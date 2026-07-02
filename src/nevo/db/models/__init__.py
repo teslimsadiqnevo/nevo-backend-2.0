@@ -5,9 +5,13 @@ from nevo.db.models.account import (
     StudentClassEnrollment,
     User,
 )
+from nevo.db.models.auth import AuthAuditEvent, AuthLoginAttempt, AuthSession
 from nevo.db.models.learner_profile import LearnerProfile, LearnerProfileHistory
 
 __all__ = [
+    "AuthAuditEvent",
+    "AuthLoginAttempt",
+    "AuthSession",
     "Class",
     "ConsentRecord",
     "LearnerProfile",

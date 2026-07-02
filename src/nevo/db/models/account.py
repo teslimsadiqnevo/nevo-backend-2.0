@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -133,6 +134,11 @@ class User(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
         UniqueConstraint("sso_external_id", name="uq_users_sso_external_id"),
+        UniqueConstraint(
+            "school_id",
+            "login_identifier",
+            name="uq_users_school_id_login_identifier",
+        ),
         CheckConstraint(
             "(status = 'deactivated') = (deactivated_at IS NOT NULL)",
             name="deactivated_at_matches_status",
@@ -155,6 +161,7 @@ class User(TimestampMixin, Base):
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    login_identifier: Mapped[str | None] = mapped_column(String(50), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sso_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -176,6 +183,26 @@ class User(TimestampMixin, Base):
     )
 
     school: Mapped[School | None] = relationship(back_populates="users")
+
+
+Index(
+    "uq_schools_school_code_ci",
+    func.lower(School.school_code),
+    unique=True,
+)
+Index(
+    "uq_users_email_ci",
+    func.lower(User.email),
+    unique=True,
+    postgresql_where=User.email.is_not(None),
+)
+Index(
+    "uq_users_school_login_identifier_ci",
+    User.school_id,
+    func.lower(User.login_identifier),
+    unique=True,
+    postgresql_where=User.login_identifier.is_not(None),
+)
 
 
 class Class(TimestampMixin, Base):

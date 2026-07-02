@@ -141,7 +141,11 @@ class LearnerProfile(LearnerProfileDimensionsMixin, Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    learner_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    learner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     version: Mapped[int] = mapped_column(
         nullable=False,
         default=1,
@@ -206,7 +210,11 @@ class LearnerProfileHistory(LearnerProfileDimensionsMixin, Base):
         ForeignKey("learner_profiles.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    learner_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    learner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     version: Mapped[int] = mapped_column(nullable=False)
     observed_event_count: Mapped[int] = mapped_column(nullable=False)
     last_evaluated_at: Mapped[datetime | None] = mapped_column(

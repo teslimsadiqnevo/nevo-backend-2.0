@@ -13,7 +13,8 @@ from nevo.auth.errors import (
     SessionReplacedError,
 )
 from nevo.auth.service import AuthService
-from tests.auth.fakes import (
+
+from .fakes import (
     DeterministicTokenService,
     FakeCredentialHasher,
     MemoryAuditLog,

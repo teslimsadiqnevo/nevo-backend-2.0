@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from nevo.api.auth import router
-from tests.auth.test_service import auth_user, harness_for
+
+from .test_service import auth_user, harness_for
 
 
 def client_for(*users):

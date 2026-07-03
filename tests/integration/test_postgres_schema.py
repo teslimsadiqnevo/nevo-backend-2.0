@@ -20,10 +20,19 @@ def asyncpg_url() -> str:
     return TEST_DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://", 1)
 
 
+async def create_learner(connection: asyncpg.Connection) -> uuid.UUID:
+    # learner_id references users.id since SCRUM-16 closed the deferred FK.
+    learner_id = await connection.fetchval(
+        "INSERT INTO users (role, auth_method) VALUES ('student', 'pin') RETURNING id"
+    )
+    assert isinstance(learner_id, uuid.UUID)
+    return learner_id
+
+
 async def test_profile_constraints_and_unique_learner() -> None:
     connection = await asyncpg.connect(asyncpg_url())
-    learner_id = uuid.uuid4()
     try:
+        learner_id = await create_learner(connection)
         profile_id = await connection.fetchval(
             """
             INSERT INTO learner_profiles (learner_id, cognitive_load_threshold)
@@ -46,6 +55,7 @@ async def test_profile_constraints_and_unique_learner() -> None:
 async def test_profile_rejects_out_of_range_observations() -> None:
     connection = await asyncpg.connect(asyncpg_url())
     try:
+        learner_id = await create_learner(connection)
         with pytest.raises(asyncpg.CheckViolationError):
             await connection.execute(
                 """
@@ -55,7 +65,7 @@ async def test_profile_rejects_out_of_range_observations() -> None:
                 )
                 VALUES ($1, 6)
                 """,
-                uuid.uuid4(),
+                learner_id,
             )
     finally:
         await connection.close()
@@ -63,8 +73,8 @@ async def test_profile_rejects_out_of_range_observations() -> None:
 
 async def test_history_rows_are_immutable() -> None:
     connection = await asyncpg.connect(asyncpg_url())
-    learner_id = uuid.uuid4()
     try:
+        learner_id = await create_learner(connection)
         profile_id = await connection.fetchval(
             """
             INSERT INTO learner_profiles (learner_id)

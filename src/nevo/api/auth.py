@@ -122,16 +122,27 @@ async def login_with_pin(
     return SessionResponse.from_issued(issued)
 
 
-@router.get("/session", response_model=PrincipalResponse)
-async def current_session(
+async def authenticated_principal(
     credentials: BearerDependency,
     service: AuthServiceDependency,
-) -> PrincipalResponse:
+) -> AuthPrincipal:
     token = require_bearer_token(credentials)
     try:
-        principal = await service.authenticate(token)
+        return await service.authenticate(token)
     except AuthError as error:
         raise public_auth_error(error) from error
+
+
+PrincipalDependency = Annotated[
+    AuthPrincipal,
+    Depends(authenticated_principal),
+]
+
+
+@router.get("/session", response_model=PrincipalResponse)
+async def current_session(
+    principal: PrincipalDependency,
+) -> PrincipalResponse:
     return PrincipalResponse.from_principal(principal)
 
 

@@ -7,8 +7,12 @@ from nevo.db.models.account import (
 )
 from nevo.db.models.auth import AuthAuditEvent, AuthLoginAttempt, AuthSession
 from nevo.db.models.learner_profile import LearnerProfile, LearnerProfileHistory
+from nevo.db.models.permission import Admin, AdminInvitation, AdminScopeAssignment
 
 __all__ = [
+    "Admin",
+    "AdminInvitation",
+    "AdminScopeAssignment",
     "AuthAuditEvent",
     "AuthLoginAttempt",
     "AuthSession",

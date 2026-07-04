@@ -207,6 +207,7 @@ class SqlAlchemyConsentRepository:
                     session,
                     parent_link=parent_link,
                 )
+                await session.flush()
                 consent_types = frozenset(
                     await session.scalars(
                         select(ConsentInvitationItem.consent_type).where(

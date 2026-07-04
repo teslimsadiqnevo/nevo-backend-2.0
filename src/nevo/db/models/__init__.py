@@ -5,6 +5,7 @@ from nevo.db.models.account import (
     StudentClassEnrollment,
     User,
 )
+from nevo.db.models.ai_gateway import AiGatewayCall, AiPromptTemplate
 from nevo.db.models.auth import AuthAuditEvent, AuthLoginAttempt, AuthSession
 from nevo.db.models.consent import (
     ConsentInvitation,
@@ -20,6 +21,8 @@ __all__ = [
     "Admin",
     "AdminInvitation",
     "AdminScopeAssignment",
+    "AiGatewayCall",
+    "AiPromptTemplate",
     "AuthAuditEvent",
     "AuthLoginAttempt",
     "AuthSession",

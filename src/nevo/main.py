@@ -3,6 +3,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from nevo.ai_gateway.config import AiGatewaySettings
+from nevo.ai_gateway.wiring import build_ai_gateway
+from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.auth import router as auth_router
 from nevo.api.consent import router as consent_router
 from nevo.api.permissions import router as permission_router
@@ -42,11 +45,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         token_pepper=auth_settings.auth_session_pepper.get_secret_value(),
         public_base_url=str(consent_settings.public_base_url),
     )
-    yield
-    await engine.dispose()
+    app.state.ai_gateway = build_ai_gateway(
+        sessions,
+        AiGatewaySettings(),
+    )
+    try:
+        yield
+    finally:
+        await app.state.ai_gateway.close()
+        await engine.dispose()
 
 
 app = FastAPI(title="Nevo Backend", version="2.0.0", lifespan=lifespan)
+app.include_router(ai_gateway_router)
 app.include_router(auth_router)
 app.include_router(consent_router)
 app.include_router(permission_router)

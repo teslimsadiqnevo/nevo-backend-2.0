@@ -39,3 +39,4 @@ def test_downgrade_removes_parent_consent_schema() -> None:
         "drop function if exists create_pending_consent_for_roster_student"
         in sql
     )
+    assert "where confirmation_source = 'parent'" in sql

@@ -361,6 +361,18 @@ def downgrade() -> None:
     op.execute(
         "DROP FUNCTION IF EXISTS create_pending_consent_for_roster_student()"
     )
+    op.execute(
+        """
+        UPDATE consent_records
+        SET
+            status = 'pending',
+            confirmed_by_parent_id = NULL,
+            confirmation_source = NULL,
+            confirmed_via = NULL,
+            confirmed_at = NULL
+        WHERE confirmation_source = 'parent'
+        """
+    )
     op.drop_table("consent_notification_outbox")
     op.drop_index(
         "ix_consent_invitation_items_invitation_id",

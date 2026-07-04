@@ -55,6 +55,7 @@ def test_user_role_enum_is_exact() -> None:
         "teacher",
         "senco_admin",
         "other_admin",
+        "parent_guardian",
     ]
 
 

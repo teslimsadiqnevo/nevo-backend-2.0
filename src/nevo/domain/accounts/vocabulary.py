@@ -13,6 +13,7 @@ class UserRole(StrEnum):
     TEACHER = "teacher"
     SENCO_ADMIN = "senco_admin"
     OTHER_ADMIN = "other_admin"
+    PARENT_GUARDIAN = "parent_guardian"
 
 
 class AuthMethod(StrEnum):

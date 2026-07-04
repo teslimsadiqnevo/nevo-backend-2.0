@@ -5,6 +5,7 @@ ROLE_IDLE_TIMEOUTS = {
     "teacher": timedelta(minutes=120),
     "senco_admin": timedelta(minutes=30),
     "other_admin": timedelta(minutes=120),
+    "parent_guardian": timedelta(minutes=120),
 }
 
 

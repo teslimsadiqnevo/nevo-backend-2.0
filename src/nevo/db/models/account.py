@@ -27,6 +27,7 @@ from nevo.domain.accounts.vocabulary import (
     UserRole,
     UserStatus,
 )
+from nevo.domain.consent.vocabulary import ConsentConfirmationSource
 
 user_role_enum = Enum(
     UserRole,
@@ -61,6 +62,11 @@ consent_type_enum = Enum(
 consent_method_enum = Enum(
     ConsentMethod,
     name="consent_confirmed_via",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+consent_confirmation_source_enum = Enum(
+    ConsentConfirmationSource,
+    name="consent_confirmation_source",
     values_callable=lambda enum: [item.value for item in enum],
 )
 
@@ -270,10 +276,28 @@ class ConsentRecord(TimestampMixin, Base):
             name="uq_consent_records_subject_user_id_consent_type",
         ),
         CheckConstraint(
-            "(status = 'confirmed') = ("
-            "confirmed_by_admin_id IS NOT NULL"
+            "("
+            "status = 'pending'"
+            " AND confirmation_source IS NULL"
+            " AND confirmed_by_admin_id IS NULL"
+            " AND confirmed_by_parent_id IS NULL"
+            " AND confirmed_via IS NULL"
+            " AND confirmed_at IS NULL"
+            ") OR ("
+            "status = 'confirmed'"
             " AND confirmed_via IS NOT NULL"
             " AND confirmed_at IS NOT NULL"
+            " AND ("
+            "("
+            "confirmation_source = 'school'"
+            " AND confirmed_by_admin_id IS NOT NULL"
+            " AND confirmed_by_parent_id IS NULL"
+            ") OR ("
+            "confirmation_source = 'parent'"
+            " AND confirmed_by_parent_id IS NOT NULL"
+            " AND confirmed_by_admin_id IS NULL"
+            ")"
+            ")"
             ")",
             name="confirmation_fields_match_status",
         ),
@@ -302,6 +326,18 @@ class ConsentRecord(TimestampMixin, Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=True,
         index=True,
+    )
+    confirmed_by_parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    confirmation_source: Mapped[ConsentConfirmationSource | None] = (
+        mapped_column(
+            consent_confirmation_source_enum,
+            nullable=True,
+        )
     )
     confirmed_via: Mapped[ConsentMethod | None] = mapped_column(
         consent_method_enum,

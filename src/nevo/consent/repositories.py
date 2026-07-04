@@ -118,6 +118,10 @@ class SqlAlchemyConsentRepository:
                 else:
                     parent_link.parent_name = draft.parent_name
 
+                # UUID-only references do not give the unit of work a Python
+                # relationship to order against, so persist each FK parent
+                # before constructing its children.
+                await session.flush()
                 await session.execute(
                     update(ConsentInvitation)
                     .where(
@@ -138,6 +142,7 @@ class SqlAlchemyConsentRepository:
                     expires_at=draft.expires_at,
                 )
                 session.add(invitation)
+                await session.flush()
                 for consent_type in draft.consent_types:
                     session.add(
                         ConsentInvitationItem(

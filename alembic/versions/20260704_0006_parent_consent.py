@@ -53,7 +53,7 @@ def upgrade() -> None:
     delivery_status_enum.create(bind, checkfirst=True)
 
     op.drop_constraint(
-        "ck_consent_records_confirmation_fields_match_status",
+        op.f("ck_consent_records_confirmation_fields_match_status"),
         "consent_records",
         type_="check",
     )
@@ -386,7 +386,7 @@ def downgrade() -> None:
     op.drop_table("parent_links")
 
     op.drop_constraint(
-        "ck_consent_records_confirmation_fields_match_status",
+        op.f("ck_consent_records_confirmation_fields_match_status"),
         "consent_records",
         type_="check",
     )
@@ -395,7 +395,7 @@ def downgrade() -> None:
         table_name="consent_records",
     )
     op.drop_constraint(
-        "fk_consent_records_confirmed_by_parent_id_users",
+        op.f("fk_consent_records_confirmed_by_parent_id_users"),
         "consent_records",
         type_="foreignkey",
     )

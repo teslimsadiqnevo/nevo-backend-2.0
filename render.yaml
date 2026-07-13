@@ -6,3 +6,32 @@ services:
     buildCommand: bash scripts/render-build.sh
     startCommand: bash scripts/render-start.sh
     healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nevo-postgres
+          property: connectionString
+      - key: AUTH_PASSWORD_PEPPER
+        generateValue: true
+      - key: AUTH_PIN_PEPPER
+        generateValue: true
+      - key: AUTH_SESSION_PEPPER
+        generateValue: true
+      - key: CONSENT_PUBLIC_BASE_URL
+        value: https://rubbish-frontend.example.com
+      - key: AI_GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: AI_REQUESTS_PER_MINUTE
+        value: "60"
+      - key: AI_MAX_CONCURRENCY
+        value: "4"
+      - key: AI_INPUT_COST_USD_PER_MILLION
+        value: "0"
+      - key: AI_OUTPUT_COST_USD_PER_MILLION
+        value: "0"
+
+databases:
+  - name: nevo-postgres
+    databaseName: nevo
+    user: nevo
+    plan: starter

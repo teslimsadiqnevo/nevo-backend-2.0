@@ -15,7 +15,7 @@ from nevo.db.models.consent import (
 )
 from nevo.db.models.learner_profile import LearnerProfile, LearnerProfileHistory
 from nevo.db.models.permission import Admin, AdminInvitation, AdminScopeAssignment
-from nevo.db.models.signal_event import SignalEvent
+from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 
 __all__ = [
@@ -34,6 +34,7 @@ __all__ = [
     "ConsentRecord",
     "LearnerProfile",
     "LearnerProfileHistory",
+    "LessonSession",
     "ParentLink",
     "School",
     "SignalEvent",

@@ -29,6 +29,12 @@ signal_event_type_enum = postgresql.ENUM(
     "break_suggested",
     "break_taken",
     "engagement_signal",
+    "modality_suggestion_shown",
+    "modality_suggestion_accepted",
+    "modality_suggestion_declined",
+    "modality_suggestion_ignored",
+    "modality_switch_outcome",
+    "modality_manual_switch",
     name="signal_event_type",
     create_type=False,
 )
@@ -122,4 +128,3 @@ def downgrade() -> None:
     )
     op.drop_table("signal_events")
     signal_event_type_enum.drop(op.get_bind(), checkfirst=True)
-

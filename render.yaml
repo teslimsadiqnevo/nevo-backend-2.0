@@ -3,6 +3,6 @@ services:
     name: nevo-backend
     runtime: python
     plan: starter
-    buildCommand: python -m pip install --upgrade pip && python -m pip install .
-    startCommand: alembic upgrade head && uvicorn nevo.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: bash scripts/render-build.sh
+    startCommand: bash scripts/render-start.sh
     healthCheckPath: /health

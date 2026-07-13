@@ -1,0 +1,2 @@
+"""Signal event domain vocabulary."""
+

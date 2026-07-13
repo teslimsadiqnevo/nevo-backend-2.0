@@ -9,6 +9,7 @@ from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.auth import router as auth_router
 from nevo.api.consent import router as consent_router
 from nevo.api.permissions import router as permission_router
+from nevo.api.signals import router as signals_router
 from nevo.api.teacher_assignments import router as teacher_assignment_router
 from nevo.auth.config import AuthSettings
 from nevo.auth.wiring import build_auth_service, build_credential_hasher
@@ -17,6 +18,7 @@ from nevo.consent.wiring import build_consent_service
 from nevo.core.config import get_settings
 from nevo.db.session import create_engine, create_session_factory
 from nevo.permissions.wiring import build_permission_service
+from nevo.signal_events.wiring import build_signal_ingestion_service
 from nevo.teacher_assignments.wiring import build_teacher_assignment_service
 
 
@@ -49,6 +51,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         AiGatewaySettings(),
     )
+    app.state.signal_ingestion_service = build_signal_ingestion_service(
+        sessions,
+    )
     try:
         yield
     finally:
@@ -61,6 +66,7 @@ app.include_router(ai_gateway_router)
 app.include_router(auth_router)
 app.include_router(consent_router)
 app.include_router(permission_router)
+app.include_router(signals_router)
 app.include_router(teacher_assignment_router)
 
 

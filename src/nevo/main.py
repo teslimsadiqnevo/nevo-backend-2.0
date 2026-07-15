@@ -11,6 +11,7 @@ from nevo.api.consent import router as consent_router
 from nevo.api.permissions import router as permission_router
 from nevo.api.signals import router as signals_router
 from nevo.api.teacher_assignments import router as teacher_assignment_router
+from nevo.attention_flags.wiring import build_attention_flag_detection_service
 from nevo.auth.config import AuthSettings
 from nevo.auth.wiring import build_auth_service, build_credential_hasher
 from nevo.consent.config import ConsentSettings
@@ -56,6 +57,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.post_lesson_profile_update_service = (
         build_post_lesson_profile_update_service(
+            sessions,
+            app.state.ai_gateway,
+        )
+    )
+    app.state.attention_flag_detection_service = (
+        build_attention_flag_detection_service(
             sessions,
             app.state.ai_gateway,
         )

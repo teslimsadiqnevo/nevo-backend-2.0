@@ -119,3 +119,22 @@ def test_profile_attention_flags_reference_profile_session_and_student() -> None
         "reviewed",
         "dismissed",
     ]
+
+
+def test_attention_workflow_tables_have_required_references() -> None:
+    assert enum_values("attention_flags", "flag_type") == [
+        "engagement_decline",
+        "sudden_change",
+    ]
+    assert ("users", "id") in foreign_key_targets("attention_flags")
+    assert ("attention_flags", "id") in foreign_key_targets("escalations")
+    assert ("users", "id") in foreign_key_targets("escalations")
+    assert ("attention_flags", "id") in foreign_key_targets(
+        "intervention_recommendations"
+    )
+    assert ("users", "id") in foreign_key_targets(
+        "intervention_recommendations"
+    )
+    assert ("ai_gateway_calls", "id") in foreign_key_targets(
+        "intervention_recommendations"
+    )

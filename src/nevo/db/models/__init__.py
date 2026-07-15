@@ -6,6 +6,11 @@ from nevo.db.models.account import (
     User,
 )
 from nevo.db.models.ai_gateway import AiGatewayCall, AiPromptTemplate
+from nevo.db.models.attention_flag import (
+    AttentionFlag,
+    Escalation,
+    InterventionRecommendation,
+)
 from nevo.db.models.auth import AuthAuditEvent, AuthLoginAttempt, AuthSession
 from nevo.db.models.consent import (
     ConsentInvitation,
@@ -28,6 +33,7 @@ __all__ = [
     "AdminScopeAssignment",
     "AiGatewayCall",
     "AiPromptTemplate",
+    "AttentionFlag",
     "AuthAuditEvent",
     "AuthLoginAttempt",
     "AuthSession",
@@ -36,6 +42,8 @@ __all__ = [
     "ConsentInvitationItem",
     "ConsentNotificationOutbox",
     "ConsentRecord",
+    "Escalation",
+    "InterventionRecommendation",
     "LearnerProfile",
     "LearnerProfileAttentionFlag",
     "LearnerProfileHistory",

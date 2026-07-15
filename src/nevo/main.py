@@ -17,6 +17,9 @@ from nevo.consent.config import ConsentSettings
 from nevo.consent.wiring import build_consent_service
 from nevo.core.config import get_settings
 from nevo.db.session import create_engine, create_session_factory
+from nevo.learner_profiles.wiring import (
+    build_post_lesson_profile_update_service,
+)
 from nevo.permissions.wiring import build_permission_service
 from nevo.signal_events.wiring import build_signal_ingestion_service
 from nevo.teacher_assignments.wiring import build_teacher_assignment_service
@@ -50,6 +53,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.ai_gateway = build_ai_gateway(
         sessions,
         AiGatewaySettings(),
+    )
+    app.state.post_lesson_profile_update_service = (
+        build_post_lesson_profile_update_service(
+            sessions,
+            app.state.ai_gateway,
+        )
     )
     app.state.signal_ingestion_service = build_signal_ingestion_service(
         sessions,

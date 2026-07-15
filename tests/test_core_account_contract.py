@@ -102,3 +102,20 @@ def test_learner_profiles_now_reference_users() -> None:
     # SCRUM-15 deferred this foreign key until the users table existed.
     assert ("users", "id") in foreign_key_targets("learner_profiles")
     assert ("users", "id") in foreign_key_targets("learner_profile_history")
+
+
+def test_profile_attention_flags_reference_profile_session_and_student() -> None:
+    assert ("users", "id") in foreign_key_targets(
+        "learner_profile_attention_flags"
+    )
+    assert ("learner_profiles", "id") in foreign_key_targets(
+        "learner_profile_attention_flags"
+    )
+    assert ("lesson_sessions", "id") in foreign_key_targets(
+        "learner_profile_attention_flags"
+    )
+    assert enum_values("learner_profile_attention_flags", "status") == [
+        "open",
+        "reviewed",
+        "dismissed",
+    ]

@@ -21,6 +21,7 @@ from nevo.domain.learner_profiles.vocabulary import (
     ChannelPreferenceStrength,
     ConfidenceLevel,
     ProcessingChannelPreference,
+    ProfileAttentionFlagStatus,
     ProfileChangeSource,
 )
 
@@ -42,6 +43,11 @@ channel_strength_enum = Enum(
 change_source_enum = Enum(
     ProfileChangeSource,
     name="profile_change_source",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+attention_flag_status_enum = Enum(
+    ProfileAttentionFlagStatus,
+    name="profile_attention_flag_status",
     values_callable=lambda enum: [item.value for item in enum],
 )
 
@@ -287,3 +293,62 @@ class LearnerProfileHistory(LearnerProfileDimensionsMixin, Base):
     )
 
     profile: Mapped[LearnerProfile] = relationship(back_populates="history")
+
+
+class LearnerProfileAttentionFlag(Base):
+    __tablename__ = "learner_profile_attention_flags"
+    __table_args__ = (
+        Index(
+            "ix_learner_profile_attention_flags_student_created",
+            "student_id",
+            "created_at",
+        ),
+        Index(
+            "ix_learner_profile_attention_flags_status_created",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    lesson_session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("lesson_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    learner_profile_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("learner_profiles.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    dimension: Mapped[str] = mapped_column(String(120), nullable=False)
+    current_value: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    recommended_value: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+    )
+    rationale: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[ProfileAttentionFlagStatus] = mapped_column(
+        attention_flag_status_enum,
+        nullable=False,
+        default=ProfileAttentionFlagStatus.OPEN,
+        server_default=ProfileAttentionFlagStatus.OPEN.value,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )

@@ -59,3 +59,9 @@ class ProfileChangeSource(StrEnum):
     LEARNER_INPUT = "learner_input"
     ROSTER_IMPORT = "roster_import"
     CORRECTION = "correction"
+
+
+class ProfileAttentionFlagStatus(StrEnum):
+    OPEN = "open"
+    REVIEWED = "reviewed"
+    DISMISSED = "dismissed"

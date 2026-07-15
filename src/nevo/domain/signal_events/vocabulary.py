@@ -19,6 +19,11 @@ class SignalEventType(StrEnum):
     MODALITY_SUGGESTION_IGNORED = "modality_suggestion_ignored"
     MODALITY_SWITCH_OUTCOME = "modality_switch_outcome"
     MODALITY_MANUAL_SWITCH = "modality_manual_switch"
+    CALCULATION_STEP_RESPONSE = "calculation_step_response"
+    CALCULATION_COMPLETE = "calculation_complete"
+    NARRATION_PLAYED = "narration_played"
+    NARRATION_REPLAYED = "narration_replayed"
+    MANIPULATIVE_PIECE_PLACED = "manipulative_piece_placed"
 
 
 class LessonCompletionStatus(StrEnum):

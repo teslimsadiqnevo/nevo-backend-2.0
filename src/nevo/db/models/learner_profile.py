@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from nevo.db.base import Base
 from nevo.domain.learner_profiles.vocabulary import (
+    ChannelPreferenceStrength,
     ConfidenceLevel,
     ProcessingChannelPreference,
     ProfileChangeSource,
@@ -33,6 +34,11 @@ processing_channel_enum = Enum(
     name="processing_channel_preference",
     values_callable=lambda enum: [item.value for item in enum],
 )
+channel_strength_enum = Enum(
+    ChannelPreferenceStrength,
+    name="channel_preference_strength",
+    values_callable=lambda enum: [item.value for item in enum],
+)
 change_source_enum = Enum(
     ProfileChangeSource,
     name="profile_change_source",
@@ -41,6 +47,53 @@ change_source_enum = Enum(
 
 
 class LearnerProfileDimensionsMixin:
+    visual_spatial_preference: Mapped[ChannelPreferenceStrength | None] = mapped_column(
+        channel_strength_enum,
+        nullable=True,
+    )
+    visual_spatial_preference_confidence: Mapped[ConfidenceLevel] = mapped_column(
+        confidence_enum,
+        nullable=False,
+        default=ConfidenceLevel.LOW,
+        server_default=ConfidenceLevel.LOW.value,
+    )
+    auditory_preference: Mapped[ChannelPreferenceStrength | None] = mapped_column(
+        channel_strength_enum,
+        nullable=True,
+    )
+    auditory_preference_confidence: Mapped[ConfidenceLevel] = mapped_column(
+        confidence_enum,
+        nullable=False,
+        default=ConfidenceLevel.LOW,
+        server_default=ConfidenceLevel.LOW.value,
+    )
+    reading_writing_preference: Mapped[ChannelPreferenceStrength | None] = mapped_column(
+        channel_strength_enum,
+        nullable=True,
+    )
+    reading_writing_preference_confidence: Mapped[ConfidenceLevel] = mapped_column(
+        confidence_enum,
+        nullable=False,
+        default=ConfidenceLevel.LOW,
+        server_default=ConfidenceLevel.LOW.value,
+    )
+    interactive_kinesthetic_preference: Mapped[
+        ChannelPreferenceStrength | None
+    ] = mapped_column(
+        channel_strength_enum,
+        nullable=True,
+    )
+    interactive_kinesthetic_preference_confidence: Mapped[
+        ConfidenceLevel
+    ] = mapped_column(
+        confidence_enum,
+        nullable=False,
+        default=ConfidenceLevel.LOW,
+        server_default=ConfidenceLevel.LOW.value,
+    )
+
+    # Legacy aggregate channel retained for backward compatibility. SCRUM-24
+    # inference uses the four independent channel dimensions above.
     processing_channel_preference: Mapped[ProcessingChannelPreference] = mapped_column(
         processing_channel_enum,
         nullable=False,

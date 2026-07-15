@@ -61,6 +61,11 @@ def test_signal_event_type_enum_is_exact() -> None:
         "modality_suggestion_ignored",
         "modality_switch_outcome",
         "modality_manual_switch",
+        "calculation_step_response",
+        "calculation_complete",
+        "narration_played",
+        "narration_replayed",
+        "manipulative_piece_placed",
     ]
 
 

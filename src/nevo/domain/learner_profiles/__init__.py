@@ -1,5 +1,6 @@
 from nevo.domain.learner_profiles.vocabulary import (
     CANONICAL_PROFILE_DIMENSIONS,
+    ChannelPreferenceStrength,
     ConfidenceLevel,
     ProcessingChannelPreference,
     ProfileChangeSource,
@@ -7,6 +8,7 @@ from nevo.domain.learner_profiles.vocabulary import (
 
 __all__ = [
     "CANONICAL_PROFILE_DIMENSIONS",
+    "ChannelPreferenceStrength",
     "ConfidenceLevel",
     "ProcessingChannelPreference",
     "ProfileChangeSource",

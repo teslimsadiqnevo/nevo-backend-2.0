@@ -25,6 +25,9 @@ def test_initial_migration_renders_expected_postgresql_contract() -> None:
     assert "create table learner_profile_history" in sql
     assert "create type profile_confidence" in sql
     assert "create type processing_channel_preference" in sql
+    assert "create type channel_preference_strength" in sql
+    assert "visual_spatial_preference" in sql
+    assert "interactive_kinesthetic_preference" in sql
     assert "trg_learner_profile_history_immutable" in sql
 
 

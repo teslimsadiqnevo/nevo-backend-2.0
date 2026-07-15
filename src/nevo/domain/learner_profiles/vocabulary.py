@@ -1,7 +1,10 @@
 from enum import StrEnum
 
 CANONICAL_PROFILE_DIMENSIONS = (
-    "processing_channel_preference",
+    "visual_spatial_preference",
+    "auditory_preference",
+    "reading_writing_preference",
+    "interactive_kinesthetic_preference",
     "cognitive_load_threshold",
     "processing_speed",
     "working_memory_capacity",
@@ -42,6 +45,12 @@ class ProcessingChannelPreference(StrEnum):
     INTERACTIVE = "interactive"
     MULTIMODAL = "multimodal"
     UNDETERMINED = "undetermined"
+
+
+class ChannelPreferenceStrength(StrEnum):
+    LOW = "low"
+    MODERATE = "moderate"
+    STRONG = "strong"
 
 
 class ProfileChangeSource(StrEnum):

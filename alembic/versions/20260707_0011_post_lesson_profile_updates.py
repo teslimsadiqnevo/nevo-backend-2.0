@@ -109,7 +109,7 @@ def upgrade() -> None:
             'Current profile JSON:\\n{current_profile}\\n\\nSession signal '
             'summary JSON:\\n{session_summary}\\n\\nReturn JSON with shape '
             '{{"updates":[{{"dimension":"cognitive_load_threshold",'
-            '"value":3,"confidence":"medium","rationale":"brief evidence"}}],'
+            '"value"\\:3,"confidence":"medium","rationale":"brief evidence"}}],'
             '"rationale":"brief overall reason"}}. Only include dimensions '
             'with enough evidence to change or increase confidence.',
             '["current_profile", "session_summary"]'::jsonb,

@@ -8,6 +8,12 @@ from nevo.ai_gateway.wiring import build_ai_gateway
 from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.auth import router as auth_router
 from nevo.api.consent import router as consent_router
+from nevo.api.docs import (
+    API_DESCRIPTION,
+    OPENAPI_TAGS,
+    SWAGGER_UI_PARAMETERS,
+    stable_operation_id,
+)
 from nevo.api.permissions import router as permission_router
 from nevo.api.signals import router as signals_router
 from nevo.api.teacher_assignments import router as teacher_assignment_router
@@ -77,7 +83,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await engine.dispose()
 
 
-app = FastAPI(title="Nevo Backend", version="2.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Nevo Backend API",
+    summary="Functional learning platform backend for Nevo.",
+    description=API_DESCRIPTION,
+    version="2.0.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    openapi_tags=OPENAPI_TAGS,
+    swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
+    generate_unique_id_function=stable_operation_id,
+)
 app.include_router(ai_gateway_router)
 app.include_router(auth_router)
 app.include_router(consent_router)

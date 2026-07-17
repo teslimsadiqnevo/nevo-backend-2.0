@@ -20,12 +20,14 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
         "teacher assignments",
         "signals",
         "ai-gateway",
+        "intelligence",
         "system",
     }.issubset(tag_names)
 
     assert "/health" in schema["paths"]
     assert "/api/v1/auth/login/password" in schema["paths"]
     assert "/api/signals/" in schema["paths"]
+    assert "/api/intelligence/adapt" in schema["paths"]
     assert (
         schema["paths"]["/api/signals/"]["post"]["operationId"]
         == "signals_ingest_signal_batch"

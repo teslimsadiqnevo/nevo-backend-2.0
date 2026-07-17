@@ -35,6 +35,13 @@ OPENAPI_TAGS = [
         "description": "Centralized Gemini Gateway generation endpoint.",
     },
     {
+        "name": "intelligence",
+        "description": (
+            "Adaptation, modality switching, proactive adjustment, and break "
+            "threshold decisions."
+        ),
+    },
+    {
         "name": "system",
         "description": "Operational health and platform status endpoints.",
     },

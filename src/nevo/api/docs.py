@@ -15,6 +15,10 @@ OPENAPI_TAGS = [
         "description": "Login, logout, and current session endpoints.",
     },
     {
+        "name": "sso",
+        "description": "Microsoft 365 and Google Workspace SSO and roster sync.",
+    },
+    {
         "name": "permissions",
         "description": "Admin team, role, scope, and navigation endpoints.",
     },
@@ -33,6 +37,10 @@ OPENAPI_TAGS = [
     {
         "name": "ai-gateway",
         "description": "Centralized Gemini Gateway generation endpoint.",
+    },
+    {
+        "name": "ask-nevo",
+        "description": "Student and teacher Ask Nevo support assistant endpoints.",
     },
     {
         "name": "intelligence",

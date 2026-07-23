@@ -24,6 +24,27 @@ class AuthMethod(StrEnum):
     SSO = "sso"
 
 
+class SsoProvider(StrEnum):
+    MICROSOFT = "microsoft"
+    GOOGLE = "google"
+
+
+class SsoFirstUseDestination(StrEnum):
+    OBSERVED_INTERACTION = "observed_interaction"
+    HOME_DASHBOARD = "home_dashboard"
+
+
+class RosterSyncStatus(StrEnum):
+    COMPLETED = "completed"
+    PARTIAL_MANUAL_REVIEW = "partial_manual_review"
+    FAILED = "failed"
+
+
+class RosterSyncIssueStatus(StrEnum):
+    OPEN = "open"
+    RESOLVED = "resolved"
+
+
 class UserStatus(StrEnum):
     """Lifecycle state of an account."""
 

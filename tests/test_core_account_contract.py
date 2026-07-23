@@ -138,3 +138,21 @@ def test_attention_workflow_tables_have_required_references() -> None:
     assert ("ai_gateway_calls", "id") in foreign_key_targets(
         "intervention_recommendations"
     )
+
+
+def test_sso_and_ask_nevo_tables_have_required_references() -> None:
+    assert enum_values("school_sso_configurations", "provider") == [
+        "microsoft",
+        "google",
+    ]
+    assert ("schools", "id") in foreign_key_targets("school_sso_configurations")
+    assert ("schools", "id") in foreign_key_targets("roster_sync_runs")
+    assert ("roster_sync_runs", "id") in foreign_key_targets("roster_sync_issues")
+    assert enum_values("ask_nevo_interactions", "role") == [
+        "student",
+        "teacher",
+    ]
+    assert ("users", "id") in foreign_key_targets("ask_nevo_interactions")
+    assert ("ai_gateway_calls", "id") in foreign_key_targets(
+        "ask_nevo_interactions"
+    )

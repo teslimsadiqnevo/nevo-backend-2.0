@@ -6,6 +6,7 @@ from nevo.db.models.account import (
     User,
 )
 from nevo.db.models.ai_gateway import AiGatewayCall, AiPromptTemplate
+from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.db.models.attention_flag import (
     AttentionFlag,
     Escalation,
@@ -25,6 +26,11 @@ from nevo.db.models.learner_profile import (
 )
 from nevo.db.models.permission import Admin, AdminInvitation, AdminScopeAssignment
 from nevo.db.models.signal_event import LessonSession, SignalEvent
+from nevo.db.models.sso import (
+    RosterSyncIssue,
+    RosterSyncRun,
+    SchoolSsoConfiguration,
+)
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 
 __all__ = [
@@ -33,6 +39,7 @@ __all__ = [
     "AdminScopeAssignment",
     "AiGatewayCall",
     "AiPromptTemplate",
+    "AskNevoInteraction",
     "AttentionFlag",
     "AuthAuditEvent",
     "AuthLoginAttempt",
@@ -49,7 +56,10 @@ __all__ = [
     "LearnerProfileHistory",
     "LessonSession",
     "ParentLink",
+    "RosterSyncIssue",
+    "RosterSyncRun",
     "School",
+    "SchoolSsoConfiguration",
     "SignalEvent",
     "StudentClassEnrollment",
     "TeacherClassAssignment",

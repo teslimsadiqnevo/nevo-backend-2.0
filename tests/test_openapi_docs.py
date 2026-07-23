@@ -15,17 +15,21 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
     tag_names = {tag["name"] for tag in schema["tags"]}
     assert {
         "authentication",
+        "sso",
         "permissions",
         "consent",
         "teacher assignments",
         "signals",
         "ai-gateway",
+        "ask-nevo",
         "intelligence",
         "system",
     }.issubset(tag_names)
 
     assert "/health" in schema["paths"]
     assert "/api/v1/auth/login/password" in schema["paths"]
+    assert "/api/v1/ask-nevo/" in schema["paths"]
+    assert "/api/v1/auth/sso/{provider}/callback" in schema["paths"]
     assert "/api/signals/" in schema["paths"]
     assert "/api/intelligence/adapt" in schema["paths"]
     assert (

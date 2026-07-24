@@ -5,7 +5,8 @@ Nevo Backend 2.0 API.
 
 This API powers authentication, school permissions, consent workflows, teacher
 assignment management, signal ingestion, and AI Gateway-backed learning
-workflows. The public contract uses functional learning language and avoids
+workflows. It also exposes content parsing for uploaded/imported lesson
+materials. The public contract uses functional learning language and avoids
 clinical or diagnostic labels.
 """
 
@@ -33,6 +34,13 @@ OPENAPI_TAGS = [
     {
         "name": "signals",
         "description": "High-throughput lesson session and signal ingestion.",
+    },
+    {
+        "name": "content",
+        "description": (
+            "Lesson upload/import parsing into structured, modality-tagged "
+            "segments."
+        ),
     },
     {
         "name": "ai-gateway",

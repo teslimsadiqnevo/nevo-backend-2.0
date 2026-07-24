@@ -19,6 +19,7 @@ from nevo.db.models.consent import (
     ConsentNotificationOutbox,
     ParentLink,
 )
+from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
 from nevo.db.models.learner_profile import (
     LearnerProfile,
     LearnerProfileAttentionFlag,
@@ -49,11 +50,14 @@ __all__ = [
     "ConsentInvitationItem",
     "ConsentNotificationOutbox",
     "ConsentRecord",
+    "ContentParseRun",
     "Escalation",
     "InterventionRecommendation",
     "LearnerProfile",
     "LearnerProfileAttentionFlag",
     "LearnerProfileHistory",
+    "Lesson",
+    "LessonSegment",
     "LessonSession",
     "ParentLink",
     "RosterSyncIssue",

@@ -20,6 +20,7 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
         "consent",
         "teacher assignments",
         "signals",
+        "content",
         "ai-gateway",
         "ask-nevo",
         "intelligence",
@@ -31,6 +32,7 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
     assert "/api/v1/ask-nevo/" in schema["paths"]
     assert "/api/v1/auth/sso/{provider}/callback" in schema["paths"]
     assert "/api/signals/" in schema["paths"]
+    assert "/api/content/parse" in schema["paths"]
     assert "/api/intelligence/adapt" in schema["paths"]
     assert (
         schema["paths"]["/api/signals/"]["post"]["operationId"]

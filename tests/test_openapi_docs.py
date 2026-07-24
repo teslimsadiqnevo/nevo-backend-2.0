@@ -23,6 +23,7 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
         "content",
         "ai-gateway",
         "ask-nevo",
+        "exports",
         "intelligence",
         "system",
     }.issubset(tag_names)
@@ -30,6 +31,7 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
     assert "/health" in schema["paths"]
     assert "/api/v1/auth/login/password" in schema["paths"]
     assert "/api/v1/ask-nevo/" in schema["paths"]
+    assert "/api/v1/exports/iep" in schema["paths"]
     assert "/api/v1/auth/sso/{provider}/callback" in schema["paths"]
     assert "/api/signals/" in schema["paths"]
     assert "/api/content/parse" in schema["paths"]

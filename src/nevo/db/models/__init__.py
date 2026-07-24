@@ -20,6 +20,7 @@ from nevo.db.models.consent import (
     ParentLink,
 )
 from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
+from nevo.db.models.export import IepExport, IepExportShare, StudentRecordEvent
 from nevo.db.models.learner_profile import (
     LearnerProfile,
     LearnerProfileAttentionFlag,
@@ -52,6 +53,8 @@ __all__ = [
     "ConsentRecord",
     "ContentParseRun",
     "Escalation",
+    "IepExport",
+    "IepExportShare",
     "InterventionRecommendation",
     "LearnerProfile",
     "LearnerProfileAttentionFlag",
@@ -66,6 +69,7 @@ __all__ = [
     "SchoolSsoConfiguration",
     "SignalEvent",
     "StudentClassEnrollment",
+    "StudentRecordEvent",
     "TeacherClassAssignment",
     "User",
 ]

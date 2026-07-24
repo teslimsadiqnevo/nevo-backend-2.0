@@ -16,6 +16,7 @@ from nevo.api.docs import (
     SWAGGER_UI_PARAMETERS,
     stable_operation_id,
 )
+from nevo.api.exports import router as exports_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.permissions import router as permission_router
 from nevo.api.signals import router as signals_router
@@ -30,6 +31,7 @@ from nevo.consent.wiring import build_consent_service
 from nevo.content_parsing.wiring import build_content_parsing_service
 from nevo.core.config import get_settings
 from nevo.db.session import create_engine, create_session_factory
+from nevo.exports.wiring import build_iep_export_service
 from nevo.intelligence.wiring import build_adaptation_engine_service
 from nevo.learner_profiles.wiring import (
     build_post_lesson_profile_update_service,
@@ -76,6 +78,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         SsoSettings(),
     )
     app.state.ask_nevo_service = build_ask_nevo_service(
+        sessions,
+        app.state.ai_gateway,
+    )
+    app.state.iep_export_service = build_iep_export_service(
         sessions,
         app.state.ai_gateway,
     )
@@ -127,6 +133,7 @@ app.include_router(ask_nevo_router)
 app.include_router(auth_router)
 app.include_router(consent_router)
 app.include_router(content_router)
+app.include_router(exports_router)
 app.include_router(intelligence_router)
 app.include_router(permission_router)
 app.include_router(signals_router)

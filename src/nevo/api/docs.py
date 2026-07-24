@@ -51,6 +51,13 @@ OPENAPI_TAGS = [
         "description": "Student and teacher Ask Nevo support assistant endpoints.",
     },
     {
+        "name": "exports",
+        "description": (
+            "Progress document draft generation, SENCo review, and parent "
+            "sharing workflows."
+        ),
+    },
+    {
         "name": "intelligence",
         "description": (
             "Adaptation, modality switching, proactive adjustment, and break "

@@ -17,11 +17,13 @@ iep_export_status = postgresql.ENUM(
     "draft",
     "final",
     name="iep_export_status",
+    create_type=False,
 )
 iep_export_share_status = postgresql.ENUM(
     "shared",
     "revoked",
     name="iep_export_share_status",
+    create_type=False,
 )
 student_record_event_type = postgresql.ENUM(
     "export_draft_created",
@@ -29,6 +31,7 @@ student_record_event_type = postgresql.ENUM(
     "export_finalized",
     "export_shared",
     name="student_record_event_type",
+    create_type=False,
 )
 
 

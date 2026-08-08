@@ -21,6 +21,7 @@ lesson_source_type = postgresql.ENUM(
     "onedrive",
     "text",
     name="lesson_source_type",
+    create_type=False,
 )
 content_parse_status = postgresql.ENUM(
     "pending",
@@ -29,6 +30,7 @@ content_parse_status = postgresql.ENUM(
     "completed_with_review",
     "failed",
     name="content_parse_status",
+    create_type=False,
 )
 lesson_content_type = postgresql.ENUM(
     "explanatory_text",
@@ -39,6 +41,7 @@ lesson_content_type = postgresql.ENUM(
     "summary",
     "calculation",
     name="lesson_content_type",
+    create_type=False,
 )
 
 

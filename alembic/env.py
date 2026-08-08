@@ -50,6 +50,10 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # See nevo.db.session.create_engine: poolers such as Supabase's
+        # PgBouncer (transaction mode) break asyncpg's server-side prepared
+        # statement cache.
+        connect_args={"statement_cache_size": 0},
     )
 
     async with connectable.connect() as connection:

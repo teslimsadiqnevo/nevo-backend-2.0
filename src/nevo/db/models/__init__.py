@@ -21,6 +21,7 @@ from nevo.db.models.consent import (
 )
 from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
 from nevo.db.models.export import IepExport, IepExportShare, StudentRecordEvent
+from nevo.db.models.heartbeat import SystemHeartbeat
 from nevo.db.models.learner_profile import (
     LearnerProfile,
     LearnerProfileAttentionFlag,
@@ -72,6 +73,7 @@ __all__ = [
     "SignalEvent",
     "StudentClassEnrollment",
     "StudentRecordEvent",
+    "SystemHeartbeat",
     "TeacherClassAssignment",
     "User",
 ]

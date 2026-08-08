@@ -37,6 +37,8 @@ from nevo.intelligence.wiring import build_adaptation_engine_service
 from nevo.learner_profiles.wiring import (
     build_post_lesson_profile_update_service,
 )
+from nevo.ops.config import OpsSettings
+from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
 from nevo.partner_inquiries.wiring import build_partner_inquiry_service
 from nevo.permissions.wiring import build_permission_service
 from nevo.signal_events.wiring import build_signal_ingestion_service
@@ -113,9 +115,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.partner_inquiry_service = build_partner_inquiry_service(
         sessions,
     )
+    ops_settings = OpsSettings()
+    app.state.self_ping_loop = build_self_ping_loop(ops_settings)
+    app.state.self_ping_loop.start()
+    app.state.heartbeat_loop = build_heartbeat_loop(sessions, ops_settings)
+    app.state.heartbeat_loop.start()
     try:
         yield
     finally:
+        await app.state.heartbeat_loop.stop()
+        await app.state.self_ping_loop.stop()
         await app.state.ai_gateway.close()
         await engine.dispose()
 

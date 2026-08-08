@@ -65,6 +65,12 @@ OPENAPI_TAGS = [
         ),
     },
     {
+        "name": "partner inquiries",
+        "description": (
+            "Public landing page founding partner inquiry submissions."
+        ),
+    },
+    {
         "name": "system",
         "description": "Operational health and platform status endpoints.",
     },

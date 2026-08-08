@@ -18,6 +18,7 @@ from nevo.api.docs import (
 )
 from nevo.api.exports import router as exports_router
 from nevo.api.intelligence import router as intelligence_router
+from nevo.api.partner_inquiries import router as partner_inquiry_router
 from nevo.api.permissions import router as permission_router
 from nevo.api.signals import router as signals_router
 from nevo.api.sso import router as sso_router
@@ -36,6 +37,7 @@ from nevo.intelligence.wiring import build_adaptation_engine_service
 from nevo.learner_profiles.wiring import (
     build_post_lesson_profile_update_service,
 )
+from nevo.partner_inquiries.wiring import build_partner_inquiry_service
 from nevo.permissions.wiring import build_permission_service
 from nevo.signal_events.wiring import build_signal_ingestion_service
 from nevo.sso.config import SsoSettings
@@ -108,6 +110,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.signal_ingestion_service = build_signal_ingestion_service(
         sessions,
     )
+    app.state.partner_inquiry_service = build_partner_inquiry_service(
+        sessions,
+    )
     try:
         yield
     finally:
@@ -135,6 +140,7 @@ app.include_router(consent_router)
 app.include_router(content_router)
 app.include_router(exports_router)
 app.include_router(intelligence_router)
+app.include_router(partner_inquiry_router)
 app.include_router(permission_router)
 app.include_router(signals_router)
 app.include_router(sso_router)

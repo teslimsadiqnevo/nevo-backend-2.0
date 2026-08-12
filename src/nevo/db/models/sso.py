@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -20,6 +21,7 @@ from nevo.db.base import Base
 from nevo.domain.accounts.vocabulary import (
     RosterSyncIssueStatus,
     RosterSyncStatus,
+    SsoConnectionStatus,
     SsoProvider,
 )
 
@@ -38,6 +40,11 @@ roster_sync_issue_status_enum = Enum(
     name="roster_sync_issue_status",
     values_callable=lambda enum: [item.value for item in enum],
 )
+sso_connection_status_enum = Enum(
+    SsoConnectionStatus,
+    name="sso_connection_status",
+    values_callable=lambda enum: [item.value for item in enum],
+)
 
 
 class SchoolSsoConfiguration(Base):
@@ -53,6 +60,11 @@ class SchoolSsoConfiguration(Base):
             "ix_school_sso_configurations_slug_provider",
             "school_url_slug",
             "provider",
+        ),
+        CheckConstraint(
+            "(connection_status = 'disconnected') = "
+            "(disconnected_at IS NOT NULL)",
+            name="disconnected_matches_timestamp",
         ),
     )
 
@@ -77,6 +89,41 @@ class SchoolSsoConfiguration(Base):
         nullable=False,
         default=True,
         server_default=text("true"),
+    )
+    connection_status: Mapped[SsoConnectionStatus] = mapped_column(
+        sso_connection_status_enum,
+        nullable=False,
+        default=SsoConnectionStatus.CONNECTED,
+        server_default=SsoConnectionStatus.CONNECTED.value,
+    )
+    # Provider-reported reason the connection needs attention, kept in plain
+    # language because it reaches a non-technical administrator.
+    last_connection_error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    connection_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    reauthorised_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    next_scheduled_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    # Disconnecting is a soft disable. Accounts survive so that a school can
+    # reconnect, or fall back to email/password, without losing anyone.
+    disconnected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    disconnected_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -131,6 +178,21 @@ class RosterSyncRun(Base):
         default=0,
         server_default="0",
     )
+    # Set only on a failed run. Plain language: the admin dashboard shows it
+    # verbatim to a non-technical administrator.
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True when an administrator pressed sync rather than the schedule firing.
+    triggered_manually: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -166,6 +228,9 @@ class RosterSyncIssue(Base):
     )
     external_reference: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    # What the administrator can actually do about it. Usually a permission to
+    # re-grant at the identity provider.
+    resolution_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[RosterSyncIssueStatus] = mapped_column(
         roster_sync_issue_status_enum,
         nullable=False,

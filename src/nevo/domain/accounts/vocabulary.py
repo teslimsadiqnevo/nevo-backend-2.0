@@ -45,6 +45,20 @@ class RosterSyncIssueStatus(StrEnum):
     RESOLVED = "resolved"
 
 
+class SsoConnectionStatus(StrEnum):
+    """Health of a school's live SSO integration.
+
+    ``NEEDS_ATTENTION`` is a recovery state, not an error state: sign-in and
+    rostering keep working on cached data, and the admin is asked to
+    reauthorise. ``DISCONNECTED`` is always deliberate and never deletes
+    accounts.
+    """
+
+    CONNECTED = "connected"
+    NEEDS_ATTENTION = "needs_attention"
+    DISCONNECTED = "disconnected"
+
+
 class UserStatus(StrEnum):
     """Lifecycle state of an account."""
 

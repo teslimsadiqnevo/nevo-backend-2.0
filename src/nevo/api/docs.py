@@ -17,7 +17,11 @@ OPENAPI_TAGS = [
     },
     {
         "name": "sso",
-        "description": "Microsoft 365 and Google Workspace SSO and roster sync.",
+        "description": (
+            "Microsoft 365 and Google Workspace SSO and roster sync, plus the "
+            "admin surfaces for connection health, sync history, "
+            "reauthorisation, and disconnection."
+        ),
     },
     {
         "name": "permissions",

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.auth.entities import AuthUser
@@ -15,15 +15,29 @@ from nevo.db.models.sso import (
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     RosterSyncStatus,
+    SsoConnectionStatus,
     SsoProvider,
     UserStatus,
 )
 from nevo.sso.entities import (
     RosterAccount,
     RosterSyncBatch,
+    RosterSyncHistory,
+    RosterSyncIssueView,
     RosterSyncResult,
+    RosterSyncRunView,
+    SsoConnectionHealth,
+    SsoDisconnection,
     SsoProviderIdentity,
     SsoSchoolConfig,
+)
+
+# Shown verbatim to a non-technical administrator, so it names the action
+# rather than the cause.
+MISSING_CLASS_RESOLUTION_HINT = (
+    "Nevo could not find a matching class for this code. Check the class "
+    "exists in Nevo with the same code as in your directory, or assign the "
+    "teacher to the class by hand from the class page."
 )
 
 
@@ -47,14 +61,226 @@ class SqlAlchemySsoRepository:
             )
         if record is None:
             return None
-        return SsoSchoolConfig(
+        return _school_config(record)
+
+    async def config_for_school(
+        self,
+        school_id: UUID,
+    ) -> SsoSchoolConfig | None:
+        async with self._sessions() as session:
+            record = await session.scalar(
+                select(SchoolSsoConfiguration)
+                .where(SchoolSsoConfiguration.school_id == school_id)
+                .order_by(SchoolSsoConfiguration.created_at)
+            )
+        if record is None:
+            return None
+        return _school_config(record)
+
+    async def connection_health(
+        self,
+        school_id: UUID,
+    ) -> SsoConnectionHealth | None:
+        async with self._sessions() as session:
+            record = await session.scalar(
+                select(SchoolSsoConfiguration)
+                .where(SchoolSsoConfiguration.school_id == school_id)
+                .order_by(SchoolSsoConfiguration.created_at)
+            )
+            if record is None:
+                return None
+            # Derived rather than denormalised: a stored copy would drift the
+            # moment a sync is written by any other path.
+            last_successful_sync_at = await session.scalar(
+                select(func.max(RosterSyncRun.completed_at)).where(
+                    RosterSyncRun.school_id == school_id,
+                    RosterSyncRun.status != RosterSyncStatus.FAILED,
+                )
+            )
+        return SsoConnectionHealth(
             school_id=record.school_id,
-            school_url_slug=record.school_url_slug,
             provider=record.provider,
-            client_id=record.client_id,
-            tenant_id=record.tenant_id,
-            hosted_domain=record.hosted_domain,
+            status=record.connection_status,
+            school_url_slug=record.school_url_slug,
+            school_entry_url="",
+            data_flow=(),
+            last_connection_error=record.last_connection_error,
+            connection_checked_at=record.connection_checked_at,
+            reauthorised_at=record.reauthorised_at,
+            last_successful_sync_at=last_successful_sync_at,
+            next_scheduled_sync_at=record.next_scheduled_sync_at,
+            disconnected_at=record.disconnected_at,
         )
+
+    async def sync_history(
+        self,
+        *,
+        school_id: UUID,
+        since: datetime,
+        window_days: int,
+    ) -> RosterSyncHistory:
+        async with self._sessions() as session:
+            runs = list(
+                await session.scalars(
+                    select(RosterSyncRun)
+                    .where(
+                        RosterSyncRun.school_id == school_id,
+                        RosterSyncRun.started_at >= since,
+                    )
+                    .order_by(RosterSyncRun.started_at.desc())
+                )
+            )
+            issues_by_run: dict[UUID, list[RosterSyncIssue]] = {}
+            if runs:
+                issues = await session.scalars(
+                    select(RosterSyncIssue)
+                    .where(
+                        RosterSyncIssue.roster_sync_run_id.in_(
+                            [run.id for run in runs]
+                        )
+                    )
+                    .order_by(RosterSyncIssue.created_at)
+                )
+                for issue in issues:
+                    issues_by_run.setdefault(
+                        issue.roster_sync_run_id, []
+                    ).append(issue)
+
+        return RosterSyncHistory(
+            school_id=school_id,
+            window_days=window_days,
+            successful_runs=sum(
+                1 for run in runs if run.status is not RosterSyncStatus.FAILED
+            ),
+            failed_runs=sum(
+                1 for run in runs if run.status is RosterSyncStatus.FAILED
+            ),
+            runs=tuple(
+                RosterSyncRunView(
+                    id=run.id,
+                    provider=run.provider,
+                    status=run.status,
+                    imported_students=run.imported_students,
+                    imported_teachers=run.imported_teachers,
+                    missing_teacher_class_mappings=(
+                        run.missing_teacher_class_mappings
+                    ),
+                    failure_reason=run.failure_reason,
+                    triggered_manually=run.triggered_manually,
+                    started_at=run.started_at,
+                    completed_at=run.completed_at,
+                    issues=tuple(
+                        RosterSyncIssueView(
+                            id=issue.id,
+                            external_reference=issue.external_reference,
+                            description=issue.description,
+                            resolution_hint=issue.resolution_hint,
+                        )
+                        for issue in issues_by_run.get(run.id, ())
+                    ),
+                )
+                for run in runs
+            ),
+        )
+
+    async def mark_reauthorisation_started(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        started_at: datetime,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                update(SchoolSsoConfiguration)
+                .where(
+                    SchoolSsoConfiguration.school_id == school_id,
+                    SchoolSsoConfiguration.provider == provider,
+                )
+                .values(connection_checked_at=started_at)
+            )
+
+    async def disconnect(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        disconnected_at: datetime,
+        disconnected_by_user_id: UUID,
+    ) -> SsoDisconnection | None:
+        async with self._sessions.begin() as session:
+            record = await session.scalar(
+                select(SchoolSsoConfiguration)
+                .where(
+                    SchoolSsoConfiguration.school_id == school_id,
+                    SchoolSsoConfiguration.provider == provider,
+                )
+                .with_for_update()
+            )
+            if record is None:
+                return None
+            record.enabled = False
+            record.connection_status = SsoConnectionStatus.DISCONNECTED
+            record.disconnected_at = disconnected_at
+            record.disconnected_by_user_id = disconnected_by_user_id
+            record.next_scheduled_sync_at = None
+            # Accounts are deliberately untouched: no deactivation, no
+            # deletion. Counted so the confirmation can state the real number.
+            retained_user_count = await session.scalar(
+                select(func.count())
+                .select_from(User)
+                .where(
+                    User.school_id == school_id,
+                    User.auth_method == AuthMethod.SSO,
+                )
+            )
+            await session.flush()
+            return SsoDisconnection(
+                school_id=school_id,
+                provider=provider,
+                disconnected_at=disconnected_at,
+                retained_user_count=int(retained_user_count or 0),
+            )
+
+    async def record_failed_roster_sync(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        failure_reason: str,
+        triggered_by_user_id: UUID | None,
+        failed_at: datetime,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            session.add(
+                RosterSyncRun(
+                    id=uuid4(),
+                    school_id=school_id,
+                    provider=provider,
+                    status=RosterSyncStatus.FAILED,
+                    failure_reason=failure_reason,
+                    triggered_manually=triggered_by_user_id is not None,
+                    triggered_by_user_id=triggered_by_user_id,
+                    started_at=failed_at,
+                    completed_at=failed_at,
+                )
+            )
+            # A provider refusal is the signal that credentials lapsed, so the
+            # health card starts telling the truth immediately.
+            await session.execute(
+                update(SchoolSsoConfiguration)
+                .where(
+                    SchoolSsoConfiguration.school_id == school_id,
+                    SchoolSsoConfiguration.provider == provider,
+                    SchoolSsoConfiguration.connection_status
+                    != SsoConnectionStatus.DISCONNECTED,
+                )
+                .values(
+                    connection_status=SsoConnectionStatus.NEEDS_ATTENTION,
+                    last_connection_error=failure_reason,
+                    connection_checked_at=failed_at,
+                )
+            )
 
     async def upsert_sso_user(
         self,
@@ -111,6 +337,7 @@ class SqlAlchemySsoRepository:
         school_id: UUID,
         provider: SsoProvider,
         batch: RosterSyncBatch,
+        triggered_by_user_id: UUID | None = None,
     ) -> RosterSyncResult:
         now = datetime.now(UTC)
         async with self._sessions.begin() as session:
@@ -122,6 +349,8 @@ class SqlAlchemySsoRepository:
                 school_id=school_id,
                 provider=provider,
                 status=RosterSyncStatus.COMPLETED,
+                triggered_manually=triggered_by_user_id is not None,
+                triggered_by_user_id=triggered_by_user_id,
                 started_at=now,
                 completed_at=now,
             )
@@ -153,6 +382,7 @@ class SqlAlchemySsoRepository:
                                 "Teacher-class mapping was not found during "
                                 "roster sync and needs manual review."
                             ),
+                            resolution_hint=MISSING_CLASS_RESOLUTION_HINT,
                         )
                         session.add(issue)
                         issue_ids.append(issue.id)
@@ -163,6 +393,23 @@ class SqlAlchemySsoRepository:
                 RosterSyncStatus.PARTIAL_MANUAL_REVIEW
                 if missing_mappings
                 else RosterSyncStatus.COMPLETED
+            )
+            # A sync that reached the provider proves the credentials work, so
+            # a previous "needs attention" clears itself without the admin
+            # having to dismiss anything. A deliberate disconnect stands.
+            await session.execute(
+                update(SchoolSsoConfiguration)
+                .where(
+                    SchoolSsoConfiguration.school_id == school_id,
+                    SchoolSsoConfiguration.provider == provider,
+                    SchoolSsoConfiguration.connection_status
+                    == SsoConnectionStatus.NEEDS_ATTENTION,
+                )
+                .values(
+                    connection_status=SsoConnectionStatus.CONNECTED,
+                    last_connection_error=None,
+                    connection_checked_at=now,
+                )
             )
             await session.flush()
             return RosterSyncResult(
@@ -211,6 +458,17 @@ async def _upsert_roster_user(
         user.email = account.email.casefold()
     await session.flush()
     return user
+
+
+def _school_config(record: SchoolSsoConfiguration) -> SsoSchoolConfig:
+    return SsoSchoolConfig(
+        school_id=record.school_id,
+        school_url_slug=record.school_url_slug,
+        provider=record.provider,
+        client_id=record.client_id,
+        tenant_id=record.tenant_id,
+        hosted_domain=record.hosted_domain,
+    )
 
 
 def _sso_external_id(identity: SsoProviderIdentity) -> str:

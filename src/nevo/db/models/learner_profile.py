@@ -5,6 +5,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     SmallInteger,
@@ -20,6 +21,9 @@ from nevo.db.base import Base
 from nevo.domain.learner_profiles.vocabulary import (
     ChannelPreferenceStrength,
     ConfidenceLevel,
+    EngagementAnomalyScope,
+    EngagementAnomalyType,
+    GamingSuspicionLevel,
     ProcessingChannelPreference,
     ProfileAttentionFlagStatus,
     ProfileChangeSource,
@@ -48,6 +52,21 @@ change_source_enum = Enum(
 attention_flag_status_enum = Enum(
     ProfileAttentionFlagStatus,
     name="profile_attention_flag_status",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+gaming_suspicion_level_enum = Enum(
+    GamingSuspicionLevel,
+    name="gaming_suspicion_level",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+engagement_anomaly_type_enum = Enum(
+    EngagementAnomalyType,
+    name="engagement_anomaly_type",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+engagement_anomaly_scope_enum = Enum(
+    EngagementAnomalyScope,
+    name="engagement_anomaly_scope",
     values_callable=lambda enum: [item.value for item in enum],
 )
 
@@ -192,6 +211,14 @@ class LearnerProfile(LearnerProfileDimensionsMixin, Base):
             "observed_event_count >= 0",
             name="observed_event_count_nonnegative",
         ),
+        CheckConstraint(
+            "gaming_anomaly_count >= 0",
+            name="gaming_anomaly_count_nonnegative",
+        ),
+        CheckConstraint(
+            "(gaming_suspicion_level = 'none') = (gaming_suspicion_updated_at IS NULL)",
+            name="gaming_suspicion_level_matches_timestamp",
+        ),
         UniqueConstraint("learner_id", name="uq_learner_profiles_learner_id"),
     )
 
@@ -218,6 +245,25 @@ class LearnerProfile(LearnerProfileDimensionsMixin, Base):
     last_evaluated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    # SCRUM-62. Stored only: no runtime path reads or writes these yet, and
+    # they are never returned on a learner-facing or parent-facing contract.
+    # Deliberately not on LearnerProfileDimensionsMixin: this is not a
+    # learning dimension and must not join the inference dimension set.
+    gaming_suspicion_level: Mapped[GamingSuspicionLevel] = mapped_column(
+        gaming_suspicion_level_enum,
+        nullable=False,
+        default=GamingSuspicionLevel.NONE,
+        server_default=GamingSuspicionLevel.NONE.value,
+    )
+    gaming_suspicion_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    gaming_anomaly_count: Mapped[int] = mapped_column(
+        nullable=False,
+        default=0,
+        server_default="0",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -351,4 +397,89 @@ class LearnerProfileAttentionFlag(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+
+class LearnerEngagementAnomaly(Base):
+    """One recorded deviation from a learner's own prior baseline (SCRUM-62).
+
+    An append-only ledger. Rows are evidence, not verdicts: the summarised
+    judgement lives on ``learner_profiles.gaming_suspicion_level``. Nothing
+    writes here yet. ``rule_key`` names the
+    ``nevo.domain.learner_profiles.gaming_rules`` rule that produced the row,
+    so thresholds can be revised without orphaning history.
+    """
+
+    __tablename__ = "learner_engagement_anomalies"
+    __table_args__ = (
+        CheckConstraint(
+            "baseline_value >= 0 AND observed_value >= 0",
+            name="anomaly_values_nonnegative",
+        ),
+        CheckConstraint(
+            "deviation_ratio > 0",
+            name="deviation_ratio_positive",
+        ),
+        CheckConstraint(
+            "distinct_content_types >= 1 AND observation_count >= 1",
+            name="anomaly_counts_positive",
+        ),
+        Index(
+            "ix_learner_engagement_anomalies_student_detected",
+            "student_id",
+            "detected_at",
+        ),
+        Index(
+            "ix_learner_engagement_anomalies_rule_detected",
+            "rule_key",
+            "detected_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    learner_profile_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("learner_profiles.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    lesson_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("lesson_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    anomaly_type: Mapped[EngagementAnomalyType] = mapped_column(
+        engagement_anomaly_type_enum,
+        nullable=False,
+    )
+    scope: Mapped[EngagementAnomalyScope] = mapped_column(
+        engagement_anomaly_scope_enum,
+        nullable=False,
+    )
+    rule_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Baseline is always the learner's own prior norm, never a cohort average.
+    baseline_value: Mapped[float] = mapped_column(Float, nullable=False)
+    observed_value: Mapped[float] = mapped_column(Float, nullable=False)
+    deviation_ratio: Mapped[float] = mapped_column(Float, nullable=False)
+    observation_count: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    distinct_content_types: Mapped[int] = mapped_column(
+        SmallInteger,
+        nullable=False,
+    )
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )

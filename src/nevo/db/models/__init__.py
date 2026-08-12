@@ -23,6 +23,7 @@ from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
 from nevo.db.models.export import IepExport, IepExportShare, StudentRecordEvent
 from nevo.db.models.heartbeat import SystemHeartbeat
 from nevo.db.models.learner_profile import (
+    LearnerEngagementAnomaly,
     LearnerProfile,
     LearnerProfileAttentionFlag,
     LearnerProfileHistory,
@@ -58,6 +59,7 @@ __all__ = [
     "IepExport",
     "IepExportShare",
     "InterventionRecommendation",
+    "LearnerEngagementAnomaly",
     "LearnerProfile",
     "LearnerProfileAttentionFlag",
     "LearnerProfileHistory",

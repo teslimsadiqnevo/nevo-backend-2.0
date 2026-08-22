@@ -83,6 +83,13 @@ OPENAPI_TAGS = [
         ),
     },
     {
+        "name": "scheduler",
+        "description": (
+            "FSRS spaced repetition scheduling, due reviews, and review outcome "
+            "recording."
+        ),
+    },
+    {
         "name": "partner inquiries",
         "description": (
             "Public landing page founding partner inquiry submissions."

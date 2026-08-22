@@ -68,3 +68,9 @@ class BreakType(StrEnum):
     MOVEMENT = "movement"
     CONSOLIDATION = "consolidation"
     FULL = "full"
+
+
+class AccommodationType(StrEnum):
+    READING = "reading"
+    ATTENTION = "attention"
+    NUMERICAL = "numerical"

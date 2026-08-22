@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
 from nevo.domain.intelligence.vocabulary import (
+    AccommodationType,
     AdaptationMode,
     BreakType,
     ContentModality,
@@ -14,8 +15,11 @@ from nevo.domain.intelligence.vocabulary import (
     ScaffoldingLevel,
 )
 from nevo.domain.learner_profiles.vocabulary import ConfidenceLevel
+from nevo.intelligence.accommodation_service import AccommodationInferenceService
 from nevo.intelligence.adaptation import AdaptationEngineService
 from nevo.intelligence.entities import (
+    AccommodationAnalysis,
+    AccommodationSignal,
     AdaptationPlan,
     AdaptationRequest,
     BreakThresholdResult,
@@ -232,6 +236,54 @@ class AdaptResponse(BaseModel):
         )
 
 
+class AccommodationSignalResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    accommodation: AccommodationType
+    frontend_signal: str = Field(alias="frontendSignal")
+    evidence: list[str]
+    lesson_count: int = Field(alias="lessonCount")
+
+    @classmethod
+    def from_signal(cls, signal: AccommodationSignal) -> "AccommodationSignalResponse":
+        return cls(
+            accommodation=signal.accommodation,
+            frontend_signal=signal.frontend_signal,
+            evidence=list(signal.evidence),
+            lesson_count=signal.lesson_count,
+        )
+
+
+class AccommodationAnalysisResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    student_id: UUID = Field(alias="studentId")
+    active_accommodations: list[AccommodationType] = Field(alias="activeAccommodations")
+    frontend_signals: list[str] = Field(alias="frontendSignals")
+    signals: list[AccommodationSignalResponse]
+    source: str
+    persisted_as_label: bool = Field(alias="persistedAsLabel")
+
+    @classmethod
+    def from_analysis(
+        cls,
+        analysis: AccommodationAnalysis,
+    ) -> "AccommodationAnalysisResponse":
+        return cls(
+            student_id=analysis.student_id,
+            active_accommodations=[
+                signal.accommodation for signal in analysis.active
+            ],
+            frontend_signals=[signal.frontend_signal for signal in analysis.active],
+            signals=[
+                AccommodationSignalResponse.from_signal(signal)
+                for signal in analysis.active
+            ],
+            source=analysis.source,
+            persisted_as_label=False,
+        )
+
+
 def get_adaptation_engine(request: Request) -> AdaptationEngineService:
     service = getattr(request.app.state, "adaptation_engine_service", None)
     if not isinstance(service, AdaptationEngineService):
@@ -248,6 +300,27 @@ def get_adaptation_engine(request: Request) -> AdaptationEngineService:
 AdaptationEngineDependency = Annotated[
     AdaptationEngineService,
     Depends(get_adaptation_engine),
+]
+
+
+def get_accommodation_inference_service(
+    request: Request,
+) -> AccommodationInferenceService:
+    service = getattr(request.app.state, "accommodation_inference_service", None)
+    if not isinstance(service, AccommodationInferenceService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "service_unavailable",
+                "message": "Accommodation inference is temporarily unavailable.",
+            },
+        )
+    return service
+
+
+AccommodationInferenceDependency = Annotated[
+    AccommodationInferenceService,
+    Depends(get_accommodation_inference_service),
 ]
 
 
@@ -277,6 +350,27 @@ async def adapt_lesson(
         requested_by_user_id=principal.user_id,
     )
     return AdaptResponse.from_plan(plan)
+
+
+@router.get(
+    "/accommodations/{student_id}",
+    response_model=AccommodationAnalysisResponse,
+)
+async def analyse_accommodations(
+    student_id: UUID,
+    principal: PrincipalDependency,
+    service: AccommodationInferenceDependency,
+) -> AccommodationAnalysisResponse:
+    if principal.role == "student" and student_id != principal.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "student_context_forbidden",
+                "message": "Students can view only their own accommodation state.",
+            },
+        )
+    analysis = await service.analyse_student(student_id=student_id)
+    return AccommodationAnalysisResponse.from_analysis(analysis)
 
 
 def _segment_from_request(segment: ContentSegmentRequest) -> ContentSegment:

@@ -22,6 +22,7 @@ from nevo.api.intelligence import router as intelligence_router
 from nevo.api.mastery import router as mastery_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
 from nevo.api.permissions import router as permission_router
+from nevo.api.scheduler import router as scheduler_router
 from nevo.api.signals import router as signals_router
 from nevo.api.sso import router as sso_router
 from nevo.api.teacher_assignments import router as teacher_assignment_router
@@ -36,7 +37,10 @@ from nevo.content_parsing.wiring import build_content_parsing_service
 from nevo.core.config import get_settings
 from nevo.db.session import create_engine, create_session_factory
 from nevo.exports.wiring import build_iep_export_service
-from nevo.intelligence.wiring import build_adaptation_engine_service
+from nevo.intelligence.wiring import (
+    build_accommodation_inference_service,
+    build_adaptation_engine_service,
+)
 from nevo.learner_profiles.wiring import (
     build_post_lesson_profile_update_service,
 )
@@ -45,6 +49,7 @@ from nevo.ops.config import OpsSettings
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
 from nevo.partner_inquiries.wiring import build_partner_inquiry_service
 from nevo.permissions.wiring import build_permission_service
+from nevo.scheduler.wiring import build_scheduler_service
 from nevo.signal_events.wiring import build_signal_ingestion_service
 from nevo.sso.config import SsoSettings
 from nevo.sso.wiring import build_sso_service
@@ -114,7 +119,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.ai_gateway,
     )
+    app.state.accommodation_inference_service = (
+        build_accommodation_inference_service(sessions)
+    )
     app.state.mastery_service = build_mastery_service(sessions)
+    app.state.scheduler_service = build_scheduler_service(sessions)
     app.state.signal_ingestion_service = build_signal_ingestion_service(
         sessions,
     )
@@ -159,6 +168,7 @@ app.include_router(intelligence_router)
 app.include_router(mastery_router)
 app.include_router(partner_inquiry_router)
 app.include_router(permission_router)
+app.include_router(scheduler_router)
 app.include_router(signals_router)
 app.include_router(sso_router)
 app.include_router(teacher_assignment_router)

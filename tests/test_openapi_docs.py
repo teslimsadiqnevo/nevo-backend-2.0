@@ -27,6 +27,7 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
         "exports",
         "intelligence",
         "mastery",
+        "scheduler",
         "system",
     }.issubset(tag_names)
 
@@ -47,6 +48,9 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
     assert "/api/mastery/student/{student_id}" in schema["paths"]
     assert "/api/mastery/class/{class_id}" in schema["paths"]
     assert "/api/mastery/school/{school_id}" in schema["paths"]
+    assert "/api/scheduler/due-reviews/{student_id}" in schema["paths"]
+    assert "/api/scheduler/record-review" in schema["paths"]
+    assert "/api/intelligence/accommodations/{student_id}" in schema["paths"]
     assert (
         schema["paths"]["/api/signals/"]["post"]["operationId"]
         == "signals_ingest_signal_batch"

@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 from nevo.domain.intelligence.vocabulary import (
+    AccommodationType,
     AdaptationMode,
     BreakType,
     ContentModality,
@@ -111,3 +112,36 @@ class AdaptationPlan:
     proactive_adjustment: ProactiveAdjustment | None
     modality_suggestion: ModalitySuggestion | None
     source: str
+
+
+@dataclass(frozen=True, slots=True)
+class AccommodationSignal:
+    accommodation: AccommodationType
+    frontend_signal: str
+    evidence: tuple[str, ...]
+    lesson_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class AccommodationAnalysis:
+    student_id: UUID
+    active: tuple[AccommodationSignal, ...]
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class BehaviourPatternAggregate:
+    lesson_count: int
+    reading_latency_lessons: int = 0
+    backward_scroll_lessons: int = 0
+    word_pause_lessons: int = 0
+    low_text_completion_lessons: int = 0
+    task_switch_lessons: int = 0
+    erratic_navigation_lessons: int = 0
+    focus_drop_lessons: int = 0
+    fragmented_flow_lessons: int = 0
+    maths_lesson_count: int = 0
+    calculation_latency_lessons: int = 0
+    numerical_correction_lessons: int = 0
+    repeated_numeric_mistake_lessons: int = 0
+    numeric_hesitation_lessons: int = 0

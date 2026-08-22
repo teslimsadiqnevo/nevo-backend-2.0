@@ -72,11 +72,13 @@ def client_for() -> tuple[TestClient, FakeAdaptationEngineService, AuthPrincipal
 def test_adapt_endpoint_returns_adaptation_plan() -> None:
     client, service, principal = client_for()
     lesson_id = uuid4()
+    session_id = uuid4()
 
     response = client.post(
         "/api/intelligence/adapt",
         json={
             "lessonId": str(lesson_id),
+            "sessionId": str(session_id),
             "mode": "in_lesson",
             "segments": [
                 {
@@ -87,6 +89,9 @@ def test_adapt_endpoint_returns_adaptation_plan() -> None:
             ],
             "signals": {
                 "continuousMinutes": 21,
+                "currentSegmentElapsedSeconds": 30,
+                "secondsSinceLastAdaptation": 20,
+                "sessionModalityShiftCount": 2,
             },
         },
     )
@@ -102,6 +107,10 @@ def test_adapt_endpoint_returns_adaptation_plan() -> None:
     }
     assert service.requests[0].mode is AdaptationMode.IN_LESSON
     assert service.requests[0].student_id == principal.user_id
+    assert service.requests[0].session_id == session_id
+    assert service.requests[0].signals.current_segment_elapsed_seconds == 30
+    assert service.requests[0].signals.seconds_since_last_adaptation == 20
+    assert service.requests[0].signals.session_modality_shift_count == 2
 
 
 def test_adapt_endpoint_rejects_different_student_context() -> None:

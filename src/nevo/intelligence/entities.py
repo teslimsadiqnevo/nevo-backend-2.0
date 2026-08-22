@@ -66,6 +66,9 @@ class RuntimeSignals:
     accuracy_below_baseline: bool = False
     response_time_below_baseline: bool = False
     midpoint_reached: bool = False
+    current_segment_elapsed_seconds: int | None = None
+    seconds_since_last_adaptation: int | None = None
+    session_modality_shift_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,12 +102,22 @@ class ModalitySuggestion:
 
 
 @dataclass(frozen=True, slots=True)
+class SuppressedAdaptationAttempt:
+    attempted_type: str
+    reason: str
+    current_segment_id: str | None
+    current_modality: ContentModality | None
+    suggested_modality: ContentModality | None
+
+
+@dataclass(frozen=True, slots=True)
 class AdaptationRequest:
     student_id: UUID
     lesson_id: UUID
     mode: AdaptationMode
     segments: tuple[ContentSegment, ...]
     signals: RuntimeSignals = field(default_factory=RuntimeSignals)
+    session_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +128,7 @@ class AdaptationPlan:
     proactive_adjustment: ProactiveAdjustment | None
     modality_suggestion: ModalitySuggestion | None
     source: str
+    suppressed_attempt: SuppressedAdaptationAttempt | None = None
 
 
 @dataclass(frozen=True, slots=True)

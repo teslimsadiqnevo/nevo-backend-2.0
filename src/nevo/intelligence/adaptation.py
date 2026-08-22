@@ -1,15 +1,18 @@
 import json
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
 from nevo.db.models.learner_profile import LearnerProfile
+from nevo.db.models.signal_event import SignalEvent
 from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.intelligence.vocabulary import (
     AdaptationMode,
@@ -22,6 +25,7 @@ from nevo.domain.learner_profiles.vocabulary import (
     ChannelPreferenceStrength,
     ConfidenceLevel,
 )
+from nevo.domain.signal_events.vocabulary import SignalEventType
 from nevo.intelligence.breaks import monitor_break_thresholds
 from nevo.intelligence.entities import (
     AdaptationPlan,
@@ -33,13 +37,32 @@ from nevo.intelligence.entities import (
     ProactiveAdjustment,
     RuntimeSignals,
     SegmentAdaptation,
+    SuppressedAdaptationAttempt,
 )
 
+MIN_MODALITY_DWELL_SECONDS = 90
+ADAPTATION_COOLDOWN_SECONDS = 120
+MAX_MODALITY_SHIFTS_PER_SESSION = 3
 MODALITY_BY_CHANNEL = {
     "visual_spatial_preference": ContentModality.VISUAL,
     "auditory_preference": ContentModality.AUDIO,
     "reading_writing_preference": ContentModality.TEXT,
     "interactive_kinesthetic_preference": ContentModality.INTERACTIVE,
+}
+ADAPTATION_HISTORY_EVENT_TYPES = {
+    SignalEventType.SIMPLIFY_TRIGGER,
+    SignalEventType.EXPAND_TRIGGER,
+    SignalEventType.SLOWER_TRIGGER,
+    SignalEventType.BREAK_SUGGESTED,
+    SignalEventType.MODALITY_SUGGESTION_SHOWN,
+    SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
+    SignalEventType.MODALITY_SWITCH_OUTCOME,
+    SignalEventType.MODALITY_MANUAL_SWITCH,
+}
+MODALITY_SHIFT_EVENT_TYPES = {
+    SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
+    SignalEventType.MODALITY_SWITCH_OUTCOME,
+    SignalEventType.MODALITY_MANUAL_SWITCH,
 }
 CHANNEL_BY_MODALITY = {
     modality: channel for channel, modality in MODALITY_BY_CHANNEL.items()
@@ -71,15 +94,45 @@ class LearnerProfileRepository(Protocol):
     async def get_profile(self, student_id: UUID) -> LearnerProfileSnapshot: ...
 
 
+class AdaptationRateLimitRepository(Protocol):
+    async def state(
+        self,
+        *,
+        student_id: UUID,
+        session_id: UUID,
+    ) -> "AdaptationRateLimitState": ...
+
+    async def log_suppressed(
+        self,
+        *,
+        request: AdaptationRequest,
+        attempt: SuppressedAdaptationAttempt,
+        timestamp: datetime,
+    ) -> None: ...
+
+
+class AdaptationRateLimitState:
+    def __init__(
+        self,
+        *,
+        last_adaptation_at: datetime | None,
+        modality_shift_count: int,
+    ) -> None:
+        self.last_adaptation_at = last_adaptation_at
+        self.modality_shift_count = modality_shift_count
+
+
 class AdaptationEngineService:
     def __init__(
         self,
         *,
         profiles: LearnerProfileRepository,
         gateway: AiGatewayService,
+        rate_limits: AdaptationRateLimitRepository | None = None,
     ) -> None:
         self._profiles = profiles
         self._gateway = gateway
+        self._rate_limits = rate_limits
 
     async def adapt(
         self,
@@ -90,7 +143,7 @@ class AdaptationEngineService:
         profile = await self._profiles.get_profile(request.student_id)
         fallback_plan = rule_based_adaptation_plan(request=request, profile=profile)
         if request.mode is AdaptationMode.IN_LESSON:
-            return fallback_plan
+            return await self._apply_rate_limits(request=request, plan=fallback_plan)
 
         try:
             result = await self._gateway.generate(
@@ -135,6 +188,36 @@ class AdaptationEngineService:
             fallback_plan=fallback_plan,
         )
         return gemini_plan or fallback_plan
+
+    async def _apply_rate_limits(
+        self,
+        *,
+        request: AdaptationRequest,
+        plan: AdaptationPlan,
+    ) -> AdaptationPlan:
+        attempt = _rate_limit_violation_from_signals(request=request, plan=plan)
+        now = datetime.now(UTC)
+        if attempt is None and self._rate_limits is not None and request.session_id:
+            state = await self._rate_limits.state(
+                student_id=request.student_id,
+                session_id=request.session_id,
+            )
+            attempt = _rate_limit_violation_from_history(
+                request=request,
+                plan=plan,
+                state=state,
+                now=now,
+            )
+        if attempt is None:
+            return plan
+        suppressed_plan = _suppress_plan(plan=plan, attempt=attempt)
+        if self._rate_limits is not None and request.session_id:
+            await self._rate_limits.log_suppressed(
+                request=request,
+                attempt=attempt,
+                timestamp=now,
+            )
+        return suppressed_plan
 
 
 def rule_based_adaptation_plan(
@@ -254,6 +337,71 @@ class SqlAlchemyLearnerProfileRepository:
         )
 
 
+class SqlAlchemyAdaptationRateLimitRepository:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def state(
+        self,
+        *,
+        student_id: UUID,
+        session_id: UUID,
+    ) -> AdaptationRateLimitState:
+        async with self._sessions() as session:
+            last_adaptation_at = await session.scalar(
+                select(func.max(SignalEvent.timestamp)).where(
+                    SignalEvent.student_id == student_id,
+                    SignalEvent.session_id == session_id,
+                    SignalEvent.event_type.in_(ADAPTATION_HISTORY_EVENT_TYPES),
+                )
+            )
+            modality_shift_count = int(
+                await session.scalar(
+                    select(func.count(SignalEvent.id)).where(
+                        SignalEvent.student_id == student_id,
+                        SignalEvent.session_id == session_id,
+                        SignalEvent.event_type.in_(MODALITY_SHIFT_EVENT_TYPES),
+                    )
+                )
+                or 0
+            )
+        return AdaptationRateLimitState(
+            last_adaptation_at=last_adaptation_at,
+            modality_shift_count=modality_shift_count,
+        )
+
+    async def log_suppressed(
+        self,
+        *,
+        request: AdaptationRequest,
+        attempt: SuppressedAdaptationAttempt,
+        timestamp: datetime,
+    ) -> None:
+        if request.session_id is None:
+            return
+        event_data: dict[str, object] = {
+            "lessonId": str(request.lesson_id),
+            "attemptedType": attempt.attempted_type,
+            "reason": attempt.reason,
+        }
+        if attempt.current_segment_id is not None:
+            event_data["segmentId"] = attempt.current_segment_id
+        if attempt.current_modality is not None:
+            event_data["currentModality"] = attempt.current_modality.value
+        if attempt.suggested_modality is not None:
+            event_data["suggestedModality"] = attempt.suggested_modality.value
+        async with self._sessions.begin() as session:
+            await session.execute(
+                insert(SignalEvent).values(
+                    student_id=request.student_id,
+                    session_id=request.session_id,
+                    event_type=SignalEventType.ADAPTATION_SUPPRESSED,
+                    event_data=event_data,
+                    timestamp=timestamp,
+                )
+            )
+
+
 def balanced_profile() -> LearnerProfileSnapshot:
     low = ChannelPreference(value=None, confidence=ConfidenceLevel.LOW)
     return LearnerProfileSnapshot(
@@ -261,6 +409,113 @@ def balanced_profile() -> LearnerProfileSnapshot:
         auditory_preference=low,
         reading_writing_preference=low,
         interactive_kinesthetic_preference=low,
+    )
+
+
+def _rate_limit_violation_from_signals(
+    *,
+    request: AdaptationRequest,
+    plan: AdaptationPlan,
+) -> SuppressedAdaptationAttempt | None:
+    if not _has_suppressible_adaptation(plan):
+        return None
+    signals = request.signals
+    if (
+        plan.modality_suggestion is not None
+        and signals.current_segment_elapsed_seconds is not None
+        and signals.current_segment_elapsed_seconds < MIN_MODALITY_DWELL_SECONDS
+    ):
+        return _suppression_attempt(
+            request=request,
+            plan=plan,
+            reason="minimum_dwell_time",
+        )
+    if (
+        signals.seconds_since_last_adaptation is not None
+        and signals.seconds_since_last_adaptation < ADAPTATION_COOLDOWN_SECONDS
+    ):
+        return _suppression_attempt(
+            request=request,
+            plan=plan,
+            reason="adaptation_cooldown",
+        )
+    if (
+        plan.modality_suggestion is not None
+        and signals.session_modality_shift_count is not None
+        and signals.session_modality_shift_count >= MAX_MODALITY_SHIFTS_PER_SESSION
+    ):
+        return _suppression_attempt(
+            request=request,
+            plan=plan,
+            reason="session_modality_shift_cap",
+        )
+    return None
+
+
+def _rate_limit_violation_from_history(
+    *,
+    request: AdaptationRequest,
+    plan: AdaptationPlan,
+    state: AdaptationRateLimitState,
+    now: datetime,
+) -> SuppressedAdaptationAttempt | None:
+    if not _has_suppressible_adaptation(plan):
+        return None
+    if state.last_adaptation_at is not None:
+        seconds_since = (now - state.last_adaptation_at).total_seconds()
+        if seconds_since < ADAPTATION_COOLDOWN_SECONDS:
+            return _suppression_attempt(
+                request=request,
+                plan=plan,
+                reason="adaptation_cooldown",
+            )
+    if (
+        plan.modality_suggestion is not None
+        and state.modality_shift_count >= MAX_MODALITY_SHIFTS_PER_SESSION
+    ):
+        return _suppression_attempt(
+            request=request,
+            plan=plan,
+            reason="session_modality_shift_cap",
+        )
+    return None
+
+
+def _has_suppressible_adaptation(plan: AdaptationPlan) -> bool:
+    return plan.modality_suggestion is not None or plan.proactive_adjustment is not None
+
+
+def _suppression_attempt(
+    *,
+    request: AdaptationRequest,
+    plan: AdaptationPlan,
+    reason: str,
+) -> SuppressedAdaptationAttempt:
+    return SuppressedAdaptationAttempt(
+        attempted_type="modality_shift"
+        if plan.modality_suggestion is not None
+        else "proactive_adjustment",
+        reason=reason,
+        current_segment_id=request.signals.current_segment_id,
+        current_modality=request.signals.current_modality,
+        suggested_modality=(
+            plan.modality_suggestion.suggested
+            if plan.modality_suggestion is not None
+            else None
+        ),
+    )
+
+
+def _suppress_plan(
+    *,
+    plan: AdaptationPlan,
+    attempt: SuppressedAdaptationAttempt,
+) -> AdaptationPlan:
+    return replace(
+        plan,
+        proactive_adjustment=None,
+        modality_suggestion=None,
+        suppressed_attempt=attempt,
     )
 
 

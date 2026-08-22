@@ -130,12 +130,28 @@ class RuntimeSignalsRequest(BaseModel):
         alias="responseTimeBelowBaseline",
     )
     midpoint_reached: bool = Field(default=False, alias="midpointReached")
+    current_segment_elapsed_seconds: int | None = Field(
+        default=None,
+        alias="currentSegmentElapsedSeconds",
+        ge=0,
+    )
+    seconds_since_last_adaptation: int | None = Field(
+        default=None,
+        alias="secondsSinceLastAdaptation",
+        ge=0,
+    )
+    session_modality_shift_count: int | None = Field(
+        default=None,
+        alias="sessionModalityShiftCount",
+        ge=0,
+    )
 
 
 class AdaptRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     student_id: UUID | None = Field(default=None, alias="studentId")
+    session_id: UUID | None = Field(default=None, alias="sessionId")
     lesson_id: UUID = Field(alias="lessonId")
     mode: AdaptationMode = AdaptationMode.LESSON_LOAD
     segments: list[ContentSegmentRequest] = Field(min_length=1, max_length=500)
@@ -476,6 +492,7 @@ async def adapt_lesson(
             mode=payload.mode,
             segments=tuple(_segment_from_request(segment) for segment in payload.segments),
             signals=_signals_from_request(payload.signals),
+            session_id=payload.session_id,
         ),
         requested_by_user_id=principal.user_id,
     )
@@ -612,4 +629,7 @@ def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:
         accuracy_below_baseline=signals.accuracy_below_baseline,
         response_time_below_baseline=signals.response_time_below_baseline,
         midpoint_reached=signals.midpoint_reached,
+        current_segment_elapsed_seconds=signals.current_segment_elapsed_seconds,
+        seconds_since_last_adaptation=signals.seconds_since_last_adaptation,
+        session_modality_shift_count=signals.session_modality_shift_count,
     )

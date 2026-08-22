@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from nevo.domain.learner_profiles.vocabulary import (
 )
 from nevo.intelligence.adaptation import (
     AdaptationEngineService,
+    AdaptationRateLimitState,
     balanced_profile,
     rule_based_adaptation_plan,
 )
@@ -53,6 +55,26 @@ class FakeGateway:
         if self.fail:
             raise ProviderUnavailableError
         return SimpleNamespace(text=self.text)
+
+
+class FakeRateLimits:
+    def __init__(
+        self,
+        *,
+        last_adaptation_at=None,
+        modality_shift_count=0,
+    ) -> None:
+        self.state_value = AdaptationRateLimitState(
+            last_adaptation_at=last_adaptation_at,
+            modality_shift_count=modality_shift_count,
+        )
+        self.logged = []
+
+    async def state(self, *, student_id, session_id):
+        return self.state_value
+
+    async def log_suppressed(self, *, request, attempt, timestamp):
+        self.logged.append((request, attempt, timestamp))
 
 
 def channel_profile() -> LearnerProfileSnapshot:
@@ -208,3 +230,104 @@ async def test_adaptation_engine_falls_back_when_gemini_unavailable() -> None:
 
     assert plan.source == "rule_based"
     assert plan.segments
+
+
+@pytest.mark.asyncio
+async def test_adaptation_engine_suppresses_rapid_modality_shift_before_dwell_time() -> None:
+    rate_limits = FakeRateLimits()
+    service = AdaptationEngineService(
+        profiles=FakeProfiles(channel_profile()),
+        gateway=FakeGateway(),  # type: ignore[arg-type]
+        rate_limits=rate_limits,
+    )
+
+    plan = await service.adapt(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            session_id=UUID("00000000-0000-4000-8000-000000000004"),
+            mode=AdaptationMode.IN_LESSON,
+            segments=segments(),
+            signals=RuntimeSignals(
+                current_segment_id="diagram-1",
+                current_modality=ContentModality.TEXT,
+                available_modalities=(ContentModality.TEXT, ContentModality.VISUAL),
+                engagement_below_baseline_seconds=190,
+                accuracy_below_baseline=True,
+                segments_since_last_suggestion=2,
+                current_segment_elapsed_seconds=30,
+            ),
+        ),
+        requested_by_user_id=REQUESTER_ID,
+    )
+
+    assert plan.modality_suggestion is None
+    assert plan.suppressed_attempt is not None
+    assert plan.suppressed_attempt.reason == "minimum_dwell_time"
+    assert len(rate_limits.logged) == 1
+
+
+@pytest.mark.asyncio
+async def test_adaptation_engine_suppresses_during_cooldown_from_history() -> None:
+    service = AdaptationEngineService(
+        profiles=FakeProfiles(channel_profile()),
+        gateway=FakeGateway(),  # type: ignore[arg-type]
+        rate_limits=FakeRateLimits(last_adaptation_at=datetime.now(UTC)),
+    )
+
+    plan = await service.adapt(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            session_id=UUID("00000000-0000-4000-8000-000000000004"),
+            mode=AdaptationMode.IN_LESSON,
+            segments=segments(),
+            signals=RuntimeSignals(
+                current_segment_id="diagram-1",
+                current_modality=ContentModality.TEXT,
+                available_modalities=(ContentModality.TEXT, ContentModality.VISUAL),
+                engagement_below_baseline_seconds=190,
+                accuracy_below_baseline=True,
+                segments_since_last_suggestion=2,
+                current_segment_elapsed_seconds=120,
+            ),
+        ),
+        requested_by_user_id=REQUESTER_ID,
+    )
+
+    assert plan.modality_suggestion is None
+    assert plan.suppressed_attempt is not None
+    assert plan.suppressed_attempt.reason == "adaptation_cooldown"
+
+
+@pytest.mark.asyncio
+async def test_adaptation_engine_caps_modality_shifts_per_session() -> None:
+    service = AdaptationEngineService(
+        profiles=FakeProfiles(channel_profile()),
+        gateway=FakeGateway(),  # type: ignore[arg-type]
+        rate_limits=FakeRateLimits(modality_shift_count=3),
+    )
+
+    plan = await service.adapt(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            session_id=UUID("00000000-0000-4000-8000-000000000004"),
+            mode=AdaptationMode.IN_LESSON,
+            segments=segments(),
+            signals=RuntimeSignals(
+                current_segment_id="diagram-1",
+                current_modality=ContentModality.TEXT,
+                available_modalities=(ContentModality.TEXT, ContentModality.VISUAL),
+                engagement_below_baseline_seconds=190,
+                accuracy_below_baseline=True,
+                segments_since_last_suggestion=2,
+                current_segment_elapsed_seconds=120,
+            ),
+        ),
+        requested_by_user_id=REQUESTER_ID,
+    )
+
+    assert plan.modality_suggestion is None
+    assert plan.suppressed_attempt is not None
+    assert plan.suppressed_attempt.reason == "session_modality_shift_cap"

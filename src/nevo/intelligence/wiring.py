@@ -8,6 +8,7 @@ from nevo.intelligence.accommodation_service import AccommodationInferenceServic
 from nevo.intelligence.accommodations import UdlAccommodationInferenceEngine
 from nevo.intelligence.adaptation import (
     AdaptationEngineService,
+    SqlAlchemyAdaptationRateLimitRepository,
     SqlAlchemyLearnerProfileRepository,
 )
 from nevo.intelligence.adaptation_log import AdaptationEventLogService
@@ -30,6 +31,7 @@ def build_adaptation_engine_service(
     return AdaptationEngineService(
         profiles=SqlAlchemyLearnerProfileRepository(sessions),
         gateway=gateway,
+        rate_limits=SqlAlchemyAdaptationRateLimitRepository(sessions),
     )
 
 

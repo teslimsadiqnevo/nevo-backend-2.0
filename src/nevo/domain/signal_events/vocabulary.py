@@ -28,6 +28,7 @@ class SignalEventType(StrEnum):
     ASK_NEVO_QUESTION_TEACHER = "ask_nevo_question_teacher"
     ASK_NEVO_CANNOT_HELP = "ask_nevo_cannot_help"
     ASK_NEVO_REDIRECT_USED = "ask_nevo_redirect_used"
+    ADAPTATION_SUPPRESSED = "adaptation_suppressed"
 
 
 class LessonCompletionStatus(StrEnum):

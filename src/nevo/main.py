@@ -19,6 +19,7 @@ from nevo.api.docs import (
 )
 from nevo.api.exports import router as exports_router
 from nevo.api.intelligence import router as intelligence_router
+from nevo.api.mastery import router as mastery_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
 from nevo.api.permissions import router as permission_router
 from nevo.api.signals import router as signals_router
@@ -39,6 +40,7 @@ from nevo.intelligence.wiring import build_adaptation_engine_service
 from nevo.learner_profiles.wiring import (
     build_post_lesson_profile_update_service,
 )
+from nevo.mastery.wiring import build_mastery_service
 from nevo.ops.config import OpsSettings
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
 from nevo.partner_inquiries.wiring import build_partner_inquiry_service
@@ -112,6 +114,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.ai_gateway,
     )
+    app.state.mastery_service = build_mastery_service(sessions)
     app.state.signal_ingestion_service = build_signal_ingestion_service(
         sessions,
     )
@@ -153,6 +156,7 @@ app.include_router(consent_router)
 app.include_router(content_router)
 app.include_router(exports_router)
 app.include_router(intelligence_router)
+app.include_router(mastery_router)
 app.include_router(partner_inquiry_router)
 app.include_router(permission_router)
 app.include_router(signals_router)

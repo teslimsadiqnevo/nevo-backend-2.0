@@ -26,6 +26,7 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
         "ask-nevo",
         "exports",
         "intelligence",
+        "mastery",
         "system",
     }.issubset(tag_names)
 
@@ -42,6 +43,10 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
     assert "/api/signals/" in schema["paths"]
     assert "/api/content/parse" in schema["paths"]
     assert "/api/intelligence/adapt" in schema["paths"]
+    assert "/api/mastery/update" in schema["paths"]
+    assert "/api/mastery/student/{student_id}" in schema["paths"]
+    assert "/api/mastery/class/{class_id}" in schema["paths"]
+    assert "/api/mastery/school/{school_id}" in schema["paths"]
     assert (
         schema["paths"]["/api/signals/"]["post"]["operationId"]
         == "signals_ingest_signal_batch"

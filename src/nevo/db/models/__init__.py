@@ -29,6 +29,7 @@ from nevo.db.models.learner_profile import (
     LearnerProfileAttentionFlag,
     LearnerProfileHistory,
 )
+from nevo.db.models.mastery import StudentConceptMastery
 from nevo.db.models.partner_inquiry import PartnerInquiry
 from nevo.db.models.permission import Admin, AdminInvitation, AdminScopeAssignment
 from nevo.db.models.signal_event import LessonSession, SignalEvent
@@ -78,6 +79,7 @@ __all__ = [
     "SchoolSsoConfiguration",
     "SignalEvent",
     "StudentClassEnrollment",
+    "StudentConceptMastery",
     "StudentRecordEvent",
     "SystemHeartbeat",
     "TeacherClassAssignment",

@@ -76,6 +76,13 @@ OPENAPI_TAGS = [
         ),
     },
     {
+        "name": "mastery",
+        "description": (
+            "Hybrid AKT concept mastery updates and student, class, and school "
+            "mastery aggregates."
+        ),
+    },
+    {
         "name": "partner inquiries",
         "description": (
             "Public landing page founding partner inquiry submissions."

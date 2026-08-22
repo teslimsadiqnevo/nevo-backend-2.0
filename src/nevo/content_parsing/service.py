@@ -24,6 +24,7 @@ from nevo.domain.intelligence.vocabulary import (
 MAX_CHUNK_CHARS = 24_000
 PROMPT_NAME = "content_parse.default"
 CALCULATION_INPUT_TYPES = {"selection", "numeric", "text", "drag"}
+AI_GENERATED_IMAGE_TYPE = "ai_generated_image"
 
 
 class ContentParsingService:
@@ -272,6 +273,14 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
     reasons = list(segment.review_reasons)
     needs_review = segment.needs_review
     modalities = tuple(dict.fromkeys(segment.available_modalities))
+    visual_variant = segment.visual_variant
+    if ContentModality.VISUAL in modalities and not _has_visual_delivery(segment):
+        visual_variant = None
+        modalities = tuple(
+            modality for modality in modalities if modality is not ContentModality.VISUAL
+        )
+        needs_review = True
+        reasons.append("visual_variant_image_generation_failed")
     if segment.content_type is LessonContentType.CALCULATION:
         modalities = (ContentModality.INTERACTIVE, ContentModality.VISUAL)
     elif ContentModality.TEXT not in modalities:
@@ -288,13 +297,28 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
         available_modalities=modalities,
         comprehension_checkpoints=segment.comprehension_checkpoints,
         text_variant=segment.text_variant or {"body": segment.body},
-        visual_variant=segment.visual_variant,
+        visual_variant=visual_variant,
         audio_variant=segment.audio_variant,
         interactive_variant=segment.interactive_variant,
         calculation_variant=segment.calculation_variant,
         needs_review=needs_review,
         review_reasons=tuple(dict.fromkeys(reasons)),
     )
+
+
+def _has_visual_delivery(segment: ParsedLessonSegment) -> bool:
+    if segment.content_type is LessonContentType.CALCULATION and segment.calculation_variant:
+        return True
+    return _is_generated_image_variant(segment.visual_variant)
+
+
+def _is_generated_image_variant(value: dict[str, object] | None) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if value.get("type") != AI_GENERATED_IMAGE_TYPE:
+        return False
+    required = ("imageUrl", "prompt", "provider", "generatedAt")
+    return all(isinstance(value.get(field), str) and value.get(field) for field in required)
 
 
 def _validated_calculation_variant(

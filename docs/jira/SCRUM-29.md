@@ -21,6 +21,14 @@ Implemented the backend slice for Gemini-powered lesson parsing.
 - Non-calculation segments are normalized so text is always available.
 - Segments with fewer than two usable modalities are flagged for teacher review.
 - Calculation segments are forced to `["interactive", "visual"]` because the co-construction mechanic is the primary learning experience.
+- Visual lesson variants use the Week 2 generated-image contract:
+  - `type: "ai_generated_image"`
+  - `imageUrl`
+  - `prompt`
+  - `provider`
+  - `generatedAt`
+  - optional `caption`
+- If image generation fails or Gemini returns an incomplete visual image object, the backend stores `visual_variant = null`, removes `visual` from `availableModalities`, and marks the segment for teacher review with `visual_variant_image_generation_failed`.
 
 ## Calculation Co-Construction
 

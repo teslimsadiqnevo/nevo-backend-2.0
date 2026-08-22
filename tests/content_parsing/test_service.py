@@ -149,3 +149,46 @@ async def test_falls_back_to_reviewable_segments_when_gemini_json_is_invalid() -
     assert result.review_segment_count == 2
     assert result.review_notes[0]["code"] == "gemini_parse_fallback"
     assert repository.parsed.segments[0].available_modalities[0] is ContentModality.TEXT  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_visual_modality_is_removed_when_generated_image_is_missing() -> None:
+    repository = FakeRepository()
+    service = ContentParsingService(
+        repository=repository,
+        ai_gateway=FakeGateway(
+            """
+            {
+              "segments": [
+                {
+                  "segment_key": "visual-1",
+                  "content_type": "explanatory_text",
+                  "body": "A numerator shows selected equal parts.",
+                  "availableModalities": ["text", "visual", "audio"],
+                  "visual_variant": {
+                    "type": "ai_generated_image",
+                    "prompt": "Equal parts diagram",
+                    "provider": "image-provider",
+                    "generatedAt": "2026-08-22T10:00:00Z"
+                  }
+                }
+              ]
+            }
+            """
+        ),
+    )
+
+    result = await service.parse(
+        request=ContentParseRequest(
+            title="Fractions",
+            source_type=LessonSourceType.TEXT,
+            source_text="A numerator shows selected equal parts.",
+        ),
+        requested_by_user_id=uuid4(),
+    )
+
+    segment = repository.parsed.segments[0]  # type: ignore[union-attr]
+    assert result.status is ContentParseStatus.COMPLETED_WITH_REVIEW
+    assert ContentModality.VISUAL not in segment.available_modalities
+    assert segment.visual_variant is None
+    assert "visual_variant_image_generation_failed" in segment.review_reasons

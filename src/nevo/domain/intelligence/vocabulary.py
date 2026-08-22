@@ -74,3 +74,15 @@ class AccommodationType(StrEnum):
     READING = "reading"
     ATTENTION = "attention"
     NUMERICAL = "numerical"
+
+
+class ScaffoldIntensity(StrEnum):
+    FULL_SUPPORT = "full_support"
+    PARTIAL_SUPPORT = "partial_support"
+    HINTS_ONLY = "hints_only"
+    INDEPENDENT = "independent"
+
+
+class ScaffoldOutcome(StrEnum):
+    CORRECT = "correct"
+    STRUGGLED = "struggled"

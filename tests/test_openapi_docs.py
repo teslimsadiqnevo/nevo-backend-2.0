@@ -51,6 +51,9 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
     assert "/api/scheduler/due-reviews/{student_id}" in schema["paths"]
     assert "/api/scheduler/record-review" in schema["paths"]
     assert "/api/intelligence/accommodations/{student_id}" in schema["paths"]
+    assert "/api/intelligence/scaffolds/state/{student_id}/{concept_id}" in schema["paths"]
+    assert "/api/intelligence/scaffolds/attempt" in schema["paths"]
+    assert "/api/intelligence/scaffolds/history/{student_id}" in schema["paths"]
     assert (
         schema["paths"]["/api/signals/"]["post"]["operationId"]
         == "signals_ingest_signal_batch"

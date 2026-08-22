@@ -10,6 +10,9 @@ from nevo.intelligence.adaptation import (
     AdaptationEngineService,
     SqlAlchemyLearnerProfileRepository,
 )
+from nevo.intelligence.scaffold_repositories import SqlAlchemyScaffoldRepository
+from nevo.intelligence.scaffold_service import ScaffoldFadingService
+from nevo.intelligence.scaffolds import ProgressiveScaffoldFadingEngine
 
 
 def build_adaptation_engine_service(
@@ -28,4 +31,13 @@ def build_accommodation_inference_service(
     return AccommodationInferenceService(
         repository=SqlAlchemyAccommodationPatternRepository(sessions),
         engine=UdlAccommodationInferenceEngine(),
+    )
+
+
+def build_scaffold_fading_service(
+    sessions: async_sessionmaker[AsyncSession],
+) -> ScaffoldFadingService:
+    return ScaffoldFadingService(
+        repository=SqlAlchemyScaffoldRepository(sessions),
+        engine=ProgressiveScaffoldFadingEngine(),
     )

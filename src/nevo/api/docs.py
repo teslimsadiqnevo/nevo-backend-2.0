@@ -72,7 +72,7 @@ OPENAPI_TAGS = [
         "name": "intelligence",
         "description": (
             "Adaptation, modality switching, proactive adjustment, and break "
-            "threshold decisions."
+            "threshold decisions, plus UDL accommodations and scaffold fading."
         ),
     },
     {

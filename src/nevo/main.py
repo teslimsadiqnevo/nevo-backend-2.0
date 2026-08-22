@@ -40,6 +40,7 @@ from nevo.exports.wiring import build_iep_export_service
 from nevo.intelligence.wiring import (
     build_accommodation_inference_service,
     build_adaptation_engine_service,
+    build_scaffold_fading_service,
 )
 from nevo.learner_profiles.wiring import (
     build_post_lesson_profile_update_service,
@@ -122,6 +123,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.accommodation_inference_service = (
         build_accommodation_inference_service(sessions)
     )
+    app.state.scaffold_fading_service = build_scaffold_fading_service(sessions)
     app.state.mastery_service = build_mastery_service(sessions)
     app.state.scheduler_service = build_scheduler_service(sessions)
     app.state.signal_ingestion_service = build_signal_ingestion_service(

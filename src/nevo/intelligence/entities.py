@@ -9,6 +9,8 @@ from nevo.domain.intelligence.vocabulary import (
     ContentSegmentType,
     DensityLevel,
     ScaffoldingLevel,
+    ScaffoldIntensity,
+    ScaffoldOutcome,
 )
 from nevo.domain.learner_profiles.vocabulary import (
     ChannelPreferenceStrength,
@@ -145,3 +147,53 @@ class BehaviourPatternAggregate:
     numerical_correction_lessons: int = 0
     repeated_numeric_mistake_lessons: int = 0
     numeric_hesitation_lessons: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ScaffoldConceptState:
+    student_id: UUID
+    concept_id: UUID
+    current_intensity: ScaffoldIntensity
+    consecutive_correct: int = 0
+    response_time_improvement_streak: int = 0
+    reduced_hint_streak: int = 0
+    last_response_time_ms: int | None = None
+    last_hint_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScaffoldProblemAttempt:
+    student_id: UUID
+    concept_id: UUID
+    problem_id: str
+    response_correct: bool
+    scaffold_intensity: ScaffoldIntensity | None = None
+    response_time_ms: int | None = None
+    expected_response_time_ms: int | None = None
+    hint_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ScaffoldDecision:
+    state: ScaffoldConceptState
+    previous_intensity: ScaffoldIntensity
+    next_intensity: ScaffoldIntensity
+    outcome: ScaffoldOutcome
+    level_changed: bool
+    change_reason: str | None
+    student_message: str
+
+
+@dataclass(frozen=True, slots=True)
+class ScaffoldProblemLogEntry:
+    student_id: UUID
+    concept_id: UUID
+    problem_id: str
+    scaffold_intensity: ScaffoldIntensity
+    outcome: ScaffoldOutcome
+    response_time_ms: int | None
+    expected_response_time_ms: int | None
+    hint_count: int
+    next_scaffold_intensity: ScaffoldIntensity
+    level_changed: bool
+    change_reason: str | None

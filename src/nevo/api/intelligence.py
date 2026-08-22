@@ -13,6 +13,8 @@ from nevo.domain.intelligence.vocabulary import (
     ContentSegmentType,
     DensityLevel,
     ScaffoldingLevel,
+    ScaffoldIntensity,
+    ScaffoldOutcome,
 )
 from nevo.domain.learner_profiles.vocabulary import ConfidenceLevel
 from nevo.intelligence.accommodation_service import AccommodationInferenceService
@@ -27,8 +29,13 @@ from nevo.intelligence.entities import (
     ModalitySuggestion,
     ProactiveAdjustment,
     RuntimeSignals,
+    ScaffoldConceptState,
+    ScaffoldDecision,
+    ScaffoldProblemAttempt,
+    ScaffoldProblemLogEntry,
     SegmentAdaptation,
 )
+from nevo.intelligence.scaffold_service import ScaffoldFadingService
 
 router = APIRouter(prefix="/api/intelligence", tags=["intelligence"])
 
@@ -284,6 +291,110 @@ class AccommodationAnalysisResponse(BaseModel):
         )
 
 
+class ScaffoldStateResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    student_id: UUID = Field(alias="studentId")
+    concept_id: UUID = Field(alias="conceptId")
+    current_intensity: ScaffoldIntensity = Field(alias="currentIntensity")
+    consecutive_correct: int = Field(alias="consecutiveCorrect")
+    response_time_improvement_streak: int = Field(
+        alias="responseTimeImprovementStreak"
+    )
+    reduced_hint_streak: int = Field(alias="reducedHintStreak")
+    last_response_time_ms: int | None = Field(alias="lastResponseTimeMs")
+    last_hint_count: int | None = Field(alias="lastHintCount")
+
+    @classmethod
+    def from_state(cls, state: ScaffoldConceptState) -> "ScaffoldStateResponse":
+        return cls(
+            student_id=state.student_id,
+            concept_id=state.concept_id,
+            current_intensity=state.current_intensity,
+            consecutive_correct=state.consecutive_correct,
+            response_time_improvement_streak=state.response_time_improvement_streak,
+            reduced_hint_streak=state.reduced_hint_streak,
+            last_response_time_ms=state.last_response_time_ms,
+            last_hint_count=state.last_hint_count,
+        )
+
+
+class ScaffoldAttemptRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    student_id: UUID = Field(alias="studentId")
+    concept_id: UUID = Field(alias="conceptId")
+    problem_id: str = Field(alias="problemId", min_length=1, max_length=120)
+    response_correct: bool = Field(alias="responseCorrect")
+    scaffold_intensity: ScaffoldIntensity | None = Field(
+        default=None,
+        alias="scaffoldIntensity",
+    )
+    response_time_ms: int | None = Field(default=None, alias="responseTimeMs", ge=0)
+    expected_response_time_ms: int | None = Field(
+        default=None,
+        alias="expectedResponseTimeMs",
+        gt=0,
+    )
+    hint_count: int = Field(default=0, alias="hintCount", ge=0)
+
+
+class ScaffoldDecisionResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    state: ScaffoldStateResponse
+    previous_intensity: ScaffoldIntensity = Field(alias="previousIntensity")
+    next_intensity: ScaffoldIntensity = Field(alias="nextIntensity")
+    outcome: ScaffoldOutcome
+    level_changed: bool = Field(alias="levelChanged")
+    change_reason: str | None = Field(alias="changeReason")
+    student_message: str = Field(alias="studentMessage")
+
+    @classmethod
+    def from_decision(cls, decision: ScaffoldDecision) -> "ScaffoldDecisionResponse":
+        return cls(
+            state=ScaffoldStateResponse.from_state(decision.state),
+            previous_intensity=decision.previous_intensity,
+            next_intensity=decision.next_intensity,
+            outcome=decision.outcome,
+            level_changed=decision.level_changed,
+            change_reason=decision.change_reason,
+            student_message=decision.student_message,
+        )
+
+
+class ScaffoldLogResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    student_id: UUID = Field(alias="studentId")
+    concept_id: UUID = Field(alias="conceptId")
+    problem_id: str = Field(alias="problemId")
+    scaffold_intensity: ScaffoldIntensity = Field(alias="scaffoldIntensity")
+    outcome: ScaffoldOutcome
+    response_time_ms: int | None = Field(alias="responseTimeMs")
+    expected_response_time_ms: int | None = Field(alias="expectedResponseTimeMs")
+    hint_count: int = Field(alias="hintCount")
+    next_scaffold_intensity: ScaffoldIntensity = Field(alias="nextScaffoldIntensity")
+    level_changed: bool = Field(alias="levelChanged")
+    change_reason: str | None = Field(alias="changeReason")
+
+    @classmethod
+    def from_log(cls, log: ScaffoldProblemLogEntry) -> "ScaffoldLogResponse":
+        return cls(
+            student_id=log.student_id,
+            concept_id=log.concept_id,
+            problem_id=log.problem_id,
+            scaffold_intensity=log.scaffold_intensity,
+            outcome=log.outcome,
+            response_time_ms=log.response_time_ms,
+            expected_response_time_ms=log.expected_response_time_ms,
+            hint_count=log.hint_count,
+            next_scaffold_intensity=log.next_scaffold_intensity,
+            level_changed=log.level_changed,
+            change_reason=log.change_reason,
+        )
+
+
 def get_adaptation_engine(request: Request) -> AdaptationEngineService:
     service = getattr(request.app.state, "adaptation_engine_service", None)
     if not isinstance(service, AdaptationEngineService):
@@ -321,6 +432,25 @@ def get_accommodation_inference_service(
 AccommodationInferenceDependency = Annotated[
     AccommodationInferenceService,
     Depends(get_accommodation_inference_service),
+]
+
+
+def get_scaffold_fading_service(request: Request) -> ScaffoldFadingService:
+    service = getattr(request.app.state, "scaffold_fading_service", None)
+    if not isinstance(service, ScaffoldFadingService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "service_unavailable",
+                "message": "Scaffold fading is temporarily unavailable.",
+            },
+        )
+    return service
+
+
+ScaffoldFadingDependency = Annotated[
+    ScaffoldFadingService,
+    Depends(get_scaffold_fading_service),
 ]
 
 
@@ -373,6 +503,70 @@ async def analyse_accommodations(
     return AccommodationAnalysisResponse.from_analysis(analysis)
 
 
+@router.get(
+    "/scaffolds/state/{student_id}/{concept_id}",
+    response_model=ScaffoldStateResponse,
+)
+async def current_scaffold_state(
+    student_id: UUID,
+    concept_id: UUID,
+    principal: PrincipalDependency,
+    service: ScaffoldFadingDependency,
+) -> ScaffoldStateResponse:
+    _ensure_student_or_staff(principal=principal, student_id=student_id)
+    state = await service.current_state(student_id=student_id, concept_id=concept_id)
+    return ScaffoldStateResponse.from_state(state)
+
+
+@router.post("/scaffolds/attempt", response_model=ScaffoldDecisionResponse)
+async def record_scaffold_attempt(
+    payload: ScaffoldAttemptRequest,
+    principal: PrincipalDependency,
+    service: ScaffoldFadingDependency,
+) -> ScaffoldDecisionResponse:
+    _ensure_student_or_staff(principal=principal, student_id=payload.student_id)
+    decision = await service.record_attempt(
+        ScaffoldProblemAttempt(
+            student_id=payload.student_id,
+            concept_id=payload.concept_id,
+            problem_id=payload.problem_id,
+            response_correct=payload.response_correct,
+            scaffold_intensity=payload.scaffold_intensity,
+            response_time_ms=payload.response_time_ms,
+            expected_response_time_ms=payload.expected_response_time_ms,
+            hint_count=payload.hint_count,
+        )
+    )
+    return ScaffoldDecisionResponse.from_decision(decision)
+
+
+@router.get(
+    "/scaffolds/history/{student_id}",
+    response_model=list[ScaffoldLogResponse],
+)
+async def scaffold_history(
+    student_id: UUID,
+    principal: PrincipalDependency,
+    service: ScaffoldFadingDependency,
+    concept_id: UUID | None = None,
+    limit: int = 100,
+) -> list[ScaffoldLogResponse]:
+    if principal.role == "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "scaffold_history_forbidden",
+                "message": "Scaffold history is available to staff dashboards.",
+            },
+        )
+    logs = await service.history(
+        student_id=student_id,
+        concept_id=concept_id,
+        limit=min(max(limit, 1), 200),
+    )
+    return [ScaffoldLogResponse.from_log(log) for log in logs]
+
+
 def _segment_from_request(segment: ContentSegmentRequest) -> ContentSegment:
     return ContentSegment(
         id=segment.id,
@@ -383,6 +577,17 @@ def _segment_from_request(segment: ContentSegmentRequest) -> ContentSegment:
         passive=segment.passive,
         title=segment.title,
     )
+
+
+def _ensure_student_or_staff(*, principal, student_id: UUID) -> None:
+    if principal.role == "student" and student_id != principal.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "student_context_forbidden",
+                "message": "Students can use only their own scaffold state.",
+            },
+        )
 
 
 def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:

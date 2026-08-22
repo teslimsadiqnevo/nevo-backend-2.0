@@ -29,7 +29,12 @@ from nevo.db.models.learner_profile import (
     LearnerProfileAttentionFlag,
     LearnerProfileHistory,
 )
-from nevo.db.models.mastery import StudentConceptMastery, StudentConceptScheduling
+from nevo.db.models.mastery import (
+    ScaffoldProblemLog,
+    StudentConceptMastery,
+    StudentConceptScaffoldState,
+    StudentConceptScheduling,
+)
 from nevo.db.models.partner_inquiry import PartnerInquiry
 from nevo.db.models.permission import Admin, AdminInvitation, AdminScopeAssignment
 from nevo.db.models.signal_event import LessonSession, SignalEvent
@@ -75,11 +80,13 @@ __all__ = [
     "PartnerInquiry",
     "RosterSyncIssue",
     "RosterSyncRun",
+    "ScaffoldProblemLog",
     "School",
     "SchoolSsoConfiguration",
     "SignalEvent",
     "StudentClassEnrollment",
     "StudentConceptMastery",
+    "StudentConceptScaffoldState",
     "StudentConceptScheduling",
     "StudentRecordEvent",
     "SystemHeartbeat",

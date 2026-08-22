@@ -30,6 +30,10 @@ def test_upgrade_renders_signal_events_schema() -> None:
     assert "calculation_step_response" in sql
     assert "narration_replayed" in sql
     assert "manipulative_piece_placed" in sql
+    assert "ask_nevo_question_student" in sql
+    assert "ask_nevo_question_teacher" in sql
+    assert "ask_nevo_cannot_help" in sql
+    assert "ask_nevo_redirect_used" in sql
     assert "ix_signal_events_student_session" in sql
     assert "ix_signal_events_student_timestamp" in sql
     assert "ix_signal_events_type_timestamp" in sql

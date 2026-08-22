@@ -24,6 +24,10 @@ class SignalEventType(StrEnum):
     NARRATION_PLAYED = "narration_played"
     NARRATION_REPLAYED = "narration_replayed"
     MANIPULATIVE_PIECE_PLACED = "manipulative_piece_placed"
+    ASK_NEVO_QUESTION_STUDENT = "ask_nevo_question_student"
+    ASK_NEVO_QUESTION_TEACHER = "ask_nevo_question_teacher"
+    ASK_NEVO_CANNOT_HELP = "ask_nevo_cannot_help"
+    ASK_NEVO_REDIRECT_USED = "ask_nevo_redirect_used"
 
 
 class LessonCompletionStatus(StrEnum):

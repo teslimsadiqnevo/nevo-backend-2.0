@@ -66,6 +66,10 @@ def test_signal_event_type_enum_is_exact() -> None:
         "narration_played",
         "narration_replayed",
         "manipulative_piece_placed",
+        "ask_nevo_question_student",
+        "ask_nevo_question_teacher",
+        "ask_nevo_cannot_help",
+        "ask_nevo_redirect_used",
     ]
 
 

@@ -140,3 +140,133 @@ def test_accepts_completion_snapshot() -> None:
     assert snapshot.exit_position == "segment-8"
     assert snapshot.break_count == 1
     assert snapshot.proactive_adjustments_count == 3
+
+
+def test_ingests_ask_nevo_context_signals_without_question_text() -> None:
+    client, repository, principal = client_for()
+    session_id = uuid4()
+    lesson_id = uuid4()
+    teacher_id = uuid4()
+
+    response = client.post(
+        "/api/signals/",
+        json={
+            "session": {
+                "sessionId": str(session_id),
+                "lessonId": str(lesson_id),
+                "startedAt": "2026-07-13T12:00:00Z",
+            },
+            "events": [
+                {
+                    "sessionId": str(session_id),
+                    "eventType": "ask_nevo_question_student",
+                    "timestamp": "2026-07-13T12:00:05Z",
+                    "studentId": str(principal.user_id),
+                    "currentPage": "lesson_player",
+                    "lessonId": str(lesson_id),
+                    "segmentId": "segment-2",
+                    "questionCategory": "comprehension",
+                },
+                {
+                    "sessionId": str(session_id),
+                    "eventType": "ask_nevo_question_teacher",
+                    "timestamp": "2026-07-13T12:00:10Z",
+                    "teacherId": str(teacher_id),
+                    "currentPage": "student_profile",
+                    "contextStudentId": str(principal.user_id),
+                    "contextClassId": str(uuid4()),
+                    "contextLessonId": str(lesson_id),
+                    "questionCategory": "student_insight",
+                },
+                {
+                    "sessionId": str(session_id),
+                    "eventType": "ask_nevo_cannot_help",
+                    "timestamp": "2026-07-13T12:00:15Z",
+                    "role": "student",
+                    "currentPage": "lesson_player",
+                },
+                {
+                    "sessionId": str(session_id),
+                    "eventType": "ask_nevo_redirect_used",
+                    "timestamp": "2026-07-13T12:00:20Z",
+                    "role": "teacher",
+                    "currentPage": "connect_thread",
+                    "redirectTarget": "message_admin",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 202
+    events = repository.batches[0].events
+    assert [event.event_type for event in events] == [
+        SignalEventType.ASK_NEVO_QUESTION_STUDENT,
+        SignalEventType.ASK_NEVO_QUESTION_TEACHER,
+        SignalEventType.ASK_NEVO_CANNOT_HELP,
+        SignalEventType.ASK_NEVO_REDIRECT_USED,
+    ]
+    assert events[0].event_data["questionCategory"] == "comprehension"
+    assert "question" not in events[0].event_data
+
+
+def test_rejects_ask_nevo_signal_with_full_question_text() -> None:
+    client, _, principal = client_for()
+    session_id = uuid4()
+    lesson_id = uuid4()
+
+    response = client.post(
+        "/api/signals/",
+        json={
+            "session": {
+                "sessionId": str(session_id),
+                "lessonId": str(lesson_id),
+                "startedAt": "2026-07-13T12:00:00Z",
+            },
+            "events": [
+                {
+                    "sessionId": str(session_id),
+                    "eventType": "ask_nevo_question_student",
+                    "studentId": str(principal.user_id),
+                    "currentPage": "lesson_player",
+                    "lessonId": str(lesson_id),
+                    "segmentId": "segment-2",
+                    "questionCategory": "comprehension",
+                    "questionText": "What does this whole paragraph mean?",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "full text" in response.text
+
+
+def test_rejects_wrong_ask_nevo_question_category_for_role() -> None:
+    client, _, principal = client_for()
+    session_id = uuid4()
+    lesson_id = uuid4()
+
+    response = client.post(
+        "/api/signals/",
+        json={
+            "session": {
+                "sessionId": str(session_id),
+                "lessonId": str(lesson_id),
+                "startedAt": "2026-07-13T12:00:00Z",
+            },
+            "events": [
+                {
+                    "sessionId": str(session_id),
+                    "eventType": "ask_nevo_question_student",
+                    "studentId": str(principal.user_id),
+                    "currentPage": "lesson_player",
+                    "lessonId": str(lesson_id),
+                    "segmentId": "segment-2",
+                    "questionCategory": "student_insight",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "questionCategory" in response.text

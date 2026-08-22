@@ -21,6 +21,28 @@ from nevo.signal_events.service import MAX_SIGNAL_BATCH_SIZE, SignalIngestionSer
 
 router = APIRouter(prefix="/api/signals", tags=["signals"])
 
+STUDENT_ASK_NEVO_CATEGORIES = {
+    "comprehension",
+    "vocabulary",
+    "navigation",
+    "general",
+}
+TEACHER_ASK_NEVO_CATEGORIES = {
+    "student_insight",
+    "class_pattern",
+    "lesson_recommendation",
+    "communication_help",
+    "general",
+}
+FORBIDDEN_ASK_NEVO_TEXT_KEYS = {
+    "question",
+    "questionText",
+    "fullQuestion",
+    "prompt",
+    "message",
+    "text",
+}
+
 
 class LessonSessionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -65,7 +87,71 @@ class SignalEventRequest(BaseModel):
     def merge_extra_event_fields(self) -> "SignalEventRequest":
         if self.model_extra:
             self.event_data = {**self.model_extra, **self.event_data}
+        self._validate_ask_nevo_signal_payload()
         return self
+
+    def _validate_ask_nevo_signal_payload(self) -> None:
+        if self.event_type not in {
+            SignalEventType.ASK_NEVO_QUESTION_STUDENT,
+            SignalEventType.ASK_NEVO_QUESTION_TEACHER,
+            SignalEventType.ASK_NEVO_CANNOT_HELP,
+            SignalEventType.ASK_NEVO_REDIRECT_USED,
+        }:
+            return
+        leaked_keys = FORBIDDEN_ASK_NEVO_TEXT_KEYS.intersection(self.event_data)
+        if leaked_keys:
+            joined = ", ".join(sorted(leaked_keys))
+            raise ValueError(f"Ask Nevo signal cannot include full text fields: {joined}.")
+        if self.event_type is SignalEventType.ASK_NEVO_QUESTION_STUDENT:
+            _require_keys(
+                self.event_data,
+                {
+                    "studentId",
+                    "currentPage",
+                    "lessonId",
+                    "segmentId",
+                    "questionCategory",
+                },
+            )
+            _require_category(
+                self.event_data,
+                allowed=STUDENT_ASK_NEVO_CATEGORIES,
+            )
+        elif self.event_type is SignalEventType.ASK_NEVO_QUESTION_TEACHER:
+            _require_keys(
+                self.event_data,
+                {
+                    "teacherId",
+                    "currentPage",
+                    "questionCategory",
+                },
+            )
+            _require_category(
+                self.event_data,
+                allowed=TEACHER_ASK_NEVO_CATEGORIES,
+            )
+        elif self.event_type is SignalEventType.ASK_NEVO_CANNOT_HELP:
+            _require_keys(self.event_data, {"role", "currentPage"})
+            if self.event_data.get("role") not in {"student", "teacher"}:
+                raise ValueError("Ask Nevo cannot-help role must be student or teacher.")
+        elif self.event_type is SignalEventType.ASK_NEVO_REDIRECT_USED:
+            _require_keys(self.event_data, {"role", "currentPage", "redirectTarget"})
+            if self.event_data.get("role") not in {"student", "teacher"}:
+                raise ValueError("Ask Nevo redirect role must be student or teacher.")
+
+
+def _require_keys(payload: dict[str, Any], keys: set[str]) -> None:
+    missing = sorted(key for key in keys if payload.get(key) in {None, ""})
+    if missing:
+        joined = ", ".join(missing)
+        raise ValueError(f"Ask Nevo signal missing required field(s): {joined}.")
+
+
+def _require_category(payload: dict[str, Any], *, allowed: set[str]) -> None:
+    category = payload.get("questionCategory")
+    if category not in allowed:
+        joined = ", ".join(sorted(allowed))
+        raise ValueError(f"Ask Nevo questionCategory must be one of: {joined}.")
 
 
 class SignalBatchRequest(BaseModel):

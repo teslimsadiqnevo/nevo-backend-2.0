@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from uuid import UUID
 
 from nevo.domain.intelligence.vocabulary import (
@@ -197,3 +198,16 @@ class ScaffoldProblemLogEntry:
     next_scaffold_intensity: ScaffoldIntensity
     level_changed: bool
     change_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptationEventLogRecord:
+    id: UUID
+    student_id: UUID
+    student_first_name: str
+    lesson_id: UUID
+    lesson_title: str
+    timestamp: datetime
+    trigger: str
+    adaptation: str
+    event_type: str

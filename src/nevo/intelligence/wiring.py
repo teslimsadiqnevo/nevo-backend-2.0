@@ -10,6 +10,10 @@ from nevo.intelligence.adaptation import (
     AdaptationEngineService,
     SqlAlchemyLearnerProfileRepository,
 )
+from nevo.intelligence.adaptation_log import AdaptationEventLogService
+from nevo.intelligence.adaptation_log_repositories import (
+    SqlAlchemyAdaptationEventLogRepository,
+)
 from nevo.intelligence.scaffold_repositories import SqlAlchemyScaffoldRepository
 from nevo.intelligence.scaffold_service import ScaffoldFadingService
 from nevo.intelligence.scaffolds import ProgressiveScaffoldFadingEngine
@@ -40,4 +44,12 @@ def build_scaffold_fading_service(
     return ScaffoldFadingService(
         repository=SqlAlchemyScaffoldRepository(sessions),
         engine=ProgressiveScaffoldFadingEngine(),
+    )
+
+
+def build_adaptation_event_log_service(
+    sessions: async_sessionmaker[AsyncSession],
+) -> AdaptationEventLogService:
+    return AdaptationEventLogService(
+        repository=SqlAlchemyAdaptationEventLogRepository(sessions)
     )

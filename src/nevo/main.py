@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from nevo.ai_gateway.config import AiGatewaySettings
 from nevo.ai_gateway.wiring import build_ai_gateway
+from nevo.api.admin import router as admin_router
 from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.ask_nevo import router as ask_nevo_router
 from nevo.api.auth import router as auth_router
@@ -40,6 +41,7 @@ from nevo.exports.wiring import build_iep_export_service
 from nevo.intelligence.wiring import (
     build_accommodation_inference_service,
     build_adaptation_engine_service,
+    build_adaptation_event_log_service,
     build_scaffold_fading_service,
 )
 from nevo.learner_profiles.wiring import (
@@ -124,6 +126,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         build_accommodation_inference_service(sessions)
     )
     app.state.scaffold_fading_service = build_scaffold_fading_service(sessions)
+    app.state.adaptation_event_log_service = build_adaptation_event_log_service(
+        sessions
+    )
     app.state.mastery_service = build_mastery_service(sessions)
     app.state.scheduler_service = build_scheduler_service(sessions)
     app.state.signal_ingestion_service = build_signal_ingestion_service(
@@ -159,6 +164,7 @@ app = FastAPI(
     swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
     generate_unique_id_function=stable_operation_id,
 )
+app.include_router(admin_router)
 app.include_router(ai_gateway_router)
 app.include_router(ask_nevo_router)
 app.include_router(auth_router)

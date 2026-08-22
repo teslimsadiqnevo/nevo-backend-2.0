@@ -28,6 +28,12 @@ OPENAPI_TAGS = [
         "description": "Admin team, role, scope, and navigation endpoints.",
     },
     {
+        "name": "admin",
+        "description": (
+            "School admin evaluation and operational reporting endpoints."
+        ),
+    },
+    {
         "name": "billing",
         "description": (
             "Admin billing, subscription, invoice, payment method, and "

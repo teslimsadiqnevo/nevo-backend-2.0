@@ -17,6 +17,7 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
         "authentication",
         "sso",
         "permissions",
+        "billing",
         "consent",
         "teacher assignments",
         "signals",
@@ -30,6 +31,11 @@ def test_openapi_schema_documents_existing_api_groups() -> None:
 
     assert "/health" in schema["paths"]
     assert "/api/v1/auth/login/password" in schema["paths"]
+    assert "/api/billing/subscription" in schema["paths"]
+    assert "/api/billing/invoices" in schema["paths"]
+    assert "/api/billing/upcoming" in schema["paths"]
+    assert "/api/billing/payment-method" in schema["paths"]
+    assert "/api/billing/billing-contact" in schema["paths"]
     assert "/api/v1/ask-nevo/" in schema["paths"]
     assert "/api/v1/exports/iep" in schema["paths"]
     assert "/api/v1/auth/sso/{provider}/callback" in schema["paths"]

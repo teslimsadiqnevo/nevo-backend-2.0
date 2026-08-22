@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     UniqueConstraint,
     Uuid,
@@ -27,6 +29,7 @@ from nevo.domain.accounts.vocabulary import (
     UserRole,
     UserStatus,
 )
+from nevo.domain.billing.vocabulary import SubscriptionTier
 from nevo.domain.consent.vocabulary import ConsentConfirmationSource
 
 user_role_enum = Enum(
@@ -47,6 +50,11 @@ user_status_enum = Enum(
 enrollment_band_enum = Enum(
     SchoolEnrollmentBand,
     name="school_enrollment_band",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+subscription_tier_enum = Enum(
+    SubscriptionTier,
+    name="subscription_tier",
     values_callable=lambda enum: [item.value for item in enum],
 )
 consent_status_enum = Enum(
@@ -94,6 +102,14 @@ class School(TimestampMixin, Base):
             "data_retention_days > 0",
             name="data_retention_days_positive",
         ),
+        CheckConstraint(
+            "contract_value IS NULL OR contract_value >= 0",
+            name="contract_value_nonnegative",
+        ),
+        CheckConstraint(
+            "contract_start IS NULL OR contract_end IS NULL OR contract_end >= contract_start",
+            name="contract_dates_ordered",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -129,6 +145,27 @@ class School(TimestampMixin, Base):
         nullable=False,
         default=365,
         server_default="365",
+    )
+    subscription_tier: Mapped[SubscriptionTier | None] = mapped_column(
+        subscription_tier_enum,
+        nullable=True,
+    )
+    contract_value: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+    )
+    contract_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    contract_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    billing_contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("billing_contacts.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
     )
 
     users: Mapped[list["User"]] = relationship(back_populates="school")

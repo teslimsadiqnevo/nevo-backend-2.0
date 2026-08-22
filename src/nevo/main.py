@@ -8,6 +8,7 @@ from nevo.ai_gateway.wiring import build_ai_gateway
 from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.ask_nevo import router as ask_nevo_router
 from nevo.api.auth import router as auth_router
+from nevo.api.billing import router as billing_router
 from nevo.api.consent import router as consent_router
 from nevo.api.content import router as content_router
 from nevo.api.docs import (
@@ -27,6 +28,7 @@ from nevo.ask_nevo.wiring import build_ask_nevo_service
 from nevo.attention_flags.wiring import build_attention_flag_detection_service
 from nevo.auth.config import AuthSettings
 from nevo.auth.wiring import build_auth_service, build_credential_hasher
+from nevo.billing.wiring import build_billing_service
 from nevo.consent.config import ConsentSettings
 from nevo.consent.wiring import build_consent_service
 from nevo.content_parsing.wiring import build_content_parsing_service
@@ -63,6 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         credential_hasher=credential_hasher,
         session_pepper=auth_settings.auth_session_pepper.get_secret_value(),
     )
+    app.state.billing_service = build_billing_service(sessions)
     app.state.teacher_assignment_service = build_teacher_assignment_service(
         sessions
     )
@@ -145,6 +148,7 @@ app = FastAPI(
 app.include_router(ai_gateway_router)
 app.include_router(ask_nevo_router)
 app.include_router(auth_router)
+app.include_router(billing_router)
 app.include_router(consent_router)
 app.include_router(content_router)
 app.include_router(exports_router)

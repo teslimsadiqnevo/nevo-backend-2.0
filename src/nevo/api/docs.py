@@ -28,6 +28,13 @@ OPENAPI_TAGS = [
         "description": "Admin team, role, scope, and navigation endpoints.",
     },
     {
+        "name": "billing",
+        "description": (
+            "Admin billing, subscription, invoice, payment method, and "
+            "billing contact endpoints."
+        ),
+    },
+    {
         "name": "consent",
         "description": "School and parent consent collection workflows.",
     },

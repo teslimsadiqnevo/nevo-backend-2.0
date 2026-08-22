@@ -13,6 +13,7 @@ from nevo.db.models.attention_flag import (
     InterventionRecommendation,
 )
 from nevo.db.models.auth import AuthAuditEvent, AuthLoginAttempt, AuthSession
+from nevo.db.models.billing import BillingContact, BillingPaymentMethod, Invoice
 from nevo.db.models.consent import (
     ConsentInvitation,
     ConsentInvitationItem,
@@ -49,6 +50,8 @@ __all__ = [
     "AuthAuditEvent",
     "AuthLoginAttempt",
     "AuthSession",
+    "BillingContact",
+    "BillingPaymentMethod",
     "Class",
     "ConsentInvitation",
     "ConsentInvitationItem",
@@ -59,6 +62,7 @@ __all__ = [
     "IepExport",
     "IepExportShare",
     "InterventionRecommendation",
+    "Invoice",
     "LearnerEngagementAnomaly",
     "LearnerProfile",
     "LearnerProfileAttentionFlag",

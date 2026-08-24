@@ -64,14 +64,18 @@ def provider_response(
     input_tokens: int = 10,
     output_tokens: int = 5,
     thought_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
 ) -> ProviderResponse:
     return ProviderResponse(
         text=text,
-        provider=AiProviderName.GEMINI,
-        model="gemini-test",
+        provider=AiProviderName.CLAUDE,
+        model="claude-haiku-4-5",
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         thought_tokens=thought_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
     )
 
 
@@ -103,6 +107,8 @@ def service_with(
         max_compliance_retries=max_retries,
         input_cost_usd_per_million=Decimal("1"),
         output_cost_usd_per_million=Decimal("2"),
+        cache_write_cost_usd_per_million=Decimal("1.25"),
+        cache_read_cost_usd_per_million=Decimal("0.10"),
     )
     return service, calls, scheduler
 
@@ -122,6 +128,26 @@ async def test_safe_response_is_returned_and_fully_audited() -> None:
     assert audit.status is AiCallStatus.SUCCEEDED
     assert audit.context.student_id is not None
     assert audit.estimated_cost_usd == Decimal("0.000024")
+
+
+async def test_prompt_cache_usage_is_included_in_cost_audit() -> None:
+    provider = SequenceProvider(
+        [
+            provider_response(
+                "Plants make food using light.",
+                input_tokens=10,
+                output_tokens=5,
+                cache_creation_input_tokens=100,
+                cache_read_input_tokens=900,
+            )
+        ]
+    )
+    service, calls, _ = service_with(provider)
+
+    await service.generate(request())
+
+    audit = calls.audits[0]
+    assert audit.estimated_cost_usd == Decimal("0.000235")
 
 
 async def test_zero_tag_violation_is_regenerated_and_usage_is_aggregated() -> None:

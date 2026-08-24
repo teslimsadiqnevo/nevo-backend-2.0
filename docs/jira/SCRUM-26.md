@@ -9,8 +9,8 @@ adjustments, break suggestions, and modality suggestions.
 
 ## Acceptance criteria
 
-1. Lesson-load requests use the Gemini Gateway with rule-based fallback.
-2. In-lesson requests use fast rule-based decisions and do not wait on Gemini.
+1. Lesson-load requests use local rule-based adaptation.
+2. In-lesson requests use fast rule-based decisions and do not wait on an AI provider.
 3. Four independent channel dimensions drive segment prioritisation and
    modality assignment.
 4. Multi-channel profiles layer preferences instead of collapsing to one
@@ -36,3 +36,7 @@ signals are IndexedDB-only, deleted at session end, never persisted, and never
 rendered as a visible label. The corrected handoff field for dwell is
 `interaction_dwell_time`; tablet flows must not fabricate cursor-specific
 signals.
+
+The AI model routing ticket supersedes the earlier lesson-load Gemini wording:
+adaptation is part of the local intelligence layer and must not call the model
+API.

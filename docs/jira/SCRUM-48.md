@@ -3,7 +3,7 @@
 ## Scope
 
 Build the attention flag workflow for engagement-decline and sudden-change
-patterns, teacher-to-support escalation records, and Gemini-generated
+patterns, teacher-to-support escalation records, and AI-generated
 intervention recommendations.
 
 ## Acceptance criteria
@@ -18,7 +18,7 @@ intervention recommendations.
    below the student's personal baseline.
 5. Sudden-change detection identifies the latest session sharply diverging from
    the student's prior engagement pattern.
-6. Recommendation generation uses the existing Gemini Gateway with the
+6. Recommendation generation uses the existing AI Gateway with the
    `intervention_recommendation.default` prompt.
 
 ## Notes

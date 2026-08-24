@@ -10,7 +10,7 @@ apply.
 ## Acceptance criteria
 
 1. Session signal data is aggregated from `lesson_sessions` and `signal_events`.
-2. The update request is sent through the existing Gemini-backed AI Gateway with
+2. The update request is sent through the existing AI Gateway with
    the current learner profile and session summary.
 3. Gateway responses are parsed as strict JSON recommendations for canonical
    profile dimensions and confidence levels.

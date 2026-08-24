@@ -8,8 +8,8 @@ from nevo.domain.ai_gateway.vocabulary import AiPriority, AiProviderName
 def response(text: str) -> ProviderResponse:
     return ProviderResponse(
         text=text,
-        provider=AiProviderName.GEMINI,
-        model="test",
+        provider=AiProviderName.CLAUDE,
+        model="claude-haiku-4-5",
     )
 
 

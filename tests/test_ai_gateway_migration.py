@@ -26,6 +26,13 @@ def test_upgrade_renders_ai_gateway_schema_and_seed_prompts() -> None:
     assert "adaptation.default" in sql
     assert "lesson_generation.default" in sql
     assert "narrative.default" in sql
+    assert "alter type ai_provider add value if not exists 'claude'" in sql
+    assert "content_parse.lesson_boundaries" in sql
+    assert "content_parse.module_boundaries" in sql
+    assert "content_parse.segment_boundaries" in sql
+    assert "content_parse.module_recap" in sql
+    assert "content_parse.module_preview" in sql
+    assert "content_parse.boundary_confidence" in sql
 
 
 def test_downgrade_removes_ai_gateway_schema() -> None:

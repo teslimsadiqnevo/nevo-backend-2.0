@@ -1,5 +1,4 @@
-import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Protocol
@@ -8,12 +7,8 @@ from uuid import UUID
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from nevo.ai_gateway.entities import AiGenerationRequest
-from nevo.ai_gateway.errors import AiGatewayError
-from nevo.ai_gateway.service import AiGatewayService
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.signal_event import SignalEvent
-from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.intelligence.vocabulary import (
     AdaptationMode,
     ContentModality,
@@ -132,11 +127,10 @@ class AdaptationEngineService:
         self,
         *,
         profiles: LearnerProfileRepository,
-        gateway: AiGatewayService,
+        gateway: object | None = None,
         rate_limits: AdaptationRateLimitRepository | None = None,
     ) -> None:
         self._profiles = profiles
-        self._gateway = gateway
         self._rate_limits = rate_limits
 
     async def adapt(
@@ -149,50 +143,7 @@ class AdaptationEngineService:
         fallback_plan = rule_based_adaptation_plan(request=request, profile=profile)
         if request.mode is AdaptationMode.IN_LESSON:
             return await self._apply_rate_limits(request=request, plan=fallback_plan)
-
-        try:
-            result = await self._gateway.generate(
-                AiGenerationRequest(
-                    requester_user_id=requested_by_user_id,
-                    student_id=request.student_id,
-                    service=AiService.ADAPTATION,
-                    prompt_name="adaptation.default",
-                    variables={
-                        "source_text": json.dumps(
-                            _segments_for_prompt(request.segments),
-                            sort_keys=True,
-                        ),
-                        "instruction": json.dumps(
-                            {
-                                "lesson_id": str(request.lesson_id),
-                                "profile": _profile_for_prompt(profile),
-                                "required_shape": {
-                                    "segments": [
-                                        {
-                                            "segment_id": "string",
-                                            "modality": "visual|audio|text|interactive",
-                                            "density": "low|medium|high",
-                                            "scaffolding": "light|standard|strong",
-                                            "priority": 0,
-                                        }
-                                    ]
-                                },
-                            },
-                            sort_keys=True,
-                        ),
-                    },
-                    max_output_tokens=2_048,
-                )
-            )
-        except AiGatewayError:
-            return fallback_plan
-
-        gemini_plan = parse_gemini_adaptation_plan(
-            lesson_id=request.lesson_id,
-            response_text=result.text,
-            fallback_plan=fallback_plan,
-        )
-        return gemini_plan or fallback_plan
+        return fallback_plan
 
     async def _apply_rate_limits(
         self,
@@ -258,55 +209,6 @@ def rule_based_adaptation_plan(
             profile=profile,
         ),
         source="rule_based",
-    )
-
-
-def parse_gemini_adaptation_plan(
-    *,
-    lesson_id: UUID,
-    response_text: str,
-    fallback_plan: AdaptationPlan,
-) -> AdaptationPlan | None:
-    try:
-        payload = json.loads(_json_payload(response_text))
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    items = payload.get("segments")
-    if not isinstance(items, list):
-        return None
-
-    adapted: list[SegmentAdaptation] = []
-    fallback_by_id = {item.segment_id: item for item in fallback_plan.segments}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        segment_id = str(item.get("segment_id") or item.get("id") or "")
-        fallback = fallback_by_id.get(segment_id)
-        if fallback is None:
-            continue
-        try:
-            adapted.append(
-                SegmentAdaptation(
-                    segment_id=segment_id,
-                    modality=ContentModality(str(item.get("modality"))),
-                    density=DensityLevel(str(item.get("density"))),
-                    scaffolding=ScaffoldingLevel(str(item.get("scaffolding"))),
-                    priority=int(item.get("priority", fallback.priority)),
-                )
-            )
-        except (ValueError, TypeError):
-            adapted.append(fallback)
-    if not adapted:
-        return None
-    return AdaptationPlan(
-        lesson_id=lesson_id,
-        segments=tuple(adapted),
-        break_suggestion=fallback_plan.break_suggestion,
-        proactive_adjustment=fallback_plan.proactive_adjustment,
-        modality_suggestion=fallback_plan.modality_suggestion,
-        source="gemini",
     )
 
 
@@ -967,40 +869,3 @@ def _profile_channels(
             profile.interactive_kinesthetic_preference
         ),
     }
-
-
-def _segments_for_prompt(segments: Iterable[ContentSegment]) -> list[dict[str, object]]:
-    return [
-        {
-            "id": segment.id,
-            "concept_id": segment.concept_id,
-            "segment_type": segment.segment_type.value,
-            "available_modalities": [
-                modality.value for modality in segment.available_modalities
-            ],
-            "estimated_minutes": segment.estimated_minutes,
-            "passive": segment.passive,
-            "title": segment.title,
-        }
-        for segment in segments
-    ]
-
-
-def _profile_for_prompt(profile: LearnerProfileSnapshot) -> dict[str, object]:
-    return {
-        channel: {
-            "value": preference.value.value if preference.value is not None else None,
-            "confidence": preference.confidence.value,
-        }
-        for channel, preference in _profile_channels(profile).items()
-    }
-
-
-def _json_payload(response_text: str) -> str:
-    stripped = response_text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    if len(lines) >= 3 and lines[-1].strip() == "```":
-        return "\n".join(lines[1:-1]).strip()
-    return stripped

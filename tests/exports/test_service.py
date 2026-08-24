@@ -15,8 +15,8 @@ class FakeGateway:
     async def generate(self, request):
         return AiGenerationResult(
             text="## Progress\nThis learner benefits from short visual checks.",
-            provider=AiProviderName.GEMINI,
-            model="test",
+            provider=AiProviderName.CLAUDE,
+            model="claude-haiku-4-5",
             prompt_name=request.prompt_name,
             prompt_version=1,
             fallback_used=False,

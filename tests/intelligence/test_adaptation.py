@@ -1,11 +1,8 @@
-import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 
-from nevo.ai_gateway.errors import ProviderUnavailableError
 from nevo.domain.intelligence.vocabulary import (
     AdaptationMode,
     ContentModality,
@@ -45,16 +42,12 @@ class FakeProfiles:
 
 
 class FakeGateway:
-    def __init__(self, text: str | None = None, fail: bool = False) -> None:
-        self.text = text or "{}"
-        self.fail = fail
+    def __init__(self) -> None:
         self.calls = 0
 
     async def generate(self, request: object) -> object:
         self.calls += 1
-        if self.fail:
-            raise ProviderUnavailableError
-        return SimpleNamespace(text=self.text)
+        raise AssertionError("adaptation intelligence must stay local")
 
 
 class FakeRateLimits:
@@ -223,22 +216,8 @@ def test_rule_based_adaptation_blocks_consecutive_modality_suggestions() -> None
 
 
 @pytest.mark.asyncio
-async def test_adaptation_engine_uses_gemini_on_lesson_load() -> None:
-    gateway = FakeGateway(
-        json.dumps(
-            {
-                "segments": [
-                    {
-                        "segment_id": "diagram-1",
-                        "modality": "visual",
-                        "density": "medium",
-                        "scaffolding": "standard",
-                        "priority": 90,
-                    }
-                ]
-            }
-        )
-    )
+async def test_adaptation_engine_stays_rule_based_on_lesson_load() -> None:
+    gateway = FakeGateway()
     service = AdaptationEngineService(
         profiles=FakeProfiles(channel_profile()),
         gateway=gateway,  # type: ignore[arg-type]
@@ -254,16 +233,17 @@ async def test_adaptation_engine_uses_gemini_on_lesson_load() -> None:
         requested_by_user_id=REQUESTER_ID,
     )
 
-    assert gateway.calls == 1
-    assert plan.source == "gemini"
-    assert plan.segments[0].priority == 90
+    assert gateway.calls == 0
+    assert plan.source == "rule_based"
+    assert plan.segments
 
 
 @pytest.mark.asyncio
-async def test_adaptation_engine_falls_back_when_gemini_unavailable() -> None:
+async def test_adaptation_engine_ignores_gateway_unavailability() -> None:
+    gateway = FakeGateway()
     service = AdaptationEngineService(
         profiles=FakeProfiles(balanced_profile()),
-        gateway=FakeGateway(fail=True),  # type: ignore[arg-type]
+        gateway=gateway,  # type: ignore[arg-type]
     )
 
     plan = await service.adapt(
@@ -276,6 +256,7 @@ async def test_adaptation_engine_falls_back_when_gemini_unavailable() -> None:
         requested_by_user_id=REQUESTER_ID,
     )
 
+    assert gateway.calls == 0
     assert plan.source == "rule_based"
     assert plan.segments
 

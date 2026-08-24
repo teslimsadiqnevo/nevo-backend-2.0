@@ -23,8 +23,8 @@ class FakeGateway:
         self.requests.append(request)
         return AiGenerationResult(
             text=self.text,
-            provider=AiProviderName.GEMINI,
-            model="test",
+            provider=AiProviderName.CLAUDE,
+            model="claude-haiku-4-5",
             prompt_name=request.prompt_name,
             prompt_version=1,
             fallback_used=False,
@@ -62,7 +62,7 @@ class FakeRepository:
 
 
 @pytest.mark.asyncio
-async def test_parses_gemini_segments_and_normalizes_calculation_variant() -> None:
+async def test_parses_ai_segments_and_normalizes_calculation_variant() -> None:
     repository = FakeRepository()
     gateway = FakeGateway(
         """
@@ -128,7 +128,7 @@ async def test_parses_gemini_segments_and_normalizes_calculation_variant() -> No
 
 
 @pytest.mark.asyncio
-async def test_falls_back_to_reviewable_segments_when_gemini_json_is_invalid() -> None:
+async def test_falls_back_to_reviewable_segments_when_ai_json_is_invalid() -> None:
     repository = FakeRepository()
     service = ContentParsingService(
         repository=repository,
@@ -147,7 +147,7 @@ async def test_falls_back_to_reviewable_segments_when_gemini_json_is_invalid() -
     assert result.status is ContentParseStatus.COMPLETED_WITH_REVIEW
     assert result.segment_count == 2
     assert result.review_segment_count == 2
-    assert result.review_notes[0]["code"] == "gemini_parse_fallback"
+    assert result.review_notes[0]["code"] == "ai_parse_fallback"
     assert repository.parsed.segments[0].available_modalities[0] is ContentModality.TEXT  # type: ignore[union-attr]
 
 

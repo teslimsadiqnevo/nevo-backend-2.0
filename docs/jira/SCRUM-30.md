@@ -35,4 +35,4 @@ Sharing is blocked until the export is final.
 
 ## Zero-Tag Generation
 
-The Gemini prompt seed `iep_export.draft` instructs board-ready functional language only. The service also runs the generated content through the existing Zero-Tag compliance policy before saving the draft.
+The AI Gateway prompt seed `iep_export.draft` instructs board-ready functional language only. The service also runs the generated content through the existing Zero-Tag compliance policy before saving the draft.

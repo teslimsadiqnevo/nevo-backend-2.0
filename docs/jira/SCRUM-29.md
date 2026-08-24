@@ -1,14 +1,14 @@
 # SCRUM-29 Content Parsing Pipeline
 
-Implemented the backend slice for Gemini-powered lesson parsing.
+Implemented the backend slice for Claude-backed lesson parsing.
 
 ## Backend Contract
 
 - Added `lessons`, `content_parse_runs`, and `lesson_segments`.
 - Added `POST /api/content/parse`.
 - The endpoint accepts extracted source text, page text, or import metadata for PDF, Word, PowerPoint, Google Drive, OneDrive, and text sources.
-- Large source text is chunked before Gemini calls.
-- Gemini output is normalized into ordered lesson segments tagged with:
+- Large source text is chunked before AI Gateway calls.
+- Claude output is normalized into ordered lesson segments tagged with:
   - `contentType`
   - `sequenceOrder`
   - `availableModalities`
@@ -28,7 +28,7 @@ Implemented the backend slice for Gemini-powered lesson parsing.
   - `provider`
   - `generatedAt`
   - optional `caption`
-- If image generation fails or Gemini returns an incomplete visual image object, the backend stores `visual_variant = null`, removes `visual` from `availableModalities`, and marks the segment for teacher review with `visual_variant_image_generation_failed`.
+- If image generation fails or the AI provider returns an incomplete visual image object, the backend stores `visual_variant = null`, removes `visual` from `availableModalities`, and marks the segment for teacher review with `visual_variant_image_generation_failed`.
 
 ## Calculation Co-Construction
 
@@ -47,4 +47,18 @@ Actual audio generation and storage are intentionally placeholder-backed until S
 
 ## Fallback
 
-If Gemini is unavailable or returns malformed JSON, the service creates deterministic reviewable segments instead of failing the upload flow. These fallback segments are marked `needsReview` for Upload Step 4.
+If Claude is unavailable or returns malformed JSON, the service creates deterministic reviewable segments instead of failing the upload flow. These fallback segments are marked `needsReview` for Upload Step 4.
+
+## Prompt library
+
+The six staged parsing prompts are seeded in `ai_prompt_templates`:
+
+- `content_parse.lesson_boundaries`
+- `content_parse.module_boundaries`
+- `content_parse.segment_boundaries`
+- `content_parse.module_recap`
+- `content_parse.module_preview`
+- `content_parse.boundary_confidence`
+
+Haiku is the default model. Sonnet is an explicit step-up only after Haiku
+quality testing shows a transformation needs stronger reasoning.

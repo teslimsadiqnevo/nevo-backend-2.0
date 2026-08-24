@@ -2,9 +2,9 @@
 
 ## Scope
 
-Build student and teacher Ask Nevo backend flows using Gemini through the AI
-Gateway, dynamic page-aware context, Zero-Tag compliance, and privacy-preserving
-interaction logs.
+Build student and teacher Ask Nevo backend flows using Claude Haiku through the
+AI Gateway, dynamic page-aware context, Zero-Tag compliance, prompt caching, and
+privacy-preserving interaction logs.
 
 ## Acceptance criteria
 

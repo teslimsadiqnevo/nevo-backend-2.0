@@ -61,7 +61,7 @@ OPENAPI_TAGS = [
     },
     {
         "name": "ai-gateway",
-        "description": "Centralized Gemini Gateway generation endpoint.",
+        "description": "Centralized Claude Gateway generation endpoint.",
     },
     {
         "name": "ask-nevo",

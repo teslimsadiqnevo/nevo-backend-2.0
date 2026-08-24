@@ -27,5 +27,6 @@ class AiCallStatus(StrEnum):
 
 
 class AiProviderName(StrEnum):
+    CLAUDE = "claude"
     GEMINI = "gemini"
     RULE_BASED = "rule_based"

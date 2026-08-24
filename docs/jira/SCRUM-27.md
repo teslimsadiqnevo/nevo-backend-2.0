@@ -14,7 +14,7 @@ real-time lesson support.
 5. Detect three or more replays on the same segment.
 6. Select `micro`, `movement`, `consolidation`, or `full` breaks based on the
    fired thresholds and learner profile.
-7. Avoid Gemini calls for break decisions so the response is fast enough for
+7. Avoid AI provider calls for break decisions so the response is fast enough for
    in-lesson use.
 
 ## Notes

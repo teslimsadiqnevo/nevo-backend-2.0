@@ -41,6 +41,11 @@ def test_gateway_call_enums_and_privacy_contract_are_exact() -> None:
         "fallback",
         "failed",
     ]
+    assert enum_values("ai_gateway_calls", "provider") == [
+        "claude",
+        "gemini",
+        "rule_based",
+    ]
     columns = Base.metadata.tables["ai_gateway_calls"].columns
     assert "prompt" not in columns
     assert "response" not in columns

@@ -25,6 +25,8 @@ class AiGenerationRequest:
     variables: dict[str, str]
     student_id: UUID | None = None
     max_output_tokens: int = 1_024
+    model: str | None = None
+    cache_prompt: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +52,8 @@ class ProviderRequest:
     system_instruction: str
     user_content: str
     max_output_tokens: int
+    model: str | None = None
+    cache_prompt: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +64,8 @@ class ProviderResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     thought_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)

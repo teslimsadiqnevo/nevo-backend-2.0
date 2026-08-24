@@ -52,8 +52,8 @@ def test_authenticated_generation_returns_version_and_call_id() -> None:
             [
                 ProviderResponse(
                     text="The learner completed three activities.",
-                    provider=AiProviderName.GEMINI,
-                    model="test",
+                    provider=AiProviderName.CLAUDE,
+                    model="claude-haiku-4-5",
                 )
             ]
         ),
@@ -64,6 +64,8 @@ def test_authenticated_generation_returns_version_and_call_id() -> None:
         max_compliance_retries=1,
         input_cost_usd_per_million=Decimal("0"),
         output_cost_usd_per_million=Decimal("0"),
+        cache_write_cost_usd_per_million=Decimal("0"),
+        cache_read_cost_usd_per_million=Decimal("0"),
     )
     principal = AuthPrincipal(
         user_id=user_id,

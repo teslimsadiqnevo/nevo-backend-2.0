@@ -47,7 +47,7 @@ class ContentParsingService:
         chunks = _chunks(source)
         segments: list[ParsedLessonSegment] = []
         review_notes: list[dict[str, object]] = []
-        gemini_call_count = 0
+        ai_call_count = 0
 
         for index, chunk in enumerate(chunks, start=1):
             try:
@@ -66,9 +66,9 @@ class ContentParsingService:
                         max_output_tokens=4_096,
                     )
                 )
-                gemini_call_count += 1
+                ai_call_count += 1
                 segments.extend(
-                    _segments_from_gemini(
+                    _segments_from_ai(
                         result.text,
                         sequence_offset=len(segments),
                     )
@@ -76,10 +76,10 @@ class ContentParsingService:
             except (AiGatewayError, ValueError, json.JSONDecodeError) as error:
                 review_notes.append(
                     {
-                        "code": "gemini_parse_fallback",
+                        "code": "ai_parse_fallback",
                         "chunkNumber": index,
                         "message": (
-                            "This chunk used deterministic parsing because Gemini "
+                            "This chunk used deterministic parsing because the AI "
                             "could not return valid structured lesson data."
                         ),
                         "error": error.__class__.__name__,
@@ -97,7 +97,7 @@ class ContentParsingService:
             segments=tuple(_normalize_segment(segment) for segment in segments),
             review_notes=tuple(review_notes),
             confirmation_summary=_confirmation_summary(segments),
-            gemini_call_count=gemini_call_count,
+            gemini_call_count=ai_call_count,
             chunk_count=len(chunks),
         )
         return await self._repository.store(
@@ -144,7 +144,7 @@ def _chunks(source: str) -> list[str]:
     return chunks
 
 
-def _segments_from_gemini(
+def _segments_from_ai(
     text: str,
     *,
     sequence_offset: int,
@@ -152,7 +152,7 @@ def _segments_from_gemini(
     payload = _json_payload(text)
     raw_segments = payload.get("segments")
     if not isinstance(raw_segments, list) or not raw_segments:
-        raise ValueError("Gemini returned no parseable segments")
+        raise ValueError("AI provider returned no parseable segments")
     parsed: list[ParsedLessonSegment] = []
     for index, item in enumerate(raw_segments, start=1):
         if not isinstance(item, dict):
@@ -164,7 +164,7 @@ def _segments_from_gemini(
             )
         )
     if not parsed:
-        raise ValueError("Gemini returned only malformed segments")
+        raise ValueError("AI provider returned only malformed segments")
     return tuple(parsed)
 
 
@@ -179,7 +179,7 @@ def _json_payload(text: str) -> dict[str, object]:
         raise json.JSONDecodeError("missing JSON object", stripped, 0)
     payload = json.loads(stripped[start : end + 1])
     if not isinstance(payload, dict):
-        raise ValueError("Gemini payload must be a JSON object")
+        raise ValueError("AI provider payload must be a JSON object")
     return payload
 
 

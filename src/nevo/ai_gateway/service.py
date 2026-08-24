@@ -48,6 +48,8 @@ class AiGatewayService:
         max_compliance_retries: int,
         input_cost_usd_per_million: Decimal,
         output_cost_usd_per_million: Decimal,
+        cache_write_cost_usd_per_million: Decimal,
+        cache_read_cost_usd_per_million: Decimal,
     ) -> None:
         self._prompts = prompts
         self._calls = calls
@@ -59,6 +61,8 @@ class AiGatewayService:
         self._max_compliance_retries = max_compliance_retries
         self._input_cost = input_cost_usd_per_million
         self._output_cost = output_cost_usd_per_million
+        self._cache_write_cost = cache_write_cost_usd_per_million
+        self._cache_read_cost = cache_read_cost_usd_per_million
 
     async def generate(
         self,
@@ -88,6 +92,8 @@ class AiGatewayService:
                 system_instruction=rendered.system_instruction,
                 user_content=user_content,
                 max_output_tokens=request.max_output_tokens,
+                model=request.model,
+                cache_prompt=request.cache_prompt,
             )
 
             async def generate_once(
@@ -123,10 +129,18 @@ class AiGatewayService:
         input_tokens = sum(item.input_tokens for item in responses)
         output_tokens = sum(item.output_tokens for item in responses)
         thought_tokens = sum(item.thought_tokens for item in responses)
+        cache_creation_input_tokens = sum(
+            item.cache_creation_input_tokens for item in responses
+        )
+        cache_read_input_tokens = sum(
+            item.cache_read_input_tokens for item in responses
+        )
         estimated_cost = self._estimated_cost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             thought_tokens=thought_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
         )
         call_id = await self._calls.record(
             AiCallAudit(
@@ -172,10 +186,14 @@ class AiGatewayService:
         input_tokens: int,
         output_tokens: int,
         thought_tokens: int,
+        cache_creation_input_tokens: int,
+        cache_read_input_tokens: int,
     ) -> Decimal:
         return (
             Decimal(input_tokens) * self._input_cost
             + Decimal(output_tokens + thought_tokens) * self._output_cost
+            + Decimal(cache_creation_input_tokens) * self._cache_write_cost
+            + Decimal(cache_read_input_tokens) * self._cache_read_cost
         ) / ONE_MILLION
 
 

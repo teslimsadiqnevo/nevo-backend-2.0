@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   AFFECTIVE_STATES,
   FORM_FACTORS,
+  RAW_TOUCH_SIGNAL_TYPES,
   SIGNAL_TYPES,
   SYSTEM_BUSY_REASONS,
+  TOUCH_SIGNAL_SURFACING_POLICY,
   calibratedConfusionGraceMs,
   evaluateAffectiveWindow,
   evaluateProductiveConfusion,
@@ -38,6 +40,13 @@ test("exports the contract states and tablet-first signals", () => {
   assert.ok(FORM_FACTORS.includes("mobile_touch"));
   assert.ok(SIGNAL_TYPES.includes("tap_duration"));
   assert.ok(SIGNAL_TYPES.includes("inter_touch_idle"));
+  assert.ok(RAW_TOUCH_SIGNAL_TYPES.includes("tap_latency"));
+  assert.ok(RAW_TOUCH_SIGNAL_TYPES.includes("gesture_completion_rate"));
+  assert.equal(TOUCH_SIGNAL_SURFACING_POLICY.storage, "indexeddb_session_only");
+  assert.equal(TOUCH_SIGNAL_SURFACING_POLICY.backendTransport, false);
+  assert.equal(TOUCH_SIGNAL_SURFACING_POLICY.opsFeed, false);
+  assert.equal(TOUCH_SIGNAL_SURFACING_POLICY.downstreamApi, false);
+  assert.equal(TOUCH_SIGNAL_SURFACING_POLICY.visibleLabels, false);
   assert.ok(!SIGNAL_TYPES.includes("cursor_dwell_time"));
   assert.equal(SYSTEM_BUSY_REASONS.length, 8);
 });

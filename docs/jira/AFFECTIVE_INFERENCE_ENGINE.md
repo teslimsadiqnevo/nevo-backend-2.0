@@ -17,6 +17,31 @@ receive, persist, or infer from affective behavioural signals.
 5. Affective baselines are scoped by form factor: `tablet_touch`,
    `desktop_cursor`, or `mobile_touch`.
 
+## Touch signal compliance guard
+
+Raw touch signals never surface outside the client affective module. These
+signals are IndexedDB-only, ephemeral, and deleted at session end:
+
+- `tap_latency`
+- `tap_duration`
+- `aborted_gesture`
+- `inter_touch_idle`
+- `scroll_pattern`
+- `gesture_completion_rate`
+
+The backend, ops event feed, ops adaptation log, teacher console, admin
+dashboard, exports, and downstream APIs must not receive or render these raw
+signals. The old handoff wording `idle_time_between_touches` maps to
+`inter_touch_idle` in the browser module.
+
+Only the derived affective state can influence session behaviour. That derived
+state remains session-scoped, is never persisted, and is never rendered as a
+visible label. If a surface needs plain-language wording such as a learner
+pausing before answering, the wording is generated at surfacing time from the
+derived state and current context, not from raw touch signal storage.
+
+This guard is NDPA-relevant and must be referenced in the DPIA before v1 launch.
+
 ## Supported states
 
 - `neutral`
@@ -36,8 +61,9 @@ Tablet and mobile touch signals are first-class:
 - `scroll_pattern`
 - `gesture_completion_rate`
 
-`cursor_dwell_time` is deliberately retired. Touch dwell is represented by
-`tap_duration`; gaps between touches are represented by `inter_touch_idle`.
+The old cursor-specific dwell field name is deliberately retired. Touch dwell is
+represented by `tap_duration`; gaps between touches are represented by
+`inter_touch_idle`.
 
 ## System busy exclusion
 
@@ -95,4 +121,3 @@ The pure helpers `inferAffectiveStateFromWindow`,
 `evaluateAffectiveWindow`, `evaluateProductiveConfusion`, and
 `calibratedConfusionGraceMs` are exported for deterministic tests and frontend
 state management.
-

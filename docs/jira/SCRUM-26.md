@@ -20,9 +20,19 @@ adjustments, break suggestions, and modality suggestions.
    engagement decline, and a higher-confidence available channel.
 7. Frequency constraints block same-segment, consecutive-segment, and repeated
    declined-session suggestions.
+8. Raw touch signals never surface through adaptation requests, responses, logs,
+   or admin/teacher views. In-lesson adaptation can consume derived,
+   session-scoped affective state and multi-signal confirmation only.
 
 ## Notes
 
 Parsed lesson segments are request payloads for now. When SCRUM-29 lands the
 same service can swap to a repository lookup without changing the response
 shape.
+
+Any logged adaptation event must describe the aligned trigger evidence in
+functional language and include confidence scores for the decision. Raw touch
+signals are IndexedDB-only, deleted at session end, never persisted, and never
+rendered as a visible label. The corrected handoff field for dwell is
+`interaction_dwell_time`; tablet flows must not fabricate cursor-specific
+signals.

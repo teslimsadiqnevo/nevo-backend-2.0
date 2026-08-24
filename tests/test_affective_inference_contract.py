@@ -30,6 +30,12 @@ def test_affective_engine_is_client_side_only() -> None:
 def test_affective_states_and_touch_contract_are_declared() -> None:
     text = source()
 
+    assert "RAW_TOUCH_SIGNAL_TYPES" in text
+    assert "TOUCH_SIGNAL_SURFACING_POLICY" in text
+    assert "backendTransport: false" in text
+    assert "opsFeed: false" in text
+    assert "downstreamApi: false" in text
+    assert "visibleLabels: false" in text
     for state in ("neutral", "anxiety", "boredom", "frustration", "confusion"):
         assert state in text
     for form_factor in ("tablet_touch", "desktop_cursor", "mobile_touch"):

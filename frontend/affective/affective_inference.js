@@ -45,6 +45,24 @@ export const SIGNAL_TYPES = Object.freeze([
   "resolved_confusion",
 ]);
 
+export const RAW_TOUCH_SIGNAL_TYPES = Object.freeze([
+  "tap_latency",
+  "tap_duration",
+  "aborted_gesture",
+  "inter_touch_idle",
+  "scroll_pattern",
+  "gesture_completion_rate",
+]);
+
+export const TOUCH_SIGNAL_SURFACING_POLICY = Object.freeze({
+  storage: "indexeddb_session_only",
+  deleteAt: "session_end",
+  backendTransport: false,
+  opsFeed: false,
+  downstreamApi: false,
+  visibleLabels: false,
+});
+
 export const SYSTEM_BUSY_REASONS = Object.freeze([
   "route_transition",
   "content_loading",
@@ -454,4 +472,3 @@ export function attachAffectiveCaptureListeners(root = document, options = {}) {
     window.removeEventListener("scroll", onScroll);
   };
 }
-

@@ -34,6 +34,7 @@ from nevo.intelligence.entities import (
     ScaffoldProblemAttempt,
     ScaffoldProblemLogEntry,
     SegmentAdaptation,
+    TriggerSignal,
 )
 from nevo.intelligence.scaffold_service import ScaffoldFadingService
 
@@ -198,19 +199,45 @@ class SegmentAdaptationResponse(BaseModel):
 class ProactiveAdjustmentResponse(BaseModel):
     action: str
     reason: str
+    confidence: float
+    trigger_signals: list["TriggerSignalResponse"]
 
     @classmethod
     def from_adjustment(
         cls,
         adjustment: ProactiveAdjustment,
     ) -> "ProactiveAdjustmentResponse":
-        return cls(action=adjustment.action, reason=adjustment.reason)
+        return cls(
+            action=adjustment.action,
+            reason=adjustment.reason,
+            confidence=adjustment.confidence,
+            trigger_signals=[
+                TriggerSignalResponse.from_signal(signal)
+                for signal in adjustment.trigger_signals
+            ],
+        )
+
+
+class TriggerSignalResponse(BaseModel):
+    category: str
+    name: str
+    confidence: float
+
+    @classmethod
+    def from_signal(cls, signal: TriggerSignal) -> "TriggerSignalResponse":
+        return cls(
+            category=signal.category,
+            name=signal.name,
+            confidence=signal.confidence,
+        )
 
 
 class ModalitySuggestionResponse(BaseModel):
     suggested: ContentModality
     trigger_reason: str
     confidence: ConfidenceLevel
+    adaptation_confidence: float
+    trigger_signals: list[TriggerSignalResponse]
 
     @classmethod
     def from_suggestion(
@@ -221,6 +248,11 @@ class ModalitySuggestionResponse(BaseModel):
             suggested=suggestion.suggested,
             trigger_reason=suggestion.trigger_reason,
             confidence=suggestion.confidence,
+            adaptation_confidence=suggestion.adaptation_confidence,
+            trigger_signals=[
+                TriggerSignalResponse.from_signal(signal)
+                for signal in suggestion.trigger_signals
+            ],
         )
 
 

@@ -89,9 +89,18 @@ class SegmentAdaptation:
 
 
 @dataclass(frozen=True, slots=True)
+class TriggerSignal:
+    category: str
+    name: str
+    confidence: float
+
+
+@dataclass(frozen=True, slots=True)
 class ProactiveAdjustment:
     action: str
     reason: str
+    confidence: float = 0
+    trigger_signals: tuple[TriggerSignal, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +108,8 @@ class ModalitySuggestion:
     suggested: ContentModality
     trigger_reason: str
     confidence: ConfidenceLevel
+    adaptation_confidence: float = 0
+    trigger_signals: tuple[TriggerSignal, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +119,8 @@ class SuppressedAdaptationAttempt:
     current_segment_id: str | None
     current_modality: ContentModality | None
     suggested_modality: ContentModality | None
+    confidence: float
+    trigger_signals: tuple[TriggerSignal, ...]
 
 
 @dataclass(frozen=True, slots=True)

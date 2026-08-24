@@ -38,8 +38,13 @@ from nevo.intelligence.entities import (
     RuntimeSignals,
     SegmentAdaptation,
     SuppressedAdaptationAttempt,
+    TriggerSignal,
 )
 
+FIRST_ADAPTATION_CONFIDENCE_THRESHOLD = 0.60
+SUBSEQUENT_ADAPTATION_CONFIDENCE_THRESHOLD = 0.70
+MIN_ALIGNED_SIGNAL_COUNT = 3
+MIN_ALIGNED_SIGNAL_CATEGORIES = 2
 MIN_MODALITY_DWELL_SECONDS = 90
 ADAPTATION_COOLDOWN_SECONDS = 120
 MAX_MODALITY_SHIFTS_PER_SESSION = 3
@@ -244,7 +249,10 @@ def rule_based_adaptation_plan(
         lesson_id=request.lesson_id,
         segments=segments,
         break_suggestion=break_suggestion,
-        proactive_adjustment=_proactive_adjustment(request.signals),
+        proactive_adjustment=_proactive_adjustment(
+            signals=request.signals,
+            profile=profile,
+        ),
         modality_suggestion=_modality_suggestion(
             signals=request.signals,
             profile=profile,
@@ -390,6 +398,30 @@ class SqlAlchemyAdaptationRateLimitRepository:
             event_data["currentModality"] = attempt.current_modality.value
         if attempt.suggested_modality is not None:
             event_data["suggestedModality"] = attempt.suggested_modality.value
+        event_data["adaptationConfidence"] = attempt.confidence
+        event_data["triggerSignals"] = [
+            {
+                "category": signal.category,
+                "name": signal.name,
+                "confidence": signal.confidence,
+            }
+            for signal in attempt.trigger_signals
+        ]
+        candidate = request.signals
+        event_data["signalSnapshot"] = {
+            "currentSegmentElapsedSeconds": candidate.current_segment_elapsed_seconds,
+            "secondsSinceLastAdaptation": candidate.seconds_since_last_adaptation,
+            "sessionModalityShiftCount": candidate.session_modality_shift_count,
+            "engagementBelowBaselineSeconds": (
+                candidate.engagement_below_baseline_seconds
+            ),
+            "comprehensionScore": candidate.comprehension_score,
+            "sessionAverageComprehension": candidate.session_average_comprehension,
+            "consecutiveErrors": candidate.consecutive_errors,
+            "replayCountOnSegment": candidate.replay_count_on_segment,
+            "accuracyBelowBaseline": candidate.accuracy_below_baseline,
+            "responseTimeBelowBaseline": candidate.response_time_below_baseline,
+        }
         async with self._sessions.begin() as session:
             await session.execute(
                 insert(SignalEvent).values(
@@ -503,6 +535,8 @@ def _suppression_attempt(
             if plan.modality_suggestion is not None
             else None
         ),
+        confidence=_plan_confidence(plan),
+        trigger_signals=_plan_trigger_signals(plan),
     )
 
 
@@ -517,6 +551,22 @@ def _suppress_plan(
         modality_suggestion=None,
         suppressed_attempt=attempt,
     )
+
+
+def _plan_confidence(plan: AdaptationPlan) -> float:
+    if plan.modality_suggestion is not None:
+        return plan.modality_suggestion.adaptation_confidence
+    if plan.proactive_adjustment is not None:
+        return plan.proactive_adjustment.confidence
+    return 0
+
+
+def _plan_trigger_signals(plan: AdaptationPlan) -> tuple[TriggerSignal, ...]:
+    if plan.modality_suggestion is not None:
+        return plan.modality_suggestion.trigger_signals
+    if plan.proactive_adjustment is not None:
+        return plan.proactive_adjustment.trigger_signals
+    return ()
 
 
 def _adapt_segment(
@@ -599,29 +649,40 @@ def _segment_priority(
     return priority
 
 
-def _proactive_adjustment(signals: RuntimeSignals) -> ProactiveAdjustment | None:
-    if (
-        signals.comprehension_score is not None
-        and signals.session_average_comprehension is not None
-        and signals.session_average_comprehension - signals.comprehension_score >= 20
-    ):
+def _proactive_adjustment(
+    *,
+    signals: RuntimeSignals,
+    profile: LearnerProfileSnapshot,
+) -> ProactiveAdjustment | None:
+    evidence = _trigger_signals(signals=signals, profile=profile)
+    confidence = _combined_confidence(evidence)
+    if not _evidence_allows_adaptation(signals=signals, evidence=evidence):
+        return None
+    evidence_by_category = _evidence_by_category(evidence)
+    if "comprehension" in evidence_by_category and {
+        "engagement",
+        "performance",
+    }.intersection(evidence_by_category):
         return ProactiveAdjustment(
             action="simplify",
             reason="Comprehension has dropped below this session's average.",
+            confidence=confidence,
+            trigger_signals=evidence,
         )
-    if signals.replay_count_on_segment >= 3:
+    if "engagement" in evidence_by_category and "comprehension" in evidence_by_category:
         return ProactiveAdjustment(
             action="slower",
-            reason="Replay accumulation suggests the segment pace is too high.",
+            reason="Multiple signals suggest the current pace may be too high.",
+            confidence=confidence,
+            trigger_signals=evidence,
         )
-    if (
-        signals.engagement_score is not None
-        and signals.engagement_baseline is not None
-        and signals.engagement_score >= signals.engagement_baseline + 0.2
-    ):
+    positive_evidence = _positive_trigger_signals(signals)
+    if _evidence_allows_adaptation(signals=signals, evidence=positive_evidence):
         return ProactiveAdjustment(
             action="expand",
-            reason="Engagement is above the current baseline.",
+            reason="Engagement and comprehension are both above the current baseline.",
+            confidence=_combined_confidence(positive_evidence),
+            trigger_signals=positive_evidence,
         )
     return None
 
@@ -652,10 +713,21 @@ def _modality_suggestion(
     )
     if candidate is None:
         return None
+    trigger_signals = _trigger_signals(signals=signals, profile=profile)
+    profile_signal = TriggerSignal(
+        category="profile",
+        name=f"{candidate}_available",
+        confidence=_confidence_rank(_profile_channels(profile)[candidate].confidence),
+    )
+    trigger_signals = (*trigger_signals, profile_signal)
+    if not _evidence_allows_adaptation(signals=signals, evidence=trigger_signals):
+        return None
     return ModalitySuggestion(
         suggested=MODALITY_BY_CHANNEL[candidate],
         trigger_reason="combined",
         confidence=_profile_channels(profile)[candidate].confidence,
+        adaptation_confidence=_combined_confidence(trigger_signals),
+        trigger_signals=trigger_signals,
     )
 
 
@@ -687,6 +759,171 @@ def _engagement_declining(signals: RuntimeSignals) -> bool:
     ):
         return signals.engagement_score <= signals.engagement_baseline - 0.15
     return False
+
+
+def _trigger_signals(
+    *,
+    signals: RuntimeSignals,
+    profile: LearnerProfileSnapshot,
+) -> tuple[TriggerSignal, ...]:
+    evidence: list[TriggerSignal] = []
+    if (
+        signals.comprehension_score is not None
+        and signals.session_average_comprehension is not None
+    ):
+        drop = signals.session_average_comprehension - signals.comprehension_score
+        if drop >= 20:
+            evidence.append(
+                TriggerSignal(
+                    category="comprehension",
+                    name="comprehension_drop",
+                    confidence=min(0.95, 0.60 + (drop / 100)),
+                )
+            )
+    if signals.accuracy_below_baseline:
+        evidence.append(
+            TriggerSignal(
+                category="comprehension",
+                name="accuracy_below_baseline",
+                confidence=0.72,
+            )
+        )
+    if signals.response_time_below_baseline and (
+        signals.accuracy_below_baseline
+        or (
+            signals.comprehension_score is not None
+            and signals.session_average_comprehension is not None
+            and signals.session_average_comprehension > signals.comprehension_score
+        )
+    ):
+        evidence.append(
+            TriggerSignal(
+                category="comprehension",
+                name="response_time_with_accuracy_shift",
+                confidence=0.64,
+            )
+        )
+    if signals.engagement_below_baseline_seconds >= 180:
+        evidence.append(
+            TriggerSignal(
+                category="engagement",
+                name="engagement_below_baseline",
+                confidence=0.70,
+            )
+        )
+    if (
+        signals.engagement_score is not None
+        and signals.engagement_baseline is not None
+        and signals.engagement_score <= signals.engagement_baseline - 0.15
+    ):
+        evidence.append(
+            TriggerSignal(
+                category="engagement",
+                name="engagement_score_drop",
+                confidence=0.70,
+            )
+        )
+    if signals.replay_count_on_segment >= 3 and _comprehension_declining(signals):
+        evidence.append(
+            TriggerSignal(
+                category="engagement",
+                name="replay_accumulation_with_comprehension_shift",
+                confidence=0.68,
+            )
+        )
+    if signals.consecutive_errors >= 3:
+        evidence.append(
+            TriggerSignal(
+                category="performance",
+                name="repeated_errors",
+                confidence=0.76,
+            )
+        )
+    if profile.working_memory_capacity is not None and profile.working_memory_capacity <= 2:
+        evidence.append(
+            TriggerSignal(
+                category="profile",
+                name="working_memory_support_pattern",
+                confidence=0.62,
+            )
+        )
+    return tuple(evidence)
+
+
+def _positive_trigger_signals(signals: RuntimeSignals) -> tuple[TriggerSignal, ...]:
+    evidence: list[TriggerSignal] = []
+    if (
+        signals.engagement_score is not None
+        and signals.engagement_baseline is not None
+        and signals.engagement_score >= signals.engagement_baseline + 0.2
+    ):
+        evidence.append(
+            TriggerSignal(
+                category="engagement",
+                name="engagement_above_baseline",
+                confidence=0.72,
+            )
+        )
+    if (
+        signals.comprehension_score is not None
+        and signals.session_average_comprehension is not None
+        and signals.comprehension_score >= signals.session_average_comprehension
+    ):
+        evidence.append(
+            TriggerSignal(
+                category="comprehension",
+                name="comprehension_at_or_above_session_average",
+                confidence=0.70,
+            )
+        )
+    if signals.consecutive_errors == 0 and signals.replay_count_on_segment == 0:
+        evidence.append(
+            TriggerSignal(
+                category="performance",
+                name="no_current_error_or_replay_pattern",
+                confidence=0.66,
+            )
+        )
+    return tuple(evidence)
+
+
+def _evidence_allows_adaptation(
+    *,
+    signals: RuntimeSignals,
+    evidence: tuple[TriggerSignal, ...],
+) -> bool:
+    if len(evidence) < MIN_ALIGNED_SIGNAL_COUNT:
+        return False
+    if len(_evidence_by_category(evidence)) < MIN_ALIGNED_SIGNAL_CATEGORIES:
+        return False
+    return _combined_confidence(evidence) >= _confidence_threshold(signals)
+
+
+def _combined_confidence(evidence: tuple[TriggerSignal, ...]) -> float:
+    if not evidence:
+        return 0
+    return round(sum(item.confidence for item in evidence) / len(evidence), 2)
+
+
+def _evidence_by_category(evidence: tuple[TriggerSignal, ...]) -> set[str]:
+    return {item.category for item in evidence}
+
+
+def _confidence_threshold(signals: RuntimeSignals) -> float:
+    if (
+        signals.session_modality_shift_count is not None
+        and signals.session_modality_shift_count > 0
+    ):
+        return SUBSEQUENT_ADAPTATION_CONFIDENCE_THRESHOLD
+    return FIRST_ADAPTATION_CONFIDENCE_THRESHOLD
+
+
+def _confidence_rank(confidence: ConfidenceLevel) -> float:
+    return {
+        ConfidenceLevel.LOW: 0.45,
+        ConfidenceLevel.MEDIUM: 0.65,
+        ConfidenceLevel.HIGH: 0.85,
+    }[confidence]
 
 
 def _higher_confidence_available_channel(

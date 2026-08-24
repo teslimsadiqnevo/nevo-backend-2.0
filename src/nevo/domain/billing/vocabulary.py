@@ -17,3 +17,22 @@ class InvoiceStatus(StrEnum):
 class PaymentMethodType(StrEnum):
     CARD = "card"
     DIRECT_DEBIT = "direct_debit"
+
+
+class PricingCurrency(StrEnum):
+    USD = "USD"
+    NGN = "NGN"
+    GBP = "GBP"
+
+
+class ContractStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    TERMINATED = "terminated"
+    PENDING_RENEWAL = "pending_renewal"
+
+
+class PaymentSource(StrEnum):
+    DIRECT = "direct"
+    STERLING = "sterling"
+    PARTNER = "partner"

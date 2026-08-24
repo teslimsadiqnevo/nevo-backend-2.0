@@ -151,6 +151,54 @@ def test_rule_based_adaptation_requires_all_three_modality_signals() -> None:
     assert plan.modality_suggestion is not None
     assert plan.modality_suggestion.suggested is ContentModality.VISUAL
     assert plan.modality_suggestion.trigger_reason == "combined"
+    assert plan.modality_suggestion.adaptation_confidence >= 0.6
+    assert {
+        signal.category for signal in plan.modality_suggestion.trigger_signals
+    }.issuperset({"comprehension", "engagement", "profile"})
+
+
+def test_rule_based_adaptation_ignores_single_pause_signal() -> None:
+    plan = rule_based_adaptation_plan(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            mode=AdaptationMode.IN_LESSON,
+            segments=segments(),
+            signals=RuntimeSignals(
+                current_modality=ContentModality.TEXT,
+                available_modalities=(ContentModality.TEXT, ContentModality.VISUAL),
+                current_segment_elapsed_seconds=30,
+            ),
+        ),
+        profile=channel_profile(),
+    )
+
+    assert plan.modality_suggestion is None
+    assert plan.proactive_adjustment is None
+
+
+def test_rule_based_adaptation_requires_subsequent_confidence_threshold() -> None:
+    plan = rule_based_adaptation_plan(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            mode=AdaptationMode.IN_LESSON,
+            segments=segments(),
+            signals=RuntimeSignals(
+                current_modality=ContentModality.TEXT,
+                available_modalities=(ContentModality.TEXT, ContentModality.VISUAL),
+                engagement_below_baseline_seconds=190,
+                accuracy_below_baseline=True,
+                response_time_below_baseline=True,
+                segments_since_last_suggestion=2,
+                session_modality_shift_count=1,
+            ),
+        ),
+        profile=channel_profile(),
+    )
+
+    assert plan.modality_suggestion is not None
+    assert plan.modality_suggestion.adaptation_confidence >= 0.7
 
 
 def test_rule_based_adaptation_blocks_consecutive_modality_suggestions() -> None:

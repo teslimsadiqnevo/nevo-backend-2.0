@@ -29,7 +29,7 @@ from nevo.domain.accounts.vocabulary import (
     UserRole,
     UserStatus,
 )
-from nevo.domain.billing.vocabulary import SubscriptionTier
+from nevo.domain.billing.vocabulary import PaymentSource, SubscriptionTier
 from nevo.domain.consent.vocabulary import ConsentConfirmationSource
 
 user_role_enum = Enum(
@@ -55,6 +55,11 @@ enrollment_band_enum = Enum(
 subscription_tier_enum = Enum(
     SubscriptionTier,
     name="subscription_tier",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+payment_source_enum = Enum(
+    PaymentSource,
+    name="payment_source",
     values_callable=lambda enum: [item.value for item in enum],
 )
 consent_status_enum = Enum(
@@ -149,6 +154,12 @@ class School(TimestampMixin, Base):
     subscription_tier: Mapped[SubscriptionTier | None] = mapped_column(
         subscription_tier_enum,
         nullable=True,
+    )
+    payment_source: Mapped[PaymentSource] = mapped_column(
+        payment_source_enum,
+        nullable=False,
+        default=PaymentSource.DIRECT,
+        server_default=PaymentSource.DIRECT.value,
     )
     contract_value: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2),

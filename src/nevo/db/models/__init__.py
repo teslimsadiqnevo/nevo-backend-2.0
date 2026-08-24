@@ -13,7 +13,16 @@ from nevo.db.models.attention_flag import (
     InterventionRecommendation,
 )
 from nevo.db.models.auth import AuthAuditEvent, AuthLoginAttempt, AuthSession
-from nevo.db.models.billing import BillingContact, BillingPaymentMethod, Invoice
+from nevo.db.models.billing import (
+    BillingContact,
+    BillingLedger,
+    BillingPaymentMethod,
+    BillingSubscriptionTier,
+    Contract,
+    ExchangeRate,
+    Invoice,
+    StepUpSchedule,
+)
 from nevo.db.models.consent import (
     ConsentInvitation,
     ConsentInvitationItem,
@@ -57,14 +66,18 @@ __all__ = [
     "AuthLoginAttempt",
     "AuthSession",
     "BillingContact",
+    "BillingLedger",
     "BillingPaymentMethod",
+    "BillingSubscriptionTier",
     "Class",
     "ConsentInvitation",
     "ConsentInvitationItem",
     "ConsentNotificationOutbox",
     "ConsentRecord",
     "ContentParseRun",
+    "Contract",
     "Escalation",
+    "ExchangeRate",
     "IepExport",
     "IepExportShare",
     "InterventionRecommendation",
@@ -84,6 +97,7 @@ __all__ = [
     "School",
     "SchoolSsoConfiguration",
     "SignalEvent",
+    "StepUpSchedule",
     "StudentClassEnrollment",
     "StudentConceptMastery",
     "StudentConceptScaffoldState",

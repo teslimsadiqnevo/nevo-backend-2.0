@@ -7,6 +7,7 @@ from nevo.domain.accounts.vocabulary import SchoolEnrollmentBand
 from nevo.domain.billing.vocabulary import (
     InvoiceStatus,
     PaymentMethodType,
+    PricingCurrency,
     SubscriptionTier,
 )
 
@@ -100,3 +101,16 @@ class BillingContactUpdate:
     region: str | None
     postal_code: str | None
     country: str
+
+
+@dataclass(frozen=True, slots=True)
+class BillingLedgerQuote:
+    tier: SubscriptionTier
+    amount_usd: Decimal
+    applied_discount_percent: Decimal
+    net_amount_usd: Decimal
+    vat_amount_usd: Decimal
+    total_with_vat_usd: Decimal
+    billed_currency: PricingCurrency
+    fx_rate_applied: Decimal
+    total_billed_local: Decimal

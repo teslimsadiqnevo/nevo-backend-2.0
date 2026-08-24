@@ -16,8 +16,13 @@ def test_school_carries_subscription_contract_fields() -> None:
         "contract_start",
         "contract_end",
         "billing_contact_id",
+        "payment_source",
     ):
         assert column in columns
+
+    payment_source = columns["payment_source"]
+    assert isinstance(payment_source.type, Enum)
+    assert payment_source.type.enums == ["direct", "sterling", "partner"]
 
 
 def test_billing_contact_is_separate_from_admin_access() -> None:
@@ -65,6 +70,46 @@ def test_invoice_schema_matches_admin_history_contract() -> None:
     status = table.columns["status"]
     assert isinstance(status.type, Enum)
     assert status.type.enums == ["paid", "pending", "overdue"]
+
+
+def test_billing_architecture_tables_support_dual_currency_contracts() -> None:
+    assert {
+        "subscription_tiers",
+        "exchange_rates",
+        "contracts",
+        "step_up_schedules",
+        "billing_ledger",
+    }.issubset(Base.metadata.tables)
+
+    tiers = Base.metadata.tables["subscription_tiers"].columns
+    assert {
+        "tier_name",
+        "min_pupils",
+        "max_pupils",
+        "founding_partner_usd_rate",
+        "commercial_usd_rate",
+        "vat_rate",
+    }.issubset(tiers.keys())
+
+    contracts = Base.metadata.tables["contracts"].columns
+    assert {"school_id", "tier_id", "payment_source", "current_year_index"}.issubset(
+        contracts.keys()
+    )
+    payment_source = contracts["payment_source"]
+    assert isinstance(payment_source.type, Enum)
+    assert payment_source.type.enums == ["direct", "sterling", "partner"]
+
+    ledger = Base.metadata.tables["billing_ledger"].columns
+    assert {
+        "amount_usd",
+        "applied_discount_percent",
+        "net_amount_usd",
+        "vat_amount_usd",
+        "total_with_vat_usd",
+        "billed_currency",
+        "fx_rate_applied",
+        "total_billed_local",
+    }.issubset(ledger.keys())
 
 
 def test_billing_tables_cascade_by_school_not_by_user() -> None:

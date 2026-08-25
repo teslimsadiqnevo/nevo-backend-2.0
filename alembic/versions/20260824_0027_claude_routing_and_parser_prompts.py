@@ -29,7 +29,7 @@ PROMPT_NAMES = (
 
 def upgrade() -> None:
     op.execute("ALTER TYPE ai_provider ADD VALUE IF NOT EXISTS 'claude'")
-    op.execute(
+    op.get_bind().exec_driver_sql(
         """
         INSERT INTO ai_prompt_templates (
             service,

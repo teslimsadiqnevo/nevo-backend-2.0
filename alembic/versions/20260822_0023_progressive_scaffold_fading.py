@@ -23,11 +23,13 @@ scaffold_intensity_enum = postgresql.ENUM(
     "hints_only",
     "independent",
     name="scaffold_intensity",
+    create_type=False,
 )
 scaffold_outcome_enum = postgresql.ENUM(
     "correct",
     "struggled",
     name="scaffold_outcome",
+    create_type=False,
 )
 
 

@@ -97,50 +97,25 @@ def upgrade() -> None:
             name="subscription_tier_vat_nonnegative",
         ),
     )
-    op.bulk_insert(
-        sa.table(
-            "subscription_tiers",
-            sa.column("tier_name", sa.String()),
-            sa.column("min_pupils", sa.Integer()),
-            sa.column("max_pupils", sa.Integer()),
-            sa.column("founding_partner_usd_rate", sa.Numeric()),
-            sa.column("commercial_usd_rate", sa.Numeric()),
-            sa.column("vat_rate", sa.Numeric()),
-        ),
-        [
-            {
-                "tier_name": "boutique",
-                "min_pupils": 0,
-                "max_pupils": 250,
-                "founding_partner_usd_rate": 25_000,
-                "commercial_usd_rate": 40_000,
-                "vat_rate": 7.50,
-            },
-            {
-                "tier_name": "mid_market",
-                "min_pupils": 251,
-                "max_pupils": 500,
-                "founding_partner_usd_rate": 50_000,
-                "commercial_usd_rate": 80_000,
-                "vat_rate": 7.50,
-            },
-            {
-                "tier_name": "premium",
-                "min_pupils": 501,
-                "max_pupils": 800,
-                "founding_partner_usd_rate": 80_000,
-                "commercial_usd_rate": 125_000,
-                "vat_rate": 7.50,
-            },
-            {
-                "tier_name": "enterprise",
-                "min_pupils": 801,
-                "max_pupils": 999_999,
-                "founding_partner_usd_rate": 140_000,
-                "commercial_usd_rate": 220_000,
-                "vat_rate": 7.50,
-            },
-        ],
+    op.execute(
+        sa.text(
+            """
+            INSERT INTO subscription_tiers (
+                tier_name,
+                min_pupils,
+                max_pupils,
+                founding_partner_usd_rate,
+                commercial_usd_rate,
+                vat_rate
+            )
+            VALUES
+                ('boutique'::subscription_tier, 0, 250, 25000, 40000, 7.50),
+                ('mid_market'::subscription_tier, 251, 500, 50000, 80000, 7.50),
+                ('premium'::subscription_tier, 501, 800, 80000, 125000, 7.50),
+                ('enterprise'::subscription_tier, 801, 999999, 140000, 220000, 7.50)
+            ON CONFLICT (tier_name) DO NOTHING
+            """
+        )
     )
 
     op.create_table(

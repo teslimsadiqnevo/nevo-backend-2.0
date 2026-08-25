@@ -1,3 +1,5 @@
+from fastapi.testclient import TestClient
+
 from nevo.main import app
 
 
@@ -5,6 +7,20 @@ def test_swagger_and_openapi_endpoints_are_wired() -> None:
     assert app.docs_url == "/docs"
     assert app.redoc_url == "/redoc"
     assert app.openapi_url == "/openapi.json"
+
+
+def test_local_frontend_origin_can_preflight_api_requests() -> None:
+    response = TestClient(app).options(
+        "/api/v1/auth/login/password",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
 
 
 def test_openapi_schema_documents_existing_api_groups() -> None:

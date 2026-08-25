@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from nevo.ai_gateway.config import AiGatewaySettings
 from nevo.ai_gateway.wiring import build_ai_gateway
@@ -167,6 +168,14 @@ app = FastAPI(
     openapi_tags=OPENAPI_TAGS,
     swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
     generate_unique_id_function=stable_operation_id,
+)
+settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 app.include_router(admin_router)
 app.include_router(ai_gateway_router)

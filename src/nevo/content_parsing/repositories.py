@@ -71,6 +71,7 @@ class SqlAlchemyContentParsingRepository:
                     confirmation_summary=parsed.confirmation_summary,
                 )
             )
+            await session.flush()
             session.add(
                 ContentParseRun(
                     id=parse_run_id,
@@ -86,6 +87,7 @@ class SqlAlchemyContentParsingRepository:
                     review_notes=list(parsed.review_notes),
                 )
             )
+            await session.flush()
             for segment in parsed.segments:
                 session.add(
                     LessonSegment(

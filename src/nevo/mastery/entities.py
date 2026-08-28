@@ -15,6 +15,7 @@ class BaselineMasterySeed:
 class MasteryState:
     student_id: UUID
     concept_id: UUID
+    concept_name: str | None
     mastery_probability_concept: float
     mastery_probability_reading: float
     attention_weights: dict[str, float]
@@ -45,6 +46,7 @@ class MasteryUpdateResult:
 @dataclass(frozen=True, slots=True)
 class ConceptMasteryAggregate:
     concept_id: UUID
+    concept_name: str | None
     student_count: int
     mastery_probability_concept: float
     mastery_probability_reading: float

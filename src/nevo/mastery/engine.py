@@ -42,6 +42,7 @@ class HybridAktMasteryEngine:
         return MasteryState(
             student_id=student_id,
             concept_id=concept_id,
+            concept_name=None,
             mastery_probability_concept=_clamp(
                 min(seed.concept_probability, BASELINE_CONCEPT_CAP)
             ),
@@ -115,6 +116,7 @@ class HybridAktMasteryEngine:
         new_state = MasteryState(
             student_id=state.student_id,
             concept_id=state.concept_id,
+            concept_name=state.concept_name,
             mastery_probability_concept=_clamp(concept),
             mastery_probability_reading=_clamp(reading),
             attention_weights=attention_weights,

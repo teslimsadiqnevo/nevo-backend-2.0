@@ -4,12 +4,15 @@ from uuid import UUID
 import pytest
 
 from nevo.ai_gateway.compliance import ZeroTagCompliancePolicy
+from nevo.ai_gateway.entities import AiGenerationRequest
+from nevo.ai_gateway.fallback import RuleBasedFallbackGenerator
 from nevo.ask_nevo.entities import (
     AskNevoContext,
     AskNevoContextIds,
     AskNevoRequest,
 )
 from nevo.ask_nevo.service import AskNevoService
+from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
 
 ACTOR_ID = UUID("00000000-0000-4000-8000-000000000001")
@@ -111,3 +114,24 @@ async def test_ask_nevo_retries_zero_tag_violation() -> None:
 
     assert result.answer == "Use a clearer worked example and a quick check-in."
     assert result.ai_gateway_call_id == RETRY_CALL_ID
+
+
+def test_ask_nevo_fallback_does_not_return_rendered_prompt() -> None:
+    fallback = RuleBasedFallbackGenerator(ZeroTagCompliancePolicy())
+
+    response = fallback.generate(
+        AiGenerationRequest(
+            requester_user_id=ACTOR_ID,
+            service=AiService.NARRATIVE,
+            prompt_name="ask_nevo.teacher",
+            variables={"question": "What needs my attention today?"},
+        ),
+        user_content=(
+            "Teacher question:\nWhat needs my attention today?\n\n"
+            'Dynamic teacher context JSON:\n{"actor":{"id":"0000"}}'
+        ),
+    )
+
+    assert "Teacher question" not in response.text
+    assert "Dynamic teacher context JSON" not in response.text
+    assert "0000" not in response.text

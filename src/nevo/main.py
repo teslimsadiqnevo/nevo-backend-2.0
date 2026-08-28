@@ -20,6 +20,7 @@ from nevo.api.docs import (
     stable_operation_id,
 )
 from nevo.api.exports import router as exports_router
+from nevo.api.frontend_unblockers import router as frontend_unblockers_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.mastery import router as mastery_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
@@ -65,6 +66,7 @@ from nevo.teacher_assignments.wiring import build_teacher_assignment_service
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_engine(get_settings().database_url)
     sessions = create_session_factory(engine)
+    app.state.db_sessions = sessions
     auth_settings = AuthSettings()  # type: ignore[call-arg]
     credential_hasher = build_credential_hasher(auth_settings)
     app.state.auth_service = build_auth_service(
@@ -185,6 +187,7 @@ app.include_router(billing_router)
 app.include_router(consent_router)
 app.include_router(content_router)
 app.include_router(exports_router)
+app.include_router(frontend_unblockers_router)
 app.include_router(intelligence_router)
 app.include_router(mastery_router)
 app.include_router(partner_inquiry_router)

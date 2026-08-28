@@ -102,6 +102,14 @@ OPENAPI_TAGS = [
         ),
     },
     {
+        "name": "frontend unblockers",
+        "description": (
+            "Teacher console integration support: class rosters, user profile, "
+            "lesson library, content upload, notifications, messages, baseline "
+            "warm-up, settings, analytics aliases, and password reset request."
+        ),
+    },
+    {
         "name": "system",
         "description": "Operational health and platform status endpoints.",
     },

@@ -22,6 +22,7 @@ class MasteryUpdateRequest(BaseModel):
 
     student_id: UUID = Field(alias="studentId")
     concept_id: UUID = Field(alias="conceptId")
+    concept_name: str | None = Field(default=None, alias="conceptName")
     response_correct: bool = Field(alias="responseCorrect")
     item_text_density: float = Field(alias="itemTextDensity", ge=0, le=1)
     related_concept_ids: list[UUID] = Field(
@@ -49,6 +50,7 @@ class MasteryStateResponse(BaseModel):
         return cls(
             student_id=state.student_id,
             concept_id=state.concept_id,
+            concept_name=state.concept_name,
             mastery_probability_concept=round(
                 state.mastery_probability_concept,
                 6,
@@ -88,6 +90,7 @@ class ConceptMasteryAggregateResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     concept_id: UUID = Field(alias="conceptId")
+    concept_name: str | None = Field(default=None, alias="conceptName")
     student_count: int = Field(alias="studentCount")
     mastery_probability_concept: float = Field(alias="masteryProbabilityConcept")
     mastery_probability_reading: float = Field(alias="masteryProbabilityReading")
@@ -99,6 +102,7 @@ class ConceptMasteryAggregateResponse(BaseModel):
     ) -> "ConceptMasteryAggregateResponse":
         return cls(
             concept_id=aggregate.concept_id,
+            concept_name=aggregate.concept_name,
             student_count=aggregate.student_count,
             mastery_probability_concept=aggregate.mastery_probability_concept,
             mastery_probability_reading=aggregate.mastery_probability_reading,

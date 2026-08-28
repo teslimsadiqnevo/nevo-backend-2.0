@@ -31,6 +31,14 @@ from nevo.db.models.consent import (
 )
 from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
 from nevo.db.models.export import IepExport, IepExportShare, StudentRecordEvent
+from nevo.db.models.frontend_support import (
+    Concept,
+    LessonAssignment,
+    Message,
+    MessageThread,
+    Notification,
+    PasswordResetToken,
+)
 from nevo.db.models.heartbeat import SystemHeartbeat
 from nevo.db.models.learner_profile import (
     LearnerEngagementAnomaly,
@@ -70,6 +78,7 @@ __all__ = [
     "BillingPaymentMethod",
     "BillingSubscriptionTier",
     "Class",
+    "Concept",
     "ConsentInvitation",
     "ConsentInvitationItem",
     "ConsentNotificationOutbox",
@@ -87,10 +96,15 @@ __all__ = [
     "LearnerProfileAttentionFlag",
     "LearnerProfileHistory",
     "Lesson",
+    "LessonAssignment",
     "LessonSegment",
     "LessonSession",
+    "Message",
+    "MessageThread",
+    "Notification",
     "ParentLink",
     "PartnerInquiry",
+    "PasswordResetToken",
     "RosterSyncIssue",
     "RosterSyncRun",
     "ScaffoldProblemLog",

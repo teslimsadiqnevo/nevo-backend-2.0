@@ -38,6 +38,7 @@ class FakeMasteryService(MasteryService):
         return (
             ConceptMasteryAggregate(
                 concept_id=uuid4(),
+                concept_name="Fractions",
                 student_count=12,
                 mastery_probability_concept=0.62,
                 mastery_probability_reading=0.74,
@@ -48,6 +49,7 @@ class FakeMasteryService(MasteryService):
         return (
             ConceptMasteryAggregate(
                 concept_id=uuid4(),
+                concept_name="Fractions",
                 student_count=120,
                 mastery_probability_concept=0.68,
                 mastery_probability_reading=0.79,
@@ -64,6 +66,7 @@ def _state(
     return MasteryState(
         student_id=student_id,
         concept_id=concept_id,
+        concept_name="Fractions",
         mastery_probability_concept=0.42,
         mastery_probability_reading=0.31,
         attention_weights={},
@@ -144,5 +147,6 @@ def test_get_endpoints_return_mastery_data() -> None:
     assert student_response.json()[0]["masteryProbabilityConcept"] == 0.42
     assert class_response.status_code == 200
     assert class_response.json()[0]["studentCount"] == 12
+    assert class_response.json()[0]["conceptName"] == "Fractions"
     assert school_response.status_code == 200
     assert school_response.json()[0]["studentCount"] == 120

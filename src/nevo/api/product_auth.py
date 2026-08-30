@@ -4,13 +4,22 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, select, update
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import actor_user, require_school_actor
+from nevo.api.response_models import (
+    AuthSessionRecordResponse,
+    BulkInvitationResponse,
+    InvitationResponse,
+    JoinAcceptedResponse,
+    JoinInspectionResponse,
+    ParentRightResponse,
+    SchoolCodeResponse,
+)
 from nevo.auth.config import AuthSettings
 from nevo.auth.security import Argon2idCredentialHasher
 from nevo.db.models.account import (
@@ -26,6 +35,7 @@ from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.product import ParentDataRequest, SchoolInvitation
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.notifications.email import EmailDeliveryUnavailableError, SmtpEmailDelivery
 
 router = APIRouter(prefix="/api/v1", tags=["product access"])
 
@@ -103,7 +113,7 @@ class ParentRightRequest(BaseModel):
     )
 
 
-@router.post("/auth/school-code/verify")
+@router.post("/auth/school-code/verify", response_model=SchoolCodeResponse)
 async def verify_school_code(
     payload: SchoolCodeRequest,
     session: DatabaseSession,
@@ -230,7 +240,7 @@ async def complete_password_reset(
     return {"status": "password_updated"}
 
 
-@router.get("/auth/sessions")
+@router.get("/auth/sessions", response_model=list[AuthSessionRecordResponse])
 async def list_auth_sessions(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -369,6 +379,7 @@ async def _create_invitation(
     payload: InvitationRequest,
     actor: User,
     session: DatabaseSession,
+    mailer: SmtpEmailDelivery,
 ) -> dict[str, object]:
     if payload.class_id:
         school_class = await session.get(Class, payload.class_id)
@@ -389,41 +400,55 @@ async def _create_invitation(
     )
     session.add(record)
     await session.commit()
+    delivery_status = "not_requested"
+    if record.email:
+        try:
+            await _send_invitation(mailer, record, token)
+            delivery_status = "sent"
+        except EmailDeliveryUnavailableError:
+            delivery_status = "email_not_configured"
     return {
         "id": str(record.id),
         "token": token,
         "status": record.status,
         "expiresAt": record.expires_at,
+        "deliveryStatus": delivery_status,
     }
 
 
-@router.post("/invites", status_code=status.HTTP_201_CREATED)
+@router.post("/invites", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
 async def create_invite(
     payload: InvitationRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    request: Request,
 ) -> dict[str, object]:
     actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
-    return await _create_invitation(payload, actor, session)
+    return await _create_invitation(payload, actor, session, _mailer(request))
 
 
-@router.post("/invites/bulk", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/invites/bulk",
+    response_model=BulkInvitationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_bulk_invites(
     payloads: list[InvitationRequest],
     principal: PrincipalDependency,
     session: DatabaseSession,
+    request: Request,
 ) -> dict[str, object]:
     actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
     created, rejected = [], []
     for index, payload in enumerate(payloads[:500]):
         try:
-            created.append(await _create_invitation(payload, actor, session))
+            created.append(await _create_invitation(payload, actor, session, _mailer(request)))
         except HTTPException as error:
             rejected.append({"row": index + 1, "reason": str(error.detail)})
     return {"created": created, "rejected": rejected}
 
 
-@router.get("/invites")
+@router.get("/invites", response_model=list[InvitationResponse])
 async def list_invites(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -447,11 +472,12 @@ async def list_invites(
     ]
 
 
-@router.patch("/invites/{invitation_id}/resend")
+@router.patch("/invites/{invitation_id}/resend", response_model=InvitationResponse)
 async def resend_invite(
     invitation_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    request: Request,
 ) -> dict[str, object]:
     actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
     record = await session.get(SchoolInvitation, invitation_id)
@@ -461,7 +487,41 @@ async def resend_invite(
     record.token_digest = _digest(token)
     record.expires_at = datetime.now(UTC) + timedelta(days=14)
     await session.commit()
-    return {"id": str(record.id), "token": token, "expiresAt": record.expires_at}
+    delivery_status = "not_requested"
+    if record.email:
+        try:
+            await _send_invitation(_mailer(request), record, token)
+            delivery_status = "sent"
+        except EmailDeliveryUnavailableError:
+            delivery_status = "email_not_configured"
+    return {
+        "id": str(record.id),
+        "token": token,
+        "expiresAt": record.expires_at,
+        "deliveryStatus": delivery_status,
+    }
+
+
+def _mailer(request: Request) -> SmtpEmailDelivery:
+    mailer = getattr(request.app.state, "email_delivery", None)
+    if not isinstance(mailer, SmtpEmailDelivery):
+        raise HTTPException(status_code=503, detail="Email delivery is unavailable")
+    return mailer
+
+
+async def _send_invitation(mailer: SmtpEmailDelivery, record: SchoolInvitation, token: str) -> None:
+    if record.email is None:
+        return
+    link = f"{mailer.frontend_base_url}/join/{token}"
+    await mailer.send(
+        to=record.email,
+        subject="Your Nevo invitation",
+        text=(
+            "You have been invited to join your school on Nevo.\n\n"
+            f"Open this secure link to finish setting up your account:\n{link}\n\n"
+            "The link expires in 14 days."
+        ),
+    )
 
 
 @router.delete("/invites/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -491,7 +551,7 @@ async def _join_record(token: str, session: DatabaseSession) -> SchoolInvitation
     return record
 
 
-@router.get("/join/{token}")
+@router.get("/join/{token}", response_model=JoinInspectionResponse)
 async def inspect_join(token: str, session: DatabaseSession) -> dict[str, object]:
     record = await _join_record(token, session)
     school = await session.get(School, record.school_id)
@@ -503,7 +563,11 @@ async def inspect_join(token: str, session: DatabaseSession) -> dict[str, object
     }
 
 
-@router.post("/join/{token}/accept", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/join/{token}/accept",
+    response_model=JoinAcceptedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def accept_join(
     token: str,
     payload: JoinRequest,
@@ -551,7 +615,11 @@ async def accept_join(
     }
 
 
-@router.post("/parent/{token}/rights", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/parent/{token}/rights",
+    response_model=ParentRightResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def exercise_parent_right(
     token: str,
     payload: ParentRightRequest,

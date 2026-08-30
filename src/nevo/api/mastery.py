@@ -5,6 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.dependencies import DatabaseSession
+from nevo.api.product_common import (
+    require_class_access,
+    require_school_actor,
+    require_student_access,
+)
 from nevo.domain.mastery.vocabulary import FailureAttribution
 from nevo.mastery.entities import (
     ConceptMasteryAggregate,
@@ -60,8 +66,7 @@ class MasteryStateResponse(BaseModel):
                 6,
             ),
             attention_weights={
-                key: round(value, 6)
-                for key, value in state.attention_weights.items()
+                key: round(value, 6) for key, value in state.attention_weights.items()
             },
             practice_count=state.practice_count,
             last_response_correct=state.last_response_correct,
@@ -130,15 +135,9 @@ async def update_mastery(
     payload: MasteryUpdateRequest,
     principal: PrincipalDependency,
     service: MasteryDependency,
+    session: DatabaseSession,
 ) -> MasteryUpdateResponse:
-    if principal.role == "student" and payload.student_id != principal.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "student_context_forbidden",
-                "message": "Students can update only their own mastery state.",
-            },
-        )
+    await require_student_access(session, principal, payload.student_id)
     result = await service.update(
         MasteryUpdate(
             student_id=payload.student_id,
@@ -156,15 +155,9 @@ async def student_mastery(
     student_id: UUID,
     principal: PrincipalDependency,
     service: MasteryDependency,
+    session: DatabaseSession,
 ) -> list[MasteryStateResponse]:
-    if principal.role == "student" and student_id != principal.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "student_context_forbidden",
-                "message": "Students can view only their own mastery state.",
-            },
-        )
+    await require_student_access(session, principal, student_id)
     records = await service.student_mastery(student_id)
     return [MasteryStateResponse.from_state(record) for record in records]
 
@@ -174,13 +167,11 @@ async def class_mastery(
     class_id: UUID,
     principal: PrincipalDependency,
     service: MasteryDependency,
+    session: DatabaseSession,
 ) -> list[ConceptMasteryAggregateResponse]:
-    del principal
+    await require_class_access(session, principal, class_id)
     records = await service.class_mastery(class_id)
-    return [
-        ConceptMasteryAggregateResponse.from_aggregate(record)
-        for record in records
-    ]
+    return [ConceptMasteryAggregateResponse.from_aggregate(record) for record in records]
 
 
 @router.get("/school/{school_id}", response_model=list[ConceptMasteryAggregateResponse])
@@ -188,10 +179,10 @@ async def school_mastery(
     school_id: UUID,
     principal: PrincipalDependency,
     service: MasteryDependency,
+    session: DatabaseSession,
 ) -> list[ConceptMasteryAggregateResponse]:
-    del principal
+    actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
+    if actor.school_id != school_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="School not found")
     records = await service.school_mastery(school_id)
-    return [
-        ConceptMasteryAggregateResponse.from_aggregate(record)
-        for record in records
-    ]
+    return [ConceptMasteryAggregateResponse.from_aggregate(record) for record in records]

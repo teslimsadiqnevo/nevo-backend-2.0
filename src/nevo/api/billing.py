@@ -3,9 +3,11 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from sqlalchemy import select
 
+from nevo.api.dependencies import DatabaseSession
 from nevo.api.permissions import RequireScope
 from nevo.billing.entities import (
     BillingContactRecord,
@@ -23,6 +25,8 @@ from nevo.billing.errors import (
     BillingSchoolContextError,
 )
 from nevo.billing.service import BillingService
+from nevo.db.models.account import School
+from nevo.db.models.billing import Invoice
 from nevo.domain.accounts.vocabulary import SchoolEnrollmentBand
 from nevo.domain.billing.vocabulary import (
     InvoiceStatus,
@@ -30,6 +34,7 @@ from nevo.domain.billing.vocabulary import (
     SubscriptionTier,
 )
 from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.intelligence.compliance_audit import render_simple_pdf
 from nevo.permissions.entities import PermissionSnapshot
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
@@ -231,6 +236,47 @@ class BillingContactRequest(BaseModel):
         return stripped or None
 
 
+@router.get("/invoices/{school_id}/{invoice_number}.pdf")
+async def invoice_pdf(
+    school_id: UUID,
+    invoice_number: str,
+    actor: Annotated[
+        PermissionSnapshot,
+        Depends(RequireScope(PermissionScope.BILLING)),
+    ],
+    session: DatabaseSession,
+) -> Response:
+    if actor.school_id != school_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+    invoice = await session.scalar(
+        select(Invoice).where(
+            Invoice.school_id == school_id,
+            Invoice.invoice_number == invoice_number,
+        )
+    )
+    school = await session.get(School, school_id)
+    if invoice is None or school is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+    content = render_simple_pdf(
+        [
+            "NEVO LEARNING INVOICE",
+            f"Invoice: {invoice.invoice_number}",
+            f"School: {school.name}",
+            f"Issued: {invoice.issued_at.isoformat()}",
+            f"Due: {invoice.due_at.isoformat()}",
+            f"Amount: {invoice.amount}",
+            f"Status: {invoice.status.value}",
+            "This document was generated from the school's billing record.",
+        ]
+    )
+    filename = f"{invoice.invoice_number}.pdf".replace('"', "")
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def get_billing_service(request: Request) -> BillingService:
     service = getattr(request.app.state, "billing_service", None)
     if not isinstance(service, BillingService):
@@ -260,9 +306,7 @@ async def current_subscription(
     service: BillingDependency,
 ) -> SubscriptionResponse:
     try:
-        return SubscriptionResponse.from_record(
-            await service.subscription(_school_id(actor))
-        )
+        return SubscriptionResponse.from_record(await service.subscription(_school_id(actor)))
     except BillingError as error:
         raise public_billing_error(error) from error
 
@@ -293,9 +337,7 @@ async def upcoming_charge(
     service: BillingDependency,
 ) -> UpcomingChargeResponse:
     try:
-        return UpcomingChargeResponse.from_record(
-            await service.upcoming(_school_id(actor))
-        )
+        return UpcomingChargeResponse.from_record(await service.upcoming(_school_id(actor)))
     except BillingError as error:
         raise public_billing_error(error) from error
 

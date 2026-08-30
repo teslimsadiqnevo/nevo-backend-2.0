@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.dependencies import DatabaseSession
+from nevo.api.product_common import require_school_actor, require_student_access
 from nevo.scheduler.entities import ConceptSchedule, ReviewResult
 from nevo.scheduler.service import FsrsSchedulerService
 
@@ -91,15 +93,9 @@ async def due_reviews(
     student_id: UUID,
     principal: PrincipalDependency,
     service: SchedulerDependency,
+    session: DatabaseSession,
 ) -> list[ConceptScheduleResponse]:
-    if principal.role == "student" and principal.user_id != student_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "student_context_forbidden",
-                "message": "Students can view only their own review schedule.",
-            },
-        )
+    await require_student_access(session, principal, student_id)
     schedules = await service.due_reviews(student_id=student_id)
     return [ConceptScheduleResponse.from_schedule(schedule) for schedule in schedules]
 
@@ -109,15 +105,9 @@ async def record_review(
     payload: RecordReviewRequest,
     principal: PrincipalDependency,
     service: SchedulerDependency,
+    session: DatabaseSession,
 ) -> RecordReviewResponse:
-    if principal.role == "student" and principal.user_id != payload.student_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "student_context_forbidden",
-                "message": "Students can update only their own review schedule.",
-            },
-        )
+    await require_student_access(session, principal, payload.student_id)
     reviewed_at = payload.reviewed_at
     if reviewed_at is not None and reviewed_at.tzinfo is None:
         reviewed_at = reviewed_at.replace(tzinfo=UTC)
@@ -134,14 +124,8 @@ async def record_review(
 async def refresh_due_dates(
     principal: PrincipalDependency,
     service: SchedulerDependency,
+    session: DatabaseSession,
 ) -> RefreshSchedulesResponse:
-    if principal.role not in {"admin", "school_admin", "teacher"}:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "scheduler_refresh_forbidden",
-                "message": "Only staff can refresh review schedules.",
-            },
-        )
+    await require_school_actor(session, principal, roles={"teacher", "senco_admin", "other_admin"})
     schedules = await service.refresh_all_due_dates()
     return RefreshSchedulesResponse(refreshed_count=len(schedules))

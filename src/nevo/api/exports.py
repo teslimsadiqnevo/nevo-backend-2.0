@@ -4,8 +4,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.dependencies import DatabaseSession
+from nevo.api.product_common import actor_user, require_student_access
+from nevo.db.models.export import IepExport, IepExportShare
+from nevo.domain.accounts.vocabulary import UserRole
 from nevo.domain.exports.vocabulary import IepExportShareStatus, IepExportStatus
 from nevo.exports.entities import IepExportRecord, IepExportShareRecord
 from nevo.exports.errors import (
@@ -148,7 +153,9 @@ async def create_iep_export(
     payload: CreateIepExportRequest,
     principal: PrincipalDependency,
     service: IepExportDependency,
+    session: DatabaseSession,
 ) -> IepExportResponse:
+    await require_student_access(session, principal, payload.student_id)
     try:
         record = await service.create_draft(
             student_id=payload.student_id,
@@ -167,7 +174,9 @@ async def get_iep_export(
     export_id: UUID,
     principal: PrincipalDependency,
     service: IepExportDependency,
+    session: DatabaseSession,
 ) -> IepExportResponse:
+    await _require_export_access(session, principal, export_id)
     try:
         record = await service.get_export(
             export_id=export_id,
@@ -184,7 +193,9 @@ async def update_iep_export(
     payload: UpdateIepExportRequest,
     principal: PrincipalDependency,
     service: IepExportDependency,
+    session: DatabaseSession,
 ) -> IepExportResponse:
+    await _require_export_access(session, principal, export_id, staff_only=True)
     try:
         record = await service.update_draft(
             export_id=export_id,
@@ -204,7 +215,9 @@ async def review_iep_export(
     payload: FinalizeIepExportRequest,
     principal: PrincipalDependency,
     service: IepExportDependency,
+    session: DatabaseSession,
 ) -> IepExportResponse:
+    await _require_export_access(session, principal, export_id, staff_only=True)
     try:
         record = await service.finalize(
             export_id=export_id,
@@ -224,7 +237,9 @@ async def share_iep_export(
     payload: ShareIepExportRequest,
     principal: PrincipalDependency,
     service: IepExportDependency,
+    session: DatabaseSession,
 ) -> IepExportShareResponse:
+    await _require_export_access(session, principal, export_id, staff_only=True)
     try:
         record = await service.share(
             export_id=export_id,
@@ -235,6 +250,31 @@ async def share_iep_export(
     except ExportWorkflowError as error:
         raise public_export_error(error) from error
     return IepExportShareResponse.from_record(record)
+
+
+async def _require_export_access(
+    session: DatabaseSession,
+    principal: PrincipalDependency,
+    export_id: UUID,
+    *,
+    staff_only: bool = False,
+) -> IepExport:
+    record = await session.get(IepExport, export_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export not found")
+    actor = await actor_user(session, principal)
+    if actor.role is UserRole.PARENT_GUARDIAN and not staff_only:
+        shared = await session.scalar(
+            select(IepExportShare.id).where(
+                IepExportShare.export_id == export_id,
+                IepExportShare.parent_id == actor.id,
+            )
+        )
+        if shared is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export not found")
+        return record
+    await require_student_access(session, principal, record.student_id)
+    return record
 
 
 def public_export_error(error: ExportWorkflowError) -> HTTPException:

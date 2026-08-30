@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.dependencies import DatabaseSession
 from nevo.ask_nevo.entities import AskNevoContextIds, AskNevoRequest, AskNevoResponse
 from nevo.ask_nevo.service import AskNevoService
+from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
 
 router = APIRouter(prefix="/api/v1/ask-nevo", tags=["ask-nevo"])
@@ -107,8 +109,11 @@ async def record_helpfulness(
     payload: HelpfulnessRequest,
     principal: PrincipalDependency,
     service: AskNevoDependency,
+    session: DatabaseSession,
 ) -> None:
-    del principal
+    interaction = await session.get(AskNevoInteraction, interaction_id)
+    if interaction is None or interaction.actor_user_id != principal.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interaction not found")
     await service.record_helpfulness(
         interaction_id=interaction_id,
         helpful=payload.helpful,

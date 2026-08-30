@@ -4,9 +4,9 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
@@ -16,7 +16,27 @@ from nevo.api.product_common import (
     require_school_actor,
     require_student_access,
 )
+from nevo.api.response_models import (
+    ClassSummaryResponse,
+    IdCodeResponse,
+    IdNameResponse,
+    NotificationPreferenceResponse,
+    OpsFeedbackResponse,
+    OpsOverviewResponse,
+    PersonalSettingsResponse,
+    PinIssueResponse,
+    SchoolOverviewResponse,
+    SchoolResponse,
+    StudentDetailResponse,
+    StudentEnrollmentResponse,
+    StudentMoveResponse,
+    StudentSummaryResponse,
+    TeacherDetailResponse,
+    TeacherSummaryResponse,
+)
+from nevo.auth.security import Argon2idCredentialHasher
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
+from nevo.db.models.auth import AuthSession
 from nevo.db.models.frontend_support import Notification
 from nevo.db.models.product import (
     EnrollmentHistory,
@@ -106,7 +126,7 @@ def _school_payload(school: School) -> dict[str, object]:
     }
 
 
-@router.get("/school")
+@router.get("/school", response_model=SchoolResponse)
 async def school_detail(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -118,7 +138,7 @@ async def school_detail(
     return _school_payload(school)
 
 
-@router.patch("/school")
+@router.patch("/school", response_model=SchoolResponse)
 async def update_school(
     payload: SchoolPatch,
     principal: PrincipalDependency,
@@ -145,7 +165,7 @@ async def update_school(
     return _school_payload(school)
 
 
-@router.get("/school/overview")
+@router.get("/school/overview", response_model=SchoolOverviewResponse)
 async def school_overview(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -175,7 +195,7 @@ async def school_overview(
     return {"schoolId": str(school_id), "counts": counts}
 
 
-@router.get("/classes")
+@router.get("/classes", response_model=list[ClassSummaryResponse])
 async def list_classes(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -207,7 +227,7 @@ async def list_classes(
     return result
 
 
-@router.post("/classes", status_code=status.HTTP_201_CREATED)
+@router.post("/classes", response_model=IdCodeResponse, status_code=status.HTTP_201_CREATED)
 async def create_class(
     payload: ClassWrite,
     principal: PrincipalDependency,
@@ -228,7 +248,7 @@ async def create_class(
     return {"id": str(school_class.id), "code": school_class.class_code}
 
 
-@router.patch("/classes/{class_id}")
+@router.patch("/classes/{class_id}", response_model=IdNameResponse)
 async def update_class(
     class_id: UUID,
     payload: ClassWrite,
@@ -245,7 +265,7 @@ async def update_class(
     return {"id": str(school_class.id), "name": school_class.name}
 
 
-@router.get("/classes/{class_id}")
+@router.get("/classes/{class_id}", response_model=ClassSummaryResponse)
 async def class_detail(
     class_id: UUID,
     principal: PrincipalDependency,
@@ -296,7 +316,7 @@ async def restore_class(
     await session.commit()
 
 
-@router.get("/teachers")
+@router.get("/teachers", response_model=list[TeacherSummaryResponse])
 async def list_teachers(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -324,7 +344,7 @@ async def list_teachers(
     ]
 
 
-@router.get("/teachers/{teacher_id}")
+@router.get("/teachers/{teacher_id}", response_model=TeacherDetailResponse)
 async def teacher_detail(
     teacher_id: UUID,
     principal: PrincipalDependency,
@@ -368,7 +388,7 @@ async def revoke_teacher(
     await session.commit()
 
 
-@router.get("/students")
+@router.get("/students", response_model=list[StudentSummaryResponse])
 async def list_students(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -400,7 +420,11 @@ async def list_students(
     ]
 
 
-@router.post("/students", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/students",
+    response_model=StudentEnrollmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def enroll_student(
     payload: StudentEnroll,
     principal: PrincipalDependency,
@@ -438,7 +462,7 @@ async def enroll_student(
     return {"id": str(student.id), "loginIdentifier": identifier}
 
 
-@router.get("/students/{student_id}")
+@router.get("/students/{student_id}", response_model=StudentDetailResponse)
 async def student_detail(
     student_id: UUID,
     principal: PrincipalDependency,
@@ -468,7 +492,7 @@ async def student_detail(
     }
 
 
-@router.patch("/students/{student_id}/class")
+@router.patch("/students/{student_id}/class", response_model=StudentMoveResponse)
 async def move_student(
     student_id: UUID,
     payload: StudentMove,
@@ -570,6 +594,42 @@ async def anonymize_student(
     await session.commit()
 
 
+@router.post("/students/{student_id}/pin/reset", response_model=PinIssueResponse)
+async def issue_student_pin(
+    student_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    request: Request,
+) -> dict[str, object]:
+    actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
+    student = await session.get(User, student_id)
+    if (
+        student is None
+        or student.school_id != actor.school_id
+        or student.role is not UserRole.STUDENT
+    ):
+        raise HTTPException(status_code=404, detail="Student not found")
+    hasher = getattr(request.app.state, "credential_hasher", None)
+    if not isinstance(hasher, Argon2idCredentialHasher):
+        raise HTTPException(status_code=503, detail="Credential service unavailable")
+    pin = f"{secrets.randbelow(1_000_000):06d}"
+    student.pin_hash = hasher.hash_pin(pin)
+    student.auth_method = AuthMethod.PIN
+    now = datetime.now(UTC)
+    await session.execute(
+        update(AuthSession)
+        .where(AuthSession.user_id == student.id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=now, revocation_reason="pin_reset")
+    )
+    await session.commit()
+    return {
+        "studentId": str(student.id),
+        "pin": pin,
+        "issuedAt": now,
+        "mustShareSecurely": True,
+    }
+
+
 @router.get("/notifications/unread-exists")
 async def unread_exists(
     principal: PrincipalDependency,
@@ -618,7 +678,26 @@ async def archive_notification(
     await session.commit()
 
 
-@router.get("/notification-preferences")
+@router.post("/notifications/{notification_id}/restore", status_code=204)
+async def restore_notification(
+    notification_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> None:
+    result = await session.execute(
+        update(Notification)
+        .where(
+            Notification.id == notification_id,
+            Notification.recipient_id == principal.user_id,
+        )
+        .values(archived_at=None)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    await session.commit()
+
+
+@router.get("/notification-preferences", response_model=list[NotificationPreferenceResponse])
 async def notification_preferences(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -635,7 +714,7 @@ async def notification_preferences(
     ]
 
 
-@router.put("/notification-preferences")
+@router.put("/notification-preferences", response_model=list[NotificationPreferenceResponse])
 async def update_notification_preferences(
     payload: list[PreferenceWrite],
     principal: PrincipalDependency,
@@ -660,7 +739,7 @@ async def update_notification_preferences(
     return await notification_preferences(principal, session)
 
 
-@router.get("/settings/me")
+@router.get("/settings/me", response_model=PersonalSettingsResponse)
 async def personal_settings(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -669,7 +748,7 @@ async def personal_settings(
     return {"userId": str(user.id), "preferences": user.preferences}
 
 
-@router.put("/settings/me")
+@router.put("/settings/me", response_model=PersonalSettingsResponse)
 async def update_personal_settings(
     payload: PersonalSettingsWrite,
     principal: PrincipalDependency,
@@ -702,7 +781,7 @@ async def submit_feedback(
     return {"id": str(record.id), "status": record.status}
 
 
-@router.get("/ops/feedback")
+@router.get("/ops/feedback", response_model=list[OpsFeedbackResponse])
 async def ops_feedback(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -732,7 +811,7 @@ async def ops_feedback(
     ]
 
 
-@router.get("/ops/overview")
+@router.get("/ops/overview", response_model=OpsOverviewResponse)
 async def ops_overview(
     principal: PrincipalDependency,
     session: DatabaseSession,

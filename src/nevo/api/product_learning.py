@@ -1,6 +1,9 @@
+import json
 from datetime import UTC, datetime
+from io import BytesIO
 from typing import Annotated
 from uuid import UUID, uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import (
     APIRouter,
@@ -10,6 +13,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -25,6 +29,24 @@ from nevo.api.product_common import (
     require_class_access,
     require_school_actor,
     require_student_access,
+)
+from nevo.api.response_models import (
+    AssignmentCreatedResponse,
+    AssignmentResponse,
+    AssignmentUpdatedResponse,
+    ConnectionResponse,
+    LessonDetailResponse,
+    LessonProgressResponse,
+    LessonSessionResponse,
+    LessonSummaryResponse,
+    OfflineDownloadResponse,
+    StudentDashboardResponse,
+    StudentProfileResponse,
+    TeacherDashboardResponse,
+    UploadConfirmedResponse,
+    UploadCreatedResponse,
+    UploadStatusResponse,
+    UploadStructureResponse,
 )
 from nevo.attention_flags.service import AttentionFlagDetectionService
 from nevo.content_parsing.entities import ContentParseRequest
@@ -135,7 +157,7 @@ async def _lesson_for_actor(
     return actor, lesson
 
 
-@router.get("/lessons")
+@router.get("/lessons", response_model=list[LessonSummaryResponse])
 async def lessons(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -164,7 +186,7 @@ async def lessons(
     return [_lesson_summary(item) for item in rows]
 
 
-@router.get("/lessons/{lesson_id}")
+@router.get("/lessons/{lesson_id}", response_model=LessonDetailResponse)
 async def lesson_detail(
     lesson_id: UUID,
     principal: PrincipalDependency,
@@ -215,7 +237,7 @@ async def lesson_detail(
     }
 
 
-@router.get("/assignments")
+@router.get("/assignments", response_model=list[AssignmentResponse])
 async def assignments(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -249,7 +271,11 @@ async def assignments(
     ]
 
 
-@router.post("/assignments", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/assignments",
+    response_model=AssignmentCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_assignments(
     payload: AssignmentCreate,
     principal: PrincipalDependency,
@@ -301,7 +327,7 @@ async def create_assignments(
     return {"assignmentIds": created, "createdCount": len(created)}
 
 
-@router.patch("/assignments/{assignment_id}")
+@router.patch("/assignments/{assignment_id}", response_model=AssignmentUpdatedResponse)
 async def update_assignment(
     assignment_id: UUID,
     payload: AssignmentPatch,
@@ -337,7 +363,11 @@ async def cancel_assignment(
     )
 
 
-@router.post("/lessons/{lesson_id}/session", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/lessons/{lesson_id}/session",
+    response_model=LessonSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def start_lesson_session(
     lesson_id: UUID,
     principal: PrincipalDependency,
@@ -369,7 +399,7 @@ async def start_lesson_session(
     return {"sessionId": str(record.id), "resumed": False}
 
 
-@router.put("/lessons/{lesson_id}/progress")
+@router.put("/lessons/{lesson_id}/progress", response_model=LessonProgressResponse)
 async def save_lesson_progress(
     lesson_id: UUID,
     payload: ProgressWrite,
@@ -461,7 +491,7 @@ async def save_lesson_progress(
     }
 
 
-@router.get("/students/me/dashboard")
+@router.get("/students/me/dashboard", response_model=StudentDashboardResponse)
 async def student_dashboard(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -493,7 +523,7 @@ async def student_dashboard(
     }
 
 
-@router.get("/students/{student_id}/profile")
+@router.get("/students/{student_id}/profile", response_model=StudentProfileResponse)
 async def student_profile(
     student_id: UUID,
     principal: PrincipalDependency,
@@ -533,7 +563,7 @@ async def student_profile(
     }
 
 
-@router.get("/teachers/me/dashboard")
+@router.get("/teachers/me/dashboard", response_model=TeacherDashboardResponse)
 async def teacher_dashboard(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -559,7 +589,11 @@ async def teacher_dashboard(
     }
 
 
-@router.post("/connections/class-code", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/connections/class-code",
+    response_model=ConnectionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def connect_by_class_code(
     class_code: str,
     principal: PrincipalDependency,
@@ -585,7 +619,7 @@ async def connect_by_class_code(
     return {"classId": str(school_class.id), "status": "connected"}
 
 
-@router.post("/lessons/{lesson_id}/download")
+@router.post("/lessons/{lesson_id}/download", response_model=OfflineDownloadResponse)
 async def create_offline_download(
     lesson_id: UUID,
     principal: PrincipalDependency,
@@ -600,7 +634,14 @@ async def create_offline_download(
             OfflineDownload.lesson_id == lesson_id,
         )
     )
-    manifest = {"lessonId": str(lesson_id), "version": 1}
+    package = await _offline_package_payload(session, lesson_id)
+    manifest = {
+        "lessonId": str(lesson_id),
+        "version": 1,
+        "segmentCount": len(package["segments"]),
+        "generatedAt": datetime.now(UTC).isoformat(),
+        "packageUrl": f"/api/v1/lessons/{lesson_id}/offline-package",
+    }
     if record is None:
         record = OfflineDownload(
             student_id=actor.id,
@@ -614,7 +655,44 @@ async def create_offline_download(
     return {"id": str(record.id), "manifest": record.manifest}
 
 
-@router.post("/uploads/text", status_code=status.HTTP_201_CREATED)
+@router.get("/lessons/{lesson_id}/offline-package")
+async def offline_package(
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> Response:
+    actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
+    if actor.role != UserRole.STUDENT:
+        raise HTTPException(status_code=403, detail="Student account required")
+    payload = await _offline_package_payload(session, lesson_id)
+    output = BytesIO()
+    with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lesson.json",
+            json.dumps(payload, ensure_ascii=True, default=str, separators=(",", ":")),
+        )
+        archive.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "lessonId": str(lesson.id),
+                    "version": 1,
+                    "files": ["lesson.json"],
+                },
+                separators=(",", ":"),
+            ),
+        )
+    filename = f"nevo-lesson-{lesson.id}.zip"
+    return Response(
+        content=output.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/uploads/text", response_model=UploadCreatedResponse, status_code=status.HTTP_201_CREATED
+)
 async def staged_upload(
     payload: UploadRequest,
     principal: PrincipalDependency,
@@ -669,7 +747,7 @@ async def staged_upload(
     return {"uploadId": str(job.id), "status": job.status, "stage": job.stage}
 
 
-@router.post("/uploads", status_code=status.HTTP_201_CREATED)
+@router.post("/uploads", response_model=UploadCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def staged_file_upload(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -698,7 +776,7 @@ async def staged_file_upload(
     )
 
 
-@router.get("/uploads/{upload_id}")
+@router.get("/uploads/{upload_id}", response_model=UploadStatusResponse)
 async def upload_status(
     upload_id: UUID,
     principal: PrincipalDependency,
@@ -717,7 +795,7 @@ async def upload_status(
     }
 
 
-@router.put("/uploads/{upload_id}/structure")
+@router.put("/uploads/{upload_id}/structure", response_model=UploadStructureResponse)
 async def update_upload_structure(
     upload_id: UUID,
     payload: UploadStructureWrite,
@@ -734,7 +812,60 @@ async def update_upload_structure(
     return {"id": str(job.id), "structure": job.structure}
 
 
-@router.post("/uploads/{upload_id}/confirm")
+@router.post("/uploads/{upload_id}/undo", response_model=UploadStructureResponse)
+async def undo_upload_structure(
+    upload_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> dict[str, object]:
+    actor = await require_school_actor(
+        session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
+    )
+    job = await session.get(UploadJob, upload_id)
+    if job is None or job.school_id != actor.school_id:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    if not job.undo_stack:
+        raise HTTPException(status_code=409, detail="There are no upload changes to undo")
+    history = list(job.undo_stack)
+    job.structure = history.pop()
+    job.undo_stack = history
+    await session.commit()
+    return {"id": str(job.id), "structure": job.structure, "canUndo": bool(history)}
+
+
+async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) -> dict[str, object]:
+    lesson = await session.get(Lesson, lesson_id)
+    segments = (
+        await session.scalars(
+            select(LessonSegment)
+            .where(LessonSegment.lesson_id == lesson_id)
+            .order_by(LessonSegment.sequence_order)
+        )
+    ).all()
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    return {
+        "id": str(lesson.id),
+        "title": lesson.title,
+        "version": lesson.parser_version,
+        "segments": [
+            {
+                "id": str(item.id),
+                "key": item.segment_key,
+                "title": item.title,
+                "body": item.body,
+                "contentType": item.content_type.value,
+                "sequenceOrder": item.sequence_order,
+                "availableModalities": item.available_modalities,
+                "modalityVariants": item.modality_variants,
+                "comprehensionCheckpoints": item.comprehension_checkpoints,
+            }
+            for item in segments
+        ],
+    }
+
+
+@router.post("/uploads/{upload_id}/confirm", response_model=UploadConfirmedResponse)
 async def confirm_upload(
     upload_id: UUID,
     principal: PrincipalDependency,

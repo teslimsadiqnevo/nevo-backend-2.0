@@ -110,8 +110,7 @@ def render_ndpa_compliance_pdf(audit: NdpaComplianceAudit) -> bytes:
     if audit.findings:
         lines.append("Findings:")
         lines.extend(
-            f"{finding.table}.{finding.field}: {finding.term}"
-            for finding in audit.findings[:12]
+            f"{finding.table}.{finding.field}: {finding.term}" for finding in audit.findings[:12]
         )
     return _simple_pdf(lines)
 
@@ -141,7 +140,7 @@ def _record_text(value: object) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
-def _simple_pdf(lines: list[str]) -> bytes:
+def render_simple_pdf(lines: list[str]) -> bytes:
     y = 760
     content_lines = [
         "BT",
@@ -184,12 +183,14 @@ def _simple_pdf(lines: list[str]) -> bytes:
     for offset in offsets[1:]:
         pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
     pdf.extend(
-        (
-            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{xref}\n%%EOF\n"
-        ).encode("ascii")
+        (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").encode(
+            "ascii"
+        )
     )
     return bytes(pdf)
+
+
+_simple_pdf = render_simple_pdf
 
 
 def _pdf_escape(value: str) -> str:

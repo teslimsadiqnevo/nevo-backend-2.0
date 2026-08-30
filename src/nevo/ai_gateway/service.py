@@ -25,6 +25,7 @@ from nevo.ai_gateway.ports import (
     RequestScheduler,
     TextGenerationProvider,
 )
+from nevo.ai_gateway.privacy import AiPrivacyGuard
 from nevo.ai_gateway.prompts import PromptRenderer
 from nevo.domain.ai_gateway.vocabulary import (
     SERVICE_PRIORITIES,
@@ -50,6 +51,7 @@ class AiGatewayService:
         output_cost_usd_per_million: Decimal,
         cache_write_cost_usd_per_million: Decimal,
         cache_read_cost_usd_per_million: Decimal,
+        privacy: AiPrivacyGuard | None = None,
     ) -> None:
         self._prompts = prompts
         self._calls = calls
@@ -63,6 +65,7 @@ class AiGatewayService:
         self._output_cost = output_cost_usd_per_million
         self._cache_write_cost = cache_write_cost_usd_per_million
         self._cache_read_cost = cache_read_cost_usd_per_million
+        self._privacy = privacy or AiPrivacyGuard()
 
     async def generate(
         self,
@@ -78,7 +81,12 @@ class AiGatewayService:
         )
         if template is None:
             raise PromptTemplateNotFoundError
-        rendered = self._renderer.render(template, request.variables)
+        safe_variables = self._privacy.sanitize_variables(
+            request.variables,
+            requester_user_id=request.requester_user_id,
+            student_id=request.student_id,
+        )
+        rendered = self._renderer.render(template, safe_variables)
         priority = SERVICE_PRIORITIES[request.service]
         started = time.perf_counter()
         responses: list[ProviderResponse] = []
@@ -89,8 +97,18 @@ class AiGatewayService:
 
         for attempt in range(self._max_compliance_retries + 1):
             provider_request = ProviderRequest(
-                system_instruction=rendered.system_instruction,
-                user_content=user_content,
+                system_instruction=self._privacy.sanitize_text(
+                    rendered.system_instruction,
+                    pseudonym=self._privacy.pseudonym(
+                        request.student_id or request.requester_user_id
+                    ),
+                ),
+                user_content=self._privacy.sanitize_text(
+                    user_content,
+                    pseudonym=self._privacy.pseudonym(
+                        request.student_id or request.requester_user_id
+                    ),
+                ),
                 max_output_tokens=request.max_output_tokens,
                 model=request.model,
                 cache_prompt=request.cache_prompt,
@@ -129,12 +147,8 @@ class AiGatewayService:
         input_tokens = sum(item.input_tokens for item in responses)
         output_tokens = sum(item.output_tokens for item in responses)
         thought_tokens = sum(item.thought_tokens for item in responses)
-        cache_creation_input_tokens = sum(
-            item.cache_creation_input_tokens for item in responses
-        )
-        cache_read_input_tokens = sum(
-            item.cache_read_input_tokens for item in responses
-        )
+        cache_creation_input_tokens = sum(item.cache_creation_input_tokens for item in responses)
+        cache_read_input_tokens = sum(item.cache_read_input_tokens for item in responses)
         estimated_cost = self._estimated_cost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -150,11 +164,7 @@ class AiGatewayService:
                 priority=priority,
                 provider=accepted.provider,
                 model=accepted.model,
-                status=(
-                    AiCallStatus.FALLBACK
-                    if fallback_used
-                    else AiCallStatus.SUCCEEDED
-                ),
+                status=(AiCallStatus.FALLBACK if fallback_used else AiCallStatus.SUCCEEDED),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 thought_tokens=thought_tokens,

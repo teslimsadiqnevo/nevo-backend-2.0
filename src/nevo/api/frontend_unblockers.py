@@ -1,12 +1,13 @@
 import hashlib
 import re
+import secrets
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Annotated
 from uuid import UUID
 from zipfile import ZipFile
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, or_, select, update
 
@@ -23,6 +24,13 @@ from nevo.api.product_common import (
     require_class_access,
     require_school_actor,
     require_student_access,
+)
+from nevo.api.response_models import (
+    AttentionFlagResponse,
+    InterventionResponse,
+    OutcomesResponse,
+    ProfileAliasResponse,
+    SchoolHealthResponse,
 )
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
@@ -41,6 +49,8 @@ from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.signal_event import LessonSession
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.intelligence.baseline import build_baseline_profile
+from nevo.notifications.email import EmailDeliveryUnavailableError, SmtpEmailDelivery
 from nevo.permissions.entities import PermissionSnapshot
 
 router = APIRouter()
@@ -74,8 +84,13 @@ class CurrentUserResponse(BaseModel):
     subjects: list[str] = Field(default_factory=list)
 
 
+def _camel(value: str) -> str:
+    head, *tail = value.split("_")
+    return head + "".join(part.title() for part in tail)
+
+
 class ClassStudentResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(alias_generator=lambda value: _camel(value), populate_by_name=True)
 
     student_id: UUID
     first_name: str | None
@@ -220,6 +235,8 @@ class BaselineSubmitResponse(BaseModel):
 
     status: str
     feature_count: int = Field(alias="featureCount")
+    baseline_profile: dict[str, object] = Field(alias="baselineProfile")
+    engine_config: dict[str, object] = Field(alias="engineConfig")
 
 
 class BaselinePromptResponse(BaseModel):
@@ -520,7 +537,10 @@ async def list_notifications(
     records = (
         await session.scalars(
             select(Notification)
-            .where(Notification.recipient_id == principal.user_id)
+            .where(
+                Notification.recipient_id == principal.user_id,
+                Notification.archived_at.is_(None),
+            )
             .order_by(Notification.created_at.desc())
             .limit(100)
         )
@@ -544,6 +564,7 @@ async def unread_count(
         select(func.count())
         .select_from(Notification)
         .where(Notification.recipient_id == principal.user_id, Notification.read.is_(False))
+        .where(Notification.archived_at.is_(None))
     )
     return UnreadCountResponse(count=int(count or 0))
 
@@ -665,12 +686,7 @@ async def submit_baseline(
     session: DatabaseSession,
 ) -> BaselineSubmitResponse:
     features = payload.features
-    leaked = {
-        key
-        for feature in features
-        for key in feature
-        if is_private_interaction_key(key)
-    }
+    leaked = {key for feature in features for key in feature if is_private_interaction_key(key)}
     if leaked:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -679,20 +695,25 @@ async def submit_baseline(
                 "aggregate baseline features."
             ),
         )
+    baseline_profile, engine_config = build_baseline_profile(
+        session_id=payload.session_id,
+        features=features,
+    )
     await session.execute(
         update(User)
         .where(User.id == principal.user_id)
         .values(
-            # Dynamic attribute exists in production DB from earlier baseline work.
-            baseline_profile={
-                "session_id": payload.session_id,
-                "feature_count": len(features),
-                "updated_at": datetime.now(UTC).isoformat(),
-            }
+            baseline_profile=baseline_profile,
+            engine_config=engine_config,
         )
     )
     await session.commit()
-    return BaselineSubmitResponse(status="accepted", featureCount=len(features))
+    return BaselineSubmitResponse(
+        status="accepted",
+        featureCount=len(features),
+        baselineProfile=baseline_profile,
+        engineConfig=engine_config,
+    )
 
 
 @router.get(
@@ -714,27 +735,94 @@ async def recalibrate_prompt(
     return BaselinePromptResponse(dimension=dimensions[index])
 
 
-@router.get("/api/analytics/schools", tags=["admin"])
-async def school_health(actor: OversightScope) -> dict[str, object]:
+@router.get("/api/analytics/schools", response_model=SchoolHealthResponse, tags=["admin"])
+async def school_health(actor: OversightScope, session: DatabaseSession) -> dict[str, object]:
+    school_id = actor.school_id
+    if school_id is None:
+        raise HTTPException(status_code=403, detail="School context required")
+    student_count = (
+        await session.scalar(
+            select(func.count(User.id)).where(
+                User.school_id == school_id, User.role == UserRole.STUDENT
+            )
+        )
+        or 0
+    )
+    active_students = (
+        await session.scalar(
+            select(func.count(func.distinct(LessonSession.student_id)))
+            .join(User, User.id == LessonSession.student_id)
+            .where(
+                User.school_id == school_id,
+                LessonSession.started_at >= datetime.now(UTC) - timedelta(days=30),
+            )
+        )
+        or 0
+    )
+    completed_sessions = (
+        await session.scalar(
+            select(func.count(LessonSession.id))
+            .join(User, User.id == LessonSession.student_id)
+            .where(User.school_id == school_id, LessonSession.completion_status == "completed")
+        )
+        or 0
+    )
     return {
-        "schoolId": str(actor.school_id) if actor.school_id else None,
-        "status": "ready",
-        "summary": "School data surfaces are available.",
+        "schoolId": str(school_id),
+        "studentCount": int(student_count),
+        "activeStudentsLast30Days": int(active_students),
+        "completedLessonSessions": int(completed_sessions),
+        "participationRate": round(int(active_students) / int(student_count), 4)
+        if student_count
+        else 0.0,
     }
 
 
-@router.get("/api/analytics/outcomes", tags=["admin"])
+@router.get("/api/analytics/outcomes", response_model=OutcomesResponse, tags=["admin"])
 async def outcomes(
     actor: OversightScope,
+    session: DatabaseSession,
     school_id: SchoolIdQuery = None,
 ) -> dict[str, object]:
+    target_school_id = school_id or actor.school_id
+    if target_school_id is None or target_school_id != actor.school_id:
+        raise HTTPException(status_code=404, detail="School not found")
+    rows = (
+        await session.execute(
+            select(
+                func.date_trunc("month", LessonSession.started_at).label("period"),
+                func.count(LessonSession.id).label("sessions"),
+                func.count(LessonSession.id)
+                .filter(LessonSession.completion_status == "completed")
+                .label("completed"),
+                func.avg(LessonSession.proactive_adjustments_count).label("adaptations"),
+            )
+            .join(User, User.id == LessonSession.student_id)
+            .where(User.school_id == target_school_id)
+            .group_by("period")
+            .order_by("period")
+        )
+    ).all()
     return {
-        "schoolId": str(school_id or actor.school_id) if (school_id or actor.school_id) else None,
-        "outcomes": [],
+        "schoolId": str(target_school_id),
+        "outcomes": [
+            {
+                "period": period.date().isoformat(),
+                "sessions": int(sessions),
+                "completedSessions": int(completed),
+                "completionRate": round(int(completed) / int(sessions), 4) if sessions else 0.0,
+                "averageAdaptations": round(float(adaptations or 0), 3),
+            }
+            for period, sessions, completed, adaptations in rows
+        ],
     }
 
 
-@router.get("/api/intelligence/profile/{student_id}", tags=["intelligence"])
+@router.get(
+    "/api/intelligence/profile/{student_id}",
+    response_model=ProfileAliasResponse,
+    tags=["intelligence"],
+)
 async def learner_profile_alias(
     student_id: UUID,
     principal: PrincipalDependency,
@@ -755,7 +843,11 @@ async def learner_profile_alias(
     }
 
 
-@router.get("/api/intelligence/flags", tags=["intelligence"])
+@router.get(
+    "/api/intelligence/flags",
+    response_model=list[AttentionFlagResponse],
+    tags=["intelligence"],
+)
 async def flags_alias(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -795,6 +887,7 @@ async def flags_alias(
 
 @router.get(
     "/api/intelligence/recommendations/{student_id}",
+    response_model=list[InterventionResponse],
     tags=["intelligence"],
 )
 async def recommendations_alias(
@@ -837,10 +930,14 @@ async def recommendations_alias(
 async def request_password_reset(
     payload: ForgotPasswordRequest,
     session: DatabaseSession,
+    request: Request,
 ) -> ResetReceipt:
+    mailer = getattr(request.app.state, "email_delivery", None)
+    if not isinstance(mailer, SmtpEmailDelivery) or not mailer.configured:
+        raise HTTPException(status_code=503, detail="Password reset email is unavailable")
     user = await session.scalar(select(User).where(func.lower(User.email) == payload.email.lower()))
     if user is not None:
-        token = hashlib.sha256(f"{user.id}:{datetime.now(UTC).isoformat()}".encode()).hexdigest()
+        token = secrets.token_urlsafe(32)
         session.add(
             PasswordResetToken(
                 user_id=user.id,
@@ -849,6 +946,21 @@ async def request_password_reset(
             )
         )
         await session.commit()
+        try:
+            await mailer.send(
+                to=str(user.email),
+                subject="Reset your Nevo password",
+                text=(
+                    "A password reset was requested for your Nevo account.\n\n"
+                    f"Reset it here: {mailer.frontend_base_url}/reset-password?token={token}\n\n"
+                    "This link expires in one hour. If you did not request it, "
+                    "you can ignore this email."
+                ),
+            )
+        except EmailDeliveryUnavailableError as error:
+            raise HTTPException(
+                status_code=503, detail="Password reset email is unavailable"
+            ) from error
     return ResetReceipt(
         status="accepted",
         message="If the account exists, Nevo will send password reset instructions.",
@@ -860,8 +972,13 @@ async def request_password_reset(
     response_model=SettingsResponse,
     tags=["school administration"],
 )
-async def get_settings(principal: PrincipalDependency) -> SettingsResponse:
-    return SettingsResponse(settings={"userId": str(principal.user_id), "preferences": {}})
+async def get_settings(
+    principal: PrincipalDependency, session: DatabaseSession
+) -> SettingsResponse:
+    user = await actor_user(session, principal)
+    return SettingsResponse(
+        settings={"userId": str(user.id), "preferences": dict(user.preferences)}
+    )
 
 
 @router.put(
@@ -872,10 +989,12 @@ async def get_settings(principal: PrincipalDependency) -> SettingsResponse:
 async def update_settings(
     payload: UpdateSettingsRequest,
     principal: PrincipalDependency,
+    session: DatabaseSession,
 ) -> SettingsResponse:
-    return SettingsResponse(
-        settings={"userId": str(principal.user_id), "preferences": payload.model_extra or {}}
-    )
+    user = await actor_user(session, principal)
+    user.preferences = {**dict(user.preferences), **(payload.model_extra or {})}
+    await session.commit()
+    return SettingsResponse(settings={"userId": str(user.id), "preferences": user.preferences})
 
 
 def _display_name(user: User) -> str:

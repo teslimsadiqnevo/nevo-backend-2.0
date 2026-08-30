@@ -15,6 +15,8 @@ from nevo.ai_gateway.errors import (
 )
 from nevo.ai_gateway.service import AiGatewayService
 from nevo.api.auth import PrincipalDependency
+from nevo.api.dependencies import DatabaseSession
+from nevo.api.product_common import require_school_actor, require_student_access
 from nevo.domain.ai_gateway.vocabulary import AiProviderName, AiService
 
 router = APIRouter(prefix="/api/v1/ai", tags=["ai-gateway"])
@@ -86,7 +88,15 @@ async def generate(
     payload: GenerateRequest,
     principal: PrincipalDependency,
     gateway: AiGatewayDependency,
+    session: DatabaseSession,
 ) -> GenerateResponse:
+    await require_school_actor(
+        session,
+        principal,
+        roles={"teacher", "senco_admin", "other_admin"},
+    )
+    if payload.student_id is not None:
+        await require_student_access(session, principal, payload.student_id)
     try:
         result = await gateway.generate(
             AiGenerationRequest(

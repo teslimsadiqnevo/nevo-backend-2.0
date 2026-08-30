@@ -1,10 +1,12 @@
 from datetime import date, datetime
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from nevo.api.auth import authenticated_principal
+from nevo.api.dependencies import database_session
 from nevo.api.exports import router
 from nevo.auth.entities import AuthPrincipal
 from nevo.domain.exports.vocabulary import IepExportShareStatus, IepExportStatus
@@ -86,8 +88,18 @@ def client_for(role: str = "teacher") -> tuple[TestClient, FakeIepExportService]
     app = FastAPI()
     app.state.iep_export_service = service
     app.dependency_overrides[authenticated_principal] = lambda: principal
+    app.dependency_overrides[database_session] = lambda: object()
     app.include_router(router)
     return TestClient(app), service
+
+
+@pytest.fixture(autouse=True)
+def allow_isolated_export_actor(monkeypatch):
+    async def allow(*args, **kwargs):
+        return object()
+
+    monkeypatch.setattr("nevo.api.exports.require_student_access", allow)
+    monkeypatch.setattr("nevo.api.exports._require_export_access", allow)
 
 
 def test_create_export_endpoint_returns_draft() -> None:

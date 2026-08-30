@@ -1,6 +1,7 @@
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -15,6 +16,7 @@ from nevo.ai_gateway.prompts import PromptRenderer
 from nevo.ai_gateway.service import AiGatewayService
 from nevo.api.ai_gateway import router
 from nevo.api.auth import authenticated_principal
+from nevo.api.dependencies import database_session
 from nevo.auth.entities import AuthPrincipal
 from nevo.domain.ai_gateway.vocabulary import AiProviderName, AiService
 
@@ -75,6 +77,7 @@ def test_authenticated_generation_returns_version_and_call_id() -> None:
     app = FastAPI()
     app.state.ai_gateway = gateway
     app.dependency_overrides[authenticated_principal] = lambda: principal
+    app.dependency_overrides[database_session] = lambda: object()
     app.include_router(router)
 
     response = TestClient(app).post(
@@ -90,3 +93,11 @@ def test_authenticated_generation_returns_version_and_call_id() -> None:
     assert response.json()["prompt_version"] == 1
     assert response.json()["call_id"] == str(calls.call_id)
     assert response.json()["fallback_used"] is False
+
+
+@pytest.fixture(autouse=True)
+def allow_isolated_gateway_actor(monkeypatch):
+    async def allow(*args, **kwargs):
+        return object()
+
+    monkeypatch.setattr("nevo.api.ai_gateway.require_school_actor", allow)

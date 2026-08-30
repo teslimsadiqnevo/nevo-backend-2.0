@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, datetime
 from io import BytesIO
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.content import get_content_parsing_service
@@ -45,11 +45,12 @@ from nevo.api.response_models import (
     TeacherDashboardResponse,
     UploadConfirmedResponse,
     UploadCreatedResponse,
+    UploadRetryResponse,
     UploadStatusResponse,
+    UploadStructureDocument,
     UploadStructureResponse,
 )
-from nevo.attention_flags.service import AttentionFlagDetectionService
-from nevo.content_parsing.entities import ContentParseRequest
+from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag
@@ -60,19 +61,21 @@ from nevo.db.models.product import (
     LessonModule,
     LessonProgress,
     OfflineDownload,
-    PostLessonProcessing,
     UploadJob,
+    UploadSourceBlob,
 )
 from nevo.db.models.signal_event import LessonSession
-from nevo.domain.accounts.vocabulary import UserRole
+from nevo.domain.accounts.vocabulary import SsoProvider, UserRole
 from nevo.domain.intelligence.vocabulary import LessonSourceType
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
-from nevo.learner_profiles.profile_updates import PostLessonProfileUpdateService
+from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
+from nevo.sso.service import SsoService
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 ParsingService = Annotated[ContentParsingService, Depends(get_content_parsing_service)]
 LessonUpload = Annotated[UploadFile, File()]
 UploadScope = Annotated[str, Form(pattern="^(lesson|unit|term)$")]
+UploadSubject = Annotated[str | None, Form(max_length=120)]
 StudentFilter = Annotated[UUID | None, Query(alias="studentId")]
 ClassFilter = Annotated[UUID | None, Query(alias="classId")]
 
@@ -81,6 +84,7 @@ class AssignmentPatch(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     due_at: datetime | None = Field(default=None, alias="dueAt")
+    available_from: datetime | None = Field(default=None, alias="availableFrom")
     status: str | None = Field(default=None, pattern="^(assigned|cancelled)$")
 
 
@@ -95,6 +99,7 @@ class AssignmentCreate(BaseModel):
     )
     class_id: UUID | None = Field(default=None, alias="classId")
     due_at: datetime | None = Field(default=None, alias="dueAt")
+    available_from: datetime | None = Field(default=None, alias="availableFrom")
 
 
 class ProgressWrite(BaseModel):
@@ -115,13 +120,31 @@ class UploadRequest(BaseModel):
     scope: str = Field(default="lesson", pattern="^(lesson|unit|term)$")
     source_type: LessonSourceType = Field(alias="sourceType")
     source_text: str = Field(alias="sourceText", min_length=1)
+    subject: str | None = Field(default=None, max_length=120)
 
 
 class UploadStructureWrite(BaseModel):
-    structure: dict[str, object]
+    structure: UploadStructureDocument
 
 
-def _lesson_summary(lesson: Lesson) -> dict[str, object]:
+class CloudImportRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_type: Literal["google_drive", "onedrive"] = Field(alias="sourceType")
+    file_id: str = Field(alias="fileId", min_length=1, max_length=500)
+    drive_id: str | None = Field(default=None, alias="driveId", max_length=500)
+    title: str | None = Field(default=None, max_length=255)
+    scope: str = Field(default="lesson", pattern="^(lesson|unit|term)$")
+    subject: str | None = Field(default=None, max_length=120)
+
+
+class RetryPagesRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    page_numbers: list[int] = Field(alias="pageNumbers", min_length=1, max_length=100)
+
+
+def _lesson_summary(lesson: Lesson, *, assignment_count: int = 0) -> dict[str, object]:
     return {
         "id": str(lesson.id),
         "title": lesson.title,
@@ -129,6 +152,8 @@ def _lesson_summary(lesson: Lesson) -> dict[str, object]:
         "sourceType": lesson.source_type.value,
         "segmentCount": lesson.segment_count,
         "reviewSegmentCount": lesson.review_segment_count,
+        "subject": lesson.subject,
+        "assignmentCount": assignment_count,
         "createdAt": lesson.created_at,
     }
 
@@ -148,6 +173,10 @@ async def _lesson_for_actor(
                 LessonAssignment.student_id == actor.id,
                 LessonAssignment.lesson_id == lesson.id,
                 LessonAssignment.status != "cancelled",
+                or_(
+                    LessonAssignment.available_from.is_(None),
+                    LessonAssignment.available_from <= datetime.now(UTC),
+                ),
             )
         )
         if assignment is None:
@@ -171,6 +200,10 @@ async def lessons(
                 .where(
                     LessonAssignment.student_id == actor.id,
                     LessonAssignment.status != "cancelled",
+                    or_(
+                        LessonAssignment.available_from.is_(None),
+                        LessonAssignment.available_from <= datetime.now(UTC),
+                    ),
                 )
                 .order_by(Lesson.created_at.desc())
             )
@@ -183,7 +216,19 @@ async def lessons(
                 .order_by(Lesson.created_at.desc())
             )
         ).all()
-    return [_lesson_summary(item) for item in rows]
+    counts = dict(
+        (
+            await session.execute(
+                select(LessonAssignment.lesson_id, func.count(LessonAssignment.id))
+                .where(
+                    LessonAssignment.lesson_id.in_([item.id for item in rows]),
+                    LessonAssignment.status != "cancelled",
+                )
+                .group_by(LessonAssignment.lesson_id)
+            )
+        ).all()
+    )
+    return [_lesson_summary(item, assignment_count=int(counts.get(item.id, 0))) for item in rows]
 
 
 @router.get("/lessons/{lesson_id}", response_model=LessonDetailResponse)
@@ -207,8 +252,14 @@ async def lesson_detail(
             .order_by(LessonModule.sequence_order)
         )
     ).all()
+    assignment_count = await session.scalar(
+        select(func.count(LessonAssignment.id)).where(
+            LessonAssignment.lesson_id == lesson.id,
+            LessonAssignment.status != "cancelled",
+        )
+    )
     return {
-        **_lesson_summary(lesson),
+        **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)),
         "confirmationSummary": lesson.confirmation_summary,
         "segments": [
             {
@@ -220,6 +271,8 @@ async def lesson_detail(
                 "body": item.body,
                 "availableModalities": item.available_modalities,
                 "comprehensionCheckpoints": item.comprehension_checkpoints,
+                "needsReview": item.needs_review,
+                "reviewReasons": item.review_reasons,
             }
             for item in segments
         ],
@@ -247,7 +300,13 @@ async def assignments(
     actor = await require_school_actor(session, principal)
     query = select(LessonAssignment, Lesson).join(Lesson, Lesson.id == LessonAssignment.lesson_id)
     if actor.role == UserRole.STUDENT:
-        query = query.where(LessonAssignment.student_id == actor.id)
+        query = query.where(
+            LessonAssignment.student_id == actor.id,
+            or_(
+                LessonAssignment.available_from.is_(None),
+                LessonAssignment.available_from <= datetime.now(UTC),
+            ),
+        )
     else:
         query = query.where(Lesson.school_id == actor.school_id)
         if student_id:
@@ -265,6 +324,7 @@ async def assignments(
             "classId": str(item.class_id) if item.class_id else None,
             "status": item.status,
             "dueAt": item.due_at,
+            "availableFrom": item.available_from,
             "assignedAt": item.assigned_at,
         }
         for item, lesson in rows
@@ -319,6 +379,7 @@ async def create_assignments(
                 class_id=payload.class_id,
                 assignment_type="class" if payload.class_id else "student",
                 due_at=payload.due_at,
+                available_from=payload.available_from,
             )
             session.add(record)
             await session.flush()
@@ -343,10 +404,17 @@ async def update_assignment(
         raise HTTPException(status_code=404, detail="Assignment not found")
     if payload.due_at is not None:
         record.due_at = payload.due_at
+    if payload.available_from is not None:
+        record.available_from = payload.available_from
     if payload.status is not None:
         record.status = payload.status
     await session.commit()
-    return {"id": str(record.id), "status": record.status, "dueAt": record.due_at}
+    return {
+        "id": str(record.id),
+        "status": record.status,
+        "dueAt": record.due_at,
+        "availableFrom": record.available_from,
+    }
 
 
 @router.delete("/assignments/{assignment_id}", status_code=204)
@@ -446,41 +514,14 @@ async def save_lesson_progress(
 
     intelligence: dict[str, object] = {"status": "not_run"}
     if payload.status == "completed":
-        processed = await session.get(PostLessonProcessing, lesson_session.id)
-        if processed is not None:
-            intelligence["status"] = "already_completed"
-            return {
-                "lessonId": str(lesson_id),
-                "status": progress.status,
-                "modulePosition": progress.module_position,
-                "segmentPosition": progress.segment_position,
-                "intelligence": intelligence,
-            }
-        profile_service = getattr(request.app.state, "post_lesson_profile_update_service", None)
-        flag_service = getattr(request.app.state, "attention_flag_detection_service", None)
-        try:
-            if isinstance(profile_service, PostLessonProfileUpdateService):
-                profile_result = await profile_service.update_after_lesson(
-                    student_id=actor.id,
-                    lesson_session_id=lesson_session.id,
-                    requested_by_user_id=actor.id,
-                )
-                intelligence["profileUpdate"] = profile_result.status.value
-            if isinstance(flag_service, AttentionFlagDetectionService):
-                flag_result = await flag_service.evaluate_student(
-                    student_id=actor.id,
-                    requested_by_user_id=actor.id,
-                )
-                intelligence["attention"] = flag_result.status
-            session.add(
-                PostLessonProcessing(
-                    session_id=lesson_session.id,
-                    student_id=actor.id,
-                )
+        worker = getattr(request.app.state, "post_lesson_worker", None)
+        if isinstance(worker, PostLessonProcessingWorker):
+            intelligence["status"] = await worker.enqueue(
+                session_id=lesson_session.id,
+                student_id=actor.id,
+                completed_at=lesson_session.ended_at,
             )
-            await session.commit()
-            intelligence["status"] = "completed"
-        except Exception:
+        else:
             intelligence["status"] = "deferred"
     return {
         "lessonId": str(lesson_id),
@@ -554,7 +595,6 @@ async def student_profile(
                 "version": profile.version,
                 "observedEventCount": profile.observed_event_count,
                 "lastEvaluatedAt": profile.last_evaluated_at,
-                "engineConfig": student.engine_config,
             }
             if profile
             else None
@@ -718,26 +758,13 @@ async def staged_upload(
                 title=payload.title,
                 source_type=payload.source_type,
                 source_text=payload.source_text,
+                source_metadata={"subject": payload.subject} if payload.subject else {},
             ),
             requested_by_user_id=actor.id,
         )
-        segment_ids = [str(item.segment_key) for item in parsed.segments]
-        modules = []
-        for index in range(0, len(segment_ids), 5):
-            modules.append(
-                {
-                    "title": f"Module {index // 5 + 1}",
-                    "sequenceOrder": index // 5 + 1,
-                    "segmentIds": segment_ids[index : index + 5],
-                }
-            )
         job.status = "ready"
         job.stage = "structure"
-        job.structure = {
-            "lessonId": str(parsed.lesson_id),
-            "modules": modules,
-            "reviewNotes": list(parsed.review_notes),
-        }
+        job.structure = _upload_structure(parsed)
         job.completed_at = datetime.now(UTC)
         await session.commit()
     except Exception as error:
@@ -754,6 +781,7 @@ async def staged_file_upload(
     parser: ParsingService,
     file: LessonUpload,
     scope: UploadScope = "lesson",
+    subject: UploadSubject = None,
 ) -> dict[str, object]:
     content = await file.read()
     if len(content) > 50 * 1024 * 1024:
@@ -762,18 +790,141 @@ async def staged_file_upload(
     source_text = _extract_text(filename, content)
     if not source_text.strip():
         raise HTTPException(status_code=400, detail="No readable lesson text was found")
-    return await staged_upload(
+    result = await staged_upload(
         UploadRequest(
             title=_title_from_filename(filename),
             filename=filename,
             scope=scope,
             sourceType=_source_type(filename),
             sourceText=source_text,
+            subject=subject,
         ),
         principal,
         session,
         parser,
     )
+    session.add(
+        UploadSourceBlob(
+            upload_id=UUID(str(result["uploadId"])),
+            filename=filename,
+            content_type=file.content_type or "application/octet-stream",
+            content=content,
+        )
+    )
+    await session.commit()
+    return result
+
+
+@router.post(
+    "/uploads/import",
+    response_model=UploadCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_cloud_file(
+    payload: CloudImportRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    parser: ParsingService,
+    request: Request,
+) -> dict[str, object]:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    sso = getattr(request.app.state, "sso_service", None)
+    if not isinstance(sso, SsoService):
+        raise HTTPException(status_code=503, detail="Cloud import is unavailable")
+    provider = (
+        SsoProvider.GOOGLE
+        if payload.source_type == "google_drive"
+        else SsoProvider.MICROSOFT
+    )
+    try:
+        cloud_file = await sso.download_file(
+            school_id=actor.school_id,
+            provider=provider,
+            file_id=payload.file_id,
+            drive_id=payload.drive_id,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if len(cloud_file.content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Cloud file exceeds 50 MB")
+    source_text = _extract_text(cloud_file.filename, cloud_file.content)
+    if not source_text.strip():
+        raise HTTPException(status_code=400, detail="No readable lesson text was found")
+    result = await staged_upload(
+        UploadRequest(
+            title=payload.title or _title_from_filename(cloud_file.filename),
+            filename=cloud_file.filename,
+            scope=payload.scope,
+            sourceType=LessonSourceType(payload.source_type),
+            sourceText=source_text,
+            subject=payload.subject,
+        ),
+        principal,
+        session,
+        parser,
+    )
+    session.add(
+        UploadSourceBlob(
+            upload_id=UUID(str(result["uploadId"])),
+            filename=cloud_file.filename,
+            content_type=cloud_file.content_type,
+            content=cloud_file.content,
+        )
+    )
+    await session.commit()
+    return result
+
+
+@router.post(
+    "/uploads/{upload_id}/retry-pages",
+    response_model=UploadRetryResponse,
+)
+async def retry_upload_pages(
+    upload_id: UUID,
+    payload: RetryPagesRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    parser: ParsingService,
+) -> dict[str, object]:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    job = await session.get(UploadJob, upload_id)
+    blob = await session.get(UploadSourceBlob, upload_id)
+    if job is None or job.school_id != actor.school_id or blob is None:
+        raise HTTPException(status_code=404, detail="Upload source was not found")
+    if not blob.filename.casefold().endswith(".pdf"):
+        raise HTTPException(status_code=409, detail="Page retry is available for PDF uploads")
+    pages = _extract_pdf_pages(blob.content, payload.page_numbers)
+    if not pages:
+        raise HTTPException(status_code=422, detail="None of those pages exist in the PDF")
+    parsed = await parser.parse(
+        request=ContentParseRequest(
+            title=_title_from_filename(blob.filename),
+            source_type=LessonSourceType.PDF,
+            pages=tuple(pages),
+            source_metadata={"retryOfUploadId": str(upload_id)},
+        ),
+        requested_by_user_id=actor.id,
+    )
+    structure = _upload_structure(parsed)
+    job.undo_stack = [*job.undo_stack, job.structure][-20:]
+    job.structure = structure
+    job.status = "ready"
+    job.error_message = None
+    await session.commit()
+    return {
+        "uploadId": str(upload_id),
+        "lessonId": str(parsed.lesson_id),
+        "pagesRetried": sorted(set(payload.page_numbers)),
+        "structure": structure,
+    }
 
 
 @router.get("/uploads/{upload_id}", response_model=UploadStatusResponse)
@@ -807,7 +958,7 @@ async def update_upload_structure(
     if job is None or job.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Upload not found")
     job.undo_stack = [*job.undo_stack, job.structure][-20:]
-    job.structure = payload.structure
+    job.structure = payload.structure.model_dump(by_alias=True, mode="json")
     await session.commit()
     return {"id": str(job.id), "structure": job.structure}
 
@@ -863,6 +1014,41 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
             for item in segments
         ],
     }
+
+
+def _upload_structure(parsed) -> dict[str, object]:
+    segment_ids = [str(item.segment_key) for item in parsed.segments]
+    modules = [
+        {
+            "title": f"Module {index // 5 + 1}",
+            "sequenceOrder": index // 5 + 1,
+            "segmentIds": segment_ids[index : index + 5],
+            "recap": None,
+            "preview": None,
+        }
+        for index in range(0, len(segment_ids), 5)
+    ]
+    return {
+        "lessonId": str(parsed.lesson_id),
+        "modules": modules,
+        "reviewNotes": list(parsed.review_notes),
+    }
+
+
+def _extract_pdf_pages(content: bytes, page_numbers: list[int]) -> list[SourcePage]:
+    from pypdf import PdfReader
+
+    try:
+        reader = PdfReader(BytesIO(content))
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="Could not read PDF pages") from error
+    pages: list[SourcePage] = []
+    for page_number in sorted(set(page_numbers)):
+        if page_number < 1 or page_number > len(reader.pages):
+            continue
+        text = reader.pages[page_number - 1].extract_text() or ""
+        pages.append(SourcePage(page_number=page_number, text=text))
+    return pages
 
 
 @router.post("/uploads/{upload_id}/confirm", response_model=UploadConfirmedResponse)

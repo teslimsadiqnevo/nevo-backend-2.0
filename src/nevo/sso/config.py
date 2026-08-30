@@ -14,3 +14,5 @@ class SsoSettings(BaseSettings):
     school_base_url: AnyHttpUrl = AnyHttpUrl("https://nevo.app")
     microsoft_client_secret: SecretStr | None = None
     google_client_secret: SecretStr | None = None
+    google_refresh_token: SecretStr | None = None
+    credential_encryption_key: SecretStr | None = None

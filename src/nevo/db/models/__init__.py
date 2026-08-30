@@ -36,7 +36,9 @@ from nevo.db.models.frontend_support import (
     LessonAssignment,
     Message,
     MessageThread,
+    MessageThreadRead,
     Notification,
+    NotificationEmailDelivery,
     PasswordResetToken,
 )
 from nevo.db.models.heartbeat import SystemHeartbeat
@@ -65,6 +67,7 @@ from nevo.db.models.product import (
     PostLessonProcessing,
     SchoolInvitation,
     UploadJob,
+    UploadSourceBlob,
     UserConnection,
 )
 from nevo.db.models.signal_event import LessonSession, SignalEvent
@@ -118,7 +121,9 @@ __all__ = [
     "LessonSession",
     "Message",
     "MessageThread",
+    "MessageThreadRead",
     "Notification",
+    "NotificationEmailDelivery",
     "NotificationPreference",
     "OfflineDownload",
     "ParentDataRequest",
@@ -142,6 +147,7 @@ __all__ = [
     "SystemHeartbeat",
     "TeacherClassAssignment",
     "UploadJob",
+    "UploadSourceBlob",
     "User",
     "UserConnection",
 ]

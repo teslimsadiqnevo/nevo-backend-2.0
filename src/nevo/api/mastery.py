@@ -43,6 +43,7 @@ class MasteryStateResponse(BaseModel):
 
     student_id: UUID = Field(alias="studentId")
     concept_id: UUID = Field(alias="conceptId")
+    concept_name: str | None = Field(default=None, alias="conceptName")
     mastery_probability_concept: float = Field(alias="masteryProbabilityConcept")
     mastery_probability_reading: float = Field(alias="masteryProbabilityReading")
     attention_weights: dict[str, float] = Field(alias="attentionWeights")

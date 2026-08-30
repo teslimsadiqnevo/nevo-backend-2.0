@@ -1,9 +1,12 @@
+from unittest.mock import ANY
 from uuid import uuid4
 
-from fastapi import FastAPI
+import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from nevo.api.auth import authenticated_principal
+from nevo.api.dependencies import database_session
 from nevo.api.mastery import router
 from nevo.auth.entities import AuthPrincipal
 from nevo.domain.mastery.vocabulary import FailureAttribution
@@ -93,8 +96,28 @@ def client_for(
     app = FastAPI()
     app.state.mastery_service = service
     app.dependency_overrides[authenticated_principal] = lambda: principal
+    app.dependency_overrides[database_session] = lambda: object()
     app.include_router(router)
     return TestClient(app), service, principal
+
+
+@pytest.fixture(autouse=True)
+def allow_isolated_mastery_actor(monkeypatch):
+    async def student_access(session, principal, student_id):
+        del session
+        if principal.role == "student" and principal.user_id != student_id:
+            raise HTTPException(status_code=403)
+        return object()
+
+    async def class_access(*args, **kwargs):
+        return object()
+
+    async def school_access(*args, **kwargs):
+        return type("Actor", (), {"school_id": ANY})()
+
+    monkeypatch.setattr("nevo.api.mastery.require_student_access", student_access)
+    monkeypatch.setattr("nevo.api.mastery.require_class_access", class_access)
+    monkeypatch.setattr("nevo.api.mastery.require_school_actor", school_access)
 
 
 def test_update_endpoint_returns_dual_track_mastery() -> None:

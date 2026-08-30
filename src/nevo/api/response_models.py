@@ -195,6 +195,8 @@ class LessonSummaryResponse(CamelResponse):
     source_type: str
     segment_count: int
     review_segment_count: int
+    subject: str | None = None
+    assignment_count: int = 0
     created_at: datetime
 
 
@@ -207,6 +209,8 @@ class LessonSegmentResponse(CamelResponse):
     body: str
     available_modalities: list[str]
     comprehension_checkpoints: list[dict[str, object]]
+    needs_review: bool = False
+    review_reasons: list[str] = Field(default_factory=list)
 
 
 class LessonModuleResponse(CamelResponse):
@@ -231,6 +235,7 @@ class AssignmentResponse(CamelResponse):
     class_id: UUID | None
     status: str
     due_at: datetime | None
+    available_from: datetime | None
     assigned_at: datetime
 
 
@@ -243,6 +248,7 @@ class AssignmentUpdatedResponse(CamelResponse):
     id: UUID
     status: str
     due_at: datetime | None
+    available_from: datetime | None
 
 
 class LessonSessionResponse(CamelResponse):
@@ -282,7 +288,6 @@ class LearnerProfileSummaryResponse(CamelResponse):
     version: int
     observed_event_count: int
     last_evaluated_at: datetime | None
-    engine_config: dict[str, object]
 
 
 class StudentProfileResponse(CamelResponse):
@@ -294,6 +299,54 @@ class StudentProfileResponse(CamelResponse):
 class TeacherDashboardResponse(CamelResponse):
     teacher: PersonReferenceResponse
     classes: list[ClassOptionResponse]
+
+
+class ClassLearningPulseResponse(CamelResponse):
+    class_id: UUID
+    class_name: str
+    student_count: int
+    engagement: float | None
+    comprehension: float | None
+    focus: float | None
+
+
+class TeacherRecentActivityResponse(CamelResponse):
+    id: str
+    activity_type: str
+    occurred_at: datetime
+    title: str
+    detail: str
+    class_id: UUID | None = None
+    student_id: UUID | None = None
+    lesson_id: UUID | None = None
+    action_target: str
+
+
+class TeacherHomeResponse(CamelResponse):
+    class_learning_pulse: list[ClassLearningPulseResponse]
+    recent_activity: list[TeacherRecentActivityResponse]
+
+
+class SegmentCompletionResponse(CamelResponse):
+    segment_id: UUID
+    segment_key: str
+    title: str | None
+    sequence_order: int
+    assigned_student_count: int
+    completion_count: int
+    completion_rate: float
+    average_time_seconds: float | None
+    slowdown_count: int
+    note: str | None
+
+
+class LessonClassProgressResponse(CamelResponse):
+    lesson_id: UUID
+    class_id: UUID
+    assigned_student_count: int
+    segments: list[SegmentCompletionResponse]
+    slowest_segment_id: UUID | None
+    slowdown_note: str | None
 
 
 class ConnectionResponse(CamelResponse):
@@ -324,19 +377,40 @@ class UploadStatusResponse(CamelResponse):
     id: UUID
     status: str
     stage: str
-    structure: dict[str, object]
+    structure: "UploadStructureDocument"
     error: str | None
+
+
+class UploadModuleDocument(CamelResponse):
+    title: str
+    sequence_order: int
+    segment_ids: list[str]
+    recap: str | None = None
+    preview: str | None = None
+
+
+class UploadStructureDocument(CamelResponse):
+    lesson_id: UUID
+    modules: list[UploadModuleDocument]
+    review_notes: list[dict[str, object]] = Field(default_factory=list)
 
 
 class UploadStructureResponse(CamelResponse):
     id: UUID
-    structure: dict[str, object]
+    structure: UploadStructureDocument
     can_undo: bool | None = None
 
 
 class UploadConfirmedResponse(CamelResponse):
     lesson_id: UUID
     status: str
+
+
+class UploadRetryResponse(CamelResponse):
+    upload_id: UUID
+    lesson_id: UUID
+    pages_retried: list[int]
+    structure: UploadStructureDocument
 
 
 class AttentionFlagResponse(CamelResponse):
@@ -346,6 +420,8 @@ class AttentionFlagResponse(CamelResponse):
     description: str
     generated_at: datetime
     acknowledged: bool
+    evidence_series: list[float] = Field(default_factory=list)
+    action_targets: list[str] = Field(default_factory=list)
 
 
 class InterventionResponse(CamelResponse):
@@ -358,8 +434,6 @@ class InterventionResponse(CamelResponse):
 class ProfileAliasResponse(CamelResponse):
     student_id: UUID
     status: Literal["observed", "not_observed_yet"]
-    working_memory_capacity: int | None = None
-    attention_span: int | None = None
     observed_event_count: int | None = None
 
 
@@ -403,22 +477,14 @@ class AdaptationResponse(CamelResponse):
     suppressed: bool
 
 
-class ConversationEvidenceRow(CamelResponse):
-    category: str
-    current_page: str
-    context_ids: dict[str, str | None]
-    helpful: bool | None
-    created_at: datetime
-
-
 class ConversationEvidenceResponse(CamelResponse):
     student_id: UUID
     period_days: int
     interaction_count: int
     categories: dict[str, int]
     helpful_response_rate: float | None
-    recent_evidence: list[ConversationEvidenceRow]
-    privacy: str
+    privacy: Literal["aggregate_only", "withheld_below_minimum"]
+    minimum_interactions: int = 3
 
 
 class MisconceptionResponse(CamelResponse):
@@ -454,6 +520,9 @@ class LessonProgressItemResponse(CamelResponse):
     status: str
     module_position: int
     segment_position: int
+    position_base: Literal[0] = 0
+    module_number: int
+    segment_number: int
     updated_at: datetime
 
 

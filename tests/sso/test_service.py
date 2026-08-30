@@ -112,6 +112,15 @@ class FakeRepository:
             }
         )
 
+    async def mark_callback_succeeded(self, *, school_id, provider, succeeded_at):
+        assert school_id == SCHOOL_ID
+        assert provider == SsoProvider.GOOGLE
+
+    async def save_provider_credential(self, *, school_id, provider, ciphertext):
+        assert school_id == SCHOOL_ID
+        assert provider == SsoProvider.GOOGLE
+        assert ciphertext
+
     async def disconnect(
         self,
         *,

@@ -62,6 +62,11 @@ class SqlAlchemyContentParsingRepository:
                     school_id=school_id,
                     created_by_user_id=requested_by_user_id,
                     title=parsed.title,
+                    subject=(
+                        str(request.source_metadata["subject"])
+                        if request.source_metadata.get("subject")
+                        else None
+                    ),
                     source_type=request.source_type,
                     source_reference=request.source_metadata,
                     parser_version=1,

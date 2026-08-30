@@ -20,6 +20,7 @@ class SsoSchoolConfig:
     client_id: str
     tenant_id: str | None = None
     hosted_domain: str | None = None
+    provider_credential: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,7 @@ class SsoProviderIdentity:
     first_name: str | None
     last_name: str | None
     role: UserRole
+    refresh_token: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +60,13 @@ class RosterAccount:
 class RosterSyncBatch:
     students: tuple[RosterAccount, ...]
     teachers: tuple[RosterAccount, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SsoCloudFile:
+    filename: str
+    content_type: str
+    content: bytes
 
 
 @dataclass(frozen=True, slots=True)

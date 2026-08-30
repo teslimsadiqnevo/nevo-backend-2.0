@@ -1,7 +1,9 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from time import perf_counter
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from nevo.ai_gateway.config import AiGatewaySettings
@@ -51,11 +53,13 @@ from nevo.intelligence.wiring import (
     build_ndpa_compliance_audit_service,
     build_scaffold_fading_service,
 )
+from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 from nevo.learner_profiles.wiring import (
     build_post_lesson_profile_update_service,
 )
 from nevo.mastery.wiring import build_mastery_service
 from nevo.notifications.email import EmailSettings, SmtpEmailDelivery
+from nevo.notifications.worker import NotificationEmailWorker
 from nevo.ops.config import OpsSettings
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
 from nevo.partner_inquiries.wiring import build_partner_inquiry_service
@@ -65,6 +69,8 @@ from nevo.signal_events.wiring import build_signal_ingestion_service
 from nevo.sso.config import SsoSettings
 from nevo.sso.wiring import build_sso_service
 from nevo.teacher_assignments.wiring import build_teacher_assignment_service
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -81,6 +87,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.credential_hasher = credential_hasher
     app.state.email_delivery = SmtpEmailDelivery(EmailSettings())
+    app.state.notification_email_worker = NotificationEmailWorker(
+        sessions=sessions,
+        delivery=app.state.email_delivery,
+    )
+    app.state.notification_email_worker.start()
     app.state.permission_service = build_permission_service(
         sessions,
         credential_hasher=credential_hasher,
@@ -123,6 +134,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.ai_gateway,
     )
+    app.state.post_lesson_worker = PostLessonProcessingWorker(
+        sessions=sessions,
+        profile_service=app.state.post_lesson_profile_update_service,
+        flag_service=app.state.attention_flag_detection_service,
+    )
+    app.state.post_lesson_worker.start()
     app.state.adaptation_engine_service = build_adaptation_engine_service(
         sessions,
         app.state.ai_gateway,
@@ -147,6 +164,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await app.state.notification_email_worker.stop()
+        await app.state.post_lesson_worker.stop()
         await app.state.heartbeat_loop.stop()
         await app.state.self_ping_loop.stop()
         await app.state.ai_gateway.close()
@@ -174,6 +193,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):  # type: ignore[no-untyped-def]
+    started_at = perf_counter()
+    response = await call_next(request)
+    duration_ms = (perf_counter() - started_at) * 1000
+    response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
+    response.headers["X-Nevo-Request-Duration-Ms"] = f"{duration_ms:.1f}"
+    if duration_ms >= 1000:
+        logger.warning(
+            "Slow request method=%s path=%s status=%s duration_ms=%.1f",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+    return response
 app.include_router(admin_router)
 app.include_router(ai_gateway_router)
 app.include_router(ask_nevo_router)

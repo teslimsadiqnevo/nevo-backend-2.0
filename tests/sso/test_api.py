@@ -61,7 +61,15 @@ class FakeSsoService(SsoService):
             destination=SsoFirstUseDestination.HOME_DASHBOARD,
         )
 
-    async def sync_roster(self, *, school_slug, provider):
+    async def sync_roster(
+        self,
+        *,
+        school_slug,
+        provider,
+        expected_school_id=None,
+        triggered_by_user_id=None,
+    ):
+        del expected_school_id, triggered_by_user_id
         return RosterSyncResult(
             status=RosterSyncStatus.PARTIAL_MANUAL_REVIEW,
             imported_students=10,

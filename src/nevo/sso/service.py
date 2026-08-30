@@ -16,6 +16,7 @@ from nevo.sso.entities import (
     RosterSyncBatch,
     RosterSyncHistory,
     RosterSyncResult,
+    SsoCloudFile,
     SsoConnectionHealth,
     SsoDataFlowCategory,
     SsoDisconnection,
@@ -25,6 +26,7 @@ from nevo.sso.entities import (
     SsoSchoolConfig,
     SsoStart,
 )
+from nevo.sso.security import SsoCredentialCipher
 
 DEFAULT_SYNC_HISTORY_WINDOW_DAYS = 30
 MAX_SYNC_HISTORY_WINDOW_DAYS = 365
@@ -118,6 +120,22 @@ class SsoRepository(Protocol):
         identity: SsoProviderIdentity,
     ) -> AuthUser: ...
 
+    async def save_provider_credential(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        ciphertext: str,
+    ) -> None: ...
+
+    async def mark_callback_succeeded(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        succeeded_at: datetime,
+    ) -> None: ...
+
     async def learner_profile_exists(self, user_id: UUID) -> bool: ...
 
     async def record_roster_sync(
@@ -163,6 +181,14 @@ class SsoProviderClient(Protocol):
         config: SsoSchoolConfig,
     ) -> RosterSyncBatch: ...
 
+    async def download_file(
+        self,
+        *,
+        config: SsoSchoolConfig,
+        file_id: str,
+        drive_id: str | None = None,
+    ) -> SsoCloudFile: ...
+
 
 class SsoService:
     def __init__(
@@ -175,6 +201,7 @@ class SsoService:
         provider_clients: dict[SsoProvider, SsoProviderClient],
         public_base_url: str,
         school_base_url: str,
+        credential_cipher: SsoCredentialCipher | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._repository = repository
@@ -184,6 +211,7 @@ class SsoService:
         self._provider_clients = provider_clients
         self._public_base_url = public_base_url.rstrip("/")
         self._school_base_url = school_base_url.rstrip("/")
+        self._credential_cipher = credential_cipher
         self._now = now or (lambda: datetime.now(UTC))
 
     async def start(
@@ -217,6 +245,19 @@ class SsoService:
             code=code,
             redirect_uri=self._redirect_uri(provider),
         )
+        if identity.refresh_token:
+            if self._credential_cipher is None:
+                raise LookupError("SSO credential encryption is not configured")
+            await self._repository.save_provider_credential(
+                school_id=config.school_id,
+                provider=provider,
+                ciphertext=self._credential_cipher.encrypt(identity.refresh_token),
+            )
+        await self._repository.mark_callback_succeeded(
+            school_id=config.school_id,
+            provider=provider,
+            succeeded_at=self._now(),
+        )
         user = await self._repository.upsert_sso_user(
             school_id=config.school_id,
             identity=identity,
@@ -237,13 +278,20 @@ class SsoService:
         *,
         school_slug: str,
         provider: SsoProvider,
+        expected_school_id: UUID | None = None,
+        triggered_by_user_id: UUID | None = None,
     ) -> RosterSyncResult:
         config = await self._require_config(school_slug, provider)
-        batch = await self._provider(provider).roster_for_school(config=config)
+        if expected_school_id is not None and config.school_id != expected_school_id:
+            raise LookupError("SSO is not configured for this school and provider")
+        batch = await self._provider(provider).roster_for_school(
+            config=self._provider_config(config)
+        )
         return await self._repository.record_roster_sync(
             school_id=config.school_id,
             provider=provider,
             batch=batch,
+            triggered_by_user_id=triggered_by_user_id,
         )
 
     async def connection_health(self, school_id: UUID) -> SsoConnectionHealth:
@@ -260,6 +308,23 @@ class SsoService:
             health,
             school_entry_url=self.school_entry_url(health.school_url_slug),
             data_flow=SSO_DATA_FLOW,
+        )
+
+    async def download_file(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        file_id: str,
+        drive_id: str | None = None,
+    ) -> SsoCloudFile:
+        config = await self._require_school_config(school_id)
+        if config.provider is not provider:
+            raise LookupError("That cloud provider is not configured for this school")
+        return await self._provider(provider).download_file(
+            config=self._provider_config(config),
+            file_id=file_id,
+            drive_id=drive_id,
         )
 
     async def sync_history(
@@ -303,7 +368,7 @@ class SsoService:
             )
         try:
             batch = await self._provider(config.provider).roster_for_school(
-                config=config,
+                config=self._provider_config(config),
             )
         except LookupError as error:
             await self._repository.record_failed_roster_sync(
@@ -425,6 +490,16 @@ class SsoService:
         except KeyError as error:
             raise LookupError("SSO provider client is not configured") from error
 
+    def _provider_config(self, config: SsoSchoolConfig) -> SsoSchoolConfig:
+        if not config.provider_credential:
+            return config
+        if self._credential_cipher is None:
+            raise LookupError("SSO credential encryption is not configured")
+        return replace(
+            config,
+            provider_credential=self._credential_cipher.decrypt(config.provider_credential),
+        )
+
     def _redirect_uri(self, provider: SsoProvider) -> str:
         return f"{self._public_base_url}/api/v1/auth/sso/{provider.value}/callback"
 
@@ -457,3 +532,13 @@ class UnavailableSsoProviderClient:
     ) -> RosterSyncBatch:
         del config
         raise LookupError("Roster provider client is not configured")
+
+    async def download_file(
+        self,
+        *,
+        config: SsoSchoolConfig,
+        file_id: str,
+        drive_id: str | None = None,
+    ) -> SsoCloudFile:
+        del config, file_id, drive_id
+        raise LookupError("Cloud file provider is not configured")

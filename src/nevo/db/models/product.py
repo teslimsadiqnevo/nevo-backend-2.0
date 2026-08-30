@@ -7,6 +7,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -162,6 +163,22 @@ class UploadJob(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class UploadSourceBlob(Base):
+    __tablename__ = "upload_source_blobs"
+
+    upload_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("upload_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class LessonProgress(Base):
     __tablename__ = "lesson_progress"
     __table_args__ = (
@@ -292,6 +309,9 @@ class NotificationPreference(Base):
 
 class PostLessonProcessing(Base):
     __tablename__ = "post_lesson_processing"
+    __table_args__ = (
+        Index("ix_post_lesson_processing_due", "status", "next_attempt_at"),
+    )
 
     session_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     student_id: Mapped[uuid.UUID] = mapped_column(
@@ -300,3 +320,20 @@ class PostLessonProcessing(Base):
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="pending", server_default="pending"
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    profile_updated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    flags_evaluated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

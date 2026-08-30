@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, Uuid, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nevo.db.base import Base
@@ -89,6 +89,32 @@ class Notification(Base):
     )
 
 
+class NotificationEmailDelivery(Base):
+    __tablename__ = "notification_email_deliveries"
+    __table_args__ = (
+        Index("uq_notification_email_deliveries_notification", "notification_id", unique=True),
+        Index("ix_notification_email_deliveries_due", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    notification_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="pending", server_default="pending"
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class MessageThread(Base):
     __tablename__ = "message_threads"
     __table_args__ = (
@@ -162,6 +188,26 @@ class Message(Base):
     )
 
 
+class MessageThreadRead(Base):
+    __tablename__ = "message_thread_reads"
+    __table_args__ = (
+        Index("uq_message_thread_reads_thread_user", "thread_id", "user_id", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("message_threads.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    last_read_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class LessonAssignment(Base):
     __tablename__ = "lesson_assignments"
     __table_args__ = (
@@ -208,6 +254,9 @@ class LessonAssignment(Base):
         server_default="assigned",
     )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     assigned_at: Mapped[datetime] = mapped_column(

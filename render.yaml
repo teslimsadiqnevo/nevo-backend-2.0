@@ -8,9 +8,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: nevo-postgres
-          property: connectionString
+        sync: false
       - key: AUTH_PASSWORD_PEPPER
         generateValue: true
       - key: AUTH_PIN_PEPPER
@@ -19,19 +17,43 @@ services:
         generateValue: true
       - key: CONSENT_PUBLIC_BASE_URL
         value: https://rubbish-frontend.example.com
-      - key: AI_GEMINI_MODEL
-        value: gemini-2.5-flash
+      - key: AI_PROVIDER
+        value: claude
+      - key: AI_ANTHROPIC_API_KEY
+        sync: false
+      - key: AI_ANTHROPIC_MODEL
+        value: claude-haiku-4-5
+      - key: AI_PROMPT_CACHING_ENABLED
+        value: "true"
       - key: AI_REQUESTS_PER_MINUTE
         value: "60"
       - key: AI_MAX_CONCURRENCY
         value: "4"
       - key: AI_INPUT_COST_USD_PER_MILLION
-        value: "0"
+        value: "1"
       - key: AI_OUTPUT_COST_USD_PER_MILLION
-        value: "0"
-
-databases:
-  - name: nevo-postgres
-    databaseName: nevo
-    user: nevo
-    plan: starter
+        value: "5"
+      - key: SSO_PUBLIC_BASE_URL
+        sync: false
+      - key: SSO_SCHOOL_BASE_URL
+        sync: false
+      - key: SSO_MICROSOFT_CLIENT_SECRET
+        sync: false
+      - key: SSO_GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: SSO_GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: SSO_CREDENTIAL_ENCRYPTION_KEY
+        sync: false
+      - key: EMAIL_SMTP_HOST
+        sync: false
+      - key: EMAIL_SMTP_PORT
+        value: "587"
+      - key: EMAIL_SMTP_USERNAME
+        sync: false
+      - key: EMAIL_SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: EMAIL_FRONTEND_BASE_URL
+        sync: false

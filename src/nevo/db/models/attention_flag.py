@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Index, Text, Uuid, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nevo.db.base import Base
@@ -41,6 +42,15 @@ class AttentionFlag(Base):
         nullable=False,
     )
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_series: Mapped[list[float]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    action_targets: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=lambda: ["view_student", "open_recommendation"],
+        server_default=text("'[\"view_student\", \"open_recommendation\"]'::jsonb"),
+    )
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

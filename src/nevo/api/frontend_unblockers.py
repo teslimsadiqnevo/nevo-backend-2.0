@@ -21,6 +21,7 @@ from nevo.api.permissions import RequireScope
 from nevo.api.privacy import is_private_interaction_key
 from nevo.api.product_common import (
     actor_user,
+    can_access_student,
     require_class_access,
     require_school_actor,
     require_student_access,
@@ -32,23 +33,31 @@ from nevo.api.response_models import (
     ProfileAliasResponse,
     SchoolHealthResponse,
 )
+from nevo.api.response_models import (
+    LessonModuleResponse as SharedLessonModuleResponse,
+)
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag, InterventionRecommendation
+from nevo.db.models.consent import ParentLink
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import (
     Concept,
     LessonAssignment,
     Message,
     MessageThread,
+    MessageThreadRead,
     Notification,
     PasswordResetToken,
 )
 from nevo.db.models.learner_profile import LearnerProfile
-from nevo.db.models.signal_event import LessonSession
+from nevo.db.models.product import LessonModule
+from nevo.db.models.signal_event import LessonSession, SignalEvent
+from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 from nevo.intelligence.baseline import build_baseline_profile
 from nevo.notifications.email import EmailDeliveryUnavailableError, SmtpEmailDelivery
 from nevo.permissions.entities import PermissionSnapshot
@@ -100,6 +109,8 @@ class ClassStudentResponse(BaseModel):
     status: str
     profile_status: str = Field(alias="profileStatus")
     latest_session_at: datetime | None = Field(alias="latestSessionAt")
+    observations: list[str] = Field(default_factory=list)
+    seat_context: str = Field(alias="seatContext")
 
 
 class ConceptResponse(BaseModel):
@@ -132,12 +143,15 @@ class LessonSummaryResponse(BaseModel):
     status: str
     segment_count: int = Field(alias="segmentCount")
     review_segment_count: int = Field(alias="reviewSegmentCount")
+    subject: str | None = None
+    assignment_count: int = Field(default=0, alias="assignmentCount")
     created_at: datetime = Field(alias="createdAt")
 
 
 class LessonDetailResponse(LessonSummaryResponse):
     confirmation_summary: str | None = Field(alias="confirmationSummary")
     segments: list[LessonSegmentResponse]
+    modules: list[SharedLessonModuleResponse]
 
 
 class LessonAssignmentRequest(BaseModel):
@@ -147,6 +161,7 @@ class LessonAssignmentRequest(BaseModel):
     class_id: UUID | None = Field(default=None, alias="classId")
     student_ids: list[UUID] = Field(default_factory=list, alias="studentIds")
     due_at: datetime | None = Field(default=None, alias="dueAt")
+    available_from: datetime | None = Field(default=None, alias="availableFrom")
 
 
 class LessonAssignmentResponse(BaseModel):
@@ -190,6 +205,9 @@ class MessageThreadResponse(BaseModel):
     title: str
     latest_preview: str | None = Field(alias="latestPreview")
     last_message_at: datetime = Field(alias="lastMessageAt")
+    class_name: str | None = Field(default=None, alias="className")
+    unread: bool
+    unread_count: int = Field(alias="unreadCount")
 
 
 class MessageResponse(BaseModel):
@@ -312,6 +330,16 @@ async def class_students(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Class is outside your school",
         )
+    if actor.role == UserRole.TEACHER:
+        assigned = await session.scalar(
+            select(TeacherClassAssignment.id).where(
+                TeacherClassAssignment.class_id == class_id,
+                TeacherClassAssignment.teacher_id == actor.user_id,
+                TeacherClassAssignment.removed_at.is_(None),
+            )
+        )
+        if assigned is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
     rows = (
         await session.execute(
             select(User, LearnerProfile.id, func.max(LessonSession.started_at))
@@ -327,6 +355,11 @@ async def class_students(
             .order_by(User.first_name, User.last_name, User.login_identifier)
         )
     ).all()
+    observations = await _student_observations(
+        session,
+        student_ids=[user.id for user, _, _ in rows],
+        school_class=school_class,
+    )
     return [
         ClassStudentResponse(
             student_id=user.id,
@@ -337,9 +370,99 @@ async def class_students(
             status=user.status.value,
             profileStatus="observed" if profile_id else "not_observed_yet",
             latestSessionAt=latest_session_at,
+            observations=observations[user.id]["observations"],
+            seatContext=observations[user.id]["seatContext"],
         )
         for user, profile_id, latest_session_at in rows
     ]
+
+
+async def _student_observations(
+    session,
+    *,
+    student_ids: list[UUID],
+    school_class: Class,
+) -> dict[UUID, dict[str, object]]:
+    if not student_ids:
+        return {}
+    since = datetime.now(UTC) - timedelta(days=30)
+    lesson_sessions = (
+        await session.scalars(
+            select(LessonSession)
+            .where(
+                LessonSession.student_id.in_(student_ids),
+                LessonSession.started_at >= since,
+            )
+            .order_by(LessonSession.started_at.desc())
+        )
+    ).all()
+    events = (
+        await session.scalars(
+            select(SignalEvent).where(
+                SignalEvent.student_id.in_(student_ids),
+                SignalEvent.timestamp >= since,
+                SignalEvent.event_type.in_(
+                    (
+                        SignalEventType.REPLAY,
+                        SignalEventType.SLOWER_TRIGGER,
+                        SignalEventType.SIMPLIFY_TRIGGER,
+                        SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
+                    )
+                ),
+            )
+        )
+    ).all()
+    sessions_by_student: dict[UUID, list[LessonSession]] = {item: [] for item in student_ids}
+    events_by_student: dict[UUID, list[SignalEvent]] = {item: [] for item in student_ids}
+    for item in lesson_sessions:
+        sessions_by_student[item.student_id].append(item)
+    for item in events:
+        events_by_student[item.student_id].append(item)
+    result: dict[UUID, dict[str, object]] = {}
+    class_context = school_class.name
+    if school_class.year_group:
+        class_context = f"{class_context}, {school_class.year_group}"
+    for student_id in student_ids:
+        recent_sessions = sessions_by_student[student_id]
+        recent_events = events_by_student[student_id]
+        completed = sum(
+            item.completion_status is LessonCompletionStatus.COMPLETED
+            for item in recent_sessions
+        )
+        replay_count = sum(item.event_type is SignalEventType.REPLAY for item in recent_events)
+        pace_changes = sum(
+            item.event_type
+            in {SignalEventType.SLOWER_TRIGGER, SignalEventType.SIMPLIFY_TRIGGER}
+            for item in recent_events
+        )
+        modality_changes = sum(
+            item.event_type is SignalEventType.MODALITY_SUGGESTION_ACCEPTED
+            for item in recent_events
+        )
+        chips: list[str] = []
+        if completed:
+            chips.append(f"Completed {completed} lesson{'s' if completed != 1 else ''} recently")
+        if replay_count >= 3:
+            chips.append("Revisited parts of recent lessons")
+        if pace_changes:
+            chips.append("Used a steadier content pace")
+        if modality_changes:
+            chips.append("Tried another content format")
+        if not chips:
+            chips.append("No recent learning pattern to highlight")
+        latest_position = next(
+            (item.exit_position for item in recent_sessions if item.exit_position),
+            None,
+        )
+        result[student_id] = {
+            "observations": chips[:3],
+            "seatContext": (
+                f"{class_context}, last position {latest_position}"
+                if latest_position
+                else class_context
+            ),
+        }
+    return result
 
 
 @router.get("/api/concepts", response_model=list[ConceptResponse], tags=["content"])
@@ -392,7 +515,19 @@ async def list_lessons(
         query = query.where(or_(Lesson.school_id == user.school_id, Lesson.school_id.is_(None)))
     query = query.order_by(Lesson.created_at.desc()).limit(limit)
     lessons = (await session.scalars(query)).all()
-    return [_lesson_summary(item) for item in lessons]
+    counts = dict(
+        (
+            await session.execute(
+                select(LessonAssignment.lesson_id, func.count(LessonAssignment.id))
+                .where(
+                    LessonAssignment.lesson_id.in_([item.id for item in lessons]),
+                    LessonAssignment.status != "cancelled",
+                )
+                .group_by(LessonAssignment.lesson_id)
+            )
+        ).all()
+    )
+    return [_lesson_summary(item, assignment_count=int(counts.get(item.id, 0))) for item in lessons]
 
 
 @router.get(
@@ -417,8 +552,23 @@ async def lesson_detail(
             .order_by(LessonSegment.sequence_order)
         )
     ).all()
+    modules = (
+        await session.scalars(
+            select(LessonModule)
+            .where(LessonModule.lesson_id == lesson_id)
+            .order_by(LessonModule.sequence_order)
+        )
+    ).all()
+    assignment_count = await session.scalar(
+        select(func.count(LessonAssignment.id)).where(
+            LessonAssignment.lesson_id == lesson_id,
+            LessonAssignment.status != "cancelled",
+        )
+    )
     return LessonDetailResponse(
-        **_lesson_summary(lesson).model_dump(by_alias=True),
+        **_lesson_summary(
+            lesson, assignment_count=int(assignment_count or 0)
+        ).model_dump(by_alias=True),
         confirmationSummary=lesson.confirmation_summary,
         segments=[
             LessonSegmentResponse(
@@ -434,6 +584,17 @@ async def lesson_detail(
                 reviewReasons=list(item.review_reasons),
             )
             for item in segments
+        ],
+        modules=[
+            SharedLessonModuleResponse(
+                id=item.id,
+                title=item.title,
+                recap=item.recap,
+                preview=item.preview,
+                sequenceOrder=item.sequence_order,
+                segmentIds=item.segment_ids,
+            )
+            for item in modules
         ],
     )
 
@@ -517,6 +678,7 @@ async def create_lesson_assignments(
                 class_id=payload.class_id,
                 assignment_type="class" if payload.class_id else "student",
                 due_at=payload.due_at,
+                available_from=payload.available_from,
             )
             session.add(record)
             await session.flush()
@@ -602,10 +764,9 @@ async def message_threads(
     if user is None or user.school_id is None:
         return MessageThreadListResponse(threads=[], total=0)
     query = select(MessageThread).where(MessageThread.school_id == user.school_id)
-    if user.role == UserRole.STUDENT:
-        query = query.where(MessageThread.student_id == user.id)
+    query = query.where(_thread_access_clause(user))
     records = (await session.scalars(query.order_by(MessageThread.last_message_at.desc()))).all()
-    threads = [await _thread_response(session, item) for item in records]
+    threads = [await _thread_response(session, item, user.id) for item in records]
     return MessageThreadListResponse(threads=threads, total=len(threads))
 
 
@@ -628,6 +789,8 @@ async def thread_messages(
             .order_by(Message.created_at)
         )
     ).all()
+    await _mark_thread_read(session, thread.id, principal.user_id)
+    await session.commit()
     return MessageListResponse(
         threadId=thread.id,
         messages=[
@@ -664,6 +827,7 @@ async def send_message(
     thread.last_message_at = datetime.now(UTC)
     session.add(message)
     await session.flush()
+    await _mark_thread_read(session, thread.id, user.id)
     await session.commit()
     return MessageResponse(
         messageId=message.id,
@@ -837,8 +1001,6 @@ async def learner_profile_alias(
     return {
         "studentId": str(student_id),
         "status": "observed",
-        "workingMemoryCapacity": profile.working_memory_capacity,
-        "attentionSpan": profile.attention_span,
         "observedEventCount": profile.observed_event_count,
     }
 
@@ -880,6 +1042,8 @@ async def flags_alias(
             "description": item.description,
             "generatedAt": item.generated_at.isoformat(),
             "acknowledged": item.acknowledged_at is not None,
+            "evidenceSeries": item.evidence_series,
+            "actionTargets": item.action_targets,
         }
         for item in rows
     ]
@@ -1017,7 +1181,7 @@ def _uuid(value: str) -> UUID:
         ) from error
 
 
-def _lesson_summary(lesson: Lesson) -> LessonSummaryResponse:
+def _lesson_summary(lesson: Lesson, *, assignment_count: int = 0) -> LessonSummaryResponse:
     return LessonSummaryResponse(
         id=lesson.id,
         title=lesson.title,
@@ -1025,6 +1189,8 @@ def _lesson_summary(lesson: Lesson) -> LessonSummaryResponse:
         status=lesson.status.value,
         segmentCount=lesson.segment_count,
         reviewSegmentCount=lesson.review_segment_count,
+        subject=lesson.subject,
+        assignmentCount=assignment_count,
         createdAt=lesson.created_at,
     )
 
@@ -1099,9 +1265,12 @@ def _extract_office_text(content: bytes) -> str:
     return re.sub(r"\s+", " ", "\n".join(texts)).strip()
 
 
-async def _thread_response(session, thread: MessageThread) -> MessageThreadResponse:
+async def _thread_response(
+    session, thread: MessageThread, viewer_id: UUID
+) -> MessageThreadResponse:
     title = "Conversation"
     recipient_id = None
+    class_name = None
     if thread.recipient_type == "student" and thread.student_id:
         student = await session.get(User, thread.student_id)
         title = _display_name(student) if student else "Student conversation"
@@ -1109,7 +1278,21 @@ async def _thread_response(session, thread: MessageThread) -> MessageThreadRespo
     elif thread.recipient_type == "class" and thread.class_id:
         school_class = await session.get(Class, thread.class_id)
         title = school_class.name if school_class else "Class conversation"
+        class_name = school_class.name if school_class else None
         recipient_id = thread.class_id
+    last_read_at = await session.scalar(
+        select(MessageThreadRead.last_read_at).where(
+            MessageThreadRead.thread_id == thread.id,
+            MessageThreadRead.user_id == viewer_id,
+        )
+    )
+    unread_count = await session.scalar(
+        select(func.count(Message.id)).where(
+            Message.thread_id == thread.id,
+            Message.sender_id != viewer_id,
+            Message.created_at > (last_read_at or datetime.min.replace(tzinfo=UTC)),
+        )
+    )
     return MessageThreadResponse(
         threadId=thread.id,
         recipientType=thread.recipient_type,
@@ -1117,7 +1300,29 @@ async def _thread_response(session, thread: MessageThread) -> MessageThreadRespo
         title=title,
         latestPreview=thread.latest_preview,
         lastMessageAt=thread.last_message_at,
+        className=class_name,
+        unread=bool(unread_count),
+        unreadCount=int(unread_count or 0),
     )
+
+
+async def _mark_thread_read(session, thread_id: UUID, user_id: UUID) -> None:
+    record = await session.scalar(
+        select(MessageThreadRead).where(
+            MessageThreadRead.thread_id == thread_id,
+            MessageThreadRead.user_id == user_id,
+        )
+    )
+    if record is None:
+        session.add(
+            MessageThreadRead(
+                thread_id=thread_id,
+                user_id=user_id,
+                last_read_at=datetime.now(UTC),
+            )
+        )
+    else:
+        record.last_read_at = datetime.now(UTC)
 
 
 async def _require_thread_access(session, user_id: UUID, thread_id: UUID) -> MessageThread:
@@ -1127,8 +1332,14 @@ async def _require_thread_access(session, user_id: UUID, thread_id: UUID) -> Mes
         raise HTTPException(status_code=404, detail="Thread not found")
     if user is None or user.school_id != thread.school_id:
         raise HTTPException(status_code=403, detail="Thread is outside your school")
-    if user.role == UserRole.STUDENT and thread.student_id != user.id:
-        raise HTTPException(status_code=403, detail="Thread is not available to this student")
+    allowed = await session.scalar(
+        select(MessageThread.id).where(
+            MessageThread.id == thread.id,
+            _thread_access_clause(user),
+        )
+    )
+    if allowed is None:
+        raise HTTPException(status_code=403, detail="Thread is not available to this account")
     return thread
 
 
@@ -1137,6 +1348,26 @@ async def _find_or_create_thread(
     user: User,
     payload: SendMessageRequest,
 ) -> MessageThread:
+    if user.role == UserRole.STUDENT:
+        if payload.recipient_type != "student" or payload.recipient_id != user.id:
+            raise HTTPException(status_code=403, detail="Students can message only in their thread")
+    elif user.role == UserRole.PARENT_GUARDIAN:
+        linked = await session.scalar(
+            select(ParentLink.id).where(
+                ParentLink.parent_id == user.id,
+                ParentLink.student_id == payload.recipient_id,
+            )
+        )
+        if payload.recipient_type != "student" or linked is None:
+            raise HTTPException(status_code=403, detail="Student is not linked to this account")
+    elif user.role == UserRole.TEACHER:
+        if payload.recipient_type == "student":
+            if not await can_access_student(session, user, payload.recipient_id):
+                raise HTTPException(status_code=404, detail="Student not found")
+        else:
+            await require_class_access(session, user, payload.recipient_id)
+    elif user.role not in {UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}:
+        raise HTTPException(status_code=403, detail="Messaging is not available to this account")
     query = select(MessageThread).where(
         MessageThread.school_id == user.school_id,
         MessageThread.recipient_type == payload.recipient_type,
@@ -1170,3 +1401,33 @@ async def _find_or_create_thread(
     session.add(thread)
     await session.flush()
     return thread
+
+
+def _thread_access_clause(user: User):
+    if user.role in {UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}:
+        return MessageThread.school_id == user.school_id
+    if user.role == UserRole.STUDENT:
+        enrolled_classes = select(StudentClassEnrollment.class_id).where(
+            StudentClassEnrollment.student_id == user.id
+        )
+        return or_(
+            MessageThread.student_id == user.id,
+            MessageThread.class_id.in_(enrolled_classes),
+        )
+    if user.role == UserRole.TEACHER:
+        assigned_classes = select(TeacherClassAssignment.class_id).where(
+            TeacherClassAssignment.teacher_id == user.id,
+            TeacherClassAssignment.removed_at.is_(None),
+        )
+        assigned_students = select(StudentClassEnrollment.student_id).where(
+            StudentClassEnrollment.class_id.in_(assigned_classes)
+        )
+        return or_(
+            MessageThread.created_by_id == user.id,
+            MessageThread.class_id.in_(assigned_classes),
+            MessageThread.student_id.in_(assigned_students),
+        )
+    if user.role == UserRole.PARENT_GUARDIAN:
+        linked_students = select(ParentLink.student_id).where(ParentLink.parent_id == user.id)
+        return MessageThread.student_id.in_(linked_students)
+    return MessageThread.id.is_(None)

@@ -83,6 +83,7 @@ class SchoolSsoConfiguration(Base):
     hosted_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     client_id: Mapped[str] = mapped_column(String(255), nullable=False)
     client_secret_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    oauth_credential_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     school_url_slug: Mapped[str] = mapped_column(String(100), nullable=False)
     enabled: Mapped[bool] = mapped_column(
         Boolean,

@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from nevo.api.ask_nevo import router
 from nevo.api.auth import authenticated_principal
+from nevo.api.dependencies import database_session
 from nevo.ask_nevo.entities import AskNevoResponse
 from nevo.ask_nevo.service import AskNevoService
 from nevo.auth.entities import AuthPrincipal
@@ -32,12 +33,22 @@ class FakeAskNevoService(AskNevoService):
         self.helpful = (interaction_id, helpful)
 
 
+class FakeSession:
+    def __init__(self, principal: AuthPrincipal) -> None:
+        self._principal = principal
+
+    async def get(self, model, record_id):
+        del model, record_id
+        return type("Interaction", (), {"actor_user_id": self._principal.user_id})()
+
+
 def client_for() -> tuple[TestClient, FakeAskNevoService, AuthPrincipal]:
     principal = AuthPrincipal(user_id=uuid4(), role="student", session_id=uuid4())
     service = FakeAskNevoService()
     app = FastAPI()
     app.state.ask_nevo_service = service
     app.dependency_overrides[authenticated_principal] = lambda: principal
+    app.dependency_overrides[database_session] = lambda: FakeSession(principal)
     app.include_router(router)
     return TestClient(app), service, principal
 

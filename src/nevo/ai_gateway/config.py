@@ -5,7 +5,6 @@ from pydantic import AnyHttpUrl, Field, PositiveInt, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AI_PROVIDER_CLAUDE = "claude"
-AI_PROVIDER_GEMINI = "gemini"
 
 
 class AiGatewaySettings(BaseSettings):
@@ -16,18 +15,13 @@ class AiGatewaySettings(BaseSettings):
         extra="ignore",
     )
 
-    provider: Literal["claude", "gemini"] = AI_PROVIDER_CLAUDE
+    provider: Literal["claude"] = AI_PROVIDER_CLAUDE
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-haiku-4-5"
     anthropic_sonnet_model: str = "claude-sonnet"
     anthropic_base_url: AnyHttpUrl = AnyHttpUrl("https://api.anthropic.com/v1")
     anthropic_version: str = "2023-06-01"
     prompt_caching_enabled: bool = True
-    gemini_api_key: SecretStr | None = None
-    gemini_model: str = "gemini-2.5-flash"
-    gemini_base_url: AnyHttpUrl = AnyHttpUrl(
-        "https://generativelanguage.googleapis.com/v1beta"
-    )
     request_timeout_seconds: float = Field(default=20, gt=0, le=120)
     requests_per_minute: PositiveInt = 60
     max_concurrency: PositiveInt = 4

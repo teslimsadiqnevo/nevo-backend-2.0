@@ -1,23 +1,28 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.auth.entities import AuthUser
-from nevo.db.models.account import Class, User
+from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.sso import (
     RosterSyncIssue,
     RosterSyncRun,
     SchoolSsoConfiguration,
 )
+from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     RosterSyncStatus,
     SsoConnectionStatus,
     SsoProvider,
     UserStatus,
+)
+from nevo.domain.teacher_assignments.vocabulary import (
+    TeacherAssignmentRole,
+    TeacherAssignmentSource,
 )
 from nevo.sso.entities import (
     RosterAccount,
@@ -324,6 +329,54 @@ class SqlAlchemySsoRepository:
             await session.flush()
             return _auth_user(user)
 
+    async def save_provider_credential(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        ciphertext: str,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                update(SchoolSsoConfiguration)
+                .where(
+                    SchoolSsoConfiguration.school_id == school_id,
+                    SchoolSsoConfiguration.provider == provider,
+                )
+                .values(
+                    oauth_credential_ciphertext=ciphertext,
+                    connection_status=SsoConnectionStatus.CONNECTED,
+                    last_connection_error=None,
+                    reauthorised_at=datetime.now(UTC),
+                )
+            )
+
+    async def mark_callback_succeeded(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        succeeded_at: datetime,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                update(SchoolSsoConfiguration)
+                .where(
+                    SchoolSsoConfiguration.school_id == school_id,
+                    SchoolSsoConfiguration.provider == provider,
+                )
+                .values(
+                    enabled=True,
+                    connection_status=SsoConnectionStatus.CONNECTED,
+                    last_connection_error=None,
+                    connection_checked_at=succeeded_at,
+                    reauthorised_at=succeeded_at,
+                    disconnected_at=None,
+                    disconnected_by_user_id=None,
+                    next_scheduled_sync_at=succeeded_at + timedelta(days=1),
+                )
+            )
+
     async def learner_profile_exists(self, user_id: UUID) -> bool:
         async with self._sessions() as session:
             profile_id = await session.scalar(
@@ -358,20 +411,29 @@ class SqlAlchemySsoRepository:
             await session.flush()
 
             for student in batch.students:
-                await _upsert_roster_user(session, school_id, provider, student)
+                student_user = await _upsert_roster_user(
+                    session, school_id, provider, student
+                )
+                await _sync_student_classes(
+                    session,
+                    school_id=school_id,
+                    student=student_user,
+                    class_external_ids=student.class_external_ids,
+                )
                 imported_students += 1
             issue_ids: list[UUID] = []
             for teacher in batch.teachers:
-                await _upsert_roster_user(session, school_id, provider, teacher)
+                teacher_user = await _upsert_roster_user(
+                    session, school_id, provider, teacher
+                )
                 imported_teachers += 1
                 for class_external_id in teacher.class_external_ids:
-                    class_exists = await session.scalar(
-                        select(Class.id).where(
-                            Class.school_id == school_id,
-                            Class.class_code == class_external_id,
-                        )
+                    school_class = await _class_for_external_id(
+                        session,
+                        school_id,
+                        class_external_id,
                     )
-                    if class_exists is None:
+                    if school_class is None:
                         missing_mappings += 1
                         issue = RosterSyncIssue(
                             id=uuid4(),
@@ -386,6 +448,14 @@ class SqlAlchemySsoRepository:
                         )
                         session.add(issue)
                         issue_ids.append(issue.id)
+                        continue
+                    await _sync_teacher_class(
+                        session,
+                        school_id=school_id,
+                        teacher=teacher_user,
+                        school_class=school_class,
+                        source_reference=class_external_id,
+                    )
             run.imported_students = imported_students
             run.imported_teachers = imported_teachers
             run.missing_teacher_class_mappings = missing_mappings
@@ -409,6 +479,7 @@ class SqlAlchemySsoRepository:
                     connection_status=SsoConnectionStatus.CONNECTED,
                     last_connection_error=None,
                     connection_checked_at=now,
+                    next_scheduled_sync_at=now + timedelta(days=1),
                 )
             )
             await session.flush()
@@ -451,6 +522,7 @@ async def _upsert_roster_user(
         session.add(user)
     else:
         user.auth_method = AuthMethod.SSO
+        user.role = account.role
         user.sso_external_id = external_id
         user.status = UserStatus.ACTIVE
         user.first_name = account.first_name
@@ -458,6 +530,88 @@ async def _upsert_roster_user(
         user.email = account.email.casefold()
     await session.flush()
     return user
+
+
+async def _class_for_external_id(
+    session: AsyncSession,
+    school_id: UUID,
+    external_id: str,
+) -> Class | None:
+    return await session.scalar(
+        select(Class).where(
+            Class.school_id == school_id,
+            func.lower(Class.class_code) == external_id.casefold(),
+            Class.archived_at.is_(None),
+        )
+    )
+
+
+async def _sync_student_classes(
+    session: AsyncSession,
+    *,
+    school_id: UUID,
+    student: User,
+    class_external_ids: tuple[str, ...],
+) -> None:
+    for external_id in class_external_ids:
+        school_class = await _class_for_external_id(session, school_id, external_id)
+        if school_class is None:
+            continue
+        enrollment_id = await session.scalar(
+            select(StudentClassEnrollment.id).where(
+                StudentClassEnrollment.student_id == student.id,
+                StudentClassEnrollment.class_id == school_class.id,
+            )
+        )
+        if enrollment_id is None:
+            session.add(
+                StudentClassEnrollment(
+                    student_id=student.id,
+                    class_id=school_class.id,
+                )
+            )
+
+
+async def _sync_teacher_class(
+    session: AsyncSession,
+    *,
+    school_id: UUID,
+    teacher: User,
+    school_class: Class,
+    source_reference: str,
+) -> None:
+    existing = await session.scalar(
+        select(TeacherClassAssignment).where(
+            TeacherClassAssignment.teacher_id == teacher.id,
+            TeacherClassAssignment.class_id == school_class.id,
+            TeacherClassAssignment.removed_at.is_(None),
+        )
+    )
+    if existing is not None:
+        if existing.source is TeacherAssignmentSource.ROSTER_SYNC:
+            existing.source_reference = source_reference
+        return
+    primary_exists = await session.scalar(
+        select(TeacherClassAssignment.id).where(
+            TeacherClassAssignment.class_id == school_class.id,
+            TeacherClassAssignment.role == TeacherAssignmentRole.PRIMARY,
+            TeacherClassAssignment.removed_at.is_(None),
+        )
+    )
+    session.add(
+        TeacherClassAssignment(
+            school_id=school_id,
+            teacher_id=teacher.id,
+            class_id=school_class.id,
+            role=(
+                TeacherAssignmentRole.CO_TEACHER
+                if primary_exists is not None
+                else TeacherAssignmentRole.PRIMARY
+            ),
+            source=TeacherAssignmentSource.ROSTER_SYNC,
+            source_reference=source_reference,
+        )
+    )
 
 
 def _school_config(record: SchoolSsoConfiguration) -> SsoSchoolConfig:
@@ -468,6 +622,7 @@ def _school_config(record: SchoolSsoConfiguration) -> SsoSchoolConfig:
         client_id=record.client_id,
         tenant_id=record.tenant_id,
         hosted_domain=record.hosted_domain,
+        provider_credential=record.oauth_credential_ciphertext,
     )
 
 

@@ -303,6 +303,12 @@ class SqlAlchemyAttentionFlagRepository:
                 student_id=draft.student_id,
                 flag_type=draft.flag_type,
                 description=draft.description,
+                evidence_series=[
+                    score
+                    for score in (draft.baseline_score, draft.current_score)
+                    if score is not None
+                ],
+                action_targets=["view_student", "open_recommendation"],
             )
             session.add(record)
             await session.flush()

@@ -12,16 +12,31 @@
 - Added SMTP-backed password reset and invitation delivery with explicit unavailable states when email infrastructure is not configured.
 - Added an admin/SENCo student PIN reset endpoint that revokes active sessions and returns a one-time replacement PIN.
 
-## Work paused for the frontend contract request
+## Completed after the frontend contract request
 
-- Implement real Microsoft 365 and Google Workspace roster retrieval, then map provider classes into student enrolments and teacher class assignments.
-- Add tenant validation to the school-slug roster-sync compatibility route.
-- Add durable post-lesson processing status, retries, and background worker.
-- Finish any remaining authorization audit items, especially messaging participant rules.
-- Add migration `0030` for any new persistent retry/SSO fields required by the completed implementation.
-- Finalise Claude-only deployment environment documentation and remove obsolete Gemini deployment examples.
-- Run PostgreSQL migrations, integration tests, the full test suite, then commit and push.
+- Added real Microsoft 365 and Google Workspace roster clients, class mapping,
+  tenant validation, encrypted refresh-token storage, and Drive/OneDrive imports.
+- Added durable post-lesson and notification-email workers with retry state.
+- Restricted messaging to authorised participants and made unread state durable.
+- Added migration `0030` for the new operational state and product contracts.
+- Finalised Claude-only and provider deployment environment documentation.
+- Unified lesson modules and segment review information in one response.
+- Added teacher Home pulse/activity, student observations, and per-segment class
+  completion APIs.
+- Typed staged-upload structure editing, retained upload bytes for page retry,
+  and added selected-page PDF re-parsing.
+- Removed engine parameters from teacher-facing profile reads and made Ask Nevo
+  evidence aggregate-only with a minimum group of three interactions.
+- Added lesson subject, assignment count, assignment availability, message class
+  and unread state, mastery concept names, progress ordinals, and flag evidence
+  and action targets.
+- Added application request timing headers and slow-request logging.
 
 ## Current frontend contract priority
 
-The active task is to type every JSON response in OpenAPI, document the eleven shapes that could not be inferred from empty demo data, declare canonical casing, correct the acceptance checklist category wording, verify the extra routes, and push those changes.
+The product routes use typed camel-case contracts. Original authentication
+responses retain snake case as an explicit compatibility contract.
+
+Microsoft/Google sign-in, directory sync, Drive imports, and email delivery need
+real provider credentials in the deployment environment. The backend reports
+explicit unavailable or needs-attention states until those credentials exist.

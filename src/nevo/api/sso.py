@@ -338,10 +338,14 @@ async def sync_roster(
     actor: ItSsoDependency,
     service: SsoDependency,
 ) -> RosterSyncResponse:
-    del actor
     try:
         return RosterSyncResponse.from_result(
-            await service.sync_roster(school_slug=school_slug, provider=provider)
+            await service.sync_roster(
+                school_slug=school_slug,
+                provider=provider,
+                expected_school_id=_school_id(actor),
+                triggered_by_user_id=actor.user_id,
+            )
         )
     except LookupError as error:
         raise _public_sso_error(error) from error

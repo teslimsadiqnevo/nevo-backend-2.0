@@ -2,9 +2,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.ai_gateway.claude import ClaudeRestProvider
 from nevo.ai_gateway.compliance import ZeroTagCompliancePolicy
-from nevo.ai_gateway.config import AI_PROVIDER_CLAUDE, AiGatewaySettings
+from nevo.ai_gateway.config import AiGatewaySettings
 from nevo.ai_gateway.fallback import RuleBasedFallbackGenerator
-from nevo.ai_gateway.gemini import GeminiRestProvider
 from nevo.ai_gateway.ports import TextGenerationProvider
 from nevo.ai_gateway.prompts import PromptRenderer
 from nevo.ai_gateway.repositories import (
@@ -40,26 +39,17 @@ def build_ai_gateway(
 
 
 def _provider_from_settings(settings: AiGatewaySettings) -> TextGenerationProvider:
-    if settings.provider == AI_PROVIDER_CLAUDE:
-        return ClaudeRestProvider(
-            api_key=(
-                settings.anthropic_api_key.get_secret_value()
-                if settings.anthropic_api_key is not None
-                else None
-            ),
-            model=settings.anthropic_model,
-            base_url=str(settings.anthropic_base_url),
-            anthropic_version=settings.anthropic_version,
-            timeout_seconds=settings.request_timeout_seconds,
-            prompt_caching_enabled=settings.prompt_caching_enabled,
-        )
-    return GeminiRestProvider(
+    if settings.provider != "claude":
+        raise ValueError("AI_PROVIDER must be 'claude'")
+    return ClaudeRestProvider(
         api_key=(
-            settings.gemini_api_key.get_secret_value()
-            if settings.gemini_api_key is not None
+            settings.anthropic_api_key.get_secret_value()
+            if settings.anthropic_api_key is not None
             else None
         ),
-        model=settings.gemini_model,
-        base_url=str(settings.gemini_base_url),
+        model=settings.anthropic_model,
+        base_url=str(settings.anthropic_base_url),
+        anthropic_version=settings.anthropic_version,
         timeout_seconds=settings.request_timeout_seconds,
+        prompt_caching_enabled=settings.prompt_caching_enabled,
     )

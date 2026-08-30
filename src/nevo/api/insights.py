@@ -16,17 +16,21 @@ from nevo.api.response_models import (
     AdaptationResponse,
     ConversationEvidenceResponse,
     EngineConfigResponse,
+    LessonClassProgressResponse,
     MisconceptionResponse,
     StudentProgressResponse,
+    TeacherHomeResponse,
     TransformationMetricsResponse,
 )
-from nevo.db.models.account import StudentClassEnrollment, User
+from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.ask_nevo import AskNevoInteraction
-from nevo.db.models.content import ContentParseRun, Lesson
-from nevo.db.models.frontend_support import Concept
+from nevo.db.models.attention_flag import AttentionFlag
+from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
+from nevo.db.models.frontend_support import Concept, LessonAssignment
 from nevo.db.models.mastery import StudentConceptMastery
 from nevo.db.models.product import LessonProgress
 from nevo.db.models.signal_event import LessonSession, SignalEvent
+from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import UserRole
 from nevo.domain.signal_events.vocabulary import SignalEventType
 
@@ -43,11 +47,156 @@ ADAPTATION_EVENTS = {
 }
 
 
+@router.get("/v1/teachers/me/home", response_model=TeacherHomeResponse)
+async def teacher_home(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> dict[str, object]:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    class_query = select(Class).where(
+        Class.school_id == actor.school_id,
+        Class.archived_at.is_(None),
+    )
+    if actor.role is UserRole.TEACHER:
+        class_query = class_query.join(TeacherClassAssignment).where(
+            TeacherClassAssignment.teacher_id == actor.id,
+            TeacherClassAssignment.removed_at.is_(None),
+        )
+    classes = (await session.scalars(class_query.order_by(Class.name))).all()
+    class_ids = [item.id for item in classes]
+    enrollment_rows = (
+        await session.execute(
+            select(StudentClassEnrollment.class_id, StudentClassEnrollment.student_id).where(
+                StudentClassEnrollment.class_id.in_(class_ids)
+            )
+        )
+    ).all()
+    students_by_class: dict[UUID, set[UUID]] = {item.id: set() for item in classes}
+    for class_id, student_id in enrollment_rows:
+        students_by_class[class_id].add(student_id)
+    student_ids = {student_id for _, student_id in enrollment_rows}
+    since = datetime.now(UTC) - timedelta(days=30)
+    lesson_sessions = (
+        await session.scalars(
+            select(LessonSession).where(
+                LessonSession.student_id.in_(student_ids),
+                LessonSession.started_at >= since,
+            )
+        )
+    ).all()
+    signal_events = (
+        await session.scalars(
+            select(SignalEvent)
+            .where(
+                SignalEvent.student_id.in_(student_ids),
+                SignalEvent.timestamp >= since,
+            )
+            .order_by(SignalEvent.timestamp.desc())
+            .limit(10_000)
+        )
+    ).all()
+    pulse = [
+        _class_pulse(
+            school_class,
+            students_by_class[school_class.id],
+            lesson_sessions,
+            signal_events,
+        )
+        for school_class in classes
+    ]
+    return {
+        "classLearningPulse": pulse,
+        "recentActivity": await _teacher_recent_activity(
+            session,
+            school_id=actor.school_id,
+            class_ids=class_ids,
+            student_ids=student_ids,
+        ),
+    }
+
+
+@router.get(
+    "/v1/lessons/{lesson_id}/class-progress",
+    response_model=LessonClassProgressResponse,
+)
+async def lesson_class_progress(
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    class_id: Annotated[UUID, Query(alias="classId")],
+) -> dict[str, object]:
+    actor = await require_school_actor(session, principal)
+    await require_class_access(session, actor, class_id)
+    lesson = await session.get(Lesson, lesson_id)
+    if lesson is None or lesson.school_id != actor.school_id:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    student_ids = set(
+        (
+            await session.scalars(
+                select(StudentClassEnrollment.student_id).where(
+                    StudentClassEnrollment.class_id == class_id
+                )
+            )
+        ).all()
+    )
+    assigned_ids = set(
+        (
+            await session.scalars(
+                select(LessonAssignment.student_id).where(
+                    LessonAssignment.lesson_id == lesson_id,
+                    LessonAssignment.student_id.in_(student_ids),
+                    LessonAssignment.status != "cancelled",
+                )
+            )
+        ).all()
+    )
+    if assigned_ids:
+        student_ids = assigned_ids
+    segments = (
+        await session.scalars(
+            select(LessonSegment)
+            .where(LessonSegment.lesson_id == lesson_id)
+            .order_by(LessonSegment.sequence_order)
+        )
+    ).all()
+    session_ids = set(
+        (
+            await session.scalars(
+                select(LessonSession.id).where(
+                    LessonSession.lesson_id == lesson_id,
+                    LessonSession.student_id.in_(student_ids),
+                )
+            )
+        ).all()
+    )
+    events = (
+        await session.scalars(
+            select(SignalEvent).where(SignalEvent.session_id.in_(session_ids))
+        )
+    ).all()
+    rows = _segment_progress_rows(segments, events, len(student_ids))
+    timed_rows = [item for item in rows if item["averageTimeSeconds"] is not None]
+    slowest = max(timed_rows, key=lambda item: item["averageTimeSeconds"]) if timed_rows else None
+    return {
+        "lessonId": str(lesson_id),
+        "classId": str(class_id),
+        "assignedStudentCount": len(student_ids),
+        "segments": rows,
+        "slowestSegmentId": slowest["segmentId"] if slowest else None,
+        "slowdownNote": slowest["note"] if slowest else None,
+    }
+
+
 @router.get("/engine-config/student/{student_id}", response_model=EngineConfigResponse)
 async def engine_config(
     student_id: UUID, principal: PrincipalDependency, session: DatabaseSession
 ) -> dict[str, object]:
-    await require_student_access(session, principal, student_id)
+    if principal.role != UserRole.STUDENT or principal.user_id != student_id:
+        raise HTTPException(status_code=404, detail="Student configuration not found")
     student = await session.get(User, student_id)
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -128,23 +277,24 @@ async def conversation_evidence(
         if item.response_helpful is not None:
             rated += 1
             helpful += int(item.response_helpful)
+    if len(interactions) < 3:
+        return {
+            "studentId": str(student_id),
+            "periodDays": days,
+            "interactionCount": 0,
+            "categories": {},
+            "helpfulResponseRate": None,
+            "privacy": "withheld_below_minimum",
+            "minimumInteractions": 3,
+        }
     return {
         "studentId": str(student_id),
         "periodDays": days,
         "interactionCount": len(interactions),
         "categories": category_counts,
         "helpfulResponseRate": round(helpful / rated, 4) if rated else None,
-        "recentEvidence": [
-            {
-                "category": item.question_category.value,
-                "currentPage": item.current_page,
-                "contextIds": item.context_ids,
-                "helpful": item.response_helpful,
-                "createdAt": item.created_at,
-            }
-            for item in interactions[:20]
-        ],
-        "privacy": "Question and response transcripts are not stored.",
+        "privacy": "aggregate_only",
+        "minimumInteractions": 3,
     }
 
 
@@ -345,6 +495,9 @@ async def _progress_payload(session, student_id, subject):
                 "status": progress.status,
                 "modulePosition": progress.module_position,
                 "segmentPosition": progress.segment_position,
+                "positionBase": 0,
+                "moduleNumber": progress.module_position + 1,
+                "segmentNumber": progress.segment_position + 1,
                 "updatedAt": progress.updated_at,
             }
             for progress, lesson in lesson_rows
@@ -375,3 +528,245 @@ def _misconception_description(name: str | None, attribution: str, count: int) -
     return (
         f"{count} students may need another example of {concept}; the pattern points to {reason}."
     )
+
+
+def _class_pulse(
+    school_class: Class,
+    student_ids: set[UUID],
+    lesson_sessions: list[LessonSession],
+    events: list[SignalEvent],
+) -> dict[str, object]:
+    class_sessions = [item for item in lesson_sessions if item.student_id in student_ids]
+    class_events = [item for item in events if item.student_id in student_ids]
+    engagement_values = [
+        score
+        for item in class_events
+        if (score := _event_score(item.event_data, "engagementScore", "engagement")) is not None
+    ]
+    comprehension_values = [
+        score
+        for item in class_events
+        if item.event_type is SignalEventType.COMPREHENSION_RESPONSE
+        and (
+            score := _event_score(
+                item.event_data,
+                "comprehensionScore",
+                "score",
+                "accuracy",
+            )
+        )
+        is not None
+    ]
+    completed = sum(
+        item.completion_status.value == "completed" for item in class_sessions
+    )
+    fallback_engagement = (
+        round(completed / len(class_sessions) * 100, 1) if class_sessions else None
+    )
+    exit_attempts = sum(
+        item.event_type is SignalEventType.EXIT_ATTEMPT for item in class_events
+    )
+    replay_count = sum(item.event_type is SignalEventType.REPLAY for item in class_events)
+    focus = None
+    if class_sessions:
+        focus = round(
+            max(
+                0.0,
+                100.0
+                - min(45.0, exit_attempts / len(class_sessions) * 15)
+                - min(25.0, replay_count / len(class_sessions) * 3),
+            ),
+            1,
+        )
+    return {
+        "classId": str(school_class.id),
+        "className": school_class.name,
+        "studentCount": len(student_ids),
+        "engagement": (
+            round(sum(engagement_values) / len(engagement_values), 1)
+            if engagement_values
+            else fallback_engagement
+        ),
+        "comprehension": (
+            round(sum(comprehension_values) / len(comprehension_values), 1)
+            if comprehension_values
+            else None
+        ),
+        "focus": focus,
+    }
+
+
+async def _teacher_recent_activity(
+    session: DatabaseSession,
+    *,
+    school_id: UUID,
+    class_ids: list[UUID],
+    student_ids: set[UUID],
+) -> list[dict[str, object]]:
+    session_rows = (
+        await session.execute(
+            select(LessonSession, User, Lesson)
+            .join(User, User.id == LessonSession.student_id)
+            .outerjoin(Lesson, Lesson.id == LessonSession.lesson_id)
+            .where(
+                LessonSession.student_id.in_(student_ids),
+                LessonSession.ended_at.is_not(None),
+            )
+            .order_by(LessonSession.ended_at.desc())
+            .limit(12)
+        )
+    ).all()
+    flag_rows = (
+        await session.execute(
+            select(AttentionFlag, User)
+            .join(User, User.id == AttentionFlag.student_id)
+            .where(User.school_id == school_id, AttentionFlag.student_id.in_(student_ids))
+            .order_by(AttentionFlag.generated_at.desc())
+            .limit(12)
+        )
+    ).all()
+    assignment_rows = (
+        await session.execute(
+            select(LessonAssignment, Lesson)
+            .join(Lesson, Lesson.id == LessonAssignment.lesson_id)
+            .where(
+                LessonAssignment.class_id.in_(class_ids),
+                LessonAssignment.status != "cancelled",
+            )
+            .order_by(LessonAssignment.assigned_at.desc())
+            .limit(12)
+        )
+    ).all()
+    activity: list[dict[str, object]] = []
+    for lesson_session, student, lesson in session_rows:
+        student_name = student.first_name or "A student"
+        activity.append(
+            {
+                "id": f"session:{lesson_session.id}",
+                "activityType": "lesson_completed",
+                "occurredAt": lesson_session.ended_at,
+                "title": f"{student_name} completed a lesson",
+                "detail": lesson.title if lesson else "Lesson activity",
+                "studentId": str(student.id),
+                "lessonId": str(lesson.id) if lesson else None,
+                "actionTarget": f"/teacher/students/{student.id}",
+            }
+        )
+    for flag, student in flag_rows:
+        student_name = student.first_name or "A student"
+        activity.append(
+            {
+                "id": f"flag:{flag.id}",
+                "activityType": "attention_flag",
+                "occurredAt": flag.generated_at,
+                "title": f"Review {student_name}'s recent pattern",
+                "detail": flag.description,
+                "studentId": str(student.id),
+                "actionTarget": f"/teacher/students/{student.id}",
+            }
+        )
+    seen_assignments: set[tuple[UUID | None, UUID]] = set()
+    for assignment, lesson in assignment_rows:
+        key = (assignment.class_id, lesson.id)
+        if key in seen_assignments:
+            continue
+        seen_assignments.add(key)
+        activity.append(
+            {
+                "id": f"assignment:{assignment.id}",
+                "activityType": "lesson_assigned",
+                "occurredAt": assignment.assigned_at,
+                "title": "Lesson assigned",
+                "detail": lesson.title,
+                "classId": str(assignment.class_id) if assignment.class_id else None,
+                "lessonId": str(lesson.id),
+                "actionTarget": f"/teacher/lessons/{lesson.id}",
+            }
+        )
+    return sorted(activity, key=lambda item: item["occurredAt"], reverse=True)[:20]
+
+
+def _segment_progress_rows(
+    segments: list[LessonSegment],
+    events: list[SignalEvent],
+    assigned_student_count: int,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    completion_types = {
+        SignalEventType.TIME_ON_SEGMENT,
+        SignalEventType.COMPREHENSION_RESPONSE,
+        SignalEventType.MODALITY_SWITCH_OUTCOME,
+    }
+    for segment in segments:
+        matching = [
+            event
+            for event in events
+            if str(event.event_data.get("segmentId") or event.event_data.get("segment_id") or "")
+            in {str(segment.id), segment.segment_key}
+        ]
+        completed_students = {
+            event.student_id for event in matching if event.event_type in completion_types
+        }
+        times = [
+            seconds
+            for event in matching
+            if (
+                seconds := _time_seconds(
+                    event.event_data.get("timeOnSegment")
+                    or event.event_data.get("durationSeconds")
+                    or event.event_data.get("durationMs")
+                )
+            )
+            is not None
+        ]
+        average = round(sum(times) / len(times), 1) if times else None
+        slowdown_count = (
+            sum(value > max(90.0, average * 1.25) for value in times)
+            if average is not None
+            else 0
+        )
+        completion_rate = (
+            round(len(completed_students) / assigned_student_count, 4)
+            if assigned_student_count
+            else 0.0
+        )
+        note = None
+        if slowdown_count:
+            note = f"{slowdown_count} students spent longer here than the class pattern."
+        elif assigned_student_count and completion_rate < 0.5:
+            note = "Fewer than half of assigned students have completed this segment."
+        rows.append(
+            {
+                "segmentId": str(segment.id),
+                "segmentKey": segment.segment_key,
+                "title": segment.title,
+                "sequenceOrder": segment.sequence_order,
+                "assignedStudentCount": assigned_student_count,
+                "completionCount": len(completed_students),
+                "completionRate": completion_rate,
+                "averageTimeSeconds": average,
+                "slowdownCount": slowdown_count,
+                "note": note,
+            }
+        )
+    return rows
+
+
+def _event_score(data: dict[str, object], *keys: str) -> float | None:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, int | float):
+            score = float(value)
+            if score <= 1:
+                score *= 100
+            return max(0.0, min(100.0, score))
+    return None
+
+
+def _time_seconds(value: object) -> float | None:
+    if not isinstance(value, int | float):
+        return None
+    seconds = float(value)
+    if seconds > 1_000:
+        seconds /= 1_000
+    return max(0.0, seconds)

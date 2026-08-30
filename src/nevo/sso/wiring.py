@@ -7,6 +7,7 @@ from nevo.domain.accounts.vocabulary import SsoProvider
 from nevo.sso.config import SsoSettings
 from nevo.sso.providers import GoogleSsoProviderClient, MicrosoftSsoProviderClient
 from nevo.sso.repositories import SqlAlchemySsoRepository
+from nevo.sso.security import SsoCredentialCipher
 from nevo.sso.service import SsoService
 
 
@@ -35,9 +36,19 @@ def build_sso_service(
                     sso_settings.google_client_secret.get_secret_value()
                     if sso_settings.google_client_secret is not None
                     else None
-                )
+                ),
+                refresh_token=(
+                    sso_settings.google_refresh_token.get_secret_value()
+                    if sso_settings.google_refresh_token is not None
+                    else None
+                ),
             ),
         },
         public_base_url=str(sso_settings.public_base_url),
         school_base_url=str(sso_settings.school_base_url),
+        credential_cipher=SsoCredentialCipher(
+            sso_settings.credential_encryption_key.get_secret_value()
+            if sso_settings.credential_encryption_key is not None
+            else None
+        ),
     )

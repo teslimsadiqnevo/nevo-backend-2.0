@@ -4,17 +4,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.privacy import is_private_interaction_key
-from nevo.attention_flags.service import AttentionFlagDetectionService
-from nevo.db.models.product import PostLessonProcessing
 from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
     SignalEventType,
 )
-from nevo.learner_profiles.profile_updates import PostLessonProfileUpdateService
+from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 from nevo.signal_events.entities import (
     LessonSessionSnapshot,
     SignalEventDraft,
@@ -241,54 +238,13 @@ async def ingest_signal_batch(
     except SignalIngestionError as error:
         raise public_signal_error(error) from error
     if payload.session.completion_status is LessonCompletionStatus.COMPLETED:
-        sessions: async_sessionmaker[AsyncSession] | None = getattr(
-            request.app.state,
-            "db_sessions",
-            None,
-        )
-        already_processed = True
-        if sessions is not None:
-            async with sessions() as processing_session:
-                already_processed = (
-                    await processing_session.get(
-                        PostLessonProcessing,
-                        payload.session.session_id,
-                    )
-                    is not None
-                )
-        if not already_processed and sessions is not None:
-            profile_service = getattr(
-                request.app.state,
-                "post_lesson_profile_update_service",
-                None,
+        worker = getattr(request.app.state, "post_lesson_worker", None)
+        if isinstance(worker, PostLessonProcessingWorker):
+            await worker.enqueue(
+                session_id=payload.session.session_id,
+                student_id=principal.user_id,
+                completed_at=payload.session.ended_at,
             )
-            flag_service = getattr(
-                request.app.state,
-                "attention_flag_detection_service",
-                None,
-            )
-            try:
-                if isinstance(profile_service, PostLessonProfileUpdateService):
-                    await profile_service.update_after_lesson(
-                        student_id=principal.user_id,
-                        lesson_session_id=payload.session.session_id,
-                        requested_by_user_id=principal.user_id,
-                    )
-                if isinstance(flag_service, AttentionFlagDetectionService):
-                    await flag_service.evaluate_student(
-                        student_id=principal.user_id,
-                        requested_by_user_id=principal.user_id,
-                    )
-                async with sessions() as processing_session:
-                    processing_session.add(
-                        PostLessonProcessing(
-                            session_id=payload.session.session_id,
-                            student_id=principal.user_id,
-                        )
-                    )
-                    await processing_session.commit()
-            except Exception:
-                pass
     return SignalBatchResponse.from_receipt(receipt)
 
 

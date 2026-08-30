@@ -42,9 +42,9 @@ and school slug remain in `school_sso_configurations`.
 
 ## Transactional email
 
-- `EMAIL_SMTP_HOST`, `EMAIL_SMTP_PORT`, `EMAIL_SMTP_USERNAME`,
-  `EMAIL_SMTP_PASSWORD`.
-- `EMAIL_FROM_ADDRESS` and `EMAIL_USE_STARTTLS`.
+- `RESEND_API_KEY`: production Resend API key.
+- `RESEND_FROM_ADDRESS`: optional verified sender; defaults to
+  `Nevo <noreply@nevolearning.com>`.
 - `EMAIL_FRONTEND_BASE_URL`: used in invitation and password-reset links.
 
 ## Commands

@@ -9,7 +9,7 @@
 - Added a mandatory outbound AI privacy guard that strips or pseudonymises direct identifiers before any provider call.
 - Added engine configuration, student adaptations, conversation evidence, class misconceptions, transformation metrics, and student progress APIs.
 - Added real invoice PDF generation, lesson offline ZIP generation, upload structure undo, and notification restore.
-- Added SMTP-backed password reset and invitation delivery with explicit unavailable states when email infrastructure is not configured.
+- Added Resend-backed password reset and invitation delivery with explicit unavailable states when email infrastructure is not configured.
 - Added an admin/SENCo student PIN reset endpoint that revokes active sessions and returns a one-time replacement PIN.
 
 ## Completed after the frontend contract request

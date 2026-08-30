@@ -1,67 +1,68 @@
-import asyncio
-import smtplib
-from email.message import EmailMessage
-
-from pydantic import AnyHttpUrl, SecretStr
+import httpx
+from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+RESEND_API_URL = "https://api.resend.com/emails"
 
 
 class EmailSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="EMAIL_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
-    smtp_host: str | None = None
-    smtp_port: int = 587
-    smtp_username: str | None = None
-    smtp_password: SecretStr | None = None
-    from_address: str | None = None
-    use_starttls: bool = True
-    frontend_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:3000")
+    resend_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="RESEND_API_KEY",
+    )
+    from_address: str = Field(
+        default="Nevo <noreply@nevolearning.com>",
+        validation_alias=AliasChoices("RESEND_FROM_ADDRESS", "EMAIL_FROM_ADDRESS"),
+    )
+    frontend_base_url: AnyHttpUrl = Field(
+        default=AnyHttpUrl("http://localhost:3000"),
+        validation_alias="EMAIL_FRONTEND_BASE_URL",
+    )
 
 
 class EmailDeliveryUnavailableError(RuntimeError):
     pass
 
 
-class SmtpEmailDelivery:
+class ResendEmailDelivery:
     def __init__(self, settings: EmailSettings) -> None:
         self._settings = settings
 
     @property
     def configured(self) -> bool:
-        return bool(self._settings.smtp_host and self._settings.from_address)
+        return self._settings.resend_api_key is not None
 
     @property
     def frontend_base_url(self) -> str:
         return str(self._settings.frontend_base_url).rstrip("/")
 
     async def send(self, *, to: str, subject: str, text: str) -> None:
-        if not self.configured:
-            raise EmailDeliveryUnavailableError("Email delivery is not configured")
-        await asyncio.to_thread(self._send_sync, to=to, subject=subject, text=text)
-
-    def _send_sync(self, *, to: str, subject: str, text: str) -> None:
-        message = EmailMessage()
-        message["From"] = self._settings.from_address
-        message["To"] = to
-        message["Subject"] = subject
-        message.set_content(text)
-        password = (
-            self._settings.smtp_password.get_secret_value()
-            if self._settings.smtp_password is not None
-            else None
-        )
-        with smtplib.SMTP(
-            self._settings.smtp_host,
-            self._settings.smtp_port,
-            timeout=20,
-        ) as client:
-            if self._settings.use_starttls:
-                client.starttls()
-            if self._settings.smtp_username:
-                client.login(self._settings.smtp_username, password or "")
-            client.send_message(message)
+        if self._settings.resend_api_key is None:
+            raise EmailDeliveryUnavailableError("Resend email delivery is not configured")
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                RESEND_API_URL,
+                headers={
+                    "Authorization": (
+                        f"Bearer {self._settings.resend_api_key.get_secret_value()}"
+                    ),
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": self._settings.from_address,
+                    "to": [to],
+                    "subject": subject,
+                    "text": text,
+                },
+            )
+        if response.is_error:
+            raise EmailDeliveryUnavailableError(
+                f"Resend rejected the email with status {response.status_code}"
+            )

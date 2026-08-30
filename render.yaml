@@ -45,15 +45,9 @@ services:
         sync: false
       - key: SSO_CREDENTIAL_ENCRYPTION_KEY
         sync: false
-      - key: EMAIL_SMTP_HOST
+      - key: RESEND_API_KEY
         sync: false
-      - key: EMAIL_SMTP_PORT
-        value: "587"
-      - key: EMAIL_SMTP_USERNAME
-        sync: false
-      - key: EMAIL_SMTP_PASSWORD
-        sync: false
-      - key: EMAIL_FROM_ADDRESS
-        sync: false
+      - key: RESEND_FROM_ADDRESS
+        value: Nevo <noreply@nevolearning.com>
       - key: EMAIL_FRONTEND_BASE_URL
         sync: false

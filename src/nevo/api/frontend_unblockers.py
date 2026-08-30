@@ -59,7 +59,7 @@ from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 from nevo.intelligence.baseline import build_baseline_profile
-from nevo.notifications.email import EmailDeliveryUnavailableError, SmtpEmailDelivery
+from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.permissions.entities import PermissionSnapshot
 
 router = APIRouter()
@@ -1097,7 +1097,7 @@ async def request_password_reset(
     request: Request,
 ) -> ResetReceipt:
     mailer = getattr(request.app.state, "email_delivery", None)
-    if not isinstance(mailer, SmtpEmailDelivery) or not mailer.configured:
+    if not isinstance(mailer, ResendEmailDelivery) or not mailer.configured:
         raise HTTPException(status_code=503, detail="Password reset email is unavailable")
     user = await session.scalar(select(User).where(func.lower(User.email) == payload.email.lower()))
     if user is not None:

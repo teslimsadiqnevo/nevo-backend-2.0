@@ -58,7 +58,7 @@ from nevo.learner_profiles.wiring import (
     build_post_lesson_profile_update_service,
 )
 from nevo.mastery.wiring import build_mastery_service
-from nevo.notifications.email import EmailSettings, SmtpEmailDelivery
+from nevo.notifications.email import EmailSettings, ResendEmailDelivery
 from nevo.notifications.worker import NotificationEmailWorker
 from nevo.ops.config import OpsSettings
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         credential_hasher=credential_hasher,
     )
     app.state.credential_hasher = credential_hasher
-    app.state.email_delivery = SmtpEmailDelivery(EmailSettings())
+    app.state.email_delivery = ResendEmailDelivery(EmailSettings())
     app.state.notification_email_worker = NotificationEmailWorker(
         sessions=sessions,
         delivery=app.state.email_delivery,

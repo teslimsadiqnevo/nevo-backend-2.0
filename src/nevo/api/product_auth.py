@@ -35,7 +35,7 @@ from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.product import ParentDataRequest, SchoolInvitation
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
-from nevo.notifications.email import EmailDeliveryUnavailableError, SmtpEmailDelivery
+from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 
 router = APIRouter(prefix="/api/v1", tags=["product access"])
 
@@ -379,7 +379,7 @@ async def _create_invitation(
     payload: InvitationRequest,
     actor: User,
     session: DatabaseSession,
-    mailer: SmtpEmailDelivery,
+    mailer: ResendEmailDelivery,
 ) -> dict[str, object]:
     if payload.class_id:
         school_class = await session.get(Class, payload.class_id)
@@ -502,14 +502,18 @@ async def resend_invite(
     }
 
 
-def _mailer(request: Request) -> SmtpEmailDelivery:
+def _mailer(request: Request) -> ResendEmailDelivery:
     mailer = getattr(request.app.state, "email_delivery", None)
-    if not isinstance(mailer, SmtpEmailDelivery):
+    if not isinstance(mailer, ResendEmailDelivery):
         raise HTTPException(status_code=503, detail="Email delivery is unavailable")
     return mailer
 
 
-async def _send_invitation(mailer: SmtpEmailDelivery, record: SchoolInvitation, token: str) -> None:
+async def _send_invitation(
+    mailer: ResendEmailDelivery,
+    record: SchoolInvitation,
+    token: str,
+) -> None:
     if record.email is None:
         return
     link = f"{mailer.frontend_base_url}/join/{token}"

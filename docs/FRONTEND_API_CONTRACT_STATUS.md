@@ -72,7 +72,7 @@ The following fields are now explicitly present in OpenAPI even when their value
 
 The additional routes are real product subsystems, not speculative Swagger placeholders. Their handlers persist or query PostgreSQL and enforce authenticated school context. This includes class and student CRUD, invitations, session management, staged lesson uploads, notification preferences, analytics, and learner-intelligence projections.
 
-Some integrations still require external deployment credentials to operate against third parties: SMTP delivery, Microsoft/Google directory access, and Anthropic. Missing credentials produce an explicit unavailable or needs-attention state; they do not return invented success data.
+Some integrations still require external deployment credentials to operate against third parties: Resend delivery, Microsoft/Google directory access, and Anthropic. Missing credentials produce an explicit unavailable or needs-attention state; they do not return invented success data.
 
 ## Teacher console additions
 

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nevo.db.models.account import User
 from nevo.db.models.frontend_support import Notification, NotificationEmailDelivery
 from nevo.db.models.product import NotificationPreference
-from nevo.notifications.email import SmtpEmailDelivery
+from nevo.notifications.email import ResendEmailDelivery
 
 MAX_ATTEMPTS = 6
 
@@ -19,7 +19,7 @@ class NotificationEmailWorker:
         self,
         *,
         sessions: async_sessionmaker[AsyncSession],
-        delivery: SmtpEmailDelivery,
+        delivery: ResendEmailDelivery,
         poll_seconds: float = 5,
     ) -> None:
         self._sessions = sessions

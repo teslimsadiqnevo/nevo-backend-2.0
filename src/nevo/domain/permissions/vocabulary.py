@@ -16,6 +16,7 @@ IMPLICIT_SCOPES_BY_ROLE: dict[str, frozenset[PermissionScope]] = {
     "teacher": frozenset({PermissionScope.TEACHER}),
     "senco_admin": frozenset({PermissionScope.SENCO}),
     "other_admin": frozenset(),
+    "parent_guardian": frozenset(),
 }
 
 NAVIGATION_BY_SCOPE: dict[PermissionScope, tuple[str, ...]] = {

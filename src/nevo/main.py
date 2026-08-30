@@ -25,6 +25,9 @@ from nevo.api.intelligence import router as intelligence_router
 from nevo.api.mastery import router as mastery_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
 from nevo.api.permissions import router as permission_router
+from nevo.api.product_admin import router as product_admin_router
+from nevo.api.product_auth import router as product_auth_router
+from nevo.api.product_learning import router as product_learning_router
 from nevo.api.scheduler import router as scheduler_router
 from nevo.api.signals import router as signals_router
 from nevo.api.sso import router as sso_router
@@ -192,6 +195,9 @@ app.include_router(intelligence_router)
 app.include_router(mastery_router)
 app.include_router(partner_inquiry_router)
 app.include_router(permission_router)
+app.include_router(product_admin_router)
+app.include_router(product_auth_router)
+app.include_router(product_learning_router)
 app.include_router(scheduler_router)
 app.include_router(signals_router)
 app.include_router(sso_router)

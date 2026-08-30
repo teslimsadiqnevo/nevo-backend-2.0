@@ -17,6 +17,13 @@ from nevo.api.content import (
 )
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.permissions import RequireScope
+from nevo.api.privacy import is_private_interaction_key
+from nevo.api.product_common import (
+    actor_user,
+    require_class_access,
+    require_school_actor,
+    require_student_access,
+)
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
@@ -36,7 +43,7 @@ from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.permissions.entities import PermissionSnapshot
 
-router = APIRouter(tags=["frontend unblockers"])
+router = APIRouter()
 TeacherScope = Annotated[PermissionSnapshot, Depends(RequireScope(PermissionScope.TEACHER))]
 OversightScope = Annotated[PermissionSnapshot, Depends(RequireScope(PermissionScope.OVERSIGHT))]
 ContentParsingDependency = Annotated[
@@ -236,7 +243,11 @@ class SettingsResponse(BaseModel):
     settings: dict[str, object]
 
 
-@router.get("/api/v1/users/me", response_model=CurrentUserResponse)
+@router.get(
+    "/api/v1/users/me",
+    response_model=CurrentUserResponse,
+    tags=["authentication"],
+)
 async def current_user_profile(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -266,7 +277,11 @@ async def current_user_profile(
     )
 
 
-@router.get("/api/v1/classes/{class_id}/students", response_model=list[ClassStudentResponse])
+@router.get(
+    "/api/v1/classes/{class_id}/students",
+    response_model=list[ClassStudentResponse],
+    tags=["school administration"],
+)
 async def class_students(
     class_id: UUID,
     actor: TeacherScope,
@@ -310,7 +325,7 @@ async def class_students(
     ]
 
 
-@router.get("/api/concepts", response_model=list[ConceptResponse])
+@router.get("/api/concepts", response_model=list[ConceptResponse], tags=["content"])
 async def concepts(
     session: DatabaseSession,
     ids: str | None = Query(default=None),
@@ -326,7 +341,11 @@ async def concepts(
     return [ConceptResponse(id=item.id, name=item.name, subject=item.subject) for item in records]
 
 
-@router.get("/api/concepts/{concept_id}", response_model=ConceptResponse)
+@router.get(
+    "/api/concepts/{concept_id}",
+    response_model=ConceptResponse,
+    tags=["content"],
+)
 async def concept(concept_id: UUID, session: DatabaseSession) -> ConceptResponse:
     record = await session.get(Concept, concept_id)
     if record is None:
@@ -337,12 +356,8 @@ async def concept(concept_id: UUID, session: DatabaseSession) -> ConceptResponse
 @router.get(
     "/api/content/lessons",
     response_model=list[LessonSummaryResponse],
-    operation_id="frontend_unblockers_list_content_lessons",
-)
-@router.get(
-    "/api/v1/lessons",
-    response_model=list[LessonSummaryResponse],
-    operation_id="frontend_unblockers_list_v1_lessons",
+    operation_id="content_list_lessons_compatibility",
+    tags=["content"],
 )
 async def list_lessons(
     principal: PrincipalDependency,
@@ -351,7 +366,12 @@ async def list_lessons(
 ) -> list[LessonSummaryResponse]:
     user = await session.get(User, principal.user_id)
     query = select(Lesson)
-    if user and user.school_id:
+    if user and user.role == UserRole.STUDENT:
+        query = query.join(LessonAssignment, LessonAssignment.lesson_id == Lesson.id).where(
+            LessonAssignment.student_id == user.id,
+            LessonAssignment.status != "cancelled",
+        )
+    elif user and user.school_id:
         query = query.where(or_(Lesson.school_id == user.school_id, Lesson.school_id.is_(None)))
     query = query.order_by(Lesson.created_at.desc()).limit(limit)
     lessons = (await session.scalars(query)).all()
@@ -361,21 +381,17 @@ async def list_lessons(
 @router.get(
     "/api/content/lessons/{lesson_id}",
     response_model=LessonDetailResponse,
-    operation_id="frontend_unblockers_content_lesson_detail",
-)
-@router.get(
-    "/api/v1/lessons/{lesson_id}",
-    response_model=LessonDetailResponse,
-    operation_id="frontend_unblockers_v1_lesson_detail",
+    operation_id="content_lesson_detail_compatibility",
+    tags=["content"],
 )
 async def lesson_detail(
     lesson_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> LessonDetailResponse:
-    del principal
+    actor = await require_school_actor(session, principal)
     lesson = await session.get(Lesson, lesson_id)
-    if lesson is None:
+    if lesson is None or (lesson.school_id is not None and lesson.school_id != actor.school_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
     segments = (
         await session.scalars(
@@ -405,7 +421,11 @@ async def lesson_detail(
     )
 
 
-@router.post("/api/content/upload", response_model=ParseContentResponse)
+@router.post(
+    "/api/content/upload",
+    response_model=ParseContentResponse,
+    tags=["content"],
+)
 async def upload_content(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -439,17 +459,28 @@ async def upload_content(
     return ParseContentResponse.from_result(result)
 
 
-@router.post("/api/v1/lesson-assignments", response_model=LessonAssignmentResponse, status_code=201)
+@router.post(
+    "/api/v1/lesson-assignments",
+    response_model=LessonAssignmentResponse,
+    status_code=201,
+    tags=["learning product"],
+)
 async def create_lesson_assignments(
     payload: LessonAssignmentRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> LessonAssignmentResponse:
-    user = await session.get(User, principal.user_id)
-    if user is None or user.school_id is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="School context required")
+    user = await require_school_actor(
+        session,
+        principal,
+        roles={"teacher", "senco_admin", "other_admin"},
+    )
+    lesson = await session.get(Lesson, payload.lesson_id)
+    if lesson is None or lesson.school_id != user.school_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
     student_ids = list(payload.student_ids)
     if payload.class_id is not None:
+        await require_class_access(session, user, payload.class_id)
         rows = await session.scalars(
             select(StudentClassEnrollment.student_id).where(
                 StudentClassEnrollment.class_id == payload.class_id
@@ -457,6 +488,8 @@ async def create_lesson_assignments(
         )
         student_ids.extend(rows.all())
     unique_student_ids = sorted(set(student_ids), key=str)
+    for student_id in unique_student_ids:
+        await require_student_access(session, principal, student_id)
     created: list[UUID] = []
     async with session.begin_nested():
         for student_id in unique_student_ids:
@@ -475,7 +508,11 @@ async def create_lesson_assignments(
     return LessonAssignmentResponse(assignmentIds=created, createdCount=len(created))
 
 
-@router.get("/api/notifications", response_model=NotificationListResponse)
+@router.get(
+    "/api/notifications",
+    response_model=NotificationListResponse,
+    tags=["notifications"],
+)
 async def list_notifications(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -494,7 +531,11 @@ async def list_notifications(
     )
 
 
-@router.get("/api/notifications/unread-count", response_model=UnreadCountResponse)
+@router.get(
+    "/api/notifications/unread-count",
+    response_model=UnreadCountResponse,
+    tags=["notifications"],
+)
 async def unread_count(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -507,7 +548,11 @@ async def unread_count(
     return UnreadCountResponse(count=int(count or 0))
 
 
-@router.post("/api/notifications/{notification_id}/read", status_code=204)
+@router.post(
+    "/api/notifications/{notification_id}/read",
+    status_code=204,
+    tags=["notifications"],
+)
 async def mark_notification_read(
     notification_id: UUID,
     principal: PrincipalDependency,
@@ -523,7 +568,11 @@ async def mark_notification_read(
     await session.commit()
 
 
-@router.get("/api/messages/threads", response_model=MessageThreadListResponse)
+@router.get(
+    "/api/messages/threads",
+    response_model=MessageThreadListResponse,
+    tags=["messaging"],
+)
 async def message_threads(
     principal: PrincipalDependency,
     session: DatabaseSession,
@@ -539,7 +588,11 @@ async def message_threads(
     return MessageThreadListResponse(threads=threads, total=len(threads))
 
 
-@router.get("/api/messages/threads/{thread_id}", response_model=MessageListResponse)
+@router.get(
+    "/api/messages/threads/{thread_id}",
+    response_model=MessageListResponse,
+    tags=["messaging"],
+)
 async def thread_messages(
     thread_id: UUID,
     principal: PrincipalDependency,
@@ -570,7 +623,12 @@ async def thread_messages(
     )
 
 
-@router.post("/api/messages", response_model=MessageResponse, status_code=201)
+@router.post(
+    "/api/messages",
+    response_model=MessageResponse,
+    status_code=201,
+    tags=["messaging"],
+)
 async def send_message(
     payload: SendMessageRequest,
     principal: PrincipalDependency,
@@ -596,13 +654,31 @@ async def send_message(
     )
 
 
-@router.post("/api/baseline/submit", response_model=BaselineSubmitResponse)
+@router.post(
+    "/api/baseline/submit",
+    response_model=BaselineSubmitResponse,
+    tags=["intelligence"],
+)
 async def submit_baseline(
     payload: BaselineSubmitRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> BaselineSubmitResponse:
     features = payload.features
+    leaked = {
+        key
+        for feature in features
+        for key in feature
+        if is_private_interaction_key(key)
+    }
+    if leaked:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Raw interaction fields are device-only. Submit reduced "
+                "aggregate baseline features."
+            ),
+        )
     await session.execute(
         update(User)
         .where(User.id == principal.user_id)
@@ -619,7 +695,11 @@ async def submit_baseline(
     return BaselineSubmitResponse(status="accepted", featureCount=len(features))
 
 
-@router.get("/api/baseline/recalibrate-prompt/{student_id}", response_model=BaselinePromptResponse)
+@router.get(
+    "/api/baseline/recalibrate-prompt/{student_id}",
+    response_model=BaselinePromptResponse,
+    tags=["intelligence"],
+)
 async def recalibrate_prompt(
     student_id: UUID,
     principal: PrincipalDependency,
@@ -634,7 +714,7 @@ async def recalibrate_prompt(
     return BaselinePromptResponse(dimension=dimensions[index])
 
 
-@router.get("/api/analytics/schools")
+@router.get("/api/analytics/schools", tags=["admin"])
 async def school_health(actor: OversightScope) -> dict[str, object]:
     return {
         "schoolId": str(actor.school_id) if actor.school_id else None,
@@ -643,7 +723,7 @@ async def school_health(actor: OversightScope) -> dict[str, object]:
     }
 
 
-@router.get("/api/analytics/outcomes")
+@router.get("/api/analytics/outcomes", tags=["admin"])
 async def outcomes(
     actor: OversightScope,
     school_id: SchoolIdQuery = None,
@@ -654,17 +734,13 @@ async def outcomes(
     }
 
 
-@router.get("/api/intelligence/profile/{student_id}")
+@router.get("/api/intelligence/profile/{student_id}", tags=["intelligence"])
 async def learner_profile_alias(
     student_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
-    if principal.role == "student" and principal.user_id != student_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Students can view only their own profile",
-        )
+    await require_student_access(session, principal, student_id)
     profile = await session.scalar(
         select(LearnerProfile).where(LearnerProfile.learner_id == student_id)
     )
@@ -675,27 +751,34 @@ async def learner_profile_alias(
         "status": "observed",
         "workingMemoryCapacity": profile.working_memory_capacity,
         "attentionSpan": profile.attention_span,
-        "confidenceLevel": profile.confidence_level.value if profile.confidence_level else None,
+        "observedEventCount": profile.observed_event_count,
     }
 
 
-@router.get("/api/intelligence/flags")
+@router.get("/api/intelligence/flags", tags=["intelligence"])
 async def flags_alias(
     principal: PrincipalDependency,
     session: DatabaseSession,
     student_id: StudentIdQuery = None,
     class_id: ClassIdQuery = None,
 ) -> list[dict[str, object]]:
+    actor = await actor_user(session, principal)
     query = select(AttentionFlag).order_by(AttentionFlag.generated_at.desc()).limit(50)
     if class_id is not None:
+        await require_class_access(session, actor, class_id)
         query = query.join(
             StudentClassEnrollment,
             StudentClassEnrollment.student_id == AttentionFlag.student_id,
         ).where(StudentClassEnrollment.class_id == class_id)
     if student_id is not None:
+        await require_student_access(session, principal, student_id)
         query = query.where(AttentionFlag.student_id == student_id)
     elif principal.role == "student":
         query = query.where(AttentionFlag.student_id == principal.user_id)
+    else:
+        query = query.join(User, User.id == AttentionFlag.student_id).where(
+            User.school_id == actor.school_id
+        )
     rows = (await session.scalars(query)).all()
     return [
         {
@@ -710,17 +793,16 @@ async def flags_alias(
     ]
 
 
-@router.get("/api/intelligence/recommendations/{student_id}")
+@router.get(
+    "/api/intelligence/recommendations/{student_id}",
+    tags=["intelligence"],
+)
 async def recommendations_alias(
     student_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> list[dict[str, object]]:
-    if principal.role == "student" and principal.user_id != student_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Students can view only their own recommendations",
-        )
+    await require_student_access(session, principal, student_id)
     rows = (
         await session.scalars(
             select(InterventionRecommendation)
@@ -743,12 +825,14 @@ async def recommendations_alias(
 @router.post(
     "/api/v1/auth/forgot-password",
     response_model=ResetReceipt,
-    operation_id="frontend_unblockers_forgot_password",
+    operation_id="authentication_forgot_password_compatibility",
+    tags=["authentication"],
 )
 @router.post(
     "/api/v1/auth/password-reset/request",
     response_model=ResetReceipt,
-    operation_id="frontend_unblockers_password_reset_request",
+    operation_id="authentication_password_reset_request_compatibility",
+    tags=["authentication"],
 )
 async def request_password_reset(
     payload: ForgotPasswordRequest,
@@ -771,12 +855,20 @@ async def request_password_reset(
     )
 
 
-@router.get("/api/settings/me", response_model=SettingsResponse)
+@router.get(
+    "/api/settings/me",
+    response_model=SettingsResponse,
+    tags=["school administration"],
+)
 async def get_settings(principal: PrincipalDependency) -> SettingsResponse:
     return SettingsResponse(settings={"userId": str(principal.user_id), "preferences": {}})
 
 
-@router.put("/api/settings/me", response_model=SettingsResponse)
+@router.put(
+    "/api/settings/me",
+    response_model=SettingsResponse,
+    tags=["school administration"],
+)
 async def update_settings(
     payload: UpdateSettingsRequest,
     principal: PrincipalDependency,

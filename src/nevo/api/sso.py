@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.permissions import RequireScope
 from nevo.domain.accounts.vocabulary import (
@@ -44,6 +44,13 @@ class SsoStartResponse(BaseModel):
             authorization_url=start.authorization_url,
             school_entry_url=start.school_entry_url,
         )
+
+
+class SsoStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    school_slug: str = Field(alias="schoolSlug", min_length=1, max_length=100)
+    provider: SsoProvider
 
 
 class SsoCallbackResponse(BaseModel):
@@ -259,6 +266,7 @@ ItSsoDependency = Annotated[
     PermissionSnapshot,
     Depends(RequireScope(PermissionScope.IT_SSO)),
 ]
+ProviderQuery = Annotated[SsoProvider, Query()]
 
 
 @router.get(
@@ -276,6 +284,14 @@ async def start_sso(
         )
     except LookupError as error:
         raise _public_sso_error(error) from error
+
+
+@router.post("/auth/sso/start", response_model=SsoStartResponse)
+async def start_sso_alias(
+    payload: SsoStartRequest,
+    service: SsoDependency,
+) -> SsoStartResponse:
+    return await start_sso(payload.school_slug, payload.provider, service)
 
 
 @router.get(
@@ -300,6 +316,16 @@ async def sso_callback(
     except (LookupError, ValueError) as error:
         raise _public_sso_error(error) from error
     return SsoCallbackResponse.from_result(result)
+
+
+@router.get("/auth/sso/callback", response_model=SsoCallbackResponse)
+async def sso_callback_alias(
+    service: SsoDependency,
+    provider: ProviderQuery,
+    code: str = Query(min_length=1),
+    state: str = Query(min_length=3),
+) -> SsoCallbackResponse:
+    return await sso_callback(provider, service, code, state)
 
 
 @router.post(

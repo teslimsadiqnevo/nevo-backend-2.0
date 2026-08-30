@@ -72,6 +72,10 @@ class Notification(Base):
         default=False,
         server_default=text("false"),
     )
+    category: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="general", server_default="general"
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

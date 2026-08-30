@@ -29,6 +29,19 @@ class PinLoginRequest(BaseModel):
     pin: str = Field(pattern=r"^\d{4,8}$")
 
 
+class UnifiedLoginRequest(BaseModel):
+    method: str = Field(pattern="^(password|pin)$")
+    email: EmailStr | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=1_024)
+    school_code: str | None = Field(default=None, alias="schoolCode", max_length=50)
+    login_identifier: str | None = Field(
+        default=None,
+        alias="loginIdentifier",
+        max_length=50,
+    )
+    pin: str | None = Field(default=None, pattern=r"^\d{4,8}$")
+
+
 class SessionResponse(BaseModel):
     access_token: str
     token_type: str
@@ -81,6 +94,43 @@ BearerDependency = Annotated[
     HTTPAuthorizationCredentials | None,
     Depends(bearer),
 ]
+
+
+@router.post("/login", response_model=SessionResponse)
+async def unified_login(
+    payload: UnifiedLoginRequest,
+    request: Request,
+    response: Response,
+    service: AuthServiceDependency,
+) -> SessionResponse:
+    try:
+        if payload.method == "password":
+            if payload.email is None or payload.password is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Email and password are required",
+                )
+            issued = await service.login_with_password(
+                email=str(payload.email),
+                password=payload.password,
+                ip_address=client_ip(request),
+            )
+        else:
+            if not (payload.school_code and payload.login_identifier and payload.pin):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="School code, login identifier, and PIN are required",
+                )
+            issued = await service.login_with_pin(
+                school_code=payload.school_code,
+                login_identifier=payload.login_identifier,
+                pin=payload.pin,
+                ip_address=client_ip(request),
+            )
+    except AuthError as error:
+        raise public_auth_error(error) from error
+    response.headers["Cache-Control"] = "no-store"
+    return SessionResponse.from_issued(issued)
 
 
 @router.post("/login/password", response_model=SessionResponse)

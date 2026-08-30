@@ -102,12 +102,24 @@ OPENAPI_TAGS = [
         ),
     },
     {
-        "name": "frontend unblockers",
-        "description": (
-            "Teacher console integration support: class rosters, user profile, "
-            "lesson library, content upload, notifications, messages, baseline "
-            "warm-up, settings, analytics aliases, and password reset request."
-        ),
+        "name": "notifications",
+        "description": "User notifications, unread state, and delivery preferences.",
+    },
+    {
+        "name": "messaging",
+        "description": "School-scoped teacher, class, and student conversations.",
+    },
+    {
+        "name": "product access",
+        "description": "School registration, recovery, invitations, and account access.",
+    },
+    {
+        "name": "school administration",
+        "description": "School, roster, preferences, feedback, and oversight workflows.",
+    },
+    {
+        "name": "learning product",
+        "description": "Assignments, lesson player progress, dashboards, and staged uploads.",
     },
     {
         "name": "system",

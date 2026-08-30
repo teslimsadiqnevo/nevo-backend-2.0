@@ -152,6 +152,24 @@ class School(TimestampMixin, Base):
         default=365,
         server_default="365",
     )
+    profile: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    academic_config: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    retention_policy: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="contract",
+        server_default="contract",
+    )
     subscription_tier: Mapped[SubscriptionTier | None] = mapped_column(
         subscription_tier_enum,
         nullable=True,
@@ -226,6 +244,19 @@ class User(TimestampMixin, Base):
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+    engine_config: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    preferences: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    age_band: Mapped[str | None] = mapped_column(String(40), nullable=True)
     is_first_use: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -283,6 +314,11 @@ class Class(TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     class_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    year_group: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="manual", server_default="manual"
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     school: Mapped[School] = relationship(back_populates="classes")
     enrollments: Mapped[list["StudentClassEnrollment"]] = relationship(
@@ -388,11 +424,9 @@ class ConsentRecord(TimestampMixin, Base):
         nullable=True,
         index=True,
     )
-    confirmation_source: Mapped[ConsentConfirmationSource | None] = (
-        mapped_column(
-            consent_confirmation_source_enum,
-            nullable=True,
-        )
+    confirmation_source: Mapped[ConsentConfirmationSource | None] = mapped_column(
+        consent_confirmation_source_enum,
+        nullable=True,
     )
     confirmed_via: Mapped[ConsentMethod | None] = mapped_column(
         consent_method_enum,

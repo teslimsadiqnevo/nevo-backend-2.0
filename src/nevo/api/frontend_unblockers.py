@@ -73,6 +73,7 @@ UploadedLessonFile = Annotated[UploadFile, File()]
 SchoolIdQuery = Annotated[UUID | None, Query(alias="schoolId")]
 StudentIdQuery = Annotated[UUID | None, Query(alias="studentId")]
 ClassIdQuery = Annotated[UUID | None, Query(alias="classId")]
+ArchivedFilter = Annotated[bool, Query(alias="archived")]
 
 
 class SchoolSummary(BaseModel):
@@ -132,6 +133,7 @@ class LessonSegmentResponse(BaseModel):
     comprehension_checkpoints: list[dict[str, object]] = Field(alias="comprehensionCheckpoints")
     needs_review: bool = Field(alias="needsReview")
     review_reasons: list[str] = Field(alias="reviewReasons")
+    estimated_minutes: int = Field(default=0, alias="estimatedMinutes")
 
 
 class LessonSummaryResponse(BaseModel):
@@ -145,6 +147,7 @@ class LessonSummaryResponse(BaseModel):
     review_segment_count: int = Field(alias="reviewSegmentCount")
     subject: str | None = None
     assignment_count: int = Field(default=0, alias="assignmentCount")
+    estimated_minutes: int = Field(default=0, alias="estimatedMinutes")
     created_at: datetime = Field(alias="createdAt")
 
 
@@ -171,6 +174,20 @@ class LessonAssignmentResponse(BaseModel):
     created_count: int = Field(alias="createdCount")
 
 
+class ProfilePatch(BaseModel):
+    """Editable fields on the caller's own profile.
+
+    Every field is optional and only applied when present, so a client can send
+    just the field the user touched without clearing the others.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    first_name: str | None = Field(default=None, alias="firstName", max_length=100)
+    last_name: str | None = Field(default=None, alias="lastName", max_length=100)
+    subjects: list[str] | None = Field(default=None, max_length=50)
+
+
 class NotificationResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -183,6 +200,8 @@ class NotificationResponse(BaseModel):
     read: bool
     created_at: datetime = Field(alias="createdAt")
     navigates_to: str | None = Field(alias="navigatesTo")
+    archived: bool = False
+    archived_at: datetime | None = Field(default=None, alias="archivedAt")
 
 
 class NotificationListResponse(BaseModel):
@@ -291,6 +310,64 @@ async def current_user_profile(
     school = await session.get(School, user.school_id) if user and user.school_id else None
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return CurrentUserResponse(
+        user_id=user.id,
+        role=user.role.value,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        display_name=_display_name(user),
+        email=user.email,
+        school=(
+            SchoolSummary(
+                id=school.id,
+                name=school.name,
+                slug=school.school_url_slug,
+                code=school.school_code,
+            )
+            if school
+            else None
+        ),
+        subjects=await _subjects_for_user(session, user),
+    )
+
+
+@router.patch(
+    "/api/v1/users/me",
+    response_model=CurrentUserResponse,
+    tags=["authentication"],
+)
+async def update_current_user_profile(
+    payload: ProfilePatch,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> CurrentUserResponse:
+    """Update the caller's own editable profile fields.
+
+    Name and subjects only. Email is an authentication identifier, so changing
+    it needs a verification flow rather than a silent write, and role and
+    school are set by an administrator rather than by the account holder.
+
+    ``subjects`` replaces the user's explicitly chosen list. Subjects inferred
+    from their lessons are still merged into the response, so the value read
+    back can legitimately be a superset of what was written.
+    """
+    user = await session.get(User, principal.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    changes = payload.model_dump(exclude_unset=True)
+    if "first_name" in changes:
+        user.first_name = payload.first_name
+    if "last_name" in changes:
+        user.last_name = payload.last_name
+    if "subjects" in changes:
+        deduped = list(
+            dict.fromkeys(
+                subject.strip() for subject in (payload.subjects or []) if subject.strip()
+            )
+        )
+        user.preferences = {**user.preferences, "subjects": deduped}
+    await session.commit()
+    school = await session.get(School, user.school_id) if user.school_id else None
     return CurrentUserResponse(
         user_id=user.id,
         role=user.role.value,
@@ -582,6 +659,7 @@ async def lesson_detail(
                 comprehensionCheckpoints=list(item.comprehension_checkpoints),
                 needsReview=item.needs_review,
                 reviewReasons=list(item.review_reasons),
+                estimatedMinutes=item.estimated_minutes,
             )
             for item in segments
         ],
@@ -695,13 +773,22 @@ async def create_lesson_assignments(
 async def list_notifications(
     principal: PrincipalDependency,
     session: DatabaseSession,
+    archived: ArchivedFilter = False,
 ) -> NotificationListResponse:
+    """List the caller's notifications.
+
+    Defaults to the active inbox. Pass ``archived=true`` for the archive view;
+    without it, archiving was a one-way action with nowhere to look afterwards.
+    """
+    archived_clause = (
+        Notification.archived_at.is_not(None) if archived else Notification.archived_at.is_(None)
+    )
     records = (
         await session.scalars(
             select(Notification)
             .where(
                 Notification.recipient_id == principal.user_id,
-                Notification.archived_at.is_(None),
+                archived_clause,
             )
             .order_by(Notification.created_at.desc())
             .limit(100)
@@ -709,7 +796,9 @@ async def list_notifications(
     ).all()
     return NotificationListResponse(
         notifications=[_notification(item) for item in records],
-        unreadCount=sum(1 for item in records if not item.read),
+        # The badge always counts the active inbox: an archived notification
+        # is not something the user still has to deal with.
+        unreadCount=sum(1 for item in records if not item.read and item.archived_at is None),
     )
 
 
@@ -805,6 +894,29 @@ async def thread_messages(
             for message, sender in rows
         ],
     )
+
+
+@router.post(
+    "/api/messages/threads/{thread_id}/read",
+    response_model=MessageThreadResponse,
+    tags=["messaging"],
+)
+async def mark_thread_read(
+    thread_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> MessageThreadResponse:
+    """Clear a thread's unread badge without opening it.
+
+    Fetching the thread also marks it read, but that makes clearing the badge
+    a side effect of a GET — a prefetch or a retry would clear it. This is the
+    explicit way to do it, and returns the updated thread so the badge can be
+    reconciled without a second request.
+    """
+    thread = await _require_thread_access(session, principal.user_id, thread_id)
+    await _mark_thread_read(session, thread.id, principal.user_id)
+    await session.commit()
+    return await _thread_response(session, thread, principal.user_id)
 
 
 @router.post(
@@ -1049,6 +1161,44 @@ async def flags_alias(
     ]
 
 
+@router.post(
+    "/api/intelligence/flags/{flag_id}/acknowledge",
+    response_model=AttentionFlagResponse,
+    tags=["intelligence"],
+)
+async def acknowledge_flag(
+    flag_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> dict[str, object]:
+    """Record that a staff member has seen and actioned a flag.
+
+    Idempotent: acknowledging an already-acknowledged flag keeps the original
+    acknowledgement rather than reassigning it to whoever clicked last.
+    """
+    actor = await actor_user(session, principal)
+    if principal.role == "student":
+        raise HTTPException(status_code=403, detail="Students cannot acknowledge flags")
+    flag = await session.get(AttentionFlag, flag_id)
+    if flag is None:
+        raise HTTPException(status_code=404, detail="Flag not found")
+    await require_student_access(session, principal, flag.student_id)
+    if flag.acknowledged_at is None:
+        flag.acknowledged_at = datetime.now(UTC)
+        flag.acknowledged_by = actor.id
+        await session.commit()
+    return {
+        "id": str(flag.id),
+        "studentId": str(flag.student_id),
+        "flagType": flag.flag_type.value,
+        "description": flag.description,
+        "generatedAt": flag.generated_at.isoformat(),
+        "acknowledged": True,
+        "evidenceSeries": flag.evidence_series,
+        "actionTargets": flag.action_targets,
+    }
+
+
 @router.get(
     "/api/intelligence/recommendations/{student_id}",
     response_model=list[InterventionResponse],
@@ -1215,6 +1365,7 @@ def _lesson_summary(lesson: Lesson, *, assignment_count: int = 0) -> LessonSumma
         reviewSegmentCount=lesson.review_segment_count,
         subject=lesson.subject,
         assignmentCount=assignment_count,
+        estimatedMinutes=lesson.estimated_minutes,
         createdAt=lesson.created_at,
     )
 
@@ -1230,6 +1381,8 @@ def _notification(item: Notification) -> NotificationResponse:
         read=item.read,
         createdAt=item.created_at,
         navigatesTo=item.navigates_to,
+        archived=item.archived_at is not None,
+        archivedAt=item.archived_at,
     )
 
 

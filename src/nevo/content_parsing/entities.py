@@ -40,6 +40,7 @@ class ParsedLessonSegment:
     calculation_variant: dict[str, object] | None = None
     needs_review: bool = False
     review_reasons: tuple[str, ...] = ()
+    estimated_minutes: int = 0
 
 
 @dataclass(frozen=True, slots=True)

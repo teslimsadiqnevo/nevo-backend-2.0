@@ -73,6 +73,9 @@ class SqlAlchemyContentParsingRepository:
                     status=status,
                     segment_count=len(parsed.segments),
                     review_segment_count=review_segment_count,
+                    estimated_minutes=sum(
+                        segment.estimated_minutes for segment in parsed.segments
+                    ),
                     confirmation_summary=parsed.confirmation_summary,
                 )
             )
@@ -116,6 +119,7 @@ class SqlAlchemyContentParsingRepository:
                         calculation_variant=segment.calculation_variant,
                         needs_review=segment.needs_review,
                         review_reasons=list(segment.review_reasons),
+                        estimated_minutes=segment.estimated_minutes,
                     )
                 )
         return StoredParsedLesson(

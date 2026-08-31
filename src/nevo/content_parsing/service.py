@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from collections.abc import Iterable
 from dataclasses import replace
@@ -361,6 +362,32 @@ def _fallback_segments(
     return tuple(segments)
 
 
+WORDS_READ_PER_MINUTE = 130
+"""Deliberately below adult silent-reading pace: these are school learners
+working through new material, not skimming."""
+
+MINUTES_BY_CONTENT_TYPE = {
+    LessonContentType.PRACTICE_QUESTION: 3,
+    LessonContentType.CALCULATION: 3,
+    LessonContentType.WORKED_EXAMPLE: 2,
+}
+"""Floor for segments whose cost is the thinking, not the reading."""
+
+
+def estimate_segment_minutes(segment: ParsedLessonSegment) -> int:
+    """Rough minutes to work through one segment.
+
+    Reading time from word count, floored per content type so a two-line
+    practice question is not billed at zero minutes. An estimate for planning,
+    not a measurement — the review screen presents it as approximate.
+    """
+    words = len(segment.body.split())
+    reading = math.ceil(words / WORDS_READ_PER_MINUTE) if words else 0
+    floor = MINUTES_BY_CONTENT_TYPE.get(segment.content_type, 1)
+    checkpoints = len(segment.comprehension_checkpoints)
+    return max(reading + checkpoints, floor)
+
+
 def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
     reasons = list(segment.review_reasons)
     needs_review = segment.needs_review
@@ -395,6 +422,7 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
         calculation_variant=segment.calculation_variant,
         needs_review=needs_review,
         review_reasons=tuple(dict.fromkeys(reasons)),
+        estimated_minutes=segment.estimated_minutes or estimate_segment_minutes(segment),
     )
 
 

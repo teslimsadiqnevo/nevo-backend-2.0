@@ -74,6 +74,7 @@ class ParsedLessonSegmentResponse(BaseModel):
     calculation_variant: dict[str, object] | None = Field(alias="calculationVariant")
     needs_review: bool = Field(alias="needsReview")
     review_reasons: list[str] = Field(alias="reviewReasons")
+    estimated_minutes: int = Field(alias="estimatedMinutes")
 
     @classmethod
     def from_segment(
@@ -95,6 +96,7 @@ class ParsedLessonSegmentResponse(BaseModel):
             calculation_variant=segment.calculation_variant,
             needs_review=segment.needs_review,
             review_reasons=list(segment.review_reasons),
+            estimated_minutes=segment.estimated_minutes,
         )
 
 

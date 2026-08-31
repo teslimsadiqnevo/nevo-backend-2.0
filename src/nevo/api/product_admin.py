@@ -46,7 +46,12 @@ from nevo.db.models.product import (
 )
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
-from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
+from nevo.domain.accounts.vocabulary import (
+    AuthMethod,
+    NotificationCategory,
+    UserRole,
+    UserStatus,
+)
 from nevo.retention.anonymisation import anonymise_student
 
 router = APIRouter(prefix="/api/v1", tags=["school administration"])
@@ -102,7 +107,7 @@ class FeedbackRequest(BaseModel):
 class PreferenceWrite(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    category: str = Field(min_length=1, max_length=80)
+    category: NotificationCategory
     in_app: bool = Field(alias="inApp")
     email: bool
 

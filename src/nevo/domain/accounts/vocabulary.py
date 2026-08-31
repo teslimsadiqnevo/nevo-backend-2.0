@@ -110,3 +110,20 @@ class ConsentMethod(StrEnum):
     VERBAL = "verbal"
     EMAIL = "email"
     DIGITAL = "digital"
+
+
+class NotificationCategory(StrEnum):
+    """Notification streams a user can mute independently.
+
+    Enumerated so a typo is rejected rather than silently creating a phantom
+    preference row that mutes nothing. Adding a stream here is a one-line
+    change; a category absent from this list is a 422, not a silent no-op.
+    """
+
+    ASSIGNMENTS = "assignments"
+    MESSAGES = "messages"
+    ATTENTION = "attention"
+    REPORTS = "reports"
+    CONSENT = "consent"
+    BILLING = "billing"
+    ACCOUNT = "account"

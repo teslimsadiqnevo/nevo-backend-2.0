@@ -86,3 +86,37 @@ class ScaffoldIntensity(StrEnum):
 class ScaffoldOutcome(StrEnum):
     CORRECT = "correct"
     STRUGGLED = "struggled"
+
+
+class SegmentReviewReason(StrEnum):
+    """Why a parsed segment was flagged for a human look.
+
+    Enumerated so the console can render its own copy per reason instead of
+    printing the raw token with underscores swapped for spaces.
+    """
+
+    DETERMINISTIC_PARSE_USED = "deterministic_parse_used"
+    FEWER_THAN_TWO_MODALITIES = "fewer_than_two_modalities"
+    AUDIO_GENERATION_FAILED = "audio_generation_failed"
+    CALCULATION_AUDIO_GENERATION_FAILED = "calculation_audio_generation_failed"
+    VISUAL_GENERATION_FAILED = "visual_generation_failed"
+    VISUAL_VARIANT_IMAGE_GENERATION_FAILED = "visual_variant_image_generation_failed"
+
+
+class UploadStatus(StrEnum):
+    """Lifecycle of an upload job."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    READY = "ready"
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class UploadStage(StrEnum):
+    """Which step of the review flow an upload has reached."""
+
+    LESSONS = "lessons"
+    STRUCTURE = "structure"
+    COMPLETE = "complete"

@@ -1188,37 +1188,108 @@ async def confirm_upload(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
+    """Turn a reviewed upload into lessons.
+
+    A unit or term upload parses into one lesson; the teacher splits it in the
+    review screen by editing ``structure.lessons``. Confirm honours that: the
+    first entry keeps the original lesson, and each additional entry becomes a
+    new lesson with the segments the teacher assigned to it moved across.
+    """
     actor = await require_school_actor(session, principal)
     job = await session.get(UploadJob, upload_id)
     if job is None or job.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Upload not found")
-    lesson_id = job.structure.get("lessonId")
-    if not lesson_id:
+    root_lesson_id = job.structure.get("lessonId")
+    if not root_lesson_id:
         raise HTTPException(status_code=409, detail="Upload has no parsed lesson")
-    await session.execute(
-        delete(LessonModule).where(LessonModule.lesson_id == UUID(str(lesson_id)))
-    )
-    module_items = job.structure.get("modules", [])
-    if not isinstance(module_items, list):
-        raise HTTPException(status_code=422, detail="Modules must be a list")
-    for item in module_items:
-        if not isinstance(item, dict):
-            continue
-        session.add(
-            LessonModule(
-                lesson_id=UUID(str(lesson_id)),
-                title=str(item.get("title") or "Module"),
-                recap=item.get("recap"),
-                preview=item.get("preview"),
-                sequence_order=int(item.get("sequenceOrder") or 1),
-                segment_ids=(
-                    list(segment_ids)
-                    if isinstance((segment_ids := item.get("segmentIds")), list)
-                    else []
-                ),
+    root_id = UUID(str(root_lesson_id))
+    root_lesson = await session.get(Lesson, root_id)
+    if root_lesson is None:
+        raise HTTPException(status_code=409, detail="Upload has no parsed lesson")
+
+    entries = _structure_lessons(job.structure)
+    segments = {
+        item.segment_key: item
+        for item in (
+            await session.scalars(select(LessonSegment).where(LessonSegment.lesson_id == root_id))
+        ).all()
+    }
+    await session.execute(delete(LessonModule).where(LessonModule.lesson_id == root_id))
+
+    lesson_ids: list[UUID] = []
+    for index, entry in enumerate(entries):
+        modules = [item for item in entry.get("modules", []) if isinstance(item, dict)]
+        if index == 0:
+            lesson = root_lesson
+        else:
+            lesson = Lesson(
+                school_id=root_lesson.school_id,
+                title=str(entry.get("title") or f"{root_lesson.title} ({index + 1})"),
+                source_type=root_lesson.source_type,
+                status=root_lesson.status,
+                subject=root_lesson.subject,
+                created_by_user_id=root_lesson.created_by_user_id,
             )
-        )
+            session.add(lesson)
+            await session.flush()
+        lesson_ids.append(lesson.id)
+
+        claimed = [
+            segments[key]
+            for module in modules
+            for key in module.get("segmentIds", [])
+            if isinstance(key, str) and key in segments
+        ]
+        for position, segment in enumerate(claimed, start=1):
+            segment.lesson_id = lesson.id
+            segment.sequence_order = position
+        # Counts are denormalised onto the lesson, so they have to follow the
+        # segments to whichever lesson they were moved into.
+        lesson.segment_count = len(claimed)
+        lesson.review_segment_count = sum(1 for item in claimed if item.needs_review)
+        lesson.estimated_minutes = sum(item.estimated_minutes for item in claimed)
+
+        for module in modules:
+            session.add(
+                LessonModule(
+                    lesson_id=lesson.id,
+                    title=str(module.get("title") or "Module"),
+                    recap=module.get("recap"),
+                    preview=module.get("preview"),
+                    sequence_order=int(module.get("sequenceOrder") or 1),
+                    segment_ids=(
+                        list(segment_ids)
+                        if isinstance((segment_ids := module.get("segmentIds")), list)
+                        else []
+                    ),
+                )
+            )
+
     job.status = "confirmed"
     job.stage = "complete"
     await session.commit()
-    return {"lessonId": str(lesson_id), "status": job.status}
+    return {
+        "lessonId": str(lesson_ids[0]),
+        "lessonIds": [str(item) for item in lesson_ids],
+        "status": job.status,
+    }
+
+
+def _structure_lessons(structure: dict[str, object]) -> list[dict[str, object]]:
+    """The lessons a confirmed upload should produce.
+
+    Falls back to the single-lesson shape when a client has not sent
+    ``lessons``, so an older console keeps working unchanged.
+    """
+    entries = structure.get("lessons")
+    if isinstance(entries, list) and entries:
+        lessons = [item for item in entries if isinstance(item, dict)]
+        if lessons:
+            return lessons
+    modules = structure.get("modules")
+    return [
+        {
+            "lessonId": structure.get("lessonId"),
+            "modules": modules if isinstance(modules, list) else [],
+        }
+    ]

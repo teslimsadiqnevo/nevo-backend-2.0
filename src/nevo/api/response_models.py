@@ -475,8 +475,11 @@ class UploadStructureResponse(CamelResponse):
 
 
 class UploadConfirmedResponse(CamelResponse):
+    #: The first lesson produced. Retained so single-lesson clients keep
+    #: working; prefer lessonIds when a unit can split.
     lesson_id: UUID
-    status: str
+    lesson_ids: list[UUID] = Field(default_factory=list)
+    status: UploadStatus
 
 
 class UploadRetryResponse(CamelResponse):

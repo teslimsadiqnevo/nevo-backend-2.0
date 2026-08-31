@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -11,6 +11,7 @@ from nevo.domain.accounts.vocabulary import (
     SsoConnectionStatus,
     SsoFirstUseDestination,
     SsoProvider,
+    UserRole,
 )
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.permissions.entities import PermissionSnapshot
@@ -55,10 +56,10 @@ class SsoStartRequest(BaseModel):
 
 class SsoCallbackResponse(BaseModel):
     access_token: str
-    token_type: str
+    token_type: Literal['bearer']
     expires_at: str
     user_id: str
-    role: str
+    role: UserRole
     replaced_session: bool
     destination: SsoFirstUseDestination
 

@@ -4,11 +4,25 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nevo.domain.accounts.vocabulary import (
+    AuthMethod,
+    ClassSource,
+    InvitationDeliveryStatus,
+    NotificationCategory,
+    UserRole,
+    UserStatus,
+)
+from nevo.domain.attention_flags.vocabulary import AttentionFlagType
 from nevo.domain.intelligence.vocabulary import (
+    AssignmentStatus,
+    ContentParseStatus,
+    LessonContentType,
+    LessonSourceType,
     SegmentReviewReason,
     UploadStage,
     UploadStatus,
 )
+from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 
 
 def _camel(value: str) -> str:
@@ -41,7 +55,7 @@ class ClassSummaryResponse(CamelResponse):
     name: str
     code: str | None
     year_group: str | None
-    source: str | None = None
+    source: ClassSource | None = None
     subjects: list[str] = Field(default_factory=list)
     student_count: int
     archived_at: datetime | None
@@ -67,7 +81,7 @@ class TeacherSummaryResponse(CamelResponse):
     id: UUID
     name: str
     email: str | None
-    status: str
+    status: UserStatus
 
 
 class TeacherDetailResponse(TeacherSummaryResponse):
@@ -78,7 +92,7 @@ class StudentSummaryResponse(CamelResponse):
     id: UUID
     name: str
     login_identifier: str | None
-    status: str
+    status: UserStatus
     age_band: str | None
 
 
@@ -88,7 +102,7 @@ class StudentDetailResponse(CamelResponse):
     last_name: str | None
     login_identifier: str | None
     email: str | None
-    status: str
+    status: UserStatus
     age_band: str | None
     class_ids: list[UUID]
     first_use: bool
@@ -112,7 +126,7 @@ class PinIssueResponse(CamelResponse):
 
 
 class NotificationPreferenceResponse(CamelResponse):
-    category: str
+    category: NotificationCategory
     in_app: bool
     email: bool
 
@@ -125,7 +139,7 @@ class PersonalSettingsResponse(CamelResponse):
 class OpsFeedbackResponse(CamelResponse):
     id: UUID
     account_ref: str
-    role: str
+    role: UserRole
     type: str
     note: str
     context: str
@@ -143,7 +157,7 @@ class OpsOverviewResponse(CamelResponse):
 class SchoolCodeResponse(CamelResponse):
     school_id: UUID
     school_name: str
-    auth_method: str
+    auth_method: AuthMethod
     classes: list[ClassOptionResponse]
 
 
@@ -164,7 +178,7 @@ class InvitationResponse(CamelResponse):
     name: str | None = None
     status: str | None = None
     expires_at: datetime
-    delivery_status: str | None = None
+    delivery_status: InvitationDeliveryStatus | None = None
 
 
 class RejectedInvitationResponse(CamelResponse):
@@ -179,14 +193,14 @@ class BulkInvitationResponse(CamelResponse):
 
 class JoinInspectionResponse(CamelResponse):
     status: Literal["valid"]
-    role: str
+    role: UserRole
     school_name: str | None
     expires_at: datetime
 
 
 class JoinAcceptedResponse(CamelResponse):
     user_id: UUID
-    role: str
+    role: UserRole
     login_identifier: str | None
 
 
@@ -198,8 +212,8 @@ class ParentRightResponse(CamelResponse):
 class LessonSummaryResponse(CamelResponse):
     id: UUID
     title: str
-    status: str
-    source_type: str
+    status: ContentParseStatus
+    source_type: LessonSourceType
     segment_count: int
     review_segment_count: int
     subject: str | None = None
@@ -214,7 +228,7 @@ class LessonSegmentResponse(CamelResponse):
     id: UUID
     segment_key: str
     sequence_order: int
-    content_type: str
+    content_type: LessonContentType
     title: str | None
     body: str
     available_modalities: list[str]
@@ -246,7 +260,7 @@ class AssignmentResponse(CamelResponse):
     lesson: LessonSummaryResponse
     student_id: UUID
     class_id: UUID | None
-    status: str
+    status: AssignmentStatus
     due_at: datetime | None
     available_from: datetime | None
     assigned_at: datetime
@@ -262,7 +276,7 @@ class AssignmentCreatedResponse(CamelResponse):
 
 class AssignmentUpdatedResponse(CamelResponse):
     id: UUID
-    status: str
+    status: AssignmentStatus
     due_at: datetime | None
     available_from: datetime | None
 
@@ -274,7 +288,7 @@ class LessonSessionResponse(CamelResponse):
 
 class LessonProgressResponse(CamelResponse):
     lesson_id: UUID
-    status: str
+    status: LessonCompletionStatus
     module_position: int
     segment_position: int
     intelligence: dict[str, object]
@@ -289,7 +303,7 @@ class PersonReferenceResponse(CamelResponse):
 
 class RecentProgressResponse(CamelResponse):
     lesson_id: UUID
-    status: str
+    status: LessonCompletionStatus
     segment_position: int
     updated_at: datetime
 
@@ -475,7 +489,7 @@ class UploadRetryResponse(CamelResponse):
 class AttentionFlagResponse(CamelResponse):
     id: UUID
     student_id: UUID
-    flag_type: str
+    flag_type: AttentionFlagType
     description: str
     generated_at: datetime
     acknowledged: bool

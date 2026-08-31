@@ -11,6 +11,7 @@ from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.teacher_assignments.vocabulary import (
     TeacherAssignmentRole,
     TeacherAssignmentSource,
+    TeacherRosterSyncStatus,
 )
 from nevo.permissions.entities import PermissionSnapshot
 from nevo.teacher_assignments.entities import (
@@ -101,7 +102,7 @@ class AssignedTeacherResponse(BaseModel):
 
 
 class RosterSyncResponse(BaseModel):
-    status: str
+    status: TeacherRosterSyncStatus
     imported_assignments: int
     missing_mappings: int
     message: str

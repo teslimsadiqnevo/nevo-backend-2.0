@@ -68,7 +68,7 @@ from nevo.db.models.product import (
 )
 from nevo.db.models.signal_event import LessonSession
 from nevo.domain.accounts.vocabulary import SsoProvider, UserRole
-from nevo.domain.intelligence.vocabulary import LessonSourceType
+from nevo.domain.intelligence.vocabulary import AssignmentStatus, LessonSourceType
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 from nevo.sso.service import SsoService
@@ -90,7 +90,7 @@ class AssignmentPatch(BaseModel):
 
     due_at: datetime | None = Field(default=None, alias="dueAt")
     available_from: datetime | None = Field(default=None, alias="availableFrom")
-    status: str | None = Field(default=None, pattern="^(assigned|cancelled)$")
+    status: AssignmentStatus | None = Field(default=None)
 
 
 class AssignmentCreate(BaseModel):
@@ -114,7 +114,7 @@ class ProgressWrite(BaseModel):
     assignment_id: UUID | None = Field(default=None, alias="assignmentId")
     module_position: int = Field(default=0, alias="modulePosition", ge=0)
     segment_position: int = Field(default=0, alias="segmentPosition", ge=0)
-    status: str = Field(pattern="^(in_progress|completed|exited)$")
+    status: LessonCompletionStatus
 
 
 class UploadRequest(BaseModel):

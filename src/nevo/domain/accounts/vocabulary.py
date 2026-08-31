@@ -127,3 +127,42 @@ class NotificationCategory(StrEnum):
     CONSENT = "consent"
     BILLING = "billing"
     ACCOUNT = "account"
+
+
+class NotificationType(StrEnum):
+    """What a notification is about.
+
+    Drives the icon and the navigation target, so the console needs the set to
+    be closed rather than guessing from a free string.
+    """
+
+    ATTENTION_SUMMARY = "attention_summary"
+    MODALITY_SHIFT = "modality_shift"
+    PIN_RESET_REQUESTED = "pin_reset_requested"
+
+
+class MessageRecipientType(StrEnum):
+    """Whether a thread addresses one student or a whole class."""
+
+    STUDENT = "student"
+    CLASS = "class"
+
+
+class ClassSource(StrEnum):
+    """How a class came to exist."""
+
+    MANUAL = "manual"
+    ROSTER_SYNC = "roster_sync"
+
+
+class InvitationDeliveryStatus(StrEnum):
+    """Whether an invitation email actually went out.
+
+    ``email_not_configured`` is deliberately distinct from ``sent``: the
+    invitation exists and its link is valid, but nobody was emailed, so the
+    caller has to deliver it another way.
+    """
+
+    NOT_REQUESTED = "not_requested"
+    SENT = "sent"
+    EMAIL_NOT_CONFIGURED = "email_not_configured"

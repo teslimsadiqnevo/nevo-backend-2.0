@@ -90,7 +90,7 @@ class SchoolRegistrationRequest(BaseModel):
 
 class InvitationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    role: str = Field(pattern="^(teacher|student)$")
+    role: UserRole = Field(pattern="^(teacher|student)$")
     first_name: str | None = Field(default=None, alias="firstName", max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
     email: EmailStr | None = None

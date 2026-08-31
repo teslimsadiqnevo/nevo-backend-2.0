@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -13,6 +13,7 @@ from nevo.auth.errors import (
     RateLimitExceededError,
 )
 from nevo.auth.service import AuthService
+from nevo.domain.accounts.vocabulary import UserRole
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 bearer = HTTPBearer(auto_error=False)
@@ -44,10 +45,10 @@ class UnifiedLoginRequest(BaseModel):
 
 class SessionResponse(BaseModel):
     access_token: str
-    token_type: str
+    token_type: Literal['bearer']
     expires_at: datetime
     user_id: UUID
-    role: str
+    role: UserRole
     replaced_session: bool
 
     @classmethod
@@ -64,7 +65,7 @@ class SessionResponse(BaseModel):
 
 class PrincipalResponse(BaseModel):
     user_id: UUID
-    role: str
+    role: UserRole
     session_id: UUID
 
     @classmethod

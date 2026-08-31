@@ -7,9 +7,20 @@ from typing import Annotated
 from uuid import UUID
 from zipfile import ZipFile
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.content import (
@@ -17,6 +28,14 @@ from nevo.api.content import (
     get_content_parsing_service,
 )
 from nevo.api.dependencies import DatabaseSession
+from nevo.api.pagination import (
+    DEFAULT_LIMIT,
+    LimitQuery,
+    OffsetQuery,
+    has_more,
+    paginate,
+    set_page_headers,
+)
 from nevo.api.permissions import RequireScope
 from nevo.api.privacy import is_private_interaction_key
 from nevo.api.product_common import (
@@ -55,7 +74,18 @@ from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.product import LessonModule
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
-from nevo.domain.accounts.vocabulary import UserRole, UserStatus
+from nevo.domain.accounts.vocabulary import (
+    MessageRecipientType,
+    NotificationType,
+    UserRole,
+    UserStatus,
+)
+from nevo.domain.intelligence.vocabulary import (
+    ContentParseStatus,
+    LessonContentType,
+    LessonSourceType,
+    SegmentReviewReason,
+)
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 from nevo.intelligence.baseline import build_baseline_profile
@@ -85,7 +115,7 @@ class SchoolSummary(BaseModel):
 
 class CurrentUserResponse(BaseModel):
     user_id: UUID
-    role: str
+    role: UserRole
     first_name: str | None
     last_name: str | None
     display_name: str
@@ -107,7 +137,7 @@ class ClassStudentResponse(BaseModel):
     last_name: str | None
     display_name: str
     login_identifier: str | None
-    status: str
+    status: UserStatus
     profile_status: str = Field(alias="profileStatus")
     latest_session_at: datetime | None = Field(alias="latestSessionAt")
     observations: list[str] = Field(default_factory=list)
@@ -125,14 +155,14 @@ class LessonSegmentResponse(BaseModel):
 
     id: UUID
     segment_key: str = Field(alias="segmentKey")
-    content_type: str = Field(alias="contentType")
+    content_type: LessonContentType = Field(alias="contentType")
     sequence_order: int = Field(alias="sequenceOrder")
     title: str | None
     body: str
     available_modalities: list[str] = Field(alias="availableModalities")
     comprehension_checkpoints: list[dict[str, object]] = Field(alias="comprehensionCheckpoints")
     needs_review: bool = Field(alias="needsReview")
-    review_reasons: list[str] = Field(alias="reviewReasons")
+    review_reasons: list[SegmentReviewReason] = Field(alias="reviewReasons")
     estimated_minutes: int = Field(default=0, alias="estimatedMinutes")
 
 
@@ -141,8 +171,8 @@ class LessonSummaryResponse(BaseModel):
 
     id: UUID
     title: str
-    source_type: str = Field(alias="sourceType")
-    status: str
+    source_type: LessonSourceType = Field(alias="sourceType")
+    status: ContentParseStatus
     segment_count: int = Field(alias="segmentCount")
     review_segment_count: int = Field(alias="reviewSegmentCount")
     subject: str | None = None
@@ -193,8 +223,8 @@ class NotificationResponse(BaseModel):
 
     notification_id: UUID = Field(alias="notificationId")
     recipient_id: UUID = Field(alias="recipientId")
-    recipient_role: str = Field(alias="recipientRole")
-    type: str
+    recipient_role: UserRole = Field(alias="recipientRole")
+    type: NotificationType
     title: str
     description: str
     read: bool
@@ -209,6 +239,10 @@ class NotificationListResponse(BaseModel):
 
     notifications: list[NotificationResponse]
     unread_count: int = Field(alias="unreadCount")
+    #: Matching notifications regardless of the page size, so a client can see
+    #: that it is looking at a truncated list rather than the whole inbox.
+    total: int = 0
+    has_more: bool = Field(default=False, alias="hasMore")
 
 
 class UnreadCountResponse(BaseModel):
@@ -219,7 +253,7 @@ class MessageThreadResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     thread_id: UUID = Field(alias="threadId")
-    recipient_type: str = Field(alias="recipientType")
+    recipient_type: MessageRecipientType = Field(alias="recipientType")
     recipient_id: UUID | None = Field(alias="recipientId")
     title: str
     latest_preview: str | None = Field(alias="latestPreview")
@@ -256,7 +290,7 @@ class SendMessageRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     recipient_id: UUID = Field(alias="recipientId")
-    recipient_type: str = Field(alias="recipientType", pattern="^(student|class)$")
+    recipient_type: MessageRecipientType = Field(alias="recipientType")
     content: str = Field(min_length=1, max_length=5_000)
 
 
@@ -545,16 +579,34 @@ async def _student_observations(
 @router.get("/api/concepts", response_model=list[ConceptResponse], tags=["content"])
 async def concepts(
     session: DatabaseSession,
+    response: Response,
     ids: str | None = Query(default=None),
     search: str | None = Query(default=None, min_length=1, max_length=120),
+    limit: LimitQuery = DEFAULT_LIMIT,
+    offset: OffsetQuery = 0,
 ) -> list[ConceptResponse]:
-    query = select(Concept).order_by(Concept.name).limit(100)
+    """List or look up concepts.
+
+    Totals are in the X-Total-Count and X-Has-More headers. An explicit `ids`
+    lookup is not paged — the caller already knows how many it asked for.
+    """
     if ids:
         concept_ids = [_uuid(item) for item in ids.split(",") if item.strip()]
-        query = select(Concept).where(Concept.id.in_(concept_ids)).order_by(Concept.name)
-    elif search:
+        records = (
+            await session.scalars(
+                select(Concept).where(Concept.id.in_(concept_ids)).order_by(Concept.name)
+            )
+        ).all()
+        set_page_headers(response, total=len(records), limit=len(records) or 1, offset=0)
+        return [
+            ConceptResponse(id=item.id, name=item.name, subject=item.subject)
+            for item in records
+        ]
+    query = select(Concept).order_by(Concept.name)
+    if search:
         query = query.where(Concept.name.ilike(f"%{search}%"))
-    records = (await session.scalars(query)).all()
+    records, total = await paginate(session, query, limit=limit, offset=offset)
+    set_page_headers(response, total=total, limit=limit, offset=offset)
     return [ConceptResponse(id=item.id, name=item.name, subject=item.subject) for item in records]
 
 
@@ -746,21 +798,35 @@ async def create_lesson_assignments(
     unique_student_ids = sorted(set(student_ids), key=str)
     for student_id in unique_student_ids:
         await require_student_access(session, principal, student_id)
-    created: list[UUID] = []
-    async with session.begin_nested():
-        for student_id in unique_student_ids:
-            record = LessonAssignment(
-                lesson_id=payload.lesson_id,
-                student_id=student_id,
-                teacher_id=principal.user_id,
-                class_id=payload.class_id,
-                assignment_type="class" if payload.class_id else "student",
-                due_at=payload.due_at,
-                available_from=payload.available_from,
+    if not unique_student_ids:
+        return LessonAssignmentResponse(assignmentIds=[], createdCount=0)
+    # Idempotent on (lesson, student, availableFrom), matching
+    # POST /api/v1/assignments: a retried request must not duplicate rows.
+    created = list(
+        (
+            await session.scalars(
+                insert(LessonAssignment)
+                .values(
+                    [
+                        {
+                            "lesson_id": payload.lesson_id,
+                            "student_id": student_id,
+                            "teacher_id": principal.user_id,
+                            "class_id": payload.class_id,
+                            "assignment_type": "class" if payload.class_id else "student",
+                            "due_at": payload.due_at,
+                            "available_from": payload.available_from,
+                        }
+                        for student_id in unique_student_ids
+                    ]
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["lesson_id", "student_id", "available_from"],
+                )
+                .returning(LessonAssignment.id)
             )
-            session.add(record)
-            await session.flush()
-            created.append(record.id)
+        ).all()
+    )
     await session.commit()
     return LessonAssignmentResponse(assignmentIds=created, createdCount=len(created))
 
@@ -774,31 +840,43 @@ async def list_notifications(
     principal: PrincipalDependency,
     session: DatabaseSession,
     archived: ArchivedFilter = False,
+    limit: LimitQuery = DEFAULT_LIMIT,
+    offset: OffsetQuery = 0,
 ) -> NotificationListResponse:
     """List the caller's notifications.
 
     Defaults to the active inbox. Pass ``archived=true`` for the archive view;
     without it, archiving was a one-way action with nowhere to look afterwards.
+
+    ``total`` and ``hasMore`` describe the whole matching set, so a busy inbox
+    is visibly paged rather than silently cut off at the page size.
     """
     archived_clause = (
         Notification.archived_at.is_not(None) if archived else Notification.archived_at.is_(None)
     )
-    records = (
-        await session.scalars(
-            select(Notification)
-            .where(
-                Notification.recipient_id == principal.user_id,
-                archived_clause,
-            )
-            .order_by(Notification.created_at.desc())
-            .limit(100)
+    query = (
+        select(Notification)
+        .where(
+            Notification.recipient_id == principal.user_id,
+            archived_clause,
         )
-    ).all()
+        .order_by(Notification.created_at.desc())
+    )
+    records, total = await paginate(session, query, limit=limit, offset=offset)
+    # The badge counts every unread notification in the active inbox, not just
+    # the ones on this page — a count that changed as you paged would be wrong.
+    unread_total = await session.scalar(
+        select(func.count(Notification.id)).where(
+            Notification.recipient_id == principal.user_id,
+            Notification.archived_at.is_(None),
+            Notification.read.is_(False),
+        )
+    )
     return NotificationListResponse(
         notifications=[_notification(item) for item in records],
-        # The badge always counts the active inbox: an archived notification
-        # is not something the user still has to deal with.
-        unreadCount=sum(1 for item in records if not item.read and item.archived_at is None),
+        unreadCount=int(unread_total or 0),
+        total=total,
+        hasMore=has_more(total=total, limit=limit, offset=offset),
     )
 
 
@@ -1125,11 +1203,20 @@ async def learner_profile_alias(
 async def flags_alias(
     principal: PrincipalDependency,
     session: DatabaseSession,
+    response: Response,
     student_id: StudentIdQuery = None,
     class_id: ClassIdQuery = None,
+    limit: LimitQuery = DEFAULT_LIMIT,
+    offset: OffsetQuery = 0,
 ) -> list[dict[str, object]]:
+    """List attention flags.
+
+    This returns a bare array, so the unpaged total and whether more remains
+    are reported in the X-Total-Count and X-Has-More headers rather than the
+    body. Previously the list was capped at 50 with no way to tell.
+    """
     actor = await actor_user(session, principal)
-    query = select(AttentionFlag).order_by(AttentionFlag.generated_at.desc()).limit(50)
+    query = select(AttentionFlag).order_by(AttentionFlag.generated_at.desc())
     if class_id is not None:
         await require_class_access(session, actor, class_id)
         query = query.join(
@@ -1145,7 +1232,8 @@ async def flags_alias(
         query = query.join(User, User.id == AttentionFlag.student_id).where(
             User.school_id == actor.school_id
         )
-    rows = (await session.scalars(query)).all()
+    rows, total = await paginate(session, query, limit=limit, offset=offset)
+    set_page_headers(response, total=total, limit=limit, offset=offset)
     return [
         {
             "id": str(item.id),

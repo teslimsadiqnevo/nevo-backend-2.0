@@ -120,3 +120,17 @@ class UploadStage(StrEnum):
     LESSONS = "lessons"
     STRUCTURE = "structure"
     COMPLETE = "complete"
+
+
+class AssignmentStatus(StrEnum):
+    """Lifecycle of a lesson assignment."""
+
+    ASSIGNED = "assigned"
+    CANCELLED = "cancelled"
+
+
+class AssignmentType(StrEnum):
+    """Whether an assignment was made to a class or to one student."""
+
+    CLASS = "class"
+    STUDENT = "student"

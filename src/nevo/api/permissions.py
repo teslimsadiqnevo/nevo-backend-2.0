@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
 from nevo.api.auth import PrincipalDependency
-from nevo.domain.accounts.vocabulary import UserRole
+from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope, navigation_for
 from nevo.permissions.entities import (
     AdminTeamMember,
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/v1", tags=["permissions"])
 class PermissionResponse(BaseModel):
     user_id: UUID
     school_id: UUID | None
-    role: str
+    role: UserRole
     scopes: list[PermissionScope]
     navigation: list[str]
 
@@ -55,8 +55,8 @@ class TeamMemberResponse(BaseModel):
     email: str | None
     first_name: str | None
     last_name: str | None
-    role: str
-    status: str
+    role: UserRole
+    status: UserStatus
     scopes: list[PermissionScope]
 
     @classmethod
@@ -83,7 +83,7 @@ class InvitationResponse(BaseModel):
     invitation_id: UUID
     user_id: UUID
     email: EmailStr
-    role: str
+    role: UserRole
     scopes: list[PermissionScope]
     invitation_token: str
     expires_at: datetime
@@ -109,7 +109,7 @@ class AcceptInvitationRequest(BaseModel):
 class AcceptedInvitationResponse(BaseModel):
     user_id: UUID
     school_id: UUID
-    role: str
+    role: UserRole
 
 
 class ReplaceScopesRequest(BaseModel):

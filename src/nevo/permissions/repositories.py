@@ -309,7 +309,16 @@ class SqlAlchemyPermissionRepository:
                     AdminScopeAssignment.scope.in_(removed),
                     AdminScopeAssignment.revoked_at.is_(None),
                 )
-                .values(revoked_at=changed_at)
+                # granted_at can come from the database clock while changed_at
+                # comes from this process's clock. On a hosted database those
+                # differ by milliseconds, which is enough to revoke "before"
+                # the grant and trip the revoked_after_grant constraint.
+                .values(
+                    revoked_at=func.greatest(
+                        changed_at,
+                        AdminScopeAssignment.granted_at,
+                    )
+                )
             )
         for scope in added:
             session.add(

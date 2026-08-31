@@ -13,5 +13,6 @@ class ConsentConfirmationSource(StrEnum):
 
 class ConsentDeliveryStatus(StrEnum):
     QUEUED = "queued"
+    PROCESSING = "processing"
     SENT = "sent"
     FAILED = "failed"

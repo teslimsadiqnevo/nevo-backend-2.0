@@ -231,3 +231,13 @@ class ConsentNotificationOutbox(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    attempt_count: Mapped[int] = mapped_column(
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )

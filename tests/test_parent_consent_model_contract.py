@@ -59,9 +59,18 @@ def test_parent_contact_and_delivery_enums_are_exact() -> None:
     assert enum_values("parent_links", "contact_method") == ["email", "sms"]
     assert enum_values("consent_notification_outbox", "status") == [
         "queued",
+        "processing",
         "sent",
         "failed",
     ]
+
+
+def test_consent_outbox_carries_worker_retry_state() -> None:
+    columns = Base.metadata.tables["consent_notification_outbox"].columns
+    assert "attempt_count" in columns
+    assert "next_attempt_at" in columns
+    assert not columns["attempt_count"].nullable
+    assert not columns["next_attempt_at"].nullable
 
 
 def test_consent_record_distinguishes_confirmation_source() -> None:

@@ -3,6 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nevo.db.base import Base
@@ -26,8 +28,10 @@ from nevo.domain.billing.vocabulary import (
     InvoiceStatus,
     PaymentMethodType,
     PaymentSource,
+    PaymentTransactionStatus,
     PricingCurrency,
     SubscriptionTier,
+    WebhookEventStatus,
 )
 
 subscription_tier_enum = Enum(
@@ -58,6 +62,16 @@ contract_status_enum = Enum(
 payment_source_enum = Enum(
     PaymentSource,
     name="payment_source",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+payment_transaction_status_enum = Enum(
+    PaymentTransactionStatus,
+    name="payment_transaction_status",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+webhook_event_status_enum = Enum(
+    WebhookEventStatus,
+    name="webhook_event_status",
     values_callable=lambda enum: [item.value for item in enum],
 )
 
@@ -368,6 +382,13 @@ class BillingPaymentMethod(Base):
     expiry_year: Mapped[int | None] = mapped_column(nullable=True)
     bank_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     account_holder_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_reusable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    processor_customer_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
     updated_by_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
         ForeignKey("users.id", ondelete="RESTRICT"),
@@ -429,4 +450,132 @@ class Invoice(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class PaymentTransaction(Base):
+    """One attempt to collect money for an invoice."""
+
+    __tablename__ = "payment_transactions"
+    __table_args__ = (
+        UniqueConstraint("reference", name="uq_payment_transactions_reference"),
+        CheckConstraint("amount >= 0", name="payment_transaction_amount_nonnegative"),
+        CheckConstraint(
+            "amount_minor >= 0",
+            name="payment_transaction_amount_minor_nonnegative",
+        ),
+        CheckConstraint(
+            "(status = 'success') = (paid_at IS NOT NULL)",
+            name="payment_transaction_paid_status_matches_paid_at",
+        ),
+        Index("ix_payment_transactions_school_created", "school_id", "created_at"),
+        Index("ix_payment_transactions_invoice", "invoice_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("schools.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    invoice_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("invoices.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reference: Mapped[str] = mapped_column(String(120), nullable=False)
+    provider: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="paystack",
+        server_default="paystack",
+    )
+    provider_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[PaymentTransactionStatus] = mapped_column(
+        payment_transaction_status_enum,
+        nullable=False,
+        default=PaymentTransactionStatus.PENDING,
+        server_default=PaymentTransactionStatus.PENDING.value,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[PricingCurrency] = mapped_column(
+        pricing_currency_enum,
+        nullable=False,
+    )
+    authorization_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    initiated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    paid_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class PaymentWebhookEvent(Base):
+    """Durable, de-duplicated record of every processor callback."""
+
+    __tablename__ = "payment_webhook_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "event_key",
+            name="uq_payment_webhook_events_provider_key",
+        ),
+        Index("ix_payment_webhook_events_status", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    provider: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="paystack",
+        server_default="paystack",
+    )
+    event_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    status: Mapped[WebhookEventStatus] = mapped_column(
+        webhook_event_status_enum,
+        nullable=False,
+        default=WebhookEventStatus.RECEIVED,
+        server_default=WebhookEventStatus.RECEIVED.value,
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )

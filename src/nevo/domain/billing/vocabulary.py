@@ -36,3 +36,17 @@ class PaymentSource(StrEnum):
     DIRECT = "direct"
     STERLING = "sterling"
     PARTNER = "partner"
+
+
+class PaymentTransactionStatus(StrEnum):
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILED = "failed"
+    ABANDONED = "abandoned"
+
+
+class WebhookEventStatus(StrEnum):
+    RECEIVED = "received"
+    PROCESSED = "processed"
+    IGNORED = "ignored"
+    FAILED = "failed"

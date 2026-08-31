@@ -31,10 +31,24 @@ from nevo.domain.accounts.vocabulary import SchoolEnrollmentBand
 from nevo.domain.billing.vocabulary import (
     InvoiceStatus,
     PaymentMethodType,
+    PaymentTransactionStatus,
+    PricingCurrency,
     SubscriptionTier,
 )
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.intelligence.compliance_audit import render_simple_pdf
+from nevo.payments.entities import CheckoutSession, PaymentOutcome
+from nevo.payments.errors import (
+    InvalidWebhookSignatureError,
+    InvoiceNotPayableError,
+    MissingBillingContactError,
+    NoReusablePaymentMethodError,
+    PaymentError,
+    PaymentNotFoundError,
+    PaymentProviderRejectedError,
+    PaymentProviderUnavailableError,
+)
+from nevo.payments.service import PaymentService
 from nevo.permissions.entities import PermissionSnapshot
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
@@ -394,6 +408,159 @@ async def update_billing_contact(
     except BillingError as error:
         raise public_billing_error(error) from error
     return BillingContactResponse.from_record(record)
+
+
+class StartPaymentRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    invoice_id: UUID = Field(alias="invoiceId")
+
+
+class CheckoutSessionResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    transaction_id: UUID = Field(alias="transactionId")
+    invoice_id: UUID = Field(alias="invoiceId")
+    reference: str
+    authorization_url: str = Field(alias="authorizationUrl")
+    amount: Decimal
+    currency: PricingCurrency
+
+    @classmethod
+    def from_record(cls, record: CheckoutSession) -> "CheckoutSessionResponse":
+        return cls(
+            transaction_id=record.transaction_id,
+            invoice_id=record.invoice_id,
+            reference=record.reference,
+            authorization_url=record.authorization_url,
+            amount=record.amount,
+            currency=record.currency,
+        )
+
+
+class PaymentOutcomeResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    transaction_id: UUID = Field(alias="transactionId")
+    invoice_id: UUID | None = Field(alias="invoiceId")
+    reference: str
+    status: PaymentTransactionStatus
+    invoice_paid: bool = Field(alias="invoicePaid")
+    payment_method_saved: bool = Field(alias="paymentMethodSaved")
+    message: str
+
+    @classmethod
+    def from_record(cls, record: PaymentOutcome) -> "PaymentOutcomeResponse":
+        return cls(
+            transaction_id=record.transaction_id,
+            invoice_id=record.invoice_id,
+            reference=record.reference,
+            status=record.status,
+            invoice_paid=record.invoice_paid,
+            payment_method_saved=record.payment_method_saved,
+            message=record.message,
+        )
+
+
+class WebhookAckResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    received: bool
+    applied: bool
+
+
+def get_payment_service(request: Request) -> PaymentService:
+    service = getattr(request.app.state, "payment_service", None)
+    if not isinstance(service, PaymentService) or not service.configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "payment_provider_unavailable",
+                "message": "Card payments are not configured.",
+            },
+        )
+    return service
+
+
+PaymentDependency = Annotated[PaymentService, Depends(get_payment_service)]
+
+
+@router.post("/payments/checkout", response_model=CheckoutSessionResponse)
+async def start_payment(
+    payload: StartPaymentRequest,
+    actor: BillingScopeDependency,
+    service: PaymentDependency,
+) -> CheckoutSessionResponse:
+    """Open a Paystack checkout for an outstanding invoice."""
+    try:
+        record = await service.start_invoice_payment(
+            school_id=_school_id(actor),
+            invoice_id=payload.invoice_id,
+            actor_user_id=actor.user_id,
+        )
+    except PaymentError as error:
+        raise public_payment_error(error) from error
+    return CheckoutSessionResponse.from_record(record)
+
+
+@router.post("/payments/{reference}/verify", response_model=PaymentOutcomeResponse)
+async def verify_payment(
+    reference: str,
+    actor: BillingScopeDependency,
+    service: PaymentDependency,
+) -> PaymentOutcomeResponse:
+    """Confirm a payment with Paystack and apply it to the invoice."""
+    _school_id(actor)
+    try:
+        outcome = await service.verify_reference(reference)
+    except PaymentError as error:
+        raise public_payment_error(error) from error
+    return PaymentOutcomeResponse.from_record(outcome)
+
+
+@router.post("/payments/webhook", response_model=WebhookAckResponse, include_in_schema=True)
+async def paystack_webhook(
+    request: Request,
+    service: PaymentDependency,
+) -> WebhookAckResponse:
+    """Receive a Paystack callback.
+
+    Unauthenticated by design — the caller is Paystack. Trust comes from the
+    HMAC-SHA512 signature over the raw body, and every event is de-duplicated
+    before it can move money.
+    """
+    body = await request.body()
+    try:
+        outcome = await service.handle_webhook(
+            payload=body,
+            signature=request.headers.get("x-paystack-signature"),
+        )
+    except InvalidWebhookSignatureError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": error.code, "message": error.public_message},
+        ) from error
+    except PaymentError as error:
+        raise public_payment_error(error) from error
+    return WebhookAckResponse(received=True, applied=outcome is not None)
+
+
+def public_payment_error(error: PaymentError) -> HTTPException:
+    status_code = status.HTTP_400_BAD_REQUEST
+    if isinstance(error, PaymentNotFoundError):
+        status_code = status.HTTP_404_NOT_FOUND
+    elif isinstance(error, PaymentProviderUnavailableError):
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif isinstance(error, PaymentProviderRejectedError):
+        status_code = status.HTTP_502_BAD_GATEWAY
+    elif isinstance(error, InvoiceNotPayableError | NoReusablePaymentMethodError):
+        status_code = status.HTTP_409_CONFLICT
+    elif isinstance(error, MissingBillingContactError):
+        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": error.code, "message": error.public_message},
+    )
 
 
 def _school_id(actor: PermissionSnapshot) -> UUID:

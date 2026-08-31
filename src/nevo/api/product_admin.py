@@ -47,6 +47,7 @@ from nevo.db.models.product import (
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
+from nevo.retention.anonymisation import anonymise_student
 
 router = APIRouter(prefix="/api/v1", tags=["school administration"])
 SearchQuery = Annotated[str | None, Query(max_length=100)]
@@ -600,18 +601,7 @@ async def anonymize_student(
     student = await session.get(User, student_id)
     if student is None or student.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Student not found")
-    suffix = secrets.token_hex(8)
-    student.first_name = "Former"
-    student.last_name = "Student"
-    student.email = None
-    student.login_identifier = f"deleted-{suffix}"
-    student.password_hash = None
-    student.pin_hash = None
-    student.baseline_profile = {}
-    student.engine_config = {}
-    student.preferences = {}
-    student.status = UserStatus.DEACTIVATED
-    student.deactivated_at = datetime.now(UTC)
+    anonymise_student(student, now=datetime.now(UTC))
     await session.commit()
 
 

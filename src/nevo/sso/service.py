@@ -348,7 +348,7 @@ class SsoService:
         self,
         *,
         school_id: UUID,
-        triggered_by_user_id: UUID,
+        triggered_by_user_id: UUID | None,
     ) -> RosterSyncResult:
         """Manual sync from the admin dashboard, in the actor's own school.
 

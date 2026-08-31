@@ -39,9 +39,12 @@ from nevo.ask_nevo.wiring import build_ask_nevo_service
 from nevo.attention_flags.wiring import build_attention_flag_detection_service
 from nevo.auth.config import AuthSettings
 from nevo.auth.wiring import build_auth_service, build_credential_hasher
+from nevo.billing.issuance import InvoiceIssuanceService
 from nevo.billing.wiring import build_billing_service
 from nevo.consent.config import ConsentSettings
+from nevo.consent.delivery import SmsSettings, TermiiSmsDelivery
 from nevo.consent.wiring import build_consent_service
+from nevo.consent.worker import ConsentDeliveryWorker
 from nevo.content_parsing.wiring import build_content_parsing_service
 from nevo.core.config import get_settings
 from nevo.db.session import create_engine, create_session_factory
@@ -61,13 +64,18 @@ from nevo.mastery.wiring import build_mastery_service
 from nevo.notifications.email import EmailSettings, ResendEmailDelivery
 from nevo.notifications.worker import NotificationEmailWorker
 from nevo.ops.config import OpsSettings
+from nevo.ops.jobs import ScheduledJobRunner
+from nevo.ops.scheduled_jobs import build_scheduled_jobs
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
 from nevo.partner_inquiries.wiring import build_partner_inquiry_service
+from nevo.payments.wiring import build_payment_service
 from nevo.permissions.wiring import build_permission_service
+from nevo.retention.service import RetentionService
 from nevo.scheduler.wiring import build_scheduler_service
 from nevo.signal_events.wiring import build_signal_ingestion_service
 from nevo.sso.config import SsoSettings
 from nevo.sso.wiring import build_sso_service
+from nevo.storage.wiring import build_lesson_media_service
 from nevo.teacher_assignments.wiring import build_teacher_assignment_service
 
 logger = logging.getLogger(__name__)
@@ -98,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         session_pepper=auth_settings.auth_session_pepper.get_secret_value(),
     )
     app.state.billing_service = build_billing_service(sessions)
+    app.state.payment_service = build_payment_service(sessions)
     app.state.teacher_assignment_service = build_teacher_assignment_service(sessions)
     consent_settings = ConsentSettings()
     app.state.consent_service = build_consent_service(
@@ -105,6 +114,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         token_pepper=auth_settings.auth_session_pepper.get_secret_value(),
         public_base_url=str(consent_settings.public_base_url),
     )
+    app.state.sms_delivery = TermiiSmsDelivery(SmsSettings())
+    app.state.consent_delivery_worker = ConsentDeliveryWorker(
+        sessions=sessions,
+        email=app.state.email_delivery,
+        sms=app.state.sms_delivery,
+    )
+    app.state.consent_delivery_worker.start()
     app.state.ai_gateway = build_ai_gateway(
         sessions,
         AiGatewaySettings(),
@@ -126,6 +142,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.ai_gateway,
     )
+    app.state.lesson_media_service = build_lesson_media_service()
     app.state.post_lesson_profile_update_service = build_post_lesson_profile_update_service(
         sessions,
         app.state.ai_gateway,
@@ -156,6 +173,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.partner_inquiry_service = build_partner_inquiry_service(
         sessions,
     )
+    app.state.retention_service = RetentionService(sessions)
+    app.state.scheduled_job_runner = ScheduledJobRunner(
+        sessions=sessions,
+        jobs=build_scheduled_jobs(
+            sessions=sessions,
+            retention_service=app.state.retention_service,
+            scheduler_service=app.state.scheduler_service,
+            sso_service=app.state.sso_service,
+            payment_service=app.state.payment_service,
+            issuance_service=InvoiceIssuanceService(sessions),
+        ),
+    )
+    app.state.scheduled_job_runner.start()
     ops_settings = OpsSettings()
     app.state.self_ping_loop = build_self_ping_loop(ops_settings)
     app.state.self_ping_loop.start()
@@ -165,6 +195,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await app.state.notification_email_worker.stop()
+        await app.state.consent_delivery_worker.stop()
+        await app.state.scheduled_job_runner.stop()
         await app.state.post_lesson_worker.stop()
         await app.state.heartbeat_loop.stop()
         await app.state.self_ping_loop.stop()

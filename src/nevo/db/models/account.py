@@ -269,6 +269,10 @@ class User(TimestampMixin, Base):
         default=UserStatus.ACTIVE,
         server_default=UserStatus.ACTIVE.value,
     )
+    anonymised_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     deactivated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

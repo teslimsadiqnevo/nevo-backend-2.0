@@ -21,6 +21,8 @@ from nevo.db.models.billing import (
     Contract,
     ExchangeRate,
     Invoice,
+    PaymentTransaction,
+    PaymentWebhookEvent,
     StepUpSchedule,
 )
 from nevo.db.models.consent import (
@@ -70,6 +72,7 @@ from nevo.db.models.product import (
     UploadSourceBlob,
     UserConnection,
 )
+from nevo.db.models.scheduled_job import ScheduledJobRun
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.sso import (
     RosterSyncIssue,
@@ -130,10 +133,13 @@ __all__ = [
     "ParentLink",
     "PartnerInquiry",
     "PasswordResetToken",
+    "PaymentTransaction",
+    "PaymentWebhookEvent",
     "PostLessonProcessing",
     "RosterSyncIssue",
     "RosterSyncRun",
     "ScaffoldProblemLog",
+    "ScheduledJobRun",
     "School",
     "SchoolInvitation",
     "SchoolSsoConfiguration",

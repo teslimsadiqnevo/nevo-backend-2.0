@@ -50,6 +50,25 @@ and school slug remain in `school_sso_configurations`.
   `Nevo <noreply@nevolearning.com>`.
 - `EMAIL_FRONTEND_BASE_URL`: used in invitation and password-reset links.
 
+## Lesson audio and storage
+
+- `YARNGPT_API_KEY`: production YarnGPT API key.
+- `YARNGPT_API_URL=https://yarngpt.ai/api/v1/tts`.
+- `YARNGPT_VOICE=Idera`: voice sent to YarnGPT.
+- `SUPABASE_URL`: project API URL, for example
+  `https://your-project.supabase.co`. This is not the PostgreSQL connection URL.
+- `SUPABASE_SERVICE_ROLE_KEY`: server-only service-role key used to inspect and
+  upload objects. Never expose this value to the frontend.
+- `SUPABASE_STORAGE_BUCKET=lesson-media`.
+- `SUPABASE_STORAGE_PUBLIC=true`: required by the current direct-playback
+  contract. Create `lesson-media` as a public bucket so the persisted
+  `audioUrl` can be played by a browser without putting a service credential in
+  the client. A private bucket requires a future signed-playback endpoint.
+
+Audio is generated during lesson parsing, stored as MP3, and keyed by a digest
+of the voice and normalized script. Re-parsing identical narration reuses the
+existing object instead of paying for another generation.
+
 ## Commands
 
 Build: `bash scripts/render-build.sh`

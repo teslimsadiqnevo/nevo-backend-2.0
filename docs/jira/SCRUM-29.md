@@ -35,7 +35,7 @@ Implemented the backend slice for Claude-backed lesson parsing.
 - `lesson_segments.calculation_variant` stores the co-construction payload.
 - Calculation steps are validated for prompt and expected input shape.
 - Malformed calculation variants fall back to teacher review.
-- Each step receives a `narrationAudio` placeholder with a stable TTS contract:
+- Each step receives a generated `narrationAudio` object with a stable TTS contract:
   - `script`
   - `audioUrl`
   - `durationMs`
@@ -43,7 +43,15 @@ Implemented the backend slice for Claude-backed lesson parsing.
 
 ## TTS and Storage
 
-Actual audio generation and storage are intentionally placeholder-backed until SCRUM-50 confirms the storage/TTS provider. The stored JSON shape is already ready for frontend playback once `audioUrl` is populated.
+YarnGPT generates MP3 narration for segment audio and co-construction steps.
+The backend uploads each result to the configured Supabase Storage bucket and
+persists the playable `audioUrl`. Objects use a content-addressed path, so the
+same voice and script reuse the existing audio. Provider or upload failures do
+not discard the lesson: the segment is marked for teacher review with an audio
+generation failure reason.
+
+The current browser playback contract requires a public `lesson-media` bucket.
+The Supabase service-role key remains server-only.
 
 ## Fallback
 

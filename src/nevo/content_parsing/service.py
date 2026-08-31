@@ -1,11 +1,13 @@
 import json
 import re
 from collections.abc import Iterable
+from dataclasses import replace
 from uuid import UUID
 
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
+from nevo.audio.service import AudioGenerationError, AudioGenerationService
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
@@ -33,9 +35,11 @@ class ContentParsingService:
         *,
         repository: SqlAlchemyContentParsingRepository,
         ai_gateway: AiGatewayService,
+        audio_generation: AudioGenerationService | None = None,
     ) -> None:
         self._repository = repository
         self._ai_gateway = ai_gateway
+        self._audio_generation = audio_generation
 
     async def parse(
         self,
@@ -92,9 +96,15 @@ class ContentParsingService:
                     )
                 )
 
+        normalized_segments = [_normalize_segment(segment) for segment in segments]
+        if self._audio_generation is not None and self._audio_generation.configured:
+            normalized_segments = [
+                await self._generate_segment_audio(segment) for segment in normalized_segments
+            ]
+
         parsed = ParsedLesson(
             title=request.title,
-            segments=tuple(_normalize_segment(segment) for segment in segments),
+            segments=tuple(normalized_segments),
             review_notes=tuple(review_notes),
             confirmation_summary=_confirmation_summary(segments),
             gemini_call_count=ai_call_count,
@@ -104,6 +114,56 @@ class ContentParsingService:
             request=request,
             parsed=parsed,
             requested_by_user_id=requested_by_user_id,
+        )
+
+    async def _generate_segment_audio(
+        self,
+        segment: ParsedLessonSegment,
+    ) -> ParsedLessonSegment:
+        generator = self._audio_generation
+        if generator is None:
+            return segment
+        reasons = list(segment.review_reasons)
+        needs_review = segment.needs_review
+        audio_variant = segment.audio_variant
+        calculation_variant = segment.calculation_variant
+
+        if audio_variant is not None:
+            try:
+                audio_variant = await generator.generate(
+                    str(audio_variant.get("script") or segment.body)
+                )
+            except AudioGenerationError:
+                needs_review = True
+                reasons.append("audio_generation_failed")
+
+        if calculation_variant is not None:
+            calculation_variant = dict(calculation_variant)
+            generated_steps: list[dict[str, object]] = []
+            for step in _dict_list(calculation_variant.get("steps")):
+                generated_step = dict(step)
+                narration = _dict_or_none(step.get("narrationAudio"))
+                if narration is not None:
+                    try:
+                        generated_audio = await generator.generate(
+                            str(narration.get("script") or step.get("prompt") or "")
+                        )
+                        generated_step["narrationAudio"] = {
+                            **generated_audio,
+                            "stepId": str(step.get("stepId") or ""),
+                        }
+                    except AudioGenerationError:
+                        needs_review = True
+                        reasons.append("calculation_audio_generation_failed")
+                generated_steps.append(generated_step)
+            calculation_variant["steps"] = generated_steps
+
+        return replace(
+            segment,
+            audio_variant=audio_variant,
+            calculation_variant=calculation_variant,
+            needs_review=needs_review,
+            review_reasons=tuple(dict.fromkeys(reasons)),
         )
 
 
@@ -192,9 +252,7 @@ def _segment_from_payload(
     body = str(item.get("body") or item.get("text") or "").strip()
     if not body:
         body = str(item.get("title") or "Review this segment.").strip()
-    raw_modalities = item.get("availableModalities") or item.get(
-        "available_modalities"
-    )
+    raw_modalities = item.get("availableModalities") or item.get("available_modalities")
     modalities = _modalities(raw_modalities)
     calculation_variant = _dict_or_none(item.get("calculation_variant"))
     review_reasons = list(_string_list(item.get("review_reasons")))
@@ -209,8 +267,7 @@ def _segment_from_payload(
             review_reasons.append(calculation_review)
             needs_review = True
     checkpoints = _dict_list(
-        item.get("comprehension_checkpoints")
-        or item.get("comprehensionCheckpoints")
+        item.get("comprehension_checkpoints") or item.get("comprehensionCheckpoints")
     )
     return ParsedLessonSegment(
         segment_key=str(item.get("segment_key") or f"segment-{sequence_order}"),

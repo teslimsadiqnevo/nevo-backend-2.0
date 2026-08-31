@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.ai_gateway.service import AiGatewayService
+from nevo.audio import AudioGenerationService, AudioSettings
 from nevo.content_parsing.repositories import SqlAlchemyContentParsingRepository
 from nevo.content_parsing.service import ContentParsingService
 
@@ -12,4 +13,5 @@ def build_content_parsing_service(
     return ContentParsingService(
         repository=SqlAlchemyContentParsingRepository(sessions),
         ai_gateway=ai_gateway,
+        audio_generation=AudioGenerationService(AudioSettings()),
     )

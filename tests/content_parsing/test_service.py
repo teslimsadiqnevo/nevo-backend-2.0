@@ -46,8 +46,7 @@ class FakeRepository:
                 "lesson_id": uuid4(),
                 "parse_run_id": uuid4(),
                 "status": ContentParseStatus.COMPLETED_WITH_REVIEW
-                if parsed.review_notes
-                or any(segment.needs_review for segment in parsed.segments)
+                if parsed.review_notes or any(segment.needs_review for segment in parsed.segments)
                 else ContentParseStatus.COMPLETED,
                 "title": parsed.title,
                 "segment_count": len(parsed.segments),
@@ -59,6 +58,26 @@ class FakeRepository:
                 "segments": parsed.segments,
             },
         )()
+
+
+class FakeAudioGeneration:
+    configured = True
+
+    def __init__(self) -> None:
+        self.scripts: list[str] = []
+
+    async def generate(self, script: str) -> dict[str, object]:
+        self.scripts.append(script)
+        return {
+            "script": script,
+            "audioUrl": f"https://audio.example/{len(self.scripts)}.mp3",
+            "storagePath": f"audio/{len(self.scripts)}.mp3",
+            "durationMs": 0,
+            "provider": "yarngpt",
+            "voice": "Idera",
+            "format": "mp3",
+            "requiresAuthentication": False,
+        }
 
 
 @pytest.mark.asyncio
@@ -125,6 +144,40 @@ async def test_parses_ai_segments_and_normalizes_calculation_variant() -> None:
     assert segment.calculation_variant is not None
     steps = segment.calculation_variant["steps"]
     assert steps[0]["narrationAudio"]["provider"] == "tts_provider_tbd"
+
+
+@pytest.mark.asyncio
+async def test_generates_segment_audio_when_configured() -> None:
+    repository = FakeRepository()
+    audio = FakeAudioGeneration()
+    service = ContentParsingService(
+        repository=repository,
+        ai_gateway=FakeGateway(
+            """
+            {"segments": [{
+              "segment_key": "audio-1",
+              "content_type": "explanatory_text",
+              "body": "Equivalent fractions have the same value.",
+              "availableModalities": ["text", "audio"]
+            }]}
+            """
+        ),
+        audio_generation=audio,  # type: ignore[arg-type]
+    )
+
+    await service.parse(
+        request=ContentParseRequest(
+            title="Fractions",
+            source_type=LessonSourceType.TEXT,
+            source_text="Equivalent fractions have the same value.",
+        ),
+        requested_by_user_id=uuid4(),
+    )
+
+    segment = repository.parsed.segments[0]  # type: ignore[union-attr]
+    assert segment.audio_variant is not None
+    assert segment.audio_variant["provider"] == "yarngpt"
+    assert segment.audio_variant["audioUrl"] == "https://audio.example/1.mp3"
 
 
 @pytest.mark.asyncio

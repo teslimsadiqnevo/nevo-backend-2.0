@@ -37,6 +37,8 @@
   student test accounts using the active deployment peppers.
 - Made first-use Microsoft and Google SSO resolve student/teacher roles from
   provider education profiles instead of provider-specific hardcoded defaults.
+- Added YarnGPT lesson narration generation with content-addressed Supabase
+  Storage caching for segment audio and calculation-step narration.
 
 ## Current frontend contract priority
 
@@ -47,6 +49,6 @@ Microsoft/Google sign-in, directory sync, Drive imports, and email delivery need
 real provider credentials in the deployment environment. The backend reports
 explicit unavailable or needs-attention states until those credentials exist.
 
-The remaining generated-content placeholder is the documented TTS contract:
-audio variants contain scripts but no `audioUrl` until a storage/TTS provider is
-selected. No API route is otherwise stubbed with `501` or `NotImplemented`.
+No API route is stubbed with `501` or `NotImplemented`. Generated visual lesson
+images still need a dedicated image provider and storage pipeline; invalid or
+missing image variants are deliberately removed and flagged for teacher review.

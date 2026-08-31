@@ -19,6 +19,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.content import get_content_parsing_service
@@ -34,6 +35,7 @@ from nevo.api.response_models import (
     AssignmentCreatedResponse,
     AssignmentResponse,
     AssignmentUpdatedResponse,
+    BatchUploadResponse,
     ConnectionResponse,
     LessonDetailResponse,
     LessonProgressResponse,
@@ -74,7 +76,10 @@ from nevo.sso.service import SsoService
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 ParsingService = Annotated[ContentParsingService, Depends(get_content_parsing_service)]
 LessonUpload = Annotated[UploadFile, File()]
+BatchLessonUpload = Annotated[list[UploadFile], File()]
 UploadScope = Annotated[str, Form(pattern="^(lesson|unit|term)$")]
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_BATCH_UPLOAD_FILES = 20
 UploadSubject = Annotated[str | None, Form(max_length=120)]
 StudentFilter = Annotated[UUID | None, Query(alias="studentId")]
 ClassFilter = Annotated[UUID | None, Query(alias="classId")]
@@ -154,6 +159,7 @@ def _lesson_summary(lesson: Lesson, *, assignment_count: int = 0) -> dict[str, o
         "reviewSegmentCount": lesson.review_segment_count,
         "subject": lesson.subject,
         "assignmentCount": assignment_count,
+        "estimatedMinutes": lesson.estimated_minutes,
         "createdAt": lesson.created_at,
     }
 
@@ -273,6 +279,7 @@ async def lesson_detail(
                 "comprehensionCheckpoints": item.comprehension_checkpoints,
                 "needsReview": item.needs_review,
                 "reviewReasons": item.review_reasons,
+                "estimatedMinutes": item.estimated_minutes,
             }
             for item in segments
         ],
@@ -369,23 +376,49 @@ async def create_assignments(
         item.school_id != actor.school_id for item in lessons_by_id.values()
     ):
         raise HTTPException(status_code=404, detail="Lesson not found")
-    created = []
-    for lesson_id in payload.lesson_ids:
-        for student_id in student_ids:
-            record = LessonAssignment(
-                lesson_id=lesson_id,
-                student_id=student_id,
-                teacher_id=actor.id,
-                class_id=payload.class_id,
-                assignment_type="class" if payload.class_id else "student",
-                due_at=payload.due_at,
-                available_from=payload.available_from,
+    rows = [
+        {
+            "lesson_id": lesson_id,
+            "student_id": student_id,
+            "teacher_id": actor.id,
+            "class_id": payload.class_id,
+            "assignment_type": "class" if payload.class_id else "student",
+            "due_at": payload.due_at,
+            "available_from": payload.available_from,
+        }
+        for lesson_id in payload.lesson_ids
+        for student_id in student_ids
+    ]
+    # Idempotent on (lesson, student, availableFrom): a client retrying a
+    # partially failed fan-out re-sends rows that already landed, and those
+    # must not become duplicates. Newly inserted ids come back from the
+    # insert; the rest are read back, so the caller always receives the full
+    # set of assignments its request is responsible for.
+    inserted = (
+        await session.scalars(
+            insert(LessonAssignment)
+            .values(rows)
+            .on_conflict_do_nothing(
+                index_elements=["lesson_id", "student_id", "available_from"],
             )
-            session.add(record)
-            await session.flush()
-            created.append(str(record.id))
+            .returning(LessonAssignment.id)
+        )
+    ).all()
+    existing = (
+        await session.scalars(
+            select(LessonAssignment.id).where(
+                LessonAssignment.lesson_id.in_(payload.lesson_ids),
+                LessonAssignment.student_id.in_(student_ids),
+                LessonAssignment.available_from.is_not_distinct_from(payload.available_from),
+            )
+        )
+    ).all()
     await session.commit()
-    return {"assignmentIds": created, "createdCount": len(created)}
+    return {
+        "assignmentIds": [str(item) for item in existing],
+        "createdCount": len(inserted),
+        "duplicateCount": len(existing) - len(inserted),
+    }
 
 
 @router.patch("/assignments/{assignment_id}", response_model=AssignmentUpdatedResponse)
@@ -783,10 +816,35 @@ async def staged_file_upload(
     scope: UploadScope = "lesson",
     subject: UploadSubject = None,
 ) -> dict[str, object]:
+    return await _ingest_one_file(
+        file=file,
+        filename=file.filename or "lesson.txt",
+        scope=scope,
+        subject=subject,
+        principal=principal,
+        session=session,
+        parser=parser,
+    )
+
+
+async def _ingest_one_file(
+    *,
+    file: UploadFile,
+    filename: str,
+    scope: str,
+    subject: str | None,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    parser: ParsingService,
+) -> dict[str, object]:
+    """Parse one uploaded file into a staged upload job.
+
+    Shared by the single-file and batch routes so both apply the same size
+    limit, text extraction and source retention.
+    """
     content = await file.read()
-    if len(content) > 50 * 1024 * 1024:
+    if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Lesson file exceeds 50 MB")
-    filename = file.filename or "lesson.txt"
     source_text = _extract_text(filename, content)
     if not source_text.strip():
         raise HTTPException(status_code=400, detail="No readable lesson text was found")
@@ -813,6 +871,64 @@ async def staged_file_upload(
     )
     await session.commit()
     return result
+
+
+@router.post(
+    "/uploads/batch",
+    response_model=BatchUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def staged_batch_upload(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    parser: ParsingService,
+    files: BatchLessonUpload,
+    scope: UploadScope = "lesson",
+    subject: UploadSubject = None,
+) -> dict[str, object]:
+    """Ingest several lesson files in one request.
+
+    Each file is parsed independently and reports its own outcome. A file that
+    is too large or has no readable text is rejected on its own line rather
+    than failing the whole batch, so the picker never has to guess which of a
+    dozen files landed.
+    """
+    if not files:
+        raise HTTPException(status_code=422, detail="At least one file is required")
+    if len(files) > MAX_BATCH_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"A batch is limited to {MAX_BATCH_UPLOAD_FILES} files",
+        )
+    results: list[dict[str, object]] = []
+    for file in files:
+        filename = file.filename or "lesson.txt"
+        try:
+            result = await _ingest_one_file(
+                file=file,
+                filename=filename,
+                scope=scope,
+                subject=subject,
+                principal=principal,
+                session=session,
+                parser=parser,
+            )
+        except HTTPException as error:
+            results.append(
+                {
+                    "filename": filename,
+                    "accepted": False,
+                    "error": str(error.detail),
+                }
+            )
+        else:
+            results.append({"filename": filename, "accepted": True, **result})
+    accepted = sum(1 for item in results if item["accepted"])
+    return {
+        "uploads": results,
+        "acceptedCount": accepted,
+        "rejectedCount": len(results) - accepted,
+    }
 
 
 @router.post(
@@ -1017,6 +1133,12 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
 
 
 def _upload_structure(parsed) -> dict[str, object]:
+    """Shape a parse result for the structure review screen.
+
+    ``lessons`` is the real structure: a unit or term upload can become
+    several lessons. ``lessonId`` and ``modules`` mirror the first lesson so
+    single-lesson clients written against the old shape keep working.
+    """
     segment_ids = [str(item.segment_key) for item in parsed.segments]
     modules = [
         {
@@ -1028,7 +1150,16 @@ def _upload_structure(parsed) -> dict[str, object]:
         }
         for index in range(0, len(segment_ids), 5)
     ]
+    lessons = [
+        {
+            "lessonId": str(parsed.lesson_id),
+            "title": parsed.title,
+            "sequenceOrder": 1,
+            "modules": modules,
+        }
+    ]
     return {
+        "lessons": lessons,
         "lessonId": str(parsed.lesson_id),
         "modules": modules,
         "reviewNotes": list(parsed.review_notes),

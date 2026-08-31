@@ -4,6 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nevo.domain.intelligence.vocabulary import (
+    SegmentReviewReason,
+    UploadStage,
+    UploadStatus,
+)
+
 
 def _camel(value: str) -> str:
     head, *tail = value.split("_")
@@ -198,6 +204,9 @@ class LessonSummaryResponse(CamelResponse):
     review_segment_count: int
     subject: str | None = None
     assignment_count: int = 0
+    #: Sum of the lesson's segment estimates, so a list view can show a
+    #: duration without fetching every segment.
+    estimated_minutes: int = 0
     created_at: datetime
 
 
@@ -211,7 +220,10 @@ class LessonSegmentResponse(CamelResponse):
     available_modalities: list[str]
     comprehension_checkpoints: list[dict[str, object]]
     needs_review: bool = False
-    review_reasons: list[str] = Field(default_factory=list)
+    review_reasons: list[SegmentReviewReason] = Field(default_factory=list)
+    #: Estimated time to work through this segment, for the review screen's
+    #: per-segment and total minute figures.
+    estimated_minutes: int = 0
 
 
 class LessonModuleResponse(CamelResponse):
@@ -243,6 +255,9 @@ class AssignmentResponse(CamelResponse):
 class AssignmentCreatedResponse(CamelResponse):
     assignment_ids: list[UUID]
     created_count: int
+    #: Rows the request re-sent that already existed. A retry of a partially
+    #: failed fan-out reports 0 created and N duplicate, rather than erroring.
+    duplicate_count: int = 0
 
 
 class AssignmentUpdatedResponse(CamelResponse):
@@ -370,14 +385,38 @@ class OfflineDownloadResponse(CamelResponse):
 
 class UploadCreatedResponse(CamelResponse):
     upload_id: UUID
-    status: str
-    stage: str
+    status: UploadStatus
+    stage: UploadStage
+
+
+class BatchUploadItemResponse(CamelResponse):
+    """One file's outcome inside a batch upload."""
+
+    filename: str
+    accepted: bool
+    upload_id: UUID | None = None
+    status: UploadStatus | None = None
+    stage: UploadStage | None = None
+    #: Why this file was not accepted. Populated only when accepted is false.
+    error: str | None = None
+
+
+class BatchUploadResponse(CamelResponse):
+    """Result of submitting several files at once.
+
+    One bad file does not fail the batch: each file reports its own outcome so
+    the picker can show which landed and which need attention.
+    """
+
+    uploads: list[BatchUploadItemResponse]
+    accepted_count: int
+    rejected_count: int
 
 
 class UploadStatusResponse(CamelResponse):
     id: UUID
-    status: str
-    stage: str
+    status: UploadStatus
+    stage: UploadStage
     structure: "UploadStructureDocument"
     error: str | None
 
@@ -390,8 +429,27 @@ class UploadModuleDocument(CamelResponse):
     preview: str | None = None
 
 
-class UploadStructureDocument(CamelResponse):
+class UploadLessonDocument(CamelResponse):
+    """One lesson produced by an upload.
+
+    A unit or term scope can legitimately parse into several lessons; this is
+    the unit that carries its own modules.
+    """
+
     lesson_id: UUID
+    title: str
+    sequence_order: int
+    modules: list[UploadModuleDocument] = Field(default_factory=list)
+
+
+class UploadStructureDocument(CamelResponse):
+    #: The full set of lessons this upload produced. A `lesson` scope yields
+    #: one; a `unit` or `term` scope can yield several.
+    lessons: list[UploadLessonDocument] = Field(default_factory=list)
+    #: First lesson's id. Retained so existing single-lesson clients keep
+    #: working; prefer `lessons` for anything that can produce more than one.
+    lesson_id: UUID
+    #: First lesson's modules, retained for the same reason.
     modules: list[UploadModuleDocument]
     review_notes: list[dict[str, object]] = Field(default_factory=list)
 

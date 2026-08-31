@@ -211,6 +211,19 @@ class MessageThreadRead(Base):
 class LessonAssignment(Base):
     __tablename__ = "lesson_assignments"
     __table_args__ = (
+        # Assigning the same lesson to the same student for the same release
+        # time is the same act, however many times it is submitted. A client
+        # retrying a partially failed fan-out must not create a second row.
+        # NULLS NOT DISTINCT so an unscheduled assignment (available_from IS
+        # NULL) collides with itself rather than duplicating freely.
+        Index(
+            "uq_lesson_assignments_lesson_student_release",
+            "lesson_id",
+            "student_id",
+            "available_from",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
         Index("ix_lesson_assignments_student_status", "student_id", "status"),
         Index("ix_lesson_assignments_class_status", "class_id", "status"),
         Index("ix_lesson_assignments_lesson", "lesson_id"),

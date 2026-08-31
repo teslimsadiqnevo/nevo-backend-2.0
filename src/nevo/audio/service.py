@@ -1,9 +1,9 @@
 import hashlib
-from urllib.parse import quote
 
 import httpx
 
 from nevo.audio.config import AudioSettings
+from nevo.storage import StorageError, SupabaseStorage
 
 
 class AudioGenerationError(RuntimeError):
@@ -13,14 +13,18 @@ class AudioGenerationError(RuntimeError):
 class AudioGenerationService:
     def __init__(self, settings: AudioSettings) -> None:
         self._settings = settings
+        key = settings.supabase_service_role_key
+        self._storage = SupabaseStorage(
+            base_url=str(settings.supabase_url) if settings.supabase_url else None,
+            service_role_key=key.get_secret_value() if key else None,
+            bucket=settings.supabase_storage_bucket,
+            public=settings.supabase_storage_public,
+            signed_url_ttl_seconds=settings.supabase_signed_url_ttl_seconds,
+        )
 
     @property
     def configured(self) -> bool:
-        return bool(
-            self._settings.yarngpt_api_key
-            and self._settings.supabase_url
-            and self._settings.supabase_service_role_key
-        )
+        return bool(self._settings.yarngpt_api_key and self._storage.configured)
 
     async def generate(self, script: str) -> dict[str, object]:
         normalized = " ".join(script.split()).strip()[:2_000]
@@ -32,18 +36,25 @@ class AudioGenerationService:
             f"{self._settings.yarngpt_voice}\0{normalized}".encode()
         ).hexdigest()
         object_path = f"audio/yarngpt/{digest}.mp3"
-        if not await self._object_exists(object_path):
-            audio = await self._generate_audio(normalized)
-            await self._upload(object_path, audio)
+        try:
+            if not await self._storage.exists(object_path):
+                audio = await self._generate_audio(normalized)
+                await self._storage.upload(object_path, audio, content_type="audio/mpeg")
+            audio_url = await self._storage.url_for(object_path)
+        except StorageError as error:
+            raise AudioGenerationError(str(error)) from error
         return {
             "script": normalized,
-            "audioUrl": self._object_url(object_path),
+            "audioUrl": audio_url,
             "storagePath": object_path,
             "durationMs": 0,
             "provider": "yarngpt",
             "voice": self._settings.yarngpt_voice,
             "format": "mp3",
-            "requiresAuthentication": not self._settings.supabase_storage_public,
+            "requiresAuthentication": False,
+            "urlExpiresInSeconds": (
+                None if self._storage.public else self._storage.signed_url_ttl_seconds
+            ),
         }
 
     async def _generate_audio(self, text: str) -> bytes:
@@ -65,47 +76,3 @@ class AudioGenerationService:
                 f"YarnGPT generation failed with status {response.status_code}"
             )
         return response.content
-
-    async def _object_exists(self, object_path: str) -> bool:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.head(
-                self._storage_object_url(object_path),
-                headers=self._storage_headers(),
-            )
-        return response.is_success
-
-    async def _upload(self, object_path: str, content: bytes) -> None:
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                self._storage_object_url(object_path),
-                headers={
-                    **self._storage_headers(),
-                    "Content-Type": "audio/mpeg",
-                    "x-upsert": "true",
-                },
-                content=content,
-            )
-        if response.is_error:
-            raise AudioGenerationError(
-                f"Supabase audio upload failed with status {response.status_code}"
-            )
-
-    def _storage_headers(self) -> dict[str, str]:
-        key = self._settings.supabase_service_role_key
-        if key is None:
-            raise AudioGenerationError("Supabase Storage is not configured")
-        value = key.get_secret_value()
-        return {"apikey": value, "Authorization": f"Bearer {value}"}
-
-    def _storage_object_url(self, object_path: str) -> str:
-        base = str(self._settings.supabase_url).rstrip("/")
-        bucket = quote(self._settings.supabase_storage_bucket, safe="")
-        path = quote(object_path, safe="/")
-        return f"{base}/storage/v1/object/{bucket}/{path}"
-
-    def _object_url(self, object_path: str) -> str:
-        base = str(self._settings.supabase_url).rstrip("/")
-        bucket = quote(self._settings.supabase_storage_bucket, safe="")
-        path = quote(object_path, safe="/")
-        visibility = "public/" if self._settings.supabase_storage_public else ""
-        return f"{base}/storage/v1/object/{visibility}{bucket}/{path}"

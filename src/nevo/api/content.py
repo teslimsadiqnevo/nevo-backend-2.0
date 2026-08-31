@@ -18,6 +18,7 @@ from nevo.domain.intelligence.vocabulary import (
     LessonContentType,
     LessonSourceType,
 )
+from nevo.storage import InvalidMediaPathError, LessonMediaService, StorageError
 
 router = APIRouter(prefix="/api/content", tags=["content"])
 
@@ -147,6 +148,39 @@ ContentParsingDependency = Annotated[
 ]
 
 
+def get_lesson_media_service(request: Request) -> LessonMediaService:
+    service = getattr(request.app.state, "lesson_media_service", None)
+    if not isinstance(service, LessonMediaService) or not service.configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "service_unavailable",
+                "message": "Lesson media storage is not configured.",
+            },
+        )
+    return service
+
+
+LessonMediaDependency = Annotated[
+    LessonMediaService,
+    Depends(get_lesson_media_service),
+]
+
+
+class MediaUrlRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    storage_path: str = Field(alias="storagePath", min_length=1, max_length=512)
+
+
+class MediaUrlResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    storage_path: str = Field(alias="storagePath")
+    url: str
+    expires_in_seconds: int | None = Field(alias="expiresInSeconds")
+
+
 @router.post("/parse", response_model=ParseContentResponse)
 async def parse_content(
     payload: ParseContentRequest,
@@ -167,3 +201,34 @@ async def parse_content(
         requested_by_user_id=principal.user_id,
     )
     return ParseContentResponse.from_result(result)
+
+
+@router.post("/media/url", response_model=MediaUrlResponse)
+async def refresh_media_url(
+    payload: MediaUrlRequest,
+    principal: PrincipalDependency,
+    service: LessonMediaDependency,
+) -> MediaUrlResponse:
+    """Re-issue a playable URL for stored lesson audio or imagery.
+
+    Public buckets return the stable public URL. Private buckets return a fresh
+    signed URL, which is how a lesson parsed before the last expiry stays
+    playable.
+    """
+    try:
+        url, expires_in_seconds = await service.url_for(payload.storage_path)
+    except InvalidMediaPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_storage_path", "message": str(error)},
+        ) from error
+    except StorageError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "storage_unavailable", "message": str(error)},
+        ) from error
+    return MediaUrlResponse(
+        storage_path=payload.storage_path,
+        url=url,
+        expires_in_seconds=expires_in_seconds,
+    )

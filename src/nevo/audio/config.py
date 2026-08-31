@@ -35,3 +35,7 @@ class AudioSettings(BaseSettings):
         default=True,
         validation_alias="SUPABASE_STORAGE_PUBLIC",
     )
+    supabase_signed_url_ttl_seconds: int = Field(
+        default=604_800,
+        validation_alias="SUPABASE_SIGNED_URL_TTL_SECONDS",
+    )

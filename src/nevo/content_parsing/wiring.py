@@ -4,6 +4,7 @@ from nevo.ai_gateway.service import AiGatewayService
 from nevo.audio import AudioGenerationService, AudioSettings
 from nevo.content_parsing.repositories import SqlAlchemyContentParsingRepository
 from nevo.content_parsing.service import ContentParsingService
+from nevo.visuals import EducationalImageService, VisualGenerationSettings
 
 
 def build_content_parsing_service(
@@ -14,4 +15,5 @@ def build_content_parsing_service(
         repository=SqlAlchemyContentParsingRepository(sessions),
         ai_gateway=ai_gateway,
         audio_generation=AudioGenerationService(AudioSettings()),
+        visual_generation=EducationalImageService(VisualGenerationSettings()),
     )

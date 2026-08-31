@@ -22,6 +22,7 @@ from nevo.domain.intelligence.vocabulary import (
     LessonContentType,
     LessonSourceType,
 )
+from nevo.visuals import EducationalImageService, VisualGenerationError
 
 MAX_CHUNK_CHARS = 24_000
 PROMPT_NAME = "content_parse.default"
@@ -36,10 +37,12 @@ class ContentParsingService:
         repository: SqlAlchemyContentParsingRepository,
         ai_gateway: AiGatewayService,
         audio_generation: AudioGenerationService | None = None,
+        visual_generation: EducationalImageService | None = None,
     ) -> None:
         self._repository = repository
         self._ai_gateway = ai_gateway
         self._audio_generation = audio_generation
+        self._visual_generation = visual_generation
 
     async def parse(
         self,
@@ -96,7 +99,12 @@ class ContentParsingService:
                     )
                 )
 
-        normalized_segments = [_normalize_segment(segment) for segment in segments]
+        prepared_segments = []
+        for segment in segments:
+            if self._visual_generation is not None and self._visual_generation.configured:
+                segment = await self._generate_segment_visual(segment)
+            prepared_segments.append(segment)
+        normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
         if self._audio_generation is not None and self._audio_generation.configured:
             normalized_segments = [
                 await self._generate_segment_audio(segment) for segment in normalized_segments
@@ -165,6 +173,33 @@ class ContentParsingService:
             needs_review=needs_review,
             review_reasons=tuple(dict.fromkeys(reasons)),
         )
+
+    async def _generate_segment_visual(
+        self,
+        segment: ParsedLessonSegment,
+    ) -> ParsedLessonSegment:
+        generator = self._visual_generation
+        if generator is None or ContentModality.VISUAL not in segment.available_modalities:
+            return segment
+        requested_prompt = None
+        if segment.visual_variant is not None:
+            requested_prompt = _optional_string(segment.visual_variant.get("prompt"))
+        try:
+            visual = await generator.generate(
+                title=segment.title,
+                lesson_text=segment.body,
+                requested_prompt=requested_prompt,
+            )
+        except VisualGenerationError:
+            return replace(
+                segment,
+                visual_variant=None,
+                needs_review=True,
+                review_reasons=tuple(
+                    dict.fromkeys((*segment.review_reasons, "visual_generation_failed"))
+                ),
+            )
+        return replace(segment, visual_variant=visual)
 
 
 def _source_for_prompt(request: ContentParseRequest) -> str:

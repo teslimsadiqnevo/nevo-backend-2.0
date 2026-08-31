@@ -85,6 +85,7 @@ class AiGatewayService:
             request.variables,
             requester_user_id=request.requester_user_id,
             student_id=request.student_id,
+            sensitive_terms=context.sensitive_terms,
         )
         rendered = self._renderer.render(template, safe_variables)
         priority = SERVICE_PRIORITIES[request.service]
@@ -102,12 +103,14 @@ class AiGatewayService:
                     pseudonym=self._privacy.pseudonym(
                         request.student_id or request.requester_user_id
                     ),
+                    sensitive_terms=context.sensitive_terms,
                 ),
                 user_content=self._privacy.sanitize_text(
                     user_content,
                     pseudonym=self._privacy.pseudonym(
                         request.student_id or request.requester_user_id
                     ),
+                    sensitive_terms=context.sensitive_terms,
                 ),
                 max_output_tokens=request.max_output_tokens,
                 model=request.model,

@@ -9,8 +9,9 @@ from nevo.ai_gateway.entities import (
     PromptTemplate,
 )
 from nevo.ai_gateway.errors import InvalidAiContextError
-from nevo.db.models.account import User
+from nevo.db.models.account import School, User
 from nevo.db.models.ai_gateway import AiGatewayCall, AiPromptTemplate
+from nevo.db.models.consent import ParentLink
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.ai_gateway.vocabulary import AiService
 
@@ -77,11 +78,63 @@ class SqlAlchemyAiCallRepository:
                 )
                 if student is None:
                     raise InvalidAiContextError
+            sensitive_terms = await self._sensitive_terms(
+                session,
+                requester=requester,
+                student_id=resolved_student_id,
+            )
         return AiRequestContext(
             requester_user_id=requester.id,
             school_id=requester.school_id,
             student_id=resolved_student_id,
+            sensitive_terms=tuple(sorted(sensitive_terms)),
         )
+
+    @staticmethod
+    async def _sensitive_terms(
+        session: AsyncSession,
+        *,
+        requester: User,
+        student_id: UUID | None,
+    ) -> set[str]:
+        """Names the guard should strike out of free prose.
+
+        Scoped to the people a prompt can plausibly be about — the requester,
+        the student in question, and that student's parents — rather than the
+        whole school roster, which would mean thousands of rows and a very
+        large alternation regex on every single AI call.
+        """
+        terms: set[str] = set()
+        if requester.school_id is not None:
+            school_name = await session.scalar(
+                select(School.name).where(School.id == requester.school_id)
+            )
+            if school_name:
+                terms.add(school_name)
+
+        subject_ids = [requester.id]
+        if student_id is not None:
+            subject_ids.append(student_id)
+        people = await session.execute(
+            select(User.first_name, User.last_name, User.email).where(
+                User.id.in_(subject_ids)
+            )
+        )
+        for first_name, last_name, email in people:
+            _add_person(terms, first_name, last_name, email)
+
+        if student_id is not None:
+            parents = await session.execute(
+                select(
+                    ParentLink.parent_name,
+                    ParentLink.parent_contact,
+                ).where(ParentLink.student_id == student_id)
+            )
+            for parent_name, parent_contact in parents:
+                for value in (parent_name, parent_contact):
+                    if value:
+                        terms.add(value)
+        return terms
 
     async def record(self, audit: AiCallAudit) -> UUID:
         call_id = uuid4()
@@ -109,3 +162,17 @@ class SqlAlchemyAiCallRepository:
                 )
             )
         return call_id
+
+
+def _add_person(
+    terms: set[str],
+    first_name: str | None,
+    last_name: str | None,
+    email: str | None,
+) -> None:
+    for value in (first_name, last_name, email):
+        if value:
+            terms.add(value)
+    full_name = " ".join(part for part in (first_name, last_name) if part)
+    if full_name:
+        terms.add(full_name)

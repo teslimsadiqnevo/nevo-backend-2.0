@@ -15,6 +15,7 @@ class AiRequestContext:
     requester_user_id: UUID
     school_id: UUID | None
     student_id: UUID | None
+    sensitive_terms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

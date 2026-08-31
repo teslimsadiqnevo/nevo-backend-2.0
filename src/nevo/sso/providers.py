@@ -70,14 +70,26 @@ class MicrosoftSsoProviderClient:
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             profile.raise_for_status()
+            education_profile = await client.get(
+                f"https://graph.microsoft.com/v1.0/education/users/{profile.json()['id']}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"$select": "primaryRole"},
+            )
         body = profile.json()
+        primary_role = (
+            str(education_profile.json().get("primaryRole") or "").casefold()
+            if education_profile.is_success
+            else ""
+        )
         return SsoProviderIdentity(
             provider=SsoProvider.MICROSOFT,
             external_id=str(body["id"]),
             email=str(body.get("mail") or body.get("userPrincipalName")),
             first_name=body.get("givenName"),
             last_name=body.get("surname"),
-            role=UserRole.TEACHER,
+            role=(
+                UserRole.STUDENT if primary_role == "student" else UserRole.TEACHER
+            ),
         )
 
     async def roster_for_school(
@@ -208,6 +220,7 @@ class GoogleSsoProviderClient:
                     "openid email profile "
                     "https://www.googleapis.com/auth/classroom.courses.readonly "
                     "https://www.googleapis.com/auth/classroom.rosters.readonly "
+                    "https://www.googleapis.com/auth/classroom.profile.emails "
                     "https://www.googleapis.com/auth/drive.readonly"
                 ),
                 "state": state,
@@ -246,14 +259,22 @@ class GoogleSsoProviderClient:
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             profile.raise_for_status()
+            classroom_profile = await client.get(
+                "https://classroom.googleapis.com/v1/userProfiles/me",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
         body = profile.json()
+        verified_teacher = bool(
+            classroom_profile.is_success
+            and classroom_profile.json().get("verifiedTeacher")
+        )
         return SsoProviderIdentity(
             provider=SsoProvider.GOOGLE,
             external_id=str(body["sub"]),
             email=str(body["email"]),
             first_name=body.get("given_name"),
             last_name=body.get("family_name"),
-            role=UserRole.STUDENT,
+            role=UserRole.TEACHER if verified_teacher else UserRole.STUDENT,
             refresh_token=token_body.get("refresh_token"),
         )
 

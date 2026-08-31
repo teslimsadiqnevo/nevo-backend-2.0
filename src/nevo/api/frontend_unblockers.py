@@ -308,7 +308,7 @@ async def current_user_profile(
             if school
             else None
         ),
-        subjects=_subjects_for_user(user),
+        subjects=await _subjects_for_user(session, user),
     )
 
 
@@ -1166,9 +1166,33 @@ def _display_name(user: User) -> str:
     return name or user.email or user.login_identifier or "Nevo user"
 
 
-def _subjects_for_user(user: User) -> list[str]:
-    del user
-    return []
+async def _subjects_for_user(session, user: User) -> list[str]:
+    subjects = {
+        str(item).strip()
+        for item in user.preferences.get("subjects", [])
+        if str(item).strip()
+    }
+    query = select(Lesson.subject).where(Lesson.subject.is_not(None))
+    if user.role is UserRole.STUDENT:
+        query = query.join(
+            LessonAssignment,
+            LessonAssignment.lesson_id == Lesson.id,
+        ).where(
+            LessonAssignment.student_id == user.id,
+            LessonAssignment.status != "cancelled",
+        )
+    elif user.role is UserRole.TEACHER:
+        query = query.where(Lesson.created_by_user_id == user.id)
+    elif user.school_id is not None:
+        query = query.where(Lesson.school_id == user.school_id)
+    else:
+        return sorted(subjects, key=str.casefold)
+    subjects.update(
+        str(item).strip()
+        for item in (await session.scalars(query.distinct())).all()
+        if item and str(item).strip()
+    )
+    return sorted(subjects, key=str.casefold)
 
 
 def _uuid(value: str) -> UUID:

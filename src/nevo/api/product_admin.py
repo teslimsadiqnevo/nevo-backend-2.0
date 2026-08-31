@@ -37,7 +37,8 @@ from nevo.api.response_models import (
 from nevo.auth.security import Argon2idCredentialHasher
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.auth import AuthSession
-from nevo.db.models.frontend_support import Notification
+from nevo.db.models.content import Lesson
+from nevo.db.models.frontend_support import LessonAssignment, Notification
 from nevo.db.models.product import (
     EnrollmentHistory,
     FeedbackSubmission,
@@ -213,6 +214,7 @@ async def list_classes(
                 StudentClassEnrollment.class_id == item.id
             )
         )
+        subjects = await _class_subjects(session, item.id)
         result.append(
             {
                 "id": str(item.id),
@@ -220,6 +222,7 @@ async def list_classes(
                 "code": item.class_code,
                 "yearGroup": item.year_group,
                 "source": item.source,
+                "subjects": subjects,
                 "studentCount": student_count or 0,
                 "archivedAt": item.archived_at,
             }
@@ -278,14 +281,32 @@ async def class_detail(
             StudentClassEnrollment.class_id == class_id
         )
     )
+    subjects = await _class_subjects(session, class_id)
     return {
         "id": str(school_class.id),
         "name": school_class.name,
         "code": school_class.class_code,
         "yearGroup": school_class.year_group,
+        "source": school_class.source,
+        "subjects": subjects,
         "studentCount": students or 0,
         "archivedAt": school_class.archived_at,
     }
+
+
+async def _class_subjects(session, class_id: UUID) -> list[str]:
+    subjects = await session.scalars(
+        select(Lesson.subject)
+        .join(LessonAssignment, LessonAssignment.lesson_id == Lesson.id)
+        .where(
+            LessonAssignment.class_id == class_id,
+            LessonAssignment.status != "cancelled",
+            Lesson.subject.is_not(None),
+        )
+        .distinct()
+        .order_by(Lesson.subject)
+    )
+    return [str(item) for item in subjects.all() if item]
 
 
 @router.post("/classes/{class_id}/archive", status_code=204)

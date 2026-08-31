@@ -26,6 +26,7 @@ from nevo.db.models.mastery import (
     StudentConceptScaffoldState,
     StudentConceptScheduling,
 )
+from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.db.session import create_engine, create_session_factory
@@ -40,6 +41,7 @@ from nevo.domain.intelligence.vocabulary import (
     ScaffoldOutcome,
 )
 from nevo.domain.mastery.vocabulary import FailureAttribution
+from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 from nevo.domain.teacher_assignments.vocabulary import (
     TeacherAssignmentRole,
@@ -48,6 +50,7 @@ from nevo.domain.teacher_assignments.vocabulary import (
 
 TEACHER_EMAIL = "teacher.demo@nevolearning.com"
 ADMIN_EMAIL = "admin.demo@nevolearning.com"
+STUDENT_EMAIL = "student.demo@nevolearning.com"
 SCHOOL_CODE = "NEVO-DEMO"
 
 
@@ -77,25 +80,87 @@ async def main() -> None:
                 session.add(school)
                 await session.flush()
 
-            teacher = await session.scalar(
-                select(User).where(User.email == TEACHER_EMAIL)
-            )
+            teacher_password = os.getenv("NEVO_DEMO_TEACHER_PASSWORD")
+            teacher = await session.scalar(select(User).where(User.email == TEACHER_EMAIL))
             if teacher is None:
-                raise SystemExit("teacher.demo@nevolearning.com does not exist")
+                if not teacher_password:
+                    raise SystemExit(
+                        "NEVO_DEMO_TEACHER_PASSWORD is required to create the demo teacher"
+                    )
+                teacher = User(
+                    id=stable_id("teacher"),
+                    school_id=school.id,
+                    role=UserRole.TEACHER,
+                    auth_method=AuthMethod.EMAIL_PASSWORD,
+                    email=TEACHER_EMAIL,
+                    first_name="Tunde",
+                    last_name="Adebayo",
+                    status=UserStatus.ACTIVE,
+                )
+                session.add(teacher)
             teacher.school_id = school.id
             teacher.role = UserRole.TEACHER
+            teacher.auth_method = AuthMethod.EMAIL_PASSWORD
             teacher.status = UserStatus.ACTIVE
             teacher.first_name = teacher.first_name or "Tunde"
             teacher.last_name = teacher.last_name or "Adebayo"
-            if teacher_password := os.getenv("NEVO_DEMO_TEACHER_PASSWORD"):
+            if teacher_password:
                 teacher.password_hash = hasher.hash_password(teacher_password)
 
+            admin_password = os.getenv("NEVO_DEMO_ADMIN_PASSWORD")
             admin = await session.scalar(select(User).where(User.email == ADMIN_EMAIL))
-            if admin is not None:
-                admin.school_id = school.id
-                admin.status = UserStatus.ACTIVE
-                if admin_password := os.getenv("NEVO_DEMO_ADMIN_PASSWORD"):
-                    admin.password_hash = hasher.hash_password(admin_password)
+            if admin is None:
+                if not admin_password:
+                    raise SystemExit(
+                        "NEVO_DEMO_ADMIN_PASSWORD is required to create the demo admin"
+                    )
+                admin = User(
+                    id=stable_id("admin"),
+                    school_id=school.id,
+                    role=UserRole.OTHER_ADMIN,
+                    auth_method=AuthMethod.EMAIL_PASSWORD,
+                    email=ADMIN_EMAIL,
+                    first_name="Ada",
+                    last_name="Okafor",
+                    status=UserStatus.ACTIVE,
+                )
+                session.add(admin)
+            admin.school_id = school.id
+            admin.role = UserRole.OTHER_ADMIN
+            admin.auth_method = AuthMethod.EMAIL_PASSWORD
+            admin.status = UserStatus.ACTIVE
+            if admin_password:
+                admin.password_hash = hasher.hash_password(admin_password)
+            await session.flush()
+            admin_record = await session.scalar(
+                select(Admin).where(Admin.user_id == admin.id)
+            )
+            if admin_record is None:
+                admin_record = Admin(
+                    id=stable_id("admin-record"),
+                    user_id=admin.id,
+                    school_id=school.id,
+                    created_by_user_id=admin.id,
+                )
+                session.add(admin_record)
+                await session.flush()
+            for scope in PermissionScope:
+                existing_scope = await session.scalar(
+                    select(AdminScopeAssignment.id).where(
+                        AdminScopeAssignment.admin_id == admin_record.id,
+                        AdminScopeAssignment.scope == scope,
+                        AdminScopeAssignment.revoked_at.is_(None),
+                    )
+                )
+                if existing_scope is None:
+                    session.add(
+                        AdminScopeAssignment(
+                            id=stable_id(f"admin-scope:{scope.value}"),
+                            admin_id=admin_record.id,
+                            scope=scope,
+                            granted_by_user_id=admin.id,
+                        )
+                    )
 
             school_class = await _get_or_create(
                 session,
@@ -117,6 +182,14 @@ async def main() -> None:
                 assigned_by_user_id=admin.id if admin else teacher.id,
             )
 
+            student_password = os.getenv("NEVO_DEMO_STUDENT_PASSWORD")
+            existing_demo_student = await session.scalar(
+                select(User.id).where(User.email == STUDENT_EMAIL)
+            )
+            if existing_demo_student is None and not student_password:
+                raise SystemExit(
+                    "NEVO_DEMO_STUDENT_PASSWORD is required to create the demo student"
+                )
             students = [
                 await _student(
                     session,
@@ -124,13 +197,18 @@ async def main() -> None:
                     "amara.demo",
                     "Amara",
                     "Okafor",
+                    email=STUDENT_EMAIL,
                 ),
                 await _student(session, school.id, "kofi.demo", "Kofi", "Dada"),
                 await _student(session, school.id, "dara.demo", "Dara", "Ibrahim"),
             ]
             if student_pin := os.getenv("NEVO_DEMO_STUDENT_PIN"):
-                for student in students:
+                for student in students[1:]:
                     student.pin_hash = hasher.hash_pin(student_pin)
+                    student.auth_method = AuthMethod.PIN
+            if student_password:
+                students[0].password_hash = hasher.hash_password(student_password)
+                students[0].auth_method = AuthMethod.EMAIL_PASSWORD
             for student in students:
                 await _get_or_create(
                     session,
@@ -321,11 +399,22 @@ async def main() -> None:
             )
 
         print("Demo teacher console seed complete.")
+        print(f"Teacher: {TEACHER_EMAIL}")
+        print(f"Admin: {ADMIN_EMAIL}")
+        print(f"Student: {STUDENT_EMAIL}")
     finally:
         await engine.dispose()
 
 
-async def _student(session, school_id: UUID, login: str, first: str, last: str) -> User:
+async def _student(
+    session,
+    school_id: UUID,
+    login: str,
+    first: str,
+    last: str,
+    *,
+    email: str | None = None,
+) -> User:
     user = await session.scalar(
         select(User).where(User.school_id == school_id, User.login_identifier == login)
     )
@@ -337,6 +426,7 @@ async def _student(session, school_id: UUID, login: str, first: str, last: str) 
             auth_method=AuthMethod.PIN,
             first_name=first,
             last_name=last,
+            email=email,
             login_identifier=login,
             status=UserStatus.ACTIVE,
         )
@@ -346,6 +436,8 @@ async def _student(session, school_id: UUID, login: str, first: str, last: str) 
         user.school_id = school_id
         user.first_name = user.first_name or first
         user.last_name = user.last_name or last
+        if email:
+            user.email = email
         user.status = UserStatus.ACTIVE
     return user
 

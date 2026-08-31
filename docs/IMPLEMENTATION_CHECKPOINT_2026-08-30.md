@@ -31,6 +31,12 @@
   and unread state, mastery concept names, progress ordinals, and flag evidence
   and action targets.
 - Added application request timing headers and slow-request logging.
+- Replaced the empty current-user subject list with lesson- and
+  preference-derived subjects, and added assigned subjects to class responses.
+- Made the demo-school seeder create or refresh connected teacher, admin and
+  student test accounts using the active deployment peppers.
+- Made first-use Microsoft and Google SSO resolve student/teacher roles from
+  provider education profiles instead of provider-specific hardcoded defaults.
 
 ## Current frontend contract priority
 
@@ -40,3 +46,7 @@ responses retain snake case as an explicit compatibility contract.
 Microsoft/Google sign-in, directory sync, Drive imports, and email delivery need
 real provider credentials in the deployment environment. The backend reports
 explicit unavailable or needs-attention states until those credentials exist.
+
+The remaining generated-content placeholder is the documented TTS contract:
+audio variants contain scripts but no `audioUrl` until a storage/TTS provider is
+selected. No API route is otherwise stubbed with `501` or `NotImplemented`.

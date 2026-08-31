@@ -36,6 +36,7 @@ class ClassSummaryResponse(CamelResponse):
     code: str | None
     year_group: str | None
     source: str | None = None
+    subjects: list[str] = Field(default_factory=list)
     student_count: int
     archived_at: datetime | None
 

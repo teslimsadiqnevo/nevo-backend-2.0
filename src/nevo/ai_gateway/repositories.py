@@ -10,6 +10,7 @@ from nevo.ai_gateway.entities import (
     PromptTemplate,
 )
 from nevo.ai_gateway.errors import InvalidAiContextError
+from nevo.ai_gateway.privacy import AiPrivacyGuard
 from nevo.db.models.account import School, User
 from nevo.db.models.ai_gateway import AiGatewayCall, AiPromptTemplate
 from nevo.db.models.consent import ParentLink
@@ -97,7 +98,7 @@ class SqlAlchemyAiCallRepository:
         *,
         requester: User,
         student_id: UUID | None,
-    ) -> set[str]:
+    ) -> set[tuple[str, str]]:
         """Names the guard should strike out of free prose.
 
         Every learner this actor can see, plus the requester and the student
@@ -109,27 +110,27 @@ class SqlAlchemyAiCallRepository:
         Bounded by class for a teacher rather than covering the school, so it
         stays a handful of rows on each call.
         """
-        terms: set[str] = set()
+        terms: set[tuple[str, str]] = set()
         if requester.school_id is not None:
             school_name = await session.scalar(
                 select(School.name).where(School.id == requester.school_id)
             )
             if school_name:
-                terms.add(school_name)
+                terms.add((school_name, "the school"))
 
         for learner in await accessible_students(session, requester):
-            _add_person(terms, learner.first_name, learner.last_name, learner.email)
+            _add_person(terms, learner.id, learner.first_name, learner.last_name, learner.email)
 
         subject_ids = [requester.id]
         if student_id is not None:
             subject_ids.append(student_id)
         people = await session.execute(
-            select(User.first_name, User.last_name, User.email).where(
+            select(User.id, User.first_name, User.last_name, User.email).where(
                 User.id.in_(subject_ids)
             )
         )
-        for first_name, last_name, email in people:
-            _add_person(terms, first_name, last_name, email)
+        for person_id, first_name, last_name, email in people:
+            _add_person(terms, person_id, first_name, last_name, email)
 
         if student_id is not None:
             parents = await session.execute(
@@ -141,7 +142,7 @@ class SqlAlchemyAiCallRepository:
             for parent_name, parent_contact in parents:
                 for value in (parent_name, parent_contact):
                     if value:
-                        terms.add(value)
+                        terms.add((value, "their parent"))
         return terms
 
     async def record(self, audit: AiCallAudit) -> UUID:
@@ -173,14 +174,17 @@ class SqlAlchemyAiCallRepository:
 
 
 def _add_person(
-    terms: set[str],
+    terms: set[tuple[str, str]],
+    person_id: UUID,
     first_name: str | None,
     last_name: str | None,
     email: str | None,
 ) -> None:
+    """Every way of naming one person maps to that person's own pseudonym."""
+    pseudonym = AiPrivacyGuard.pseudonym(person_id)
     for value in (first_name, last_name, email):
         if value:
-            terms.add(value)
+            terms.add((value, pseudonym))
     full_name = " ".join(part for part in (first_name, last_name) if part)
     if full_name:
-        terms.add(full_name)
+        terms.add((full_name, pseudonym))

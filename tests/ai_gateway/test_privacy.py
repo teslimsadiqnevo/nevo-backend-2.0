@@ -9,7 +9,12 @@ PSEUDONYM = AiPrivacyGuard.pseudonym(SUBJECT)
 
 
 def sanitize(text: str, *, terms: tuple[str, ...] = ()) -> str:
-    return GUARD.sanitize_text(text, pseudonym=PSEUDONYM, sensitive_terms=terms)
+    """Terms map to the subject's pseudonym unless a test says otherwise."""
+    return GUARD.sanitize_text(
+        text,
+        pseudonym=PSEUDONYM,
+        sensitive_terms=tuple((term, PSEUDONYM) for term in terms),
+    )
 
 
 def test_pseudonym_is_stable_and_opaque() -> None:
@@ -73,6 +78,35 @@ def test_longer_names_win_over_their_prefixes() -> None:
     assert result == f"{PSEUDONYM} did well."
 
 
+def test_each_person_keeps_their_own_pseudonym() -> None:
+    """One shared pseudonym would hide the names but merge the people.
+
+    A question naming two learners has to arrive as two distinct codes, or a
+    tool cannot tell which learner was meant.
+    """
+    ada, grace = "Learner-AAA", "Learner-BBB"
+
+    result = GUARD.sanitize_text(
+        "Ada is ahead of Grace.",
+        pseudonym=PSEUDONYM,
+        sensitive_terms=(("Ada", ada), ("Grace", grace)),
+    )
+
+    assert result == f"{ada} is ahead of {grace}."
+
+
+def test_every_alias_of_one_person_maps_to_the_same_code() -> None:
+    code = "Learner-AAA"
+
+    result = GUARD.sanitize_text(
+        "Ada Lovelace asked. Ada is fine.",
+        pseudonym=PSEUDONYM,
+        sensitive_terms=(("Ada", code), ("Ada Lovelace", code)),
+    )
+
+    assert result == f"{code} asked. {code} is fine."
+
+
 def test_name_redaction_respects_word_boundaries() -> None:
     result = sanitize("Adaptation improved for Ada.", terms=("Ada",))
 
@@ -96,7 +130,7 @@ def test_sensitive_variables_are_replaced_wholesale() -> None:
         },
         requester_user_id=SUBJECT,
         student_id=None,
-        sensitive_terms=("Ada",),
+        sensitive_terms=(("Ada", PSEUDONYM),),
     )
 
     assert sanitized["student_name"] == PSEUDONYM

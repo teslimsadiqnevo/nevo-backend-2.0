@@ -16,7 +16,9 @@ class AiRequestContext:
     requester_user_id: UUID
     school_id: UUID | None
     student_id: UUID | None
-    sensitive_terms: tuple[str, ...] = ()
+    #: (term, replacement) pairs. Each person gets their own stand-in so
+    #: the model can tell two learners apart.
+    sensitive_terms: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

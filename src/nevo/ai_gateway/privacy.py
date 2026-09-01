@@ -45,7 +45,7 @@ class AiPrivacyGuard:
         *,
         requester_user_id: UUID,
         student_id: UUID | None,
-        sensitive_terms: tuple[str, ...] = (),
+        sensitive_terms: tuple[tuple[str, str], ...] = (),
     ) -> dict[str, str]:
         subject = student_id or requester_user_id
         pseudonym = self.pseudonym(subject)
@@ -74,26 +74,39 @@ class AiPrivacyGuard:
         value: str,
         *,
         pseudonym: str,
-        sensitive_terms: tuple[str, ...] = (),
+        sensitive_terms: tuple[tuple[str, str], ...] = (),
     ) -> str:
+        """Mask identifiers, giving each person their own stand-in.
+
+        ``sensitive_terms`` pairs a term with the pseudonym that replaces it.
+        Mapping every name to one pseudonym would hide the names but destroy
+        identity: two learners in one question would arrive as the same code,
+        and a tool could not tell which was meant.
+        """
         value = EMAIL_PATTERN.sub("[email removed]", value)
         value = PHONE_PATTERN.sub("[contact removed]", value)
         value = CREDENTIAL_PATTERN.sub(lambda match: f"{match.group(1)}: [removed]", value)
         value = LABELLED_IDENTIFIER_PATTERN.sub(
             lambda match: f"{match.group(1)}: {pseudonym}", value
         )
-        terms = sorted(
-            {term.strip() for term in sensitive_terms if len(term.strip()) >= 3},
-            key=len,
-            reverse=True,
-        )
-        if not terms:
+        replacements = {
+            term.strip().casefold(): replacement
+            for term, replacement in sensitive_terms
+            if len(term.strip()) >= 3
+        }
+        if not replacements:
             return value
+        # Longest first, so "Amara Okafor" is matched before "Amara" and a
+        # surname is never left stranded beside a pseudonym.
+        ordered = sorted(replacements, key=len, reverse=True)
         pattern = re.compile(
-            r"(?<!\w)(?:" + "|".join(re.escape(term) for term in terms) + r")(?!\w)",
+            r"(?<!\w)(?:" + "|".join(re.escape(term) for term in ordered) + r")(?!\w)",
             re.IGNORECASE,
         )
-        return pattern.sub(pseudonym, value)
+        return pattern.sub(
+            lambda match: replacements.get(match.group(0).casefold(), pseudonym),
+            value,
+        )
 
     @staticmethod
     def pseudonym(subject_id: UUID) -> str:

@@ -101,10 +101,20 @@ def test_upload_status_and_stage_are_enumerated() -> None:
     assert set(schema("UploadStage")["enum"]) == {item.value for item in UploadStage}
 
 
-def test_a_preference_category_typo_is_rejected() -> None:
-    category = schema("PreferenceWrite")["properties"]["category"]
+def test_a_preference_category_typo_is_reported_not_silently_stored() -> None:
+    """Rejected per row, not by failing the batch.
 
-    assert "$ref" in str(category) or "enum" in category
+    The request field is deliberately a plain string so an unknown category
+    reaches the handler. Typing it in the schema made Pydantic reject the whole
+    list before any row was written, so one unrecognised category discarded a
+    user's other valid changes.
+    """
+    assert schema("PreferenceWrite")["properties"]["category"]["type"] == "string"
+
+    write = schema("NotificationPreferencesWriteResponse")["properties"]
+    assert {"preferences", "savedCount", "rejected"} <= set(write)
+    # The response is still typed, so the vocabulary is discoverable.
+    assert "$ref" in str(schema("NotificationPreferenceResponse")["properties"]["category"])
     assert "account" in {item.value for item in NotificationCategory}
 
 

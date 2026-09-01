@@ -21,6 +21,7 @@ from nevo.api.response_models import (
     IdCodeResponse,
     IdNameResponse,
     NotificationPreferenceResponse,
+    NotificationPreferencesWriteResponse,
     OpsFeedbackResponse,
     OpsOverviewResponse,
     PersonalSettingsResponse,
@@ -107,7 +108,9 @@ class FeedbackRequest(BaseModel):
 class PreferenceWrite(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    category: NotificationCategory
+    # Deliberately a string, not the enum: an unknown category has to reach
+    # the handler so it can be rejected on its own line. Typed on the way out.
+    category: str = Field(min_length=1, max_length=80)
     in_app: bool = Field(alias="inApp")
     email: bool
 
@@ -730,29 +733,62 @@ async def notification_preferences(
     ]
 
 
-@router.put("/notification-preferences", response_model=list[NotificationPreferenceResponse])
+@router.put(
+    "/notification-preferences",
+    response_model=NotificationPreferencesWriteResponse,
+)
 async def update_notification_preferences(
     payload: list[PreferenceWrite],
     principal: PrincipalDependency,
     session: DatabaseSession,
-) -> list[dict[str, object]]:
+) -> dict[str, object]:
+    """Save notification preferences, row by row.
+
+    An unknown category is rejected on its own line rather than failing the
+    whole request. A settings screen posts every toggle in one call, so
+    all-or-nothing meant one unrecognised category discarded the user's other,
+    valid changes with nothing saved and nothing to show for it.
+    """
+    saved: list[NotificationCategory] = []
+    rejected: list[dict[str, str]] = []
     for item in payload:
+        category = _known_category(item.category)
+        if category is None:
+            rejected.append(
+                {
+                    "category": str(item.category),
+                    "reason": "unknown_category",
+                }
+            )
+            continue
         record = await session.scalar(
             select(NotificationPreference).where(
                 NotificationPreference.user_id == principal.user_id,
-                NotificationPreference.category == item.category,
+                NotificationPreference.category == category,
             )
         )
         if record is None:
             record = NotificationPreference(
                 user_id=principal.user_id,
-                category=item.category,
+                category=category,
             )
             session.add(record)
         record.in_app = item.in_app
         record.email = item.email
+        saved.append(category)
     await session.commit()
-    return await notification_preferences(principal, session)
+    return {
+        "preferences": await notification_preferences(principal, session),
+        "savedCount": len(saved),
+        "rejected": rejected,
+    }
+
+
+def _known_category(value: str) -> NotificationCategory | None:
+    try:
+        return NotificationCategory(value)
+    except ValueError:
+        return None
 
 
 @router.get("/settings/me", response_model=PersonalSettingsResponse)

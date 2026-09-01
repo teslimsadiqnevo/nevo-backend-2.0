@@ -608,3 +608,21 @@ class StudentProgressResponse(CamelResponse):
     mastery_average: float | None
     concepts: list[ConceptProgressResponse]
     lessons: list[LessonProgressItemResponse]
+
+
+class RejectedPreferenceResponse(CamelResponse):
+    category: str
+    reason: str
+
+
+class NotificationPreferencesWriteResponse(CamelResponse):
+    """Result of saving notification preferences.
+
+    Partial success is reported rather than failing the batch: valid rows are
+    saved and unknown categories come back named, so a settings screen can
+    show what landed and what did not.
+    """
+
+    preferences: list[NotificationPreferenceResponse]
+    saved_count: int
+    rejected: list[RejectedPreferenceResponse] = Field(default_factory=list)

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
 from nevo.ask_nevo.entities import AskNevoContextIds, AskNevoRequest, AskNevoResponse
+from nevo.ask_nevo.formatting import AnswerBlockType, AnswerFormat, structure_answer
 from nevo.ask_nevo.service import AskNevoService
 from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
@@ -33,16 +34,58 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=2_000)
 
 
+class AnswerBlockResponse(BaseModel):
+    """One renderable piece of an answer.
+
+    A client that only handles ``paragraph`` can render ``text`` for every
+    block and still be correct, so adopting this is optional.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: AnswerBlockType
+    text: str = ""
+    items: list[str] = Field(default_factory=list)
+    level: int = 0
+
+
 class AskResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    #: The model's answer exactly as returned, unchanged. Kept so nothing that
+    #: already reads it breaks, and so the raw output stays inspectable.
     answer: str
+    #: The same answer normalised into blocks. Parsed once here rather than in
+    #: each client, so every surface renders identically.
+    blocks: list[AnswerBlockResponse] = Field(default_factory=list)
+    #: The answer flattened back to prose, markers removed. For clients that
+    #: want one string and no block handling.
+    plain_text: str = Field(default="", alias="plainText")
+    #: Whether the model actually produced structure this time.
+    answer_format: AnswerFormat = Field(
+        default=AnswerFormat.PLAIN,
+        alias="answerFormat",
+    )
     question_category: AskNevoQuestionCategory
     interaction_id: UUID
     ai_gateway_call_id: UUID
 
     @classmethod
     def from_result(cls, result: AskNevoResponse) -> "AskResponse":
+        structured = structure_answer(result.answer)
         return cls(
             answer=result.answer,
+            blocks=[
+                AnswerBlockResponse(
+                    type=block.type,
+                    text=block.text,
+                    items=list(block.items),
+                    level=block.level,
+                )
+                for block in structured.blocks
+            ],
+            plain_text=structured.plain_text,
+            answer_format=structured.format,
             question_category=result.question_category,
             interaction_id=result.interaction_id,
             ai_gateway_call_id=result.ai_gateway_call_id,

@@ -6,7 +6,7 @@ the assistant back into something that answers from what it was handed.
 import re
 from pathlib import Path
 
-MIGRATION = Path("alembic/versions/20260901_0036_ask_nevo_tool_prompts.py")
+MIGRATION = Path("alembic/versions/20260901_0037_ask_nevo_stay_in_lane.py")
 SOURCE = MIGRATION.read_text()
 
 
@@ -66,5 +66,18 @@ def test_the_student_prompt_keeps_its_privacy_constraints() -> None:
 
 def test_the_migration_supersedes_rather_than_edits_the_previous_version() -> None:
     """Prompts are versioned; a partial unique index allows one active row."""
-    assert "version = 2" in SOURCE
+    assert "version = 3" in SOURCE
     assert re.search(r"active\s*=\s*false", SOURCE)
+
+
+def test_the_assistant_is_told_to_write_about_the_learner_not_about_nevo() -> None:
+    """It was telling teachers there might be a bug in session closure."""
+    for prompt in prompts().values():
+        assert "never about Nevo" in prompt
+        assert "Do not speculate about bugs" in prompt
+
+
+def test_internal_record_keeping_is_off_limits_even_if_a_tool_leaks_it() -> None:
+    for prompt in prompts().values():
+        assert "profile versions" in prompt
+        assert "even if a tool result includes them" in prompt

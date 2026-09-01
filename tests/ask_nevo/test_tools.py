@@ -235,3 +235,61 @@ def test_no_tool_takes_a_school_id(tool: str) -> None:
     schema = next(item for item in TOOL_SCHEMAS if item["name"] == tool)
 
     assert "school_id" not in schema["input_schema"]["properties"]
+
+
+# --- what a teacher should never be shown ----------------------------------
+
+
+def test_the_learner_payload_exposes_no_internals() -> None:
+    """The model narrates whatever it is handed.
+
+    A teacher told about a "profile version" learns nothing and starts
+    doubting the data, so those fields must not be in the payload at all
+    rather than relying on the prompt to suppress them.
+    """
+    import inspect
+
+    from nevo.ask_nevo import tools
+
+    body = inspect.getsource(tools._get_learner_overview)
+
+    for leaked in ("profile.version", "observed_event_count", "last_evaluated_at"):
+        assert leaked not in body, leaked
+
+
+def test_the_learner_payload_says_whether_a_profile_exists_in_plain_words() -> None:
+    import inspect
+
+    from nevo.ask_nevo import tools
+
+    body = inspect.getsource(tools._get_learner_overview)
+
+    assert "has_learning_profile" in body
+    assert "Not enough lessons yet" in body
+
+
+def test_session_outcomes_are_plain_words_not_status_tokens() -> None:
+    from nevo.ask_nevo.tools import _session_outcome
+    from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
+
+    assert _session_outcome(LessonCompletionStatus.COMPLETED) == "finished"
+    assert _session_outcome(LessonCompletionStatus.IN_PROGRESS) == "still open"
+    assert _session_outcome(LessonCompletionStatus.EXITED) == "left early"
+
+
+def test_every_completion_status_has_plain_words() -> None:
+    """A new status must not surface as a raw token."""
+    from nevo.ask_nevo.tools import _session_outcome
+    from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
+
+    for status in LessonCompletionStatus:
+        assert _session_outcome(status) != "unknown", status
+
+
+def test_dates_read_the_way_a_teacher_would_say_them() -> None:
+    from datetime import UTC, datetime
+
+    from nevo.ask_nevo.tools import _date
+
+    assert _date(datetime(2026, 8, 28, 9, 30, tzinfo=UTC)) == "28 August"
+    assert _date(None) is None

@@ -12,6 +12,7 @@ from nevo.db.models.attention_flag import AttentionFlag
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.signal_event import LessonSession
+from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 
 NOT_PERMITTED = {"error": "not_permitted", "detail": "That learner is not in your classes."}
 NOT_FOUND = {"error": "not_found", "detail": "No record matched."}
@@ -166,18 +167,31 @@ async def _get_learner_overview(ctx: ToolContext, arguments: dict[str, Any]) -> 
             .limit(5)
         )
     ).all()
+    # Only things a teacher can act on. Internals - profile version numbers,
+    # observed-event counts, evaluation timestamps - are deliberately absent:
+    # the model can only narrate what it is handed, and a teacher told about a
+    # "profile version" learns nothing and starts doubting the data.
+    finished = sum(
+        1
+        for item in sessions
+        if item.completion_status is LessonCompletionStatus.COMPLETED
+    )
     return {
         "learner": entry.pseudonym,
-        "profile": {
-            "version": profile.version if profile else None,
-            "observed_events": profile.observed_event_count if profile else 0,
-            "last_evaluated_at": _iso(getattr(profile, "last_evaluated_at", None)),
-        },
+        "has_learning_profile": profile is not None,
+        "profile_note": (
+            "Nevo has watched enough lessons to build a picture."
+            if profile is not None
+            else "Not enough lessons yet for Nevo to build a picture."
+        ),
+        "sessions_seen": len(sessions),
+        "sessions_finished": finished,
+        "sessions_left_unfinished": len(sessions) - finished,
         "recent_sessions": [
             {
-                "started_at": _iso(item.started_at),
-                "completion_status": item.completion_status.value,
-                "break_count": item.break_count,
+                "date": _date(item.started_at),
+                "outcome": _session_outcome(item.completion_status),
+                "breaks_taken": item.break_count,
             }
             for item in sessions
         ],
@@ -185,7 +199,7 @@ async def _get_learner_overview(ctx: ToolContext, arguments: dict[str, Any]) -> 
             {
                 "type": item.flag_type.value,
                 "description": item.description,
-                "generated_at": _iso(item.generated_at),
+                "raised": _date(item.generated_at),
             }
             for item in flags
         ],
@@ -326,3 +340,17 @@ def _uuid(value: Any) -> UUID | None:
 
 def _iso(value: Any) -> str | None:
     return value.isoformat() if value is not None and hasattr(value, "isoformat") else None
+
+
+def _date(value: Any) -> str | None:
+    """A date a teacher would say out loud, not a timestamp."""
+    return value.strftime("%-d %B") if value is not None and hasattr(value, "strftime") else None
+
+
+def _session_outcome(status: LessonCompletionStatus) -> str:
+    """Plain words for what happened, rather than an internal status token."""
+    return {
+        LessonCompletionStatus.COMPLETED: "finished",
+        LessonCompletionStatus.IN_PROGRESS: "still open",
+        LessonCompletionStatus.EXITED: "left early",
+    }.get(status, "unknown")

@@ -267,5 +267,22 @@ app.include_router(teacher_assignment_router)
 
 
 @app.get("/health", tags=["system"])
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health(request: Request) -> dict[str, str]:
+    """Liveness, plus whether the optional integrations are actually wired.
+
+    A missing provider key does not stop the app serving traffic, so it used
+    to be invisible: AI answers quietly degraded to the rule-based fallback
+    and looked like a bad model rather than an unset variable. These flags
+    make that legible without reading the audit tables.
+    """
+    ai_gateway = getattr(request.app.state, "ai_gateway", None)
+    payments = getattr(request.app.state, "payment_service", None)
+    media = getattr(request.app.state, "lesson_media_service", None)
+    email = getattr(request.app.state, "email_delivery", None)
+    return {
+        "status": "ok",
+        "ai": "configured" if getattr(ai_gateway, "configured", False) else "fallback_only",
+        "payments": "configured" if getattr(payments, "configured", False) else "not_configured",
+        "media": "configured" if getattr(media, "configured", False) else "not_configured",
+        "email": "configured" if getattr(email, "configured", False) else "not_configured",
+    }

@@ -67,6 +67,15 @@ class AiGatewayService:
         self._cache_read_cost = cache_read_cost_usd_per_million
         self._privacy = privacy or AiPrivacyGuard()
 
+    @property
+    def configured(self) -> bool:
+        """Whether a real provider can be reached.
+
+        False means every request will answer from the rule-based fallback,
+        which reads as a poor model rather than as missing configuration.
+        """
+        return bool(getattr(self._provider, "configured", False))
+
     async def generate(
         self,
         request: AiGenerationRequest,

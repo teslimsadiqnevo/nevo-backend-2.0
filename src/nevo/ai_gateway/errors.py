@@ -19,7 +19,23 @@ class InvalidAiContextError(AiGatewayError):
 
 
 class ProviderUnavailableError(AiGatewayError):
+    """The provider was called but the call did not succeed."""
+
     code = "provider_unavailable"
+
+
+class ProviderNotConfiguredError(ProviderUnavailableError):
+    """No API key, so no request was ever made.
+
+    Distinct from ProviderUnavailableError because the two need completely
+    different responses: this is a deployment setting, not an outage. While
+    they shared one code, a missing key was indistinguishable from a provider
+    failure in the audit trail, and the only symptom a user saw was a generic
+    fallback answer that looked like a bad model.
+    """
+
+    code = "provider_not_configured"
+    public_message = "The AI provider is not configured."
 
 
 class ProviderResponseError(AiGatewayError):

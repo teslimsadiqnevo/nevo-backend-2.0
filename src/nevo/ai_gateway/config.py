@@ -18,7 +18,7 @@ class AiGatewaySettings(BaseSettings):
     provider: Literal["claude"] = AI_PROVIDER_CLAUDE
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-haiku-4-5"
-    anthropic_sonnet_model: str = "claude-sonnet"
+    anthropic_sonnet_model: str = "claude-sonnet-5"
     anthropic_base_url: AnyHttpUrl = AnyHttpUrl("https://api.anthropic.com/v1")
     anthropic_version: str = "2023-06-01"
     prompt_caching_enabled: bool = True

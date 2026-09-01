@@ -4,7 +4,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from nevo.ai_gateway.entities import ProviderRequest, ProviderResponse
-from nevo.ai_gateway.errors import ProviderResponseError, ProviderUnavailableError
+from nevo.ai_gateway.errors import (
+    ProviderNotConfiguredError,
+    ProviderResponseError,
+    ProviderUnavailableError,
+)
 from nevo.domain.ai_gateway.vocabulary import AiProviderName
 
 
@@ -50,9 +54,14 @@ class ClaudeRestProvider:
         )
         self._owns_client = client is None
 
+    @property
+    def configured(self) -> bool:
+        """Whether this provider has the credentials to be called at all."""
+        return bool(self._api_key)
+
     async def generate(self, request: ProviderRequest) -> ProviderResponse:
         if not self._api_key:
-            raise ProviderUnavailableError
+            raise ProviderNotConfiguredError
 
         payload: dict[str, Any] = {
             "model": request.model or self._model,

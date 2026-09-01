@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from nevo.ai_gateway.entities import ProviderRequest, ProviderResponse
 from nevo.ai_gateway.errors import (
+    ProviderNotConfiguredError,
     ProviderResponseError,
     ProviderUnavailableError,
 )
@@ -64,9 +65,14 @@ class GeminiRestProvider:
         )
         self._owns_client = client is None
 
+    @property
+    def configured(self) -> bool:
+        """Whether this provider has the credentials to be called at all."""
+        return bool(self._api_key)
+
     async def generate(self, request: ProviderRequest) -> ProviderResponse:
         if not self._api_key:
-            raise ProviderUnavailableError
+            raise ProviderNotConfiguredError
         endpoint = (
             f"{self._base_url}/models/"
             f"{quote(self._model, safe='-._')}:generateContent"

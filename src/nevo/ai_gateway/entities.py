@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from nevo.domain.ai_gateway.vocabulary import (
@@ -49,12 +50,35 @@ class RenderedPrompt:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolCall:
+    """A tool the model asked to run, and the id its result must carry back."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResult:
+    id: str
+    content: str
+    is_error: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderRequest:
     system_instruction: str
     user_content: str
     max_output_tokens: int
     model: str | None = None
     cache_prompt: bool = True
+    #: Tool schemas the model may call. Empty means a plain text completion,
+    #: which is what every existing caller gets.
+    tools: tuple[dict[str, Any], ...] = ()
+    #: Prior assistant/tool turns, replayed so the model can continue a tool
+    #: conversation. The provider owns the wire format; callers pass these
+    #: back opaquely.
+    history: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +86,11 @@ class ProviderResponse:
     text: str
     provider: AiProviderName
     model: str
+    #: Populated when the model stopped to ask for tools. The caller runs them
+    #: and calls again with the results appended to history.
+    tool_calls: tuple[ToolCall, ...] = ()
+    #: The assistant turn exactly as returned, to be replayed as history.
+    raw_content: tuple[dict[str, Any], ...] = ()
     input_tokens: int = 0
     output_tokens: int = 0
     thought_tokens: int = 0

@@ -3,7 +3,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from nevo.ai_gateway.entities import ProviderRequest, ProviderResponse
+from nevo.ai_gateway.entities import ProviderRequest, ProviderResponse, ToolCall
 from nevo.ai_gateway.errors import (
     ProviderNotConfiguredError,
     ProviderResponseError,
@@ -13,8 +13,13 @@ from nevo.domain.ai_gateway.vocabulary import AiProviderName
 
 
 class _ClaudeTextBlock(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     type: str
     text: str | None = None
+    id: str | None = None
+    name: str | None = None
+    input: dict[str, Any] | None = None
 
 
 class _ClaudeUsage(BaseModel):
@@ -29,6 +34,7 @@ class _ClaudeUsage(BaseModel):
 class _ClaudeResponse(BaseModel):
     content: list[_ClaudeTextBlock] = Field(default_factory=list)
     model: str | None = None
+    stop_reason: str | None = None
     usage: _ClaudeUsage = Field(default_factory=_ClaudeUsage)
 
 
@@ -81,9 +87,12 @@ class ClaudeRestProvider:
                             "text": request.user_content,
                         }
                     ],
-                }
+                },
+                *request.history,
             ],
         }
+        if request.tools:
+            payload["tools"] = list(request.tools)
         if self._prompt_caching_enabled and request.cache_prompt:
             payload["cache_control"] = {"type": "ephemeral"}
             payload["system"][0]["cache_control"] = {"type": "ephemeral"}
@@ -110,10 +119,21 @@ class ClaudeRestProvider:
         text = "".join(
             block.text or "" for block in parsed.content if block.type == "text"
         ).strip()
-        if not text:
+        tool_calls = tuple(
+            ToolCall(id=block.id or "", name=block.name or "", arguments=block.input or {})
+            for block in parsed.content
+            if block.type == "tool_use" and block.id and block.name
+        )
+        # A turn that only asks for tools legitimately carries no text, so an
+        # empty answer is only a failure when nothing was requested either.
+        if not text and not tool_calls:
             raise ProviderResponseError
         return ProviderResponse(
             text=text,
+            tool_calls=tool_calls,
+            raw_content=tuple(
+                block.model_dump(exclude_none=True) for block in parsed.content
+            ),
             provider=AiProviderName.CLAUDE,
             model=parsed.model or request.model or self._model,
             input_tokens=parsed.usage.input_tokens,

@@ -3,11 +3,11 @@ import json
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+from nevo.ai_gateway.agent import run_tool_loop
 from nevo.ai_gateway.entities import ProviderRequest, ProviderResponse, ToolCall
 from nevo.ai_gateway.privacy import AiPrivacyGuard
-from nevo.ask_nevo.agent import run_tool_loop
 from nevo.ask_nevo.directory import DirectoryEntry, PseudonymDirectory
-from nevo.ask_nevo.tools import TOOL_SCHEMAS, ToolContext
+from nevo.ask_nevo.tools import TOOL_SCHEMAS, ToolContext, execute_tool
 from nevo.domain.accounts.vocabulary import UserRole
 from nevo.domain.ai_gateway.vocabulary import AiProviderName
 
@@ -61,6 +61,13 @@ class FakeSession:
         return None
 
 
+def _executor(ctx: ToolContext):
+    async def execute(name: str, arguments: dict):
+        return await execute_tool(ctx, name, arguments)
+
+    return execute
+
+
 def _context() -> ToolContext:
     book = PseudonymDirectory(
         (
@@ -88,7 +95,7 @@ async def test_an_answer_with_no_tool_calls_returns_immediately() -> None:
     provider = ScriptedProvider(_text("They are doing well."))
 
     outcome = await run_tool_loop(
-        provider=provider, request=_request(), tool_context=_context()
+        provider=provider, request=_request(), execute=_executor(_context())
     )
 
     assert outcome.text == "They are doing well."
@@ -104,7 +111,7 @@ async def test_a_tool_call_is_executed_and_fed_back() -> None:
     )
 
     outcome = await run_tool_loop(
-        provider=provider, request=_request(), tool_context=_context()
+        provider=provider, request=_request(), execute=_executor(_context())
     )
 
     assert outcome.tool_names == ("find_learners",)
@@ -118,7 +125,7 @@ async def test_a_tool_call_is_executed_and_fed_back() -> None:
 async def test_tool_results_are_json_data_not_instructions() -> None:
     provider = ScriptedProvider(_asks("find_learners", {}), _text("Done."))
 
-    await run_tool_loop(provider=provider, request=_request(), tool_context=_context())
+    await run_tool_loop(provider=provider, request=_request(), execute=_executor(_context()))
 
     payload = provider.requests[1].history[1]["content"][0]["content"]
     assert json.loads(payload)["total"] == 1
@@ -132,7 +139,7 @@ async def test_several_tool_calls_run_in_sequence() -> None:
     )
 
     outcome = await run_tool_loop(
-        provider=provider, request=_request(), tool_context=_context()
+        provider=provider, request=_request(), execute=_executor(_context())
     )
 
     assert outcome.tool_names == ("list_classes", "find_learners")
@@ -147,7 +154,7 @@ async def test_a_refused_lookup_still_reaches_the_model() -> None:
     )
 
     outcome = await run_tool_loop(
-        provider=provider, request=_request(), tool_context=_context()
+        provider=provider, request=_request(), execute=_executor(_context())
     )
 
     payload = json.loads(provider.requests[1].history[1]["content"][0]["content"])
@@ -162,7 +169,7 @@ async def test_a_model_that_only_ever_asks_for_tools_is_capped() -> None:
     outcome = await run_tool_loop(
         provider=provider,
         request=_request(),
-        tool_context=_context(),
+        execute=_executor(_context()),
         max_iterations=3,
     )
 
@@ -178,7 +185,7 @@ async def test_the_total_tool_call_budget_is_enforced() -> None:
     outcome = await run_tool_loop(
         provider=provider,
         request=_request(),
-        tool_context=_context(),
+        execute=_executor(_context()),
         max_iterations=10,
         max_tool_calls=2,
     )
@@ -191,7 +198,7 @@ async def test_an_unknown_tool_does_not_break_the_loop() -> None:
     provider = ScriptedProvider(_asks("delete_everything", {}), _text("I cannot do that."))
 
     outcome = await run_tool_loop(
-        provider=provider, request=_request(), tool_context=_context()
+        provider=provider, request=_request(), execute=_executor(_context())
     )
 
     payload = json.loads(provider.requests[1].history[1]["content"][0]["content"])
@@ -202,7 +209,7 @@ async def test_an_unknown_tool_does_not_break_the_loop() -> None:
 async def test_tools_are_offered_on_the_first_call() -> None:
     provider = ScriptedProvider(_text("Fine."))
 
-    await run_tool_loop(provider=provider, request=_request(), tool_context=_context())
+    await run_tool_loop(provider=provider, request=_request(), execute=_executor(_context()))
 
     assert {item["name"] for item in provider.requests[0].tools} == {
         item["name"] for item in TOOL_SCHEMAS

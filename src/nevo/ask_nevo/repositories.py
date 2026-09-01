@@ -3,7 +3,9 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.ask_nevo.directory import PseudonymDirectory
 from nevo.ask_nevo.entities import AskNevoContext, AskNevoRequest
+from nevo.ask_nevo.tools import TOOL_SCHEMAS, ToolContext, execute_tool
 from nevo.db.models.account import Class, User
 from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.db.models.attention_flag import AttentionFlag, Escalation
@@ -150,6 +152,43 @@ class SqlAlchemyAskNevoRepository:
                 .where(AskNevoInteraction.id == interaction_id)
                 .values(response_helpful=helpful)
             )
+
+
+    async def build_toolset(
+        self,
+        *,
+        actor_user_id: UUID,
+    ) -> tuple[tuple[dict[str, object], ...], object, "PseudonymDirectory | None"]:
+        """Tools bound to one asking user.
+
+        The session is opened per tool call rather than held for the whole
+        model turn, because a tool loop can take many seconds and holding a
+        connection open across it would tie up the pool.
+        """
+        async with self._sessions() as session:
+            actor = await session.get(User, actor_user_id)
+            if actor is None:
+                return (), None, None
+            directory = await PseudonymDirectory.for_actor(session, actor)
+
+        async def execute(name: str, arguments: dict[str, object]) -> dict[str, object]:
+            async with self._sessions() as tool_session:
+                tool_actor = await tool_session.get(User, actor_user_id)
+                if tool_actor is None:
+                    return {"error": "not_permitted"}
+                return await execute_tool(
+                    ToolContext(
+                        session=tool_session,
+                        actor=tool_actor,
+                        directory=directory,
+                    ),
+                    name,
+                    arguments,
+                )
+
+        return tuple(TOOL_SCHEMAS), execute, directory
+
+
 
 
 def _context_ids_payload(request: AskNevoRequest) -> dict[str, str | None]:

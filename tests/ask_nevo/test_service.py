@@ -34,6 +34,10 @@ class FakeGateway:
 
 
 class FakeRepository:
+    async def build_toolset(self, *, actor_user_id):
+        """No tools in service tests: they cover prompt choice and compliance."""
+        return (), None, None
+
     def __init__(self) -> None:
         self.logged_question_text = None
         self.category = None

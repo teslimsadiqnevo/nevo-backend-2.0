@@ -1,5 +1,5 @@
 import json
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from nevo.ai_gateway.compliance import ZeroTagCompliancePolicy
@@ -21,6 +21,12 @@ class AskNevoRepository(Protocol):
         actor_user_id: UUID,
         request: AskNevoRequest,
     ) -> AskNevoContext: ...
+
+    async def build_toolset(
+        self,
+        *,
+        actor_user_id: UUID,
+    ) -> tuple[tuple[dict[str, object], ...], object, Any]: ...
 
     async def log_interaction(
         self,
@@ -62,6 +68,13 @@ class AskNevoService:
             actor_user_id=actor_user_id,
             request=request,
         )
+        # Tools let the model reach data the frontend could not have named -
+        # a question mentioning a learner the page never identified. The
+        # directory is built from this actor's own accessible set, so it also
+        # bounds what any tool can reach.
+        tools, executor, directory = await self._repository.build_toolset(
+            actor_user_id=actor_user_id
+        )
         result = await self._gateway.generate(
             AiGenerationRequest(
                 requester_user_id=actor_user_id,
@@ -77,6 +90,8 @@ class AskNevoService:
                     "context": json.dumps(context.payload, sort_keys=True, default=str),
                 },
                 max_output_tokens=900,
+                tools=tools,
+                tool_executor=executor,
             )
         )
         answer = result.text
@@ -110,6 +125,10 @@ class AskNevoService:
             result = retry
         if not self._compliance.inspect(answer).allowed:
             answer = self._compliance.sanitize(answer)
+        # Names go back only here, on the way to the user. The model saw
+        # pseudonyms throughout, including in every tool result.
+        if directory is not None:
+            answer = directory.rehydrate(answer)
         interaction_id = await self._repository.log_interaction(
             actor_user_id=actor_user_id,
             request=request,

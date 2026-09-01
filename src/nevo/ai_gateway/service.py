@@ -1,6 +1,7 @@
 import time
 from decimal import Decimal
 
+from nevo.ai_gateway.agent import run_tool_loop
 from nevo.ai_gateway.compliance import (
     ZERO_TAG_REWRITE_INSTRUCTION,
     ZeroTagCompliancePolicy,
@@ -124,11 +125,19 @@ class AiGatewayService:
                 max_output_tokens=request.max_output_tokens,
                 model=request.model,
                 cache_prompt=request.cache_prompt,
+                tools=request.tools,
             )
 
             async def generate_once(
                 provider_request: ProviderRequest = provider_request,
             ) -> ProviderResponse:
+                if provider_request.tools and request.tool_executor is not None:
+                    outcome = await run_tool_loop(
+                        provider=self._provider,
+                        request=provider_request,
+                        execute=request.tool_executor,
+                    )
+                    return outcome.response_with_text()
                 return await self._provider.generate(provider_request)
 
             try:

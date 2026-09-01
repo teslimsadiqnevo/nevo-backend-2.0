@@ -29,6 +29,13 @@ class AiGenerationRequest:
     max_output_tokens: int = 1_024
     model: str | None = None
     cache_prompt: bool = True
+    #: Tool schemas offered to the model. When set, the gateway drives a tool
+    #: loop instead of a single completion, keeping audit, cost accounting,
+    #: rate limiting and the fallback around it.
+    tools: tuple[dict[str, Any], ...] = ()
+    #: Runs one tool call and returns its payload. Supplied by the caller
+    #: because only the caller knows who is asking and what they may see.
+    tool_executor: Any = None
 
 
 @dataclass(frozen=True, slots=True)

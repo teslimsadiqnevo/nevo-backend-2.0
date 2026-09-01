@@ -1,10 +1,10 @@
 import json
 import logging
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from nevo.ai_gateway.entities import ProviderRequest, ProviderResponse
-from nevo.ask_nevo.tools import ToolContext, execute_tool
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,9 @@ class ToolCapableProvider(Protocol):
     async def generate(self, request: ProviderRequest) -> ProviderResponse: ...
 
 
+ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
 @dataclass(frozen=True, slots=True)
 class AgentOutcome:
     text: str
@@ -27,12 +30,20 @@ class AgentOutcome:
     truncated: bool
     response: ProviderResponse
 
+    def response_with_text(self) -> ProviderResponse:
+        """The final response carrying the loop's answer.
+
+        Token counts come from the last call only; the gateway meters each
+        provider call it makes, so the loop does not double-count here.
+        """
+        return replace(self.response, text=self.text)
+
 
 async def run_tool_loop(
     *,
     provider: ToolCapableProvider,
     request: ProviderRequest,
-    tool_context: ToolContext,
+    execute: ToolExecutor,
     max_iterations: int = MAX_TOOL_ITERATIONS,
     max_tool_calls: int = MAX_TOOL_CALLS,
 ) -> AgentOutcome:
@@ -70,7 +81,7 @@ async def run_tool_loop(
         results = []
         for call in last.tool_calls:
             used.append(call.name)
-            payload = await execute_tool(tool_context, call.name, call.arguments)
+            payload = await execute(call.name, call.arguments)
             results.append(
                 {
                     "type": "tool_result",

@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.access import accessible_students
 from nevo.ai_gateway.entities import (
     AiCallAudit,
     AiRequestContext,
@@ -99,10 +100,14 @@ class SqlAlchemyAiCallRepository:
     ) -> set[str]:
         """Names the guard should strike out of free prose.
 
-        Scoped to the people a prompt can plausibly be about — the requester,
-        the student in question, and that student's parents — rather than the
-        whole school roster, which would mean thousands of rows and a very
-        large alternation regex on every single AI call.
+        Every learner this actor can see, plus the requester and the student
+        in question. It has to be the accessible set, not just the named
+        student: a question can mention a learner the caller never identified
+        in the request, and that name would otherwise reach the provider in
+        the clear.
+
+        Bounded by class for a teacher rather than covering the school, so it
+        stays a handful of rows on each call.
         """
         terms: set[str] = set()
         if requester.school_id is not None:
@@ -111,6 +116,9 @@ class SqlAlchemyAiCallRepository:
             )
             if school_name:
                 terms.add(school_name)
+
+        for learner in await accessible_students(session, requester):
+            _add_person(terms, learner.first_name, learner.last_name, learner.email)
 
         subject_ids = [requester.id]
         if student_id is not None:

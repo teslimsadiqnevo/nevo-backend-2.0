@@ -5,7 +5,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nevo.ask_nevo.directory import PseudonymDirectory, accessible_classes
+from nevo.access import accessible_classes
+from nevo.ask_nevo.directory import PseudonymDirectory
 from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag
 from nevo.db.models.content import Lesson, LessonSegment

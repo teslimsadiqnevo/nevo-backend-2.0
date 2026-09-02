@@ -134,3 +134,43 @@ def test_segments_and_lessons_both_report_a_duration() -> None:
     assert segment_shapes and lesson_shapes
     for name in segment_shapes + lesson_shapes:
         assert "estimatedMinutes" in schemas[name]["properties"], name
+
+
+def test_a_new_lesson_in_a_split_needs_no_client_minted_id() -> None:
+    """Split was unbuildable while lessonId was required.
+
+    A client had to invent a UUID for a row it does not own, and confirm then
+    discarded it and minted its own - so the write was accepted and the id was
+    silently not the one that existed.
+    """
+    lesson = schema("UploadLessonDocument")
+
+    assert "lessonId" not in lesson.get("required", [])
+    assert "title" in lesson["required"]
+
+
+def test_confirm_returns_every_lesson_id_it_created() -> None:
+    """Positionally aligned with lessons[], so a new lesson can be matched."""
+    assert "lessonIds" in schema("UploadConfirmedResponse")["properties"]
+
+
+def test_upload_status_names_its_segments() -> None:
+    """Otherwise the third review level is a count, not named rows."""
+    status = schema("UploadStatusResponse")["properties"]
+
+    assert "segments" in status
+    assert "lessonTitle" in status
+    segment = schema("UploadSegmentDocument")["properties"]
+    assert {"segmentKey", "title", "contentType"} <= set(segment)
+
+
+def test_roster_observations_are_a_closed_vocabulary() -> None:
+    """An untyped string[] gave a client no way to know the contents were
+    closed rather than free text, which is a fair reason to refuse to render
+    it. The guarantee now lives in the schema."""
+    observations = schema("ClassStudentResponse")["properties"]["observations"]
+
+    assert "LearnerObservationResponse" in str(observations)
+    assert schema("LearnerObservationPattern")["enum"]
+    # The client composes the wording; the backend only says which pattern.
+    assert set(schema("LearnerObservationResponse")["properties"]) == {"pattern", "count"}

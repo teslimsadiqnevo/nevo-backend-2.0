@@ -35,3 +35,20 @@ class LessonCompletionStatus(StrEnum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     EXITED = "exited"
+
+
+class LearnerObservationPattern(StrEnum):
+    """What a roster observation can say about a learner.
+
+    A closed set, and deliberately so. These are derived from lesson sessions
+    and a fixed list of signal events - never free text, model output, or
+    anything the learner authored. Typing it puts that guarantee in the schema
+    rather than in the reviewer's memory: a client can see there is nothing
+    open-ended here without taking anyone's word for it.
+    """
+
+    COMPLETED_LESSONS = "completed_lessons"
+    REVISITED_CONTENT = "revisited_content"
+    STEADIER_PACE = "steadier_pace"
+    TRIED_ANOTHER_FORMAT = "tried_another_format"
+    NO_RECENT_PATTERN = "no_recent_pattern"

@@ -1053,10 +1053,35 @@ async def upload_status(
     job = await session.get(UploadJob, upload_id)
     if job is None or job.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Upload not found")
+    lesson_id = _uuid(job.structure.get("lessonId"))
+    lesson = await session.get(Lesson, lesson_id) if lesson_id else None
+    segments = (
+        (
+            await session.scalars(
+                select(LessonSegment)
+                .where(LessonSegment.lesson_id == lesson_id)
+                .order_by(LessonSegment.sequence_order)
+            )
+        ).all()
+        if lesson_id
+        else []
+    )
     return {
         "id": str(job.id),
         "status": job.status,
         "stage": job.stage,
+        "lessonTitle": lesson.title if lesson else None,
+        "segments": [
+            {
+                "segmentKey": item.segment_key,
+                "title": item.title,
+                "contentType": item.content_type.value,
+                "sequenceOrder": item.sequence_order,
+                "estimatedMinutes": item.estimated_minutes,
+                "needsReview": item.needs_review,
+            }
+            for item in segments
+        ],
         "structure": job.structure,
         "error": job.error_message,
     }
@@ -1219,9 +1244,13 @@ async def confirm_upload(
     lesson_ids: list[UUID] = []
     for index, entry in enumerate(entries):
         modules = [item for item in entry.get("modules", []) if isinstance(item, dict)]
-        if index == 0:
+        entry_id = _uuid(entry.get("lessonId"))
+        if entry_id == root_id or (index == 0 and entry_id is None):
             lesson = root_lesson
         else:
+            # No id, or an id we do not own: this entry is a new lesson and the
+            # server mints it. Position in lessonIds is how the caller matches
+            # it back.
             lesson = Lesson(
                 school_id=root_lesson.school_id,
                 title=str(entry.get("title") or f"{root_lesson.title} ({index + 1})"),
@@ -1293,3 +1322,11 @@ def _structure_lessons(structure: dict[str, object]) -> list[dict[str, object]]:
             "modules": modules if isinstance(modules, list) else [],
         }
     ]
+
+
+def _uuid(value: object) -> UUID | None:
+    """Parse an identifier that may be absent or malformed, without raising."""
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None

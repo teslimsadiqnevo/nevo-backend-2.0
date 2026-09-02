@@ -87,7 +87,11 @@ from nevo.domain.intelligence.vocabulary import (
     SegmentReviewReason,
 )
 from nevo.domain.permissions.vocabulary import PermissionScope
-from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
+from nevo.domain.signal_events.vocabulary import (
+    LearnerObservationPattern,
+    LessonCompletionStatus,
+    SignalEventType,
+)
 from nevo.intelligence.baseline import build_baseline_profile
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.permissions.entities import PermissionSnapshot
@@ -129,6 +133,22 @@ def _camel(value: str) -> str:
     return head + "".join(part.title() for part in tail)
 
 
+class LearnerObservationResponse(BaseModel):
+    """One roster observation, as a code the client renders.
+
+    Previously an untyped string the backend had already phrased. A client
+    could not tell from the contract that the contents were closed rather than
+    free text, which is a fair reason to refuse to render it. The wording is
+    now the client's and the guarantee is in the schema.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pattern: LearnerObservationPattern
+    #: Only set where the pattern counts something, e.g. lessons completed.
+    count: int | None = None
+
+
 class ClassStudentResponse(BaseModel):
     model_config = ConfigDict(alias_generator=lambda value: _camel(value), populate_by_name=True)
 
@@ -140,7 +160,7 @@ class ClassStudentResponse(BaseModel):
     status: UserStatus
     profile_status: str = Field(alias="profileStatus")
     latest_session_at: datetime | None = Field(alias="latestSessionAt")
-    observations: list[str] = Field(default_factory=list)
+    observations: list["LearnerObservationResponse"] = Field(default_factory=list)
     seat_context: str = Field(alias="seatContext")
 
 
@@ -550,17 +570,22 @@ async def _student_observations(
             item.event_type is SignalEventType.MODALITY_SUGGESTION_ACCEPTED
             for item in recent_events
         )
-        chips: list[str] = []
+        chips: list[dict[str, object]] = []
         if completed:
-            chips.append(f"Completed {completed} lesson{'s' if completed != 1 else ''} recently")
+            chips.append(
+                {
+                    "pattern": LearnerObservationPattern.COMPLETED_LESSONS,
+                    "count": completed,
+                }
+            )
         if replay_count >= 3:
-            chips.append("Revisited parts of recent lessons")
+            chips.append({"pattern": LearnerObservationPattern.REVISITED_CONTENT, "count": None})
         if pace_changes:
-            chips.append("Used a steadier content pace")
+            chips.append({"pattern": LearnerObservationPattern.STEADIER_PACE, "count": None})
         if modality_changes:
-            chips.append("Tried another content format")
+            chips.append({"pattern": LearnerObservationPattern.TRIED_ANOTHER_FORMAT, "count": None})
         if not chips:
-            chips.append("No recent learning pattern to highlight")
+            chips.append({"pattern": LearnerObservationPattern.NO_RECENT_PATTERN, "count": None})
         latest_position = next(
             (item.exit_position for item in recent_sessions if item.exit_position),
             None,

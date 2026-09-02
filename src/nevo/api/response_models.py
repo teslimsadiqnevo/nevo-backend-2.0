@@ -427,10 +427,32 @@ class BatchUploadResponse(CamelResponse):
     rejected_count: int
 
 
+class UploadSegmentDocument(CamelResponse):
+    """A named row for the structure review screen.
+
+    Modules reference segments by key, so without this the third level of the
+    review is a count rather than named rows, and a batch screen can only show
+    filenames because titles would mean polling every upload separately.
+    """
+
+    segment_key: str
+    title: str | None
+    content_type: LessonContentType
+    sequence_order: int
+    estimated_minutes: int = 0
+    needs_review: bool = False
+
+
 class UploadStatusResponse(CamelResponse):
     id: UUID
     status: UploadStatus
     stage: UploadStage
+    #: Lesson title for this upload, so a batch screen can show titles rather
+    #: than filenames from the one poll it already makes.
+    lesson_title: str | None = None
+    #: Every segment the parse produced, in order. Modules point at these by
+    #: segmentKey.
+    segments: list[UploadSegmentDocument] = Field(default_factory=list)
     structure: "UploadStructureDocument"
     error: str | None
 
@@ -450,7 +472,12 @@ class UploadLessonDocument(CamelResponse):
     the unit that carries its own modules.
     """
 
-    lesson_id: UUID
+    #: Omit to split off a new lesson. The server mints the id, because a
+    #: client should not have to invent identity for a row it does not own -
+    #: and a client-minted id would be silently discarded at confirm anyway.
+    #: Confirm returns lessonIds aligned with this list, so a new lesson can
+    #: be matched back by position.
+    lesson_id: UUID | None = None
     title: str
     sequence_order: int
     modules: list[UploadModuleDocument] = Field(default_factory=list)

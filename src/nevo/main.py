@@ -27,6 +27,7 @@ from nevo.api.insights import router as insights_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.mastery import router as mastery_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
+from nevo.api.partner_inquiries import tosse_router
 from nevo.api.permissions import router as permission_router
 from nevo.api.product_admin import router as product_admin_router
 from nevo.api.product_auth import router as product_auth_router
@@ -172,6 +173,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.partner_inquiry_service = build_partner_inquiry_service(
         sessions,
+        delivery=app.state.email_delivery,
     )
     app.state.retention_service = RetentionService(sessions)
     app.state.scheduled_job_runner = ScheduledJobRunner(
@@ -256,6 +258,7 @@ app.include_router(intelligence_router)
 app.include_router(insights_router)
 app.include_router(mastery_router)
 app.include_router(partner_inquiry_router)
+app.include_router(tosse_router)
 app.include_router(permission_router)
 app.include_router(product_admin_router)
 app.include_router(product_auth_router)

@@ -1,6 +1,10 @@
 services:
   - type: web
     name: nevo-backend
+    # The database is in eu-west-1. Without this Render defaults to Oregon,
+    # so every query crossed the Atlantic - about 140ms each, on a request
+    # that makes several. Frankfurt is the closest Render region to it.
+    region: frankfurt
     runtime: python
     plan: starter
     buildCommand: bash scripts/render-build.sh

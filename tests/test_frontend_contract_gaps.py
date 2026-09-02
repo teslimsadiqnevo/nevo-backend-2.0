@@ -174,3 +174,37 @@ def test_roster_observations_are_a_closed_vocabulary() -> None:
     assert schema("LearnerObservationPattern")["enum"]
     # The client composes the wording; the backend only says which pattern.
     assert set(schema("LearnerObservationResponse")["properties"]) == {"pattern", "count"}
+
+
+def test_bulk_writes_are_bounded() -> None:
+    """An unbounded list is an unbounded amount of work per request."""
+    spec = app.openapi()["components"]["schemas"]
+
+    assert spec["LessonAssignmentRequest"]["properties"]["studentIds"]["maxItems"] == 500
+    # Its sibling endpoint was already bounded; these two must not disagree.
+    assert spec["AssignmentCreate"]["properties"]["studentIds"]["maxItems"] == 500
+
+
+def test_listing_classes_does_not_scale_queries_with_classes() -> None:
+    """It ran two queries per class on a page every admin opens."""
+    import inspect
+
+    from nevo.api import product_admin
+
+    body = inspect.getsource(product_admin.list_classes)
+
+    assert "_student_counts" in body
+    assert "_class_subjects_bulk" in body
+    # The per-class helpers must not be called from inside the loop.
+    assert "await _class_subjects(" not in body
+
+
+def test_saving_preferences_reads_existing_rows_once() -> None:
+    import inspect
+
+    from nevo.api import product_admin
+
+    body = inspect.getsource(product_admin.update_notification_preferences)
+
+    assert "existing = {" in body
+    assert "existing.get(category)" in body

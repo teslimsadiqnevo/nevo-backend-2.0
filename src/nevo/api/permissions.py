@@ -34,7 +34,7 @@ class PermissionResponse(BaseModel):
     user_id: UUID
     school_id: UUID | None
     role: UserRole
-    scopes: list[PermissionScope]
+    scopes: list[PermissionScope] = Field(max_length=50)
     navigation: list[str]
 
     @classmethod
@@ -57,7 +57,7 @@ class TeamMemberResponse(BaseModel):
     last_name: str | None
     role: UserRole
     status: UserStatus
-    scopes: list[PermissionScope]
+    scopes: list[PermissionScope] = Field(max_length=50)
 
     @classmethod
     def from_member(cls, member: AdminTeamMember) -> "TeamMemberResponse":
@@ -84,7 +84,7 @@ class InvitationResponse(BaseModel):
     user_id: UUID
     email: EmailStr
     role: UserRole
-    scopes: list[PermissionScope]
+    scopes: list[PermissionScope] = Field(max_length=50)
     invitation_token: str
     expires_at: datetime
 

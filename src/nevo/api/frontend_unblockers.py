@@ -212,7 +212,11 @@ class LessonAssignmentRequest(BaseModel):
 
     lesson_id: UUID = Field(alias="lessonId")
     class_id: UUID | None = Field(default=None, alias="classId")
-    student_ids: list[UUID] = Field(default_factory=list, alias="studentIds")
+    # Bounded to match POST /api/v1/assignments. Unbounded, one request could
+    # ask for an arbitrarily large bulk insert.
+    student_ids: list[UUID] = Field(
+        default_factory=list, alias="studentIds", max_length=500
+    )
     due_at: datetime | None = Field(default=None, alias="dueAt")
     available_from: datetime | None = Field(default=None, alias="availableFrom")
 

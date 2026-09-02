@@ -115,6 +115,11 @@ class PreferenceWrite(BaseModel):
     email: bool
 
 
+#: One row per category, so the natural bound is the vocabulary itself plus
+#: room for a client that repeats one. Unbounded, this was a query per row.
+PreferenceWriteList = Annotated[list[PreferenceWrite], Field(max_length=50)]
+
+
 class PersonalSettingsWrite(BaseModel):
     preferences: dict[str, object] = Field(default_factory=dict)
 
@@ -216,14 +221,16 @@ async def list_classes(
     if not include_archived:
         query = query.where(Class.archived_at.is_(None))
     classes = (await session.scalars(query.order_by(Class.name))).all()
+    # Two aggregates for the whole page rather than two queries per class.
+    # A school with forty classes was issuing eighty-one queries to render
+    # the list every admin opens.
+    class_ids = [item.id for item in classes]
+    counts = await _student_counts(session, class_ids)
+    subjects_by_class = await _class_subjects_bulk(session, class_ids)
     result: list[dict[str, object]] = []
     for item in classes:
-        student_count = await session.scalar(
-            select(func.count(StudentClassEnrollment.id)).where(
-                StudentClassEnrollment.class_id == item.id
-            )
-        )
-        subjects = await _class_subjects(session, item.id)
+        student_count = counts.get(item.id, 0)
+        subjects = subjects_by_class.get(item.id, [])
         result.append(
             {
                 "id": str(item.id),
@@ -301,6 +308,43 @@ async def class_detail(
         "studentCount": students or 0,
         "archivedAt": school_class.archived_at,
     }
+
+
+async def _student_counts(session, class_ids: list[UUID]) -> dict[UUID, int]:
+    """Enrolment counts for many classes in one query."""
+    if not class_ids:
+        return {}
+    rows = await session.execute(
+        select(
+            StudentClassEnrollment.class_id,
+            func.count(StudentClassEnrollment.id),
+        )
+        .where(StudentClassEnrollment.class_id.in_(class_ids))
+        .group_by(StudentClassEnrollment.class_id)
+    )
+    return {class_id: int(total) for class_id, total in rows}
+
+
+async def _class_subjects_bulk(session, class_ids: list[UUID]) -> dict[UUID, list[str]]:
+    """Distinct subjects for many classes in one query."""
+    if not class_ids:
+        return {}
+    rows = await session.execute(
+        select(LessonAssignment.class_id, Lesson.subject)
+        .join(Lesson, Lesson.id == LessonAssignment.lesson_id)
+        .where(
+            LessonAssignment.class_id.in_(class_ids),
+            LessonAssignment.status != "cancelled",
+            Lesson.subject.is_not(None),
+        )
+        .distinct()
+        .order_by(LessonAssignment.class_id, Lesson.subject)
+    )
+    grouped: dict[UUID, list[str]] = {}
+    for class_id, subject in rows:
+        if subject:
+            grouped.setdefault(class_id, []).append(str(subject))
+    return grouped
 
 
 async def _class_subjects(session, class_id: UUID) -> list[str]:
@@ -738,7 +782,7 @@ async def notification_preferences(
     response_model=NotificationPreferencesWriteResponse,
 )
 async def update_notification_preferences(
-    payload: list[PreferenceWrite],
+    payload: PreferenceWriteList,
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
@@ -749,6 +793,16 @@ async def update_notification_preferences(
     all-or-nothing meant one unrecognised category discarded the user's other,
     valid changes with nothing saved and nothing to show for it.
     """
+    existing = {
+        record.category: record
+        for record in (
+            await session.scalars(
+                select(NotificationPreference).where(
+                    NotificationPreference.user_id == principal.user_id
+                )
+            )
+        ).all()
+    }
     saved: list[NotificationCategory] = []
     rejected: list[dict[str, str]] = []
     for item in payload:
@@ -761,18 +815,14 @@ async def update_notification_preferences(
                 }
             )
             continue
-        record = await session.scalar(
-            select(NotificationPreference).where(
-                NotificationPreference.user_id == principal.user_id,
-                NotificationPreference.category == category,
-            )
-        )
+        record = existing.get(category)
         if record is None:
             record = NotificationPreference(
                 user_id=principal.user_id,
                 category=category,
             )
             session.add(record)
+            existing[category] = record
         record.in_app = item.in_app
         record.email = item.email
         saved.append(category)

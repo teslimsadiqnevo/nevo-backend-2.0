@@ -43,7 +43,19 @@ class ResendEmailDelivery:
     def frontend_base_url(self) -> str:
         return str(self._settings.frontend_base_url).rstrip("/")
 
-    async def send(self, *, to: str, subject: str, text: str) -> None:
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        text: str,
+        html: str | None = None,
+    ) -> None:
+        """Send one email.
+
+        ``text`` is always sent and is what a plain-text client renders, so it
+        has to stand on its own. ``html`` is optional and additive.
+        """
         if self._settings.resend_api_key is None:
             raise EmailDeliveryUnavailableError("Resend email delivery is not configured")
         async with httpx.AsyncClient(timeout=20) as client:
@@ -60,6 +72,7 @@ class ResendEmailDelivery:
                     "to": [to],
                     "subject": subject,
                     "text": text,
+                    **({"html": html} if html else {}),
                 },
             )
         if response.is_error:

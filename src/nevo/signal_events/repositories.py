@@ -16,6 +16,7 @@ class SqlAlchemySignalIngestionRepository:
                 id=session_snapshot.id,
                 student_id=session_snapshot.student_id,
                 lesson_id=session_snapshot.lesson_id,
+                session_type=session_snapshot.session_type,
                 started_at=session_snapshot.started_at,
                 ended_at=session_snapshot.ended_at,
                 completion_status=session_snapshot.completion_status,
@@ -30,6 +31,8 @@ class SqlAlchemySignalIngestionRepository:
                     index_elements=[LessonSession.id],
                     set_={
                         "ended_at": statement.excluded.ended_at,
+                        "lesson_id": statement.excluded.lesson_id,
+                        "session_type": statement.excluded.session_type,
                         "completion_status": statement.excluded.completion_status,
                         "exit_position": statement.excluded.exit_position,
                         "break_count": statement.excluded.break_count,

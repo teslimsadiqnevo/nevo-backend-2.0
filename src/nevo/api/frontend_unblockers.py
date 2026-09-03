@@ -28,6 +28,15 @@ from nevo.api.content import (
     get_content_parsing_service,
 )
 from nevo.api.dependencies import DatabaseSession
+from nevo.api.lesson_contracts import (
+    AudioVariant,
+    CalculationVariant,
+    ComprehensionCheckpoint,
+    InteractiveVariant,
+    TextVariant,
+    VisualVariant,
+    checkpoint_payloads,
+)
 from nevo.api.pagination import (
     DEFAULT_LIMIT,
     LimitQuery,
@@ -165,9 +174,12 @@ class ClassStudentResponse(BaseModel):
 
 
 class ConceptResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: UUID
     name: str
     subject: str | None = None
+    lesson_id: UUID | None = Field(default=None, alias="lessonId")
 
 
 class LessonSegmentResponse(BaseModel):
@@ -180,7 +192,14 @@ class LessonSegmentResponse(BaseModel):
     title: str | None
     body: str
     available_modalities: list[str] = Field(alias="availableModalities")
-    comprehension_checkpoints: list[dict[str, object]] = Field(alias="comprehensionCheckpoints")
+    comprehension_checkpoints: list[ComprehensionCheckpoint] = Field(
+        alias="comprehensionCheckpoints"
+    )
+    text_variant: TextVariant | None = Field(default=None, alias="textVariant")
+    visual_variant: VisualVariant | None = Field(default=None, alias="visualVariant")
+    audio_variant: AudioVariant | None = Field(default=None, alias="audioVariant")
+    interactive_variant: InteractiveVariant | None = Field(default=None, alias="interactiveVariant")
+    calculation_variant: CalculationVariant | None = Field(default=None, alias="calculationVariant")
     needs_review: bool = Field(alias="needsReview")
     review_reasons: list[SegmentReviewReason] = Field(alias="reviewReasons")
     estimated_minutes: int = Field(default=0, alias="estimatedMinutes")
@@ -315,6 +334,10 @@ class SendMessageRequest(BaseModel):
 
     recipient_id: UUID = Field(alias="recipientId")
     recipient_type: MessageRecipientType = Field(alias="recipientType")
+    content: str = Field(min_length=1, max_length=5_000)
+
+
+class ReplyMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=5_000)
 
 
@@ -628,7 +651,9 @@ async def concepts(
         ).all()
         set_page_headers(response, total=len(records), limit=len(records) or 1, offset=0)
         return [
-            ConceptResponse(id=item.id, name=item.name, subject=item.subject)
+            ConceptResponse(
+                id=item.id, name=item.name, subject=item.subject, lessonId=item.lesson_id
+            )
             for item in records
         ]
     query = select(Concept).order_by(Concept.name)
@@ -636,7 +661,10 @@ async def concepts(
         query = query.where(Concept.name.ilike(f"%{search}%"))
     records, total = await paginate(session, query, limit=limit, offset=offset)
     set_page_headers(response, total=total, limit=limit, offset=offset)
-    return [ConceptResponse(id=item.id, name=item.name, subject=item.subject) for item in records]
+    return [
+        ConceptResponse(id=item.id, name=item.name, subject=item.subject, lessonId=item.lesson_id)
+        for item in records
+    ]
 
 
 @router.get(
@@ -648,7 +676,9 @@ async def concept(concept_id: UUID, session: DatabaseSession) -> ConceptResponse
     record = await session.get(Concept, concept_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Concept not found")
-    return ConceptResponse(id=record.id, name=record.name, subject=record.subject)
+    return ConceptResponse(
+        id=record.id, name=record.name, subject=record.subject, lessonId=record.lesson_id
+    )
 
 
 @router.get(
@@ -737,7 +767,14 @@ async def lesson_detail(
                 title=item.title,
                 body=item.body,
                 availableModalities=list(item.available_modalities),
-                comprehensionCheckpoints=list(item.comprehension_checkpoints),
+                comprehensionCheckpoints=checkpoint_payloads(
+                    item.comprehension_checkpoints, segment_key=item.segment_key
+                ),
+                textVariant=item.text_variant,
+                visualVariant=item.visual_variant,
+                audioVariant=item.audio_variant,
+                interactiveVariant=item.interactive_variant,
+                calculationVariant=item.calculation_variant,
                 needsReview=item.needs_review,
                 reviewReasons=list(item.review_reasons),
                 estimatedMinutes=item.estimated_minutes,
@@ -1024,6 +1061,39 @@ async def mark_thread_read(
     await _mark_thread_read(session, thread.id, principal.user_id)
     await session.commit()
     return await _thread_response(session, thread, principal.user_id)
+
+
+@router.post(
+    "/api/messages/threads/{thread_id}/reply",
+    response_model=MessageResponse,
+    status_code=201,
+    tags=["messaging"],
+)
+async def reply_to_thread(
+    thread_id: UUID,
+    payload: ReplyMessageRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> MessageResponse:
+    """Reply inside an existing accessible thread, including as a student."""
+    thread = await _require_thread_access(session, principal.user_id, thread_id)
+    user = await actor_user(session, principal)
+    content = payload.content.strip()
+    message = Message(thread_id=thread.id, sender_id=user.id, content=content)
+    thread.latest_preview = content[:255]
+    thread.last_message_at = datetime.now(UTC)
+    session.add(message)
+    await session.flush()
+    await _mark_thread_read(session, thread.id, user.id)
+    await session.commit()
+    return MessageResponse(
+        messageId=message.id,
+        threadId=thread.id,
+        senderId=user.id,
+        senderName=_display_name(user),
+        content=message.content,
+        createdAt=message.created_at,
+    )
 
 
 @router.post(

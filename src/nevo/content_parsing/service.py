@@ -305,6 +305,11 @@ def _segment_from_payload(
     checkpoints = _dict_list(
         item.get("comprehension_checkpoints") or item.get("comprehensionCheckpoints")
     )
+    for checkpoint in checkpoints:
+        checkpoint.setdefault(
+            "conceptName",
+            str(item.get("concept_name") or item.get("title") or body[:80]),
+        )
     return ParsedLessonSegment(
         segment_key=str(item.get("segment_key") or f"segment-{sequence_order}"),
         content_type=content_type,
@@ -313,10 +318,10 @@ def _segment_from_payload(
         body=body,
         available_modalities=modalities,
         comprehension_checkpoints=tuple(checkpoints),
-        text_variant=_dict_or_none(item.get("text_variant")),
+        text_variant=_text_variant(item.get("text_variant"), body),
         visual_variant=_dict_or_none(item.get("visual_variant")),
         audio_variant=_audio_variant(item.get("audio_variant"), body),
-        interactive_variant=_dict_or_none(item.get("interactive_variant")),
+        interactive_variant=_interactive_variant(item.get("interactive_variant"), body),
         calculation_variant=calculation_variant,
         needs_review=needs_review,
         review_reasons=tuple(review_reasons),
@@ -543,6 +548,51 @@ def _audio_variant(value: object, body: str) -> dict[str, object] | None:
             "provider": str(value.get("provider") or "tts_provider_tbd"),
         }
     return _placeholder_audio_variant(body)
+
+
+def _text_variant(value: object, body: str) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    key_points = source.get("keyPoints")
+    return {
+        "body": str(source.get("body") or body),
+        "keyPoints": list(_string_list(key_points)),
+    }
+
+
+def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    options = []
+    raw_options = value.get("options")
+    if isinstance(raw_options, list):
+        for option in raw_options:
+            if isinstance(option, dict) and "value" in option:
+                options.append(
+                    {
+                        "value": option["value"],
+                        "label": str(option.get("label") or option["value"]),
+                    }
+                )
+            elif isinstance(option, (str, int, float, bool)):
+                options.append({"value": option, "label": str(option)})
+    answer_key = value.get("answerKey")
+    if isinstance(answer_key, list):
+        answer_key = [
+            answer for answer in answer_key if isinstance(answer, (str, int, float, bool))
+        ]
+    elif not isinstance(answer_key, (str, int, float, bool, type(None))):
+        answer_key = None
+    instructions = value.get("instructions")
+    return {
+        "type": str(value.get("type") or "practice_problem"),
+        "prompt": str(value.get("prompt") or body[:500]),
+        "expectedInteraction": str(
+            value.get("expectedInteraction") or "teacher_review"
+        ),
+        "options": options,
+        "answerKey": answer_key,
+        "instructions": str(instructions) if instructions is not None else None,
+    }
 
 
 def _placeholder_audio_variant(body: str) -> dict[str, object]:

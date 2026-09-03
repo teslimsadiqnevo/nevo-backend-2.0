@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import StudentConceptScheduling
 from nevo.scheduler.entities import ConceptSchedule
 from nevo.scheduler.fsrs import refresh_due_date, retrievability
@@ -37,8 +38,9 @@ class SqlAlchemySchedulerRepository:
     ) -> tuple[ConceptSchedule, ...]:
         async with self._sessions() as session:
             rows = (
-                await session.scalars(
-                    select(StudentConceptScheduling)
+                await session.execute(
+                    select(StudentConceptScheduling, Concept.lesson_id)
+                    .outerjoin(Concept, Concept.id == StudentConceptScheduling.concept_id)
                     .where(
                         StudentConceptScheduling.student_id == student_id,
                         StudentConceptScheduling.next_review_due <= now,
@@ -46,7 +48,10 @@ class SqlAlchemySchedulerRepository:
                     .order_by(StudentConceptScheduling.next_review_due)
                 )
             ).all()
-        return tuple(_schedule_from_record(row, now=now) for row in rows)
+        return tuple(
+            _schedule_from_record(row, now=now, lesson_id=lesson_id)
+            for row, lesson_id in rows
+        )
 
     async def save(self, schedule: ConceptSchedule) -> ConceptSchedule:
         async with self._sessions.begin() as session:
@@ -96,6 +101,7 @@ def _schedule_from_record(
     record: StudentConceptScheduling,
     *,
     now: datetime,
+    lesson_id: UUID | None = None,
 ) -> ConceptSchedule:
     last_review = record.last_review
     if last_review.tzinfo is None:
@@ -112,5 +118,6 @@ def _schedule_from_record(
         last_review=last_review,
         review_count=record.review_count,
         next_review_due=record.next_review_due,
+        lesson_id=lesson_id,
     )
     return refresh_due_date(current=current, now=now)

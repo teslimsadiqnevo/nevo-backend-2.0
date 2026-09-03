@@ -57,6 +57,32 @@ class SchoolInvitation(Base):
     )
 
 
+class StudentOnboardingGrant(Base):
+    """One-use proof that a pre-auth student supplied a valid class code."""
+
+    __tablename__ = "student_onboarding_grants"
+    __table_args__ = (
+        Index("uq_student_onboarding_grants_token", "token_digest", unique=True),
+        Index("ix_student_onboarding_grants_expiry", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+    )
+    class_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False
+    )
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class ParentDataRequest(Base):
     __tablename__ = "parent_data_requests"
     __table_args__ = (Index("ix_parent_data_requests_student_status", "student_id", "status"),)

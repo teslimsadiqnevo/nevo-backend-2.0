@@ -51,7 +51,7 @@ def auth_user(
     status: str = "active",
     email: str | None = None,
     password: str | None = None,
-    pin: str | None = "2443",
+    pin: str | None = "244300",
     login_identifier: str | None = "UZ59R",
     school_auth_method: str | None = "pin",
     deactivated_at: datetime | None = None,
@@ -107,7 +107,7 @@ async def pin_login(
     *,
     school_code: str = "NVS",
     login_identifier: str = "UZ59R",
-    pin: str = "2443",
+    pin: str = "244300",
 ):
     return await harness.service.login_with_pin(
         school_code=school_code,

@@ -79,7 +79,7 @@ def test_replaced_student_session_returns_required_message() -> None:
     request = {
         "school_code": "NVS",
         "login_identifier": "UZ59R",
-        "pin": "2443",
+        "pin": "244300",
     }
     first = client.post("/api/v1/auth/login/pin", json=request).json()
     second = client.post("/api/v1/auth/login/pin", json=request).json()
@@ -119,7 +119,7 @@ def test_logout_revokes_current_token() -> None:
         json={
             "school_code": "NVS",
             "login_identifier": "UZ59R",
-            "pin": "2443",
+            "pin": "244300",
         },
     ).json()
     headers = {"Authorization": f"Bearer {login['access_token']}"}
@@ -137,7 +137,7 @@ def test_rate_limit_error_maps_to_http_429() -> None:
         json={
             "school_code": "NVS",
             "login_identifier": "UZ59R",
-            "pin": "2443",
+            "pin": "244300",
         },
     )
 

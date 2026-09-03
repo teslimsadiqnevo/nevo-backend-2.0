@@ -4,11 +4,16 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, select, update
 
-from nevo.api.auth import PrincipalDependency
+from nevo.api.auth import (
+    AuthServiceDependency,
+    OptionalPrincipalDependency,
+    PrincipalDependency,
+    SessionResponse,
+)
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import actor_user, require_school_actor
 from nevo.api.response_models import (
@@ -32,7 +37,11 @@ from nevo.db.models.auth import AuthSession
 from nevo.db.models.consent import ConsentInvitation, ParentLink
 from nevo.db.models.frontend_support import PasswordResetToken
 from nevo.db.models.permission import Admin, AdminScopeAssignment
-from nevo.db.models.product import ParentDataRequest, SchoolInvitation
+from nevo.db.models.product import (
+    ParentDataRequest,
+    SchoolInvitation,
+    StudentOnboardingGrant,
+)
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
@@ -58,7 +67,22 @@ class SchoolCodeRequest(BaseModel):
 
 
 class PinUpdateRequest(BaseModel):
-    pin: str = Field(pattern=r"^\d{4,8}$")
+    model_config = ConfigDict(populate_by_name=True)
+
+    pin: str = Field(pattern=r"^\d{6}$")
+    onboarding_token: str | None = Field(default=None, alias="onboardingToken", min_length=32)
+    first_name: str | None = Field(default=None, alias="firstName", min_length=1, max_length=100)
+    last_name: str | None = Field(default=None, alias="lastName", max_length=100)
+    age: int | None = Field(default=None, ge=5, le=21)
+
+
+class PinUpdateResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str
+    user_id: UUID = Field(alias="userId")
+    login_identifier: str | None = Field(alias="loginIdentifier")
+    session: SessionResponse | None = None
 
 
 class PinResetRequest(BaseModel):
@@ -101,7 +125,7 @@ class InvitationRequest(BaseModel):
 class JoinRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     password: str | None = Field(default=None, min_length=8, max_length=1024)
-    pin: str | None = Field(default=None, pattern=r"^\d{4,8}$")
+    pin: str | None = Field(default=None, pattern=r"^\d{6}$")
     first_name: str | None = Field(default=None, alias="firstName", max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
 
@@ -141,22 +165,74 @@ async def verify_school_code(
     }
 
 
-@router.post("/auth/pin")
+@router.post(
+    "/auth/pin",
+    response_model=PinUpdateResponse,
+    openapi_extra={"security": []},
+)
 async def set_pin(
     payload: PinUpdateRequest,
-    principal: PrincipalDependency,
+    principal: OptionalPrincipalDependency,
     session: DatabaseSession,
-) -> dict[str, str]:
-    user = await actor_user(session, principal)
-    if user.role is not UserRole.STUDENT:
+    auth_service: AuthServiceDependency,
+    response: Response,
+) -> dict[str, object]:
+    if principal is not None:
+        user = await actor_user(session, principal)
+        if user.role is not UserRole.STUDENT:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="PIN is for student accounts",
+            )
+        user.pin_hash = credential_hasher().hash_pin(payload.pin)
+        user.auth_method = AuthMethod.PIN
+        await session.commit()
+        return {
+            "status": "updated",
+            "userId": user.id,
+            "loginIdentifier": user.login_identifier,
+            "session": None,
+        }
+
+    if not payload.onboarding_token or not payload.first_name:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="PIN is for student accounts",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="onboardingToken and firstName are required before sign-in",
         )
-    user.pin_hash = credential_hasher().hash_pin(payload.pin)
-    user.auth_method = AuthMethod.PIN
+    grant = await session.scalar(
+        select(StudentOnboardingGrant).where(
+            StudentOnboardingGrant.token_digest == _digest(payload.onboarding_token),
+            StudentOnboardingGrant.used_at.is_(None),
+            StudentOnboardingGrant.expires_at > datetime.now(UTC),
+        )
+    )
+    if grant is None:
+        raise HTTPException(status_code=404, detail="Onboarding session is invalid or expired")
+    identifier = f"NV-{secrets.token_hex(3).upper()}"
+    user = User(
+        school_id=grant.school_id,
+        role=UserRole.STUDENT,
+        auth_method=AuthMethod.PIN,
+        first_name=payload.first_name.strip(),
+        last_name=payload.last_name.strip() if payload.last_name else None,
+        login_identifier=identifier,
+        age_band=str(payload.age) if payload.age is not None else None,
+        pin_hash=credential_hasher().hash_pin(payload.pin),
+        status=UserStatus.ACTIVE,
+    )
+    session.add(user)
+    await session.flush()
+    session.add(StudentClassEnrollment(student_id=user.id, class_id=grant.class_id))
+    grant.used_at = datetime.now(UTC)
     await session.commit()
-    return {"status": "updated"}
+    issued = await auth_service.issue_for_provisioned_user(user.id)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "status": "created",
+        "userId": user.id,
+        "loginIdentifier": identifier,
+        "session": SessionResponse.from_issued(issued),
+    }
 
 
 @router.post("/auth/pin/reset", status_code=status.HTTP_202_ACCEPTED)

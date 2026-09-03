@@ -27,7 +27,7 @@ class PasswordLoginRequest(BaseModel):
 class PinLoginRequest(BaseModel):
     school_code: str = Field(min_length=2, max_length=50)
     login_identifier: str = Field(min_length=1, max_length=50)
-    pin: str = Field(pattern=r"^\d{4,8}$")
+    pin: str = Field(pattern=r"^\d{6}$")
 
 
 class UnifiedLoginRequest(BaseModel):
@@ -40,7 +40,7 @@ class UnifiedLoginRequest(BaseModel):
         alias="loginIdentifier",
         max_length=50,
     )
-    pin: str | None = Field(default=None, pattern=r"^\d{4,8}$")
+    pin: str | None = Field(default=None, pattern=r"^\d{6}$")
 
 
 class SessionResponse(BaseModel):
@@ -187,6 +187,26 @@ async def authenticated_principal(
 PrincipalDependency = Annotated[
     AuthPrincipal,
     Depends(authenticated_principal),
+]
+
+
+async def optional_authenticated_principal(
+    request: Request,
+    service: AuthServiceDependency,
+) -> AuthPrincipal | None:
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if not token or scheme.casefold() != "bearer":
+        return None
+    try:
+        return await service.authenticate(token)
+    except AuthError as error:
+        raise public_auth_error(error) from error
+
+
+OptionalPrincipalDependency = Annotated[
+    AuthPrincipal | None,
+    Depends(optional_authenticated_principal),
 ]
 
 

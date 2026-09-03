@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Never
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from nevo.auth.entities import (
     AuthPrincipal,
@@ -174,6 +174,18 @@ class AuthService:
             user_id=session.user_id,
             role=session.role,
             session_id=session.id,
+        )
+
+    async def issue_for_provisioned_user(self, user_id: UUID) -> IssuedSession:
+        """Issue the first session after a trusted provisioning flow completes."""
+        user = await self._users.find_by_id(user_id)
+        if user is None or not self._is_active(user):
+            raise InvalidCredentialsError
+        identity_digest = self._token_service.protect_identifier(f"provisioned:{user.id}")
+        return await self._complete_login(
+            user=user,
+            identity_digest=identity_digest,
+            ip_digest=self._token_service.protect_identifier("ip:provisioning"),
         )
 
     async def logout(self, access_token: str) -> None:

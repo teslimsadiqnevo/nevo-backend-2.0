@@ -1,5 +1,7 @@
+import hashlib
 import json
-from datetime import UTC, datetime
+import secrets
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -17,14 +19,15 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
-from nevo.api.auth import PrincipalDependency
+from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.content import get_content_parsing_service
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.frontend_unblockers import _extract_text, _source_type, _title_from_filename
+from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.api.product_common import (
     actor_user,
     require_class_access,
@@ -54,7 +57,7 @@ from nevo.api.response_models import (
 )
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
-from nevo.db.models.account import Class, StudentClassEnrollment, User
+from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import LessonAssignment
@@ -63,6 +66,7 @@ from nevo.db.models.product import (
     LessonModule,
     LessonProgress,
     OfflineDownload,
+    StudentOnboardingGrant,
     UploadJob,
     UploadSourceBlob,
 )
@@ -115,6 +119,20 @@ class ProgressWrite(BaseModel):
     module_position: int = Field(default=0, alias="modulePosition", ge=0)
     segment_position: int = Field(default=0, alias="segmentPosition", ge=0)
     status: LessonCompletionStatus
+
+
+class ClassCodeConnectionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    class_code: str | None = Field(default=None, alias="classCode", min_length=4, max_length=20)
+    class_id: UUID | None = Field(default=None, alias="classId")
+    school_code: str | None = Field(default=None, alias="schoolCode", min_length=2, max_length=50)
+
+    @model_validator(mode="after")
+    def identify_class(self) -> "ClassCodeConnectionRequest":
+        if self.class_code or (self.class_id and self.school_code):
+            return self
+        raise ValueError("classCode or classId with schoolCode is required")
 
 
 class UploadRequest(BaseModel):
@@ -276,7 +294,14 @@ async def lesson_detail(
                 "title": item.title,
                 "body": item.body,
                 "availableModalities": item.available_modalities,
-                "comprehensionCheckpoints": item.comprehension_checkpoints,
+                "comprehensionCheckpoints": checkpoint_payloads(
+                    item.comprehension_checkpoints, segment_key=item.segment_key
+                ),
+                "textVariant": item.text_variant,
+                "visualVariant": item.visual_variant,
+                "audioVariant": item.audio_variant,
+                "interactiveVariant": item.interactive_variant,
+                "calculationVariant": item.calculation_variant,
                 "needsReview": item.needs_review,
                 "reviewReasons": item.review_reasons,
                 "estimatedMinutes": item.estimated_minutes,
@@ -666,19 +691,52 @@ async def teacher_dashboard(
     "/connections/class-code",
     response_model=ConnectionResponse,
     status_code=status.HTTP_201_CREATED,
+    openapi_extra={"security": []},
 )
 async def connect_by_class_code(
-    class_code: str,
-    principal: PrincipalDependency,
+    payload: ClassCodeConnectionRequest,
+    principal: OptionalPrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
+    query = select(Class)
+    if payload.class_code:
+        query = query.where(func.lower(Class.class_code) == payload.class_code.casefold())
+    else:
+        query = query.join(School, School.id == Class.school_id).where(
+            Class.id == payload.class_id,
+            func.lower(School.school_code) == (payload.school_code or "").casefold(),
+        )
+    school_class = await session.scalar(query.where(Class.archived_at.is_(None)))
+    if school_class is None:
+        raise HTTPException(status_code=404, detail="Class code not found")
+    school = await session.get(School, school_class.school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    if principal is None:
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(UTC) + timedelta(minutes=20)
+        session.add(
+            StudentOnboardingGrant(
+                school_id=school.id,
+                class_id=school_class.id,
+                token_digest=hashlib.sha256(token.encode()).hexdigest(),
+                expires_at=expires_at,
+            )
+        )
+        await session.commit()
+        return {
+            "classId": school_class.id,
+            "status": "onboarding_ready",
+            "schoolCode": school.school_code,
+            "onboardingToken": token,
+            "expiresAt": expires_at,
+        }
+
     student = await actor_user(session, principal)
     if student.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
-    school_class = await session.scalar(
-        select(Class).where(func.lower(Class.class_code) == class_code.casefold())
-    )
-    if school_class is None or school_class.school_id != student.school_id:
+    if school_class.school_id != student.school_id:
         raise HTTPException(status_code=404, detail="Class code not found")
     exists = await session.scalar(
         select(StudentClassEnrollment.id).where(
@@ -689,7 +747,11 @@ async def connect_by_class_code(
     if exists is None:
         session.add(StudentClassEnrollment(student_id=student.id, class_id=school_class.id))
     await session.commit()
-    return {"classId": str(school_class.id), "status": "connected"}
+    return {
+        "classId": school_class.id,
+        "status": "connected",
+        "schoolCode": school.school_code,
+    }
 
 
 @router.post("/lessons/{lesson_id}/download", response_model=OfflineDownloadResponse)
@@ -1149,8 +1211,16 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
                 "contentType": item.content_type.value,
                 "sequenceOrder": item.sequence_order,
                 "availableModalities": item.available_modalities,
-                "modalityVariants": item.modality_variants,
-                "comprehensionCheckpoints": item.comprehension_checkpoints,
+                "modalityVariants": {
+                    "text": item.text_variant,
+                    "visual": item.visual_variant,
+                    "audio": item.audio_variant,
+                    "interactive": item.interactive_variant,
+                    "calculation": item.calculation_variant,
+                },
+                "comprehensionCheckpoints": checkpoint_payloads(
+                    item.comprehension_checkpoints, segment_key=item.segment_key
+                ),
             }
             for item in segments
         ],

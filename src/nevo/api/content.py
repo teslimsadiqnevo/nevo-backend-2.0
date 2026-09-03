@@ -5,6 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.lesson_contracts import (
+    AudioVariant,
+    CalculationVariant,
+    ComprehensionCheckpoint,
+    InteractiveVariant,
+    TextVariant,
+    VisualVariant,
+    checkpoint_payloads,
+)
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLessonSegment,
@@ -64,14 +73,14 @@ class ParsedLessonSegmentResponse(BaseModel):
     title: str | None
     body: str
     available_modalities: list[ContentModality] = Field(alias="availableModalities")
-    comprehension_checkpoints: list[dict[str, object]] = Field(
+    comprehension_checkpoints: list[ComprehensionCheckpoint] = Field(
         alias="comprehensionCheckpoints"
     )
-    text_variant: dict[str, object] | None = Field(alias="textVariant")
-    visual_variant: dict[str, object] | None = Field(alias="visualVariant")
-    audio_variant: dict[str, object] | None = Field(alias="audioVariant")
-    interactive_variant: dict[str, object] | None = Field(alias="interactiveVariant")
-    calculation_variant: dict[str, object] | None = Field(alias="calculationVariant")
+    text_variant: TextVariant | None = Field(alias="textVariant")
+    visual_variant: VisualVariant | None = Field(alias="visualVariant")
+    audio_variant: AudioVariant | None = Field(alias="audioVariant")
+    interactive_variant: InteractiveVariant | None = Field(alias="interactiveVariant")
+    calculation_variant: CalculationVariant | None = Field(alias="calculationVariant")
     needs_review: bool = Field(alias="needsReview")
     review_reasons: list[str] = Field(alias="reviewReasons")
     estimated_minutes: int = Field(alias="estimatedMinutes")
@@ -88,7 +97,9 @@ class ParsedLessonSegmentResponse(BaseModel):
             title=segment.title,
             body=segment.body,
             available_modalities=list(segment.available_modalities),
-            comprehension_checkpoints=list(segment.comprehension_checkpoints),
+            comprehension_checkpoints=checkpoint_payloads(
+                list(segment.comprehension_checkpoints), segment_key=segment.segment_key
+            ),
             text_variant=segment.text_variant,
             visual_variant=segment.visual_variant,
             audio_variant=segment.audio_variant,

@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
@@ -12,6 +13,7 @@ from nevo.content_parsing.entities import (
 )
 from nevo.db.models.account import User
 from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
+from nevo.db.models.frontend_support import Concept
 from nevo.domain.accounts.vocabulary import UserStatus
 from nevo.domain.intelligence.vocabulary import (
     ContentModality,
@@ -97,6 +99,46 @@ class SqlAlchemyContentParsingRepository:
             )
             await session.flush()
             for segment in parsed.segments:
+                checkpoints: list[dict[str, object]] = []
+                for index, checkpoint in enumerate(segment.comprehension_checkpoints, start=1):
+                    concept_name = str(
+                        checkpoint.get("conceptName")
+                        or segment.title
+                        or parsed.title
+                    ).strip()
+                    concept = await session.scalar(
+                        select(Concept).where(
+                            Concept.school_id == school_id,
+                            Concept.name == concept_name,
+                            Concept.subject == (
+                                str(request.source_metadata.get("subject"))
+                                if request.source_metadata.get("subject")
+                                else None
+                            ),
+                        )
+                    )
+                    if concept is None:
+                        concept = Concept(
+                            school_id=school_id,
+                            lesson_id=lesson_id,
+                            name=concept_name,
+                            subject=(
+                                str(request.source_metadata.get("subject"))
+                                if request.source_metadata.get("subject")
+                                else None
+                            ),
+                            source="lesson_parser",
+                        )
+                        session.add(concept)
+                        await session.flush()
+                    elif concept.lesson_id is None:
+                        concept.lesson_id = lesson_id
+                    normalized = checkpoint_payloads(
+                        [checkpoint],
+                        segment_key=f"{segment.segment_key}-{index}",
+                        concept_id=concept.id,
+                    )
+                    checkpoints.extend(normalized)
                 session.add(
                     LessonSegment(
                         lesson_id=lesson_id,
@@ -109,9 +151,7 @@ class SqlAlchemyContentParsingRepository:
                         available_modalities=[
                             modality.value for modality in segment.available_modalities
                         ],
-                        comprehension_checkpoints=list(
-                            segment.comprehension_checkpoints
-                        ),
+                        comprehension_checkpoints=checkpoints,
                         text_variant=segment.text_variant,
                         visual_variant=segment.visual_variant,
                         audio_variant=segment.audio_variant,

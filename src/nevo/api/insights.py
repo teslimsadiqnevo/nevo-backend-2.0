@@ -471,15 +471,22 @@ async def _progress_payload(session, student_id, subject):
             if str(row[1].source_reference.get("subject", "")).casefold() == subject.casefold()
         ]
     probabilities = [item.mastery_probability_concept for item, _ in mastery]
+    mastery_average = sum(probabilities) / len(probabilities) if probabilities else None
+    reflection, highlights = _progress_narrative(
+        mastery_average=mastery_average,
+        concept_count=len(mastery),
+        practice_count=sum(item.practice_count for item, _ in mastery),
+        lesson_count=len(lesson_rows),
+        subject=subject,
+    )
     return {
         "studentId": str(student_id),
         "subject": subject,
-        "masteryAverage": round(sum(probabilities) / len(probabilities), 4)
-        if probabilities
-        else None,
+        "masteryAverage": round(mastery_average, 4) if mastery_average is not None else None,
         "concepts": [
             {
                 "conceptId": str(item.concept_id),
+                "lessonId": concept.lesson_id if concept else None,
                 "name": concept.name if concept else "Concept",
                 "subject": concept.subject if concept else None,
                 "understanding": round(item.mastery_probability_concept, 4),
@@ -502,7 +509,40 @@ async def _progress_payload(session, student_id, subject):
             }
             for progress, lesson in lesson_rows
         ],
+        "reflection": reflection,
+        "highlights": highlights,
     }
+
+
+def _progress_narrative(
+    *, mastery_average: float | None,
+    concept_count: int,
+    practice_count: int,
+    lesson_count: int,
+    subject: str | None,
+) -> tuple[str, list[str]]:
+    area = subject or "your recent learning"
+    if mastery_average is None:
+        return (
+            f"Your {area} reflection will grow as you complete lessons.",
+            ["Complete a lesson to start building your progress story."],
+        )
+    if mastery_average >= 0.8:
+        reflection = f"You are applying most of the ideas you have practised in {area}."
+    elif mastery_average >= 0.6:
+        reflection = f"Your understanding in {area} is becoming steadier with practice."
+    else:
+        reflection = f"You are building familiarity with the ideas in {area}, one step at a time."
+    highlights = [f"Worked with {concept_count} concept{'s' if concept_count != 1 else ''}."]
+    if practice_count:
+        practice_suffix = "s" if practice_count != 1 else ""
+        highlights.append(
+            f"Completed {practice_count} recorded practice attempt{practice_suffix}."
+        )
+    if lesson_count:
+        lesson_suffix = "s" if lesson_count != 1 else ""
+        highlights.append(f"Made progress in {lesson_count} lesson{lesson_suffix}.")
+    return reflection, highlights
 
 
 def _plain_trigger(event: SignalEvent) -> str:

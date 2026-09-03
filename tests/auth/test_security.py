@@ -15,15 +15,15 @@ def test_password_and_pin_hashes_are_argon2id_and_independently_peppered() -> No
     )
 
     password_hash = hasher.hash_password("correct horse battery staple")
-    pin_hash = hasher.hash_pin("2443")
+    pin_hash = hasher.hash_pin("244300")
 
     assert password_hash.startswith("$argon2id$")
     assert pin_hash.startswith("$argon2id$")
     assert "correct horse battery staple" not in password_hash
-    assert "2443" not in pin_hash
+    assert "244300" not in pin_hash
     assert hasher.verify_password(password_hash, "correct horse battery staple")
     assert not hasher.verify_password(password_hash, "wrong password")
-    assert hasher.verify_pin(pin_hash, "2443")
+    assert hasher.verify_pin(pin_hash, "244300")
     assert not hasher.verify_pin(pin_hash, "0000")
 
 
@@ -37,7 +37,7 @@ def test_missing_hash_still_performs_verification_and_returns_false() -> None:
     )
 
     assert not hasher.verify_password(None, "some password")
-    assert not hasher.verify_pin(None, "2443")
+    assert not hasher.verify_pin(None, "244300")
 
 
 def test_session_tokens_are_random_and_only_digests_are_stable() -> None:

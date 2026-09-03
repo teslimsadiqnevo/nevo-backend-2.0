@@ -4,6 +4,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nevo.api.lesson_contracts import (
+    AudioVariant,
+    CalculationVariant,
+    ComprehensionCheckpoint,
+    InteractiveVariant,
+    TextVariant,
+    VisualVariant,
+)
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     ClassSource,
@@ -232,7 +240,12 @@ class LessonSegmentResponse(CamelResponse):
     title: str | None
     body: str
     available_modalities: list[str]
-    comprehension_checkpoints: list[dict[str, object]]
+    comprehension_checkpoints: list[ComprehensionCheckpoint]
+    text_variant: TextVariant | None = None
+    visual_variant: VisualVariant | None = None
+    audio_variant: AudioVariant | None = None
+    interactive_variant: InteractiveVariant | None = None
+    calculation_variant: CalculationVariant | None = None
     needs_review: bool = False
     review_reasons: list[SegmentReviewReason] = Field(default_factory=list)
     #: Estimated time to work through this segment, for the review screen's
@@ -382,6 +395,9 @@ class LessonClassProgressResponse(CamelResponse):
 class ConnectionResponse(CamelResponse):
     class_id: UUID
     status: str
+    school_code: str | None = None
+    onboarding_token: str | None = None
+    expires_at: datetime | None = None
 
 
 class OfflineManifestResponse(CamelResponse):
@@ -610,6 +626,7 @@ class TransformationMetricsResponse(CamelResponse):
 
 class ConceptProgressResponse(CamelResponse):
     concept_id: UUID
+    lesson_id: UUID | None
     name: str
     subject: str | None
     understanding: float
@@ -635,6 +652,8 @@ class StudentProgressResponse(CamelResponse):
     mastery_average: float | None
     concepts: list[ConceptProgressResponse]
     lessons: list[LessonProgressItemResponse]
+    reflection: str
+    highlights: list[str]
 
 
 class RejectedPreferenceResponse(CamelResponse):

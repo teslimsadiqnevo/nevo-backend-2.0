@@ -66,9 +66,12 @@ class LessonSession(Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    lesson_id: Mapped[uuid.UUID] = mapped_column(
+    lesson_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        nullable=False,
+        nullable=True,
+    )
+    session_type: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="lesson", server_default="lesson"
     )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

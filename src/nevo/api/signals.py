@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -48,7 +48,10 @@ class LessonSessionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     session_id: UUID = Field(alias="sessionId")
-    lesson_id: UUID = Field(alias="lessonId")
+    lesson_id: UUID | None = Field(default=None, alias="lessonId")
+    session_type: Literal["lesson", "onboarding", "profiling", "sso"] = Field(
+        default="lesson", alias="sessionType"
+    )
     started_at: datetime = Field(alias="startedAt")
     ended_at: datetime | None = Field(default=None, alias="endedAt")
     completion_status: LessonCompletionStatus = Field(
@@ -216,6 +219,7 @@ async def ingest_signal_batch(
                     id=payload.session.session_id,
                     student_id=principal.user_id,
                     lesson_id=payload.session.lesson_id,
+                    session_type=payload.session.session_type,
                     started_at=payload.session.started_at,
                     ended_at=payload.session.ended_at,
                     completion_status=payload.session.completion_status,
@@ -237,7 +241,10 @@ async def ingest_signal_batch(
         )
     except SignalIngestionError as error:
         raise public_signal_error(error) from error
-    if payload.session.completion_status is LessonCompletionStatus.COMPLETED:
+    if (
+        payload.session.lesson_id is not None
+        and payload.session.completion_status is LessonCompletionStatus.COMPLETED
+    ):
         worker = getattr(request.app.state, "post_lesson_worker", None)
         if isinstance(worker, PostLessonProcessingWorker):
             await worker.enqueue(

@@ -13,10 +13,10 @@ class ConceptSchedule:
     last_review: datetime
     review_count: int
     next_review_due: datetime
+    lesson_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ReviewResult:
     schedule: ConceptSchedule
     recall_successful: bool
-

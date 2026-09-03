@@ -12,6 +12,7 @@ class Concept(Base):
     __table_args__ = (
         Index("ix_concepts_school_name", "school_id", "name"),
         Index("ix_concepts_subject_name", "subject", "name"),
+        Index("ix_concepts_lesson_id", "lesson_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -22,6 +23,11 @@ class Concept(Base):
     school_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey("schools.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    lesson_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("lessons.id", ondelete="SET NULL"),
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)

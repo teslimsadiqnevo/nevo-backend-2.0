@@ -12,13 +12,14 @@ from nevo.domain.signal_events.vocabulary import (
 class LessonSessionSnapshot:
     id: UUID
     student_id: UUID
-    lesson_id: UUID
+    lesson_id: UUID | None
     started_at: datetime
     ended_at: datetime | None
     completion_status: LessonCompletionStatus
     exit_position: str | None
     break_count: int
     proactive_adjustments_count: int
+    session_type: str = "lesson"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,4 +41,3 @@ class SignalIngestionBatch:
 class SignalIngestionReceipt:
     session_id: UUID
     accepted_events: int
-

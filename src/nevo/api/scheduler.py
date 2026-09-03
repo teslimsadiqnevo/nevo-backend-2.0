@@ -25,9 +25,12 @@ class ConceptScheduleResponse(BaseModel):
     last_review: datetime = Field(alias="lastReview")
     review_count: int = Field(alias="reviewCount")
     next_review_due: datetime = Field(alias="nextReviewDue")
+    lesson_id: UUID | None = Field(default=None, alias="lessonId")
 
     @classmethod
-    def from_schedule(cls, schedule: ConceptSchedule) -> "ConceptScheduleResponse":
+    def from_schedule(
+        cls, schedule: ConceptSchedule, *, lesson_id: UUID | None = None
+    ) -> "ConceptScheduleResponse":
         return cls(
             student_id=schedule.student_id,
             concept_id=schedule.concept_id,
@@ -37,6 +40,7 @@ class ConceptScheduleResponse(BaseModel):
             last_review=schedule.last_review,
             review_count=schedule.review_count,
             next_review_due=schedule.next_review_due,
+            lesson_id=lesson_id if lesson_id is not None else schedule.lesson_id,
         )
 
 
@@ -97,7 +101,10 @@ async def due_reviews(
 ) -> list[ConceptScheduleResponse]:
     await require_student_access(session, principal, student_id)
     schedules = await service.due_reviews(student_id=student_id)
-    return [ConceptScheduleResponse.from_schedule(schedule) for schedule in schedules]
+    return [
+        ConceptScheduleResponse.from_schedule(schedule)
+        for schedule in schedules
+    ]
 
 
 @router.post("/record-review", response_model=RecordReviewResponse)

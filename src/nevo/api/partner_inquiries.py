@@ -1,7 +1,7 @@
 import csv
 import io
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -13,6 +13,7 @@ from nevo.domain.partner_inquiries.vocabulary import (
     PartnerInquiryIntent,
     PartnerInquiryRole,
     PartnerInquirySource,
+    parse_role,
 )
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.partner_inquiries.entities import PartnerInquiryView
@@ -115,7 +116,10 @@ class TosseInterestRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     full_name: str = Field(alias="name", min_length=2, max_length=255)
-    role: PartnerInquiryRole
+    #: Accepted as free text, not the enum. The page sends the dropdown's
+    #: display label, and a lead at a stand is worth more than a tidy request
+    #: shape - an unfamiliar role is recorded as "other" rather than rejected.
+    role: str = Field(min_length=1, max_length=120)
     school_name: str = Field(alias="schoolName", min_length=2, max_length=255)
     student_count: int = Field(alias="studentCount", gt=0, le=100_000)
     phone: str = Field(min_length=6, max_length=50)
@@ -134,6 +138,9 @@ class TosseInterestResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: UUID
+    #: SCRUM-117 specifies this exact field; the page treats its absence as a
+    #: failure and shows the retry notice instead of the confirmation.
+    status: Literal["received"] = "received"
     received: bool = True
 
 
@@ -147,12 +154,17 @@ async def submit_tosse_interest(
     payload: TosseInterestRequest,
     service: PartnerInquiryServiceDependency,
 ) -> TosseInterestResponse:
-    """Capture a founding-partner lead from the TOSSE landing page."""
+    """Capture a founding-partner lead from the TOSSE landing page.
+
+    Public and unauthenticated: the visitor is a headteacher at a stand who
+    has just scanned a QR code, so anything that turns a real lead into an
+    error is a lead lost with a Nevo rep watching.
+    """
     try:
         view = await service.submit(
             full_name=payload.full_name,
             school_name=payload.school_name,
-            role=payload.role,
+            role=parse_role(payload.role) or PartnerInquiryRole.OTHER,
             email=str(payload.email),
             phone=payload.phone,
             student_count=payload.student_count,

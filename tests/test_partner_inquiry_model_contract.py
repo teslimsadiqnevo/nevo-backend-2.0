@@ -26,6 +26,10 @@ def test_partner_inquiry_table_and_enums_exist() -> None:
         "senco",
         "head_of_learning",
         "head_teacher",
+        # The TOSSE dropdown offers both; without them a teacher or a parent
+        # at the stand would be recorded as "other".
+        "teacher",
+        "parent",
         "other",
     ]
     assert enum_values("contact_method") == ["email", "phone"]

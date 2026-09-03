@@ -121,3 +121,80 @@ def test_service_unavailable_when_not_wired() -> None:
     )
 
     assert response.status_code == 503
+
+
+# --- the exact payload the TOSSE page sends -------------------------------
+# Captured off the wire from a real submission (SCRUM-117), not transcribed
+# from the spec. Every field here is load-bearing: the enum values were
+# guessed before the ticket was settled and two of the three intent cards
+# would have been rejected at the stand.
+
+WIRE_PAYLOAD = {
+    "name": "Adebola Okafor",
+    "role": "Academic Director / Head of School",
+    "school_name": "Greenfield Academy",
+    "student_count": 280,
+    "phone": "+234 803 456 7890",
+    "email": "adebola@greenfieldacademy.ng",
+    "intent": "founding_partner",
+}
+
+
+def test_the_page_payload_validates_exactly_as_sent() -> None:
+    from nevo.api.partner_inquiries import TosseInterestRequest
+
+    parsed = TosseInterestRequest(**WIRE_PAYLOAD)
+
+    assert parsed.full_name == "Adebola Okafor"
+    assert parsed.school_name == "Greenfield Academy"
+    assert parsed.student_count == 280
+    # A phone with spaces is what a person types; it must not be rejected.
+    assert parsed.phone == "+234 803 456 7890"
+
+
+def test_every_intent_card_on_the_page_is_accepted() -> None:
+    """Two of these three used to 422, so two thirds of leads were lost."""
+    from nevo.api.partner_inquiries import TosseInterestRequest
+
+    for intent in ("founding_partner", "schedule_walkthrough", "contact_me"):
+        parsed = TosseInterestRequest(**{**WIRE_PAYLOAD, "intent": intent})
+        assert parsed.intent.value == intent
+
+
+def test_every_role_the_dropdown_offers_maps_to_a_distinct_value() -> None:
+    from nevo.domain.partner_inquiries.vocabulary import parse_role
+
+    labels = [
+        "School Proprietor / Owner",
+        "Academic Director / Head of School",
+        "Teacher",
+        "Parent",
+        "Other",
+    ]
+    roles = [parse_role(label) for label in labels]
+
+    assert None not in roles
+    assert len(set(roles)) == len(labels), "two labels collapsed to one role"
+
+
+def test_an_unfamiliar_role_is_recorded_rather_than_rejected() -> None:
+    """A lead at a stand is worth more than a tidy enum."""
+    from nevo.api.partner_inquiries import TosseInterestRequest
+    from nevo.domain.partner_inquiries.vocabulary import PartnerInquiryRole, parse_role
+
+    parsed = TosseInterestRequest(**{**WIRE_PAYLOAD, "role": "Bursar"})
+
+    assert parse_role(parsed.role) is None
+    assert (parse_role(parsed.role) or PartnerInquiryRole.OTHER) is PartnerInquiryRole.OTHER
+
+
+def test_the_response_carries_the_status_the_page_reads() -> None:
+    """The page shows its retry notice unless this field is present."""
+    from uuid import uuid4
+
+    from nevo.api.partner_inquiries import TosseInterestResponse
+
+    body = TosseInterestResponse(id=uuid4()).model_dump(by_alias=True)
+
+    assert body["status"] == "received"
+    assert "id" in body

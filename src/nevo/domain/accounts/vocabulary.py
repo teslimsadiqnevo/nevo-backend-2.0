@@ -81,10 +81,12 @@ class SchoolEnrollmentBand(StrEnum):
 
 
 class ConsentStatus(StrEnum):
-    """Whether a consent record has been confirmed by an administrator."""
+    """Frontend-visible lifecycle of required learner consent."""
 
+    NOT_SENT = "not_sent"
     PENDING = "pending"
     CONFIRMED = "confirmed"
+    WITHDRAWN = "withdrawn"
 
 
 class ConsentType(StrEnum):
@@ -139,6 +141,12 @@ class NotificationType(StrEnum):
     ATTENTION_SUMMARY = "attention_summary"
     MODALITY_SHIFT = "modality_shift"
     PIN_RESET_REQUESTED = "pin_reset_requested"
+    ADMIN_WELCOME = "admin_welcome"
+    CONSENT_ACTION_REQUIRED = "consent_action_required"
+    ROSTER_SYNC_COMPLETED = "roster_sync_completed"
+    ROSTER_SYNC_NEEDS_ATTENTION = "roster_sync_needs_attention"
+    INVOICE_ISSUED = "invoice_issued"
+    SSO_NEEDS_ATTENTION = "sso_needs_attention"
 
 
 class MessageRecipientType(StrEnum):

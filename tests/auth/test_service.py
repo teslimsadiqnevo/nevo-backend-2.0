@@ -247,10 +247,7 @@ async def test_second_student_login_replaces_first_session() -> None:
     principal = await harness.service.authenticate(second.access_token)
     assert principal.user_id == user.id
     assert principal.session_id != UUID(int=0)
-    assert any(
-        event["event_type"] == "session_replaced"
-        for event in harness.audit.events
-    )
+    assert any(event["event_type"] == "session_replaced" for event in harness.audit.events)
 
 
 async def test_teacher_can_keep_multiple_active_sessions() -> None:
@@ -284,6 +281,19 @@ async def test_authenticate_slides_idle_expiry() -> None:
     assert stored is not None
     assert stored.last_seen_at == harness.clock.value
     assert stored.expires_at == harness.clock.value + timedelta(minutes=60)
+
+
+async def test_refresh_returns_the_extended_session_deadline() -> None:
+    user = auth_user()
+    harness = harness_for(user)
+    issued = await pin_login(harness)
+    harness.clock.value = NOW + timedelta(minutes=45)
+
+    refreshed = await harness.service.refresh(issued.access_token)
+
+    assert refreshed.access_token == issued.access_token
+    assert refreshed.expires_at == harness.clock.value + timedelta(minutes=60)
+    assert refreshed.user_id == user.id
 
 
 async def test_expired_session_is_revoked_and_audited() -> None:

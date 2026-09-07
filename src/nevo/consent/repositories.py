@@ -74,13 +74,14 @@ class SqlAlchemyConsentRepository:
                     session.add(record)
                 if record.status is ConsentStatus.PENDING:
                     record.status = ConsentStatus.CONFIRMED
-                    record.confirmation_source = (
-                        ConsentConfirmationSource.SCHOOL
-                    )
+                    record.confirmation_source = ConsentConfirmationSource.SCHOOL
                     record.confirmed_by_admin_id = confirmed_by_user_id
                     record.confirmed_by_parent_id = None
                     record.confirmed_via = confirmed_via
                     record.confirmed_at = confirmed_at
+                    record.last_actor_user_id = confirmed_by_user_id
+                    record.last_changed_at = confirmed_at
+                    record.last_channel = confirmed_via.value
                 records.append(record)
             await session.flush()
             return [self._consent_view(record) for record in records]
@@ -211,8 +212,7 @@ class SqlAlchemyConsentRepository:
                 consent_types = frozenset(
                     await session.scalars(
                         select(ConsentInvitationItem.consent_type).where(
-                            ConsentInvitationItem.invitation_id
-                            == invitation.id
+                            ConsentInvitationItem.invitation_id == invitation.id
                         )
                     )
                 )
@@ -231,13 +231,14 @@ class SqlAlchemyConsentRepository:
                         session.add(record)
                     if record.status is ConsentStatus.PENDING:
                         record.status = ConsentStatus.CONFIRMED
-                        record.confirmation_source = (
-                            ConsentConfirmationSource.PARENT
-                        )
+                        record.confirmation_source = ConsentConfirmationSource.PARENT
                         record.confirmed_by_admin_id = None
                         record.confirmed_by_parent_id = parent.id
                         record.confirmed_via = ConsentMethod.DIGITAL
                         record.confirmed_at = completed_at
+                        record.last_actor_user_id = parent.id
+                        record.last_changed_at = completed_at
+                        record.last_channel = ConsentMethod.DIGITAL.value
 
                 parent_link.parent_id = parent.id
                 parent_link.account_created = True
@@ -245,10 +246,7 @@ class SqlAlchemyConsentRepository:
                 invitation.accepted_at = completed_at
                 await session.execute(
                     update(ConsentNotificationOutbox)
-                    .where(
-                        ConsentNotificationOutbox.invitation_id
-                        == invitation.id
-                    )
+                    .where(ConsentNotificationOutbox.invitation_id == invitation.id)
                     .values(consent_url="")
                 )
                 await session.flush()
@@ -397,9 +395,7 @@ class SqlAlchemyConsentRepository:
     ) -> User:
         if parent_link.parent_id is not None:
             linked_parent = await session.scalar(
-                select(User)
-                .where(User.id == parent_link.parent_id)
-                .with_for_update()
+                select(User).where(User.id == parent_link.parent_id).with_for_update()
             )
             if linked_parent is None:
                 raise ParentAccountConflictError
@@ -409,10 +405,7 @@ class SqlAlchemyConsentRepository:
         if parent_link.contact_method is ParentContactMethod.EMAIL:
             parent = await session.scalar(
                 select(User)
-                .where(
-                    func.lower(User.email)
-                    == parent_link.parent_contact.casefold()
-                )
+                .where(func.lower(User.email) == parent_link.parent_contact.casefold())
                 .with_for_update()
                 .limit(1)
             )
@@ -430,8 +423,7 @@ class SqlAlchemyConsentRepository:
                 first_name=parent_link.parent_name,
                 email=(
                     parent_link.parent_contact
-                    if parent_link.contact_method
-                    is ParentContactMethod.EMAIL
+                    if parent_link.contact_method is ParentContactMethod.EMAIL
                     else None
                 ),
                 status=UserStatus.INVITED,

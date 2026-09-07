@@ -45,7 +45,7 @@ class UnifiedLoginRequest(BaseModel):
 
 class SessionResponse(BaseModel):
     access_token: str
-    token_type: Literal['bearer']
+    token_type: Literal["bearer"]
     expires_at: datetime
     user_id: UUID
     role: UserRole
@@ -215,6 +215,22 @@ async def current_session(
     principal: PrincipalDependency,
 ) -> PrincipalResponse:
     return PrincipalResponse.from_principal(principal)
+
+
+@router.post("/session/refresh", response_model=SessionResponse)
+async def refresh_session(
+    credentials: BearerDependency,
+    service: AuthServiceDependency,
+    response: Response,
+) -> SessionResponse:
+    """Renew an unexpired session and return its new client-side deadline."""
+    token = require_bearer_token(credentials)
+    try:
+        issued = await service.refresh(token)
+    except AuthError as error:
+        raise public_auth_error(error) from error
+    response.headers["Cache-Control"] = "no-store"
+    return SessionResponse.from_issued(issued)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

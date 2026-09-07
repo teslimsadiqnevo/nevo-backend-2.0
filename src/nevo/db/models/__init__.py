@@ -59,6 +59,7 @@ from nevo.db.models.mastery import (
 from nevo.db.models.partner_inquiry import PartnerInquiry
 from nevo.db.models.permission import Admin, AdminInvitation, AdminScopeAssignment
 from nevo.db.models.product import (
+    DpaAcceptance,
     EnrollmentHistory,
     FeedbackSubmission,
     LessonModule,
@@ -105,6 +106,7 @@ __all__ = [
     "ConsentRecord",
     "ContentParseRun",
     "Contract",
+    "DpaAcceptance",
     "EnrollmentHistory",
     "Escalation",
     "ExchangeRate",

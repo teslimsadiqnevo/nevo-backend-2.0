@@ -27,22 +27,34 @@ from nevo.api.response_models import (
 )
 from nevo.auth.config import AuthSettings
 from nevo.auth.security import Argon2idCredentialHasher
+from nevo.consent.entities import ConsentActor
+from nevo.consent.errors import ConsentError
+from nevo.consent.service import ConsentService
 from nevo.db.models.account import (
     Class,
+    ConsentRecord,
     School,
     StudentClassEnrollment,
     User,
 )
 from nevo.db.models.auth import AuthSession
 from nevo.db.models.consent import ConsentInvitation, ParentLink
-from nevo.db.models.frontend_support import PasswordResetToken
+from nevo.db.models.frontend_support import Notification, PasswordResetToken
 from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.product import (
     ParentDataRequest,
     SchoolInvitation,
     StudentOnboardingGrant,
 )
-from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
+from nevo.domain.accounts.vocabulary import (
+    AuthMethod,
+    ConsentStatus,
+    ConsentType,
+    NotificationType,
+    UserRole,
+    UserStatus,
+)
+from nevo.domain.consent.vocabulary import ParentContactMethod
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 
@@ -404,11 +416,23 @@ async def change_password(
     return {"status": "password_updated"}
 
 
-@router.post("/schools/register", status_code=status.HTTP_201_CREATED)
+class SchoolRegistrationResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    school_id: UUID = Field(alias="schoolId")
+    admin_id: UUID = Field(alias="adminId")
+    school_code: str = Field(alias="schoolCode")
+
+
+@router.post(
+    "/schools/register",
+    response_model=SchoolRegistrationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def register_school(
     payload: SchoolRegistrationRequest,
     session: DatabaseSession,
-) -> dict[str, str]:
+) -> SchoolRegistrationResponse:
     existing_id = await session.scalar(
         select(User.id).where(func.lower(User.email) == str(payload.email).casefold())
     )
@@ -438,7 +462,26 @@ async def register_school(
         password_hash=credential_hasher().hash_password(payload.password),
         status=UserStatus.ACTIVE,
     )
-    session.add_all([school, user, Admin(id=admin_id, user_id=user_id, school_id=school_id)])
+    # These models intentionally use raw UUID foreign keys rather than ORM
+    # relationships. Flush each dependency tier so SQLAlchemy cannot schedule
+    # the admin row before the user it references.
+    session.add(school)
+    await session.flush()
+    session.add(user)
+    await session.flush()
+    session.add(
+        Notification(
+            recipient_id=user_id,
+            recipient_role=UserRole.OTHER_ADMIN.value,
+            type=NotificationType.ADMIN_WELCOME.value,
+            title="Your school workspace is ready",
+            description="You can now add your team, classes, and learners.",
+            navigates_to="/admin/overview",
+            category="account",
+        )
+    )
+    session.add(Admin(id=admin_id, user_id=user_id, school_id=school_id))
+    await session.flush()
     for scope in PermissionScope:
         session.add(
             AdminScopeAssignment(
@@ -448,7 +491,11 @@ async def register_school(
             )
         )
     await session.commit()
-    return {"schoolId": str(school_id), "adminId": str(user_id), "schoolCode": school.school_code}
+    return SchoolRegistrationResponse(
+        schoolId=school_id,
+        adminId=user_id,
+        schoolCode=school.school_code,
+    )
 
 
 async def _create_invitation(
@@ -489,6 +536,7 @@ async def _create_invitation(
         "status": record.status,
         "expiresAt": record.expires_at,
         "deliveryStatus": delivery_status,
+        "consentStatus": record.consent_request_status,
     }
 
 
@@ -543,6 +591,7 @@ async def list_invites(
             "name": " ".join(filter(None, (item.first_name, item.last_name))),
             "status": item.status,
             "expiresAt": item.expires_at,
+            "consentStatus": item.consent_request_status,
         }
         for item in rows
     ]
@@ -575,6 +624,7 @@ async def resend_invite(
         "token": token,
         "expiresAt": record.expires_at,
         "deliveryStatus": delivery_status,
+        "consentStatus": record.consent_request_status,
     }
 
 
@@ -652,6 +702,7 @@ async def accept_join(
     token: str,
     payload: JoinRequest,
     session: DatabaseSession,
+    request: Request,
 ) -> dict[str, object]:
     record = await _join_record(token, session)
     if record.role == "teacher" and not (payload.password and record.email):
@@ -688,10 +739,40 @@ async def accept_join(
         session.add(StudentClassEnrollment(student_id=user.id, class_id=record.class_id))
     record.status, record.accepted_at = "joined", datetime.now(UTC)
     await session.commit()
+    consent_status: ConsentStatus | None = None
+    if record.role == "student":
+        consent_status = ConsentStatus.NOT_SENT
+        if record.parent_contact:
+            service = getattr(request.app.state, "consent_service", None)
+            if isinstance(service, ConsentService):
+                method = (
+                    ParentContactMethod.EMAIL
+                    if "@" in record.parent_contact
+                    else ParentContactMethod.SMS
+                )
+                try:
+                    await service.request_parent_consent(
+                        ConsentActor(
+                            user_id=record.created_by_id,
+                            school_id=record.school_id,
+                        ),
+                        student_id=user.id,
+                        parent_name="Parent or guardian",
+                        parent_contact=record.parent_contact,
+                        contact_method=method,
+                        consent_types=frozenset({ConsentType.DATA_PROCESSING}),
+                    )
+                    consent_status = ConsentStatus.PENDING
+                    record.consent_request_status = ConsentStatus.PENDING.value
+                    await session.commit()
+                except ConsentError:
+                    record.consent_request_status = ConsentStatus.NOT_SENT.value
+                    await session.commit()
     return {
         "userId": str(user.id),
         "role": user.role.value,
         "loginIdentifier": user.login_identifier,
+        "consentStatus": consent_status,
     }
 
 
@@ -727,5 +808,16 @@ async def exercise_parent_right(
         if student:
             student.status = UserStatus.DEACTIVATED
             student.deactivated_at = datetime.now(UTC)
+        consent = await session.scalar(
+            select(ConsentRecord).where(
+                ConsentRecord.subject_user_id == link.student_id,
+                ConsentRecord.consent_type == ConsentType.DATA_PROCESSING,
+            )
+        )
+        if consent is not None and consent.status is ConsentStatus.CONFIRMED:
+            consent.status = ConsentStatus.WITHDRAWN
+            consent.last_actor_user_id = link.parent_id
+            consent.last_changed_at = datetime.now(UTC)
+            consent.last_channel = "parent_portal"
     await session.commit()
     return {"requestId": str(request.id), "status": request.status}

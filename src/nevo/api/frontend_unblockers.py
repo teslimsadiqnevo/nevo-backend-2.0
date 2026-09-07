@@ -23,6 +23,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.consent_summary import empty_consent_summary, student_consent_summaries
 from nevo.api.content import (
     ParseContentResponse,
     get_content_parsing_service,
@@ -60,6 +61,7 @@ from nevo.api.response_models import (
     OutcomesResponse,
     ProfileAliasResponse,
     SchoolHealthResponse,
+    StudentConsentSummaryResponse,
 )
 from nevo.api.response_models import (
     LessonModuleResponse as SharedLessonModuleResponse,
@@ -171,6 +173,7 @@ class ClassStudentResponse(BaseModel):
     latest_session_at: datetime | None = Field(alias="latestSessionAt")
     observations: list["LearnerObservationResponse"] = Field(default_factory=list)
     seat_context: str = Field(alias="seatContext")
+    consent: StudentConsentSummaryResponse
 
 
 class ConceptResponse(BaseModel):
@@ -233,9 +236,7 @@ class LessonAssignmentRequest(BaseModel):
     class_id: UUID | None = Field(default=None, alias="classId")
     # Bounded to match POST /api/v1/assignments. Unbounded, one request could
     # ask for an arbitrarily large bulk insert.
-    student_ids: list[UUID] = Field(
-        default_factory=list, alias="studentIds", max_length=500
-    )
+    student_ids: list[UUID] = Field(default_factory=list, alias="studentIds", max_length=500)
     due_at: datetime | None = Field(default=None, alias="dueAt")
     available_from: datetime | None = Field(default=None, alias="availableFrom")
 
@@ -518,6 +519,7 @@ async def class_students(
         student_ids=[user.id for user, _, _ in rows],
         school_class=school_class,
     )
+    consent = await student_consent_summaries(session, (user.id for user, _, _ in rows))
     return [
         ClassStudentResponse(
             student_id=user.id,
@@ -530,6 +532,7 @@ async def class_students(
             latestSessionAt=latest_session_at,
             observations=observations[user.id]["observations"],
             seatContext=observations[user.id]["seatContext"],
+            consent=consent.get(user.id, empty_consent_summary()),
         )
         for user, profile_id, latest_session_at in rows
     ]
@@ -584,13 +587,11 @@ async def _student_observations(
         recent_sessions = sessions_by_student[student_id]
         recent_events = events_by_student[student_id]
         completed = sum(
-            item.completion_status is LessonCompletionStatus.COMPLETED
-            for item in recent_sessions
+            item.completion_status is LessonCompletionStatus.COMPLETED for item in recent_sessions
         )
         replay_count = sum(item.event_type is SignalEventType.REPLAY for item in recent_events)
         pace_changes = sum(
-            item.event_type
-            in {SignalEventType.SLOWER_TRIGGER, SignalEventType.SIMPLIFY_TRIGGER}
+            item.event_type in {SignalEventType.SLOWER_TRIGGER, SignalEventType.SIMPLIFY_TRIGGER}
             for item in recent_events
         )
         modality_changes = sum(
@@ -754,9 +755,9 @@ async def lesson_detail(
         )
     )
     return LessonDetailResponse(
-        **_lesson_summary(
-            lesson, assignment_count=int(assignment_count or 0)
-        ).model_dump(by_alias=True),
+        **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)).model_dump(
+            by_alias=True
+        ),
         confirmationSummary=lesson.confirmation_summary,
         segments=[
             LessonSegmentResponse(
@@ -1505,9 +1506,7 @@ def _display_name(user: User) -> str:
 
 async def _subjects_for_user(session, user: User) -> list[str]:
     subjects = {
-        str(item).strip()
-        for item in user.preferences.get("subjects", [])
-        if str(item).strip()
+        str(item).strip() for item in user.preferences.get("subjects", []) if str(item).strip()
     }
     query = select(Lesson.subject).where(Lesson.subject.is_not(None))
     if user.role is UserRole.STUDENT:

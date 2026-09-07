@@ -1,8 +1,9 @@
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.billing.entities import (
@@ -15,8 +16,9 @@ from nevo.billing.entities import (
     UpcomingCharge,
 )
 from nevo.billing.errors import BillingNotFoundError
-from nevo.db.models.account import School
+from nevo.db.models.account import School, User
 from nevo.db.models.billing import BillingContact, BillingPaymentMethod, Invoice
+from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.billing.vocabulary import InvoiceStatus
 
 RENEWAL_NOTICE_DAYS = 60
@@ -39,9 +41,17 @@ class SqlAlchemyBillingRepository:
                 raise BillingNotFoundError
             contact = await _billing_contact(session, school.billing_contact_id)
             payment_method = await session.scalar(
-                select(BillingPaymentMethod).where(
-                    BillingPaymentMethod.school_id == school_id
+                select(BillingPaymentMethod).where(BillingPaymentMethod.school_id == school_id)
+            )
+            active_student_count = int(
+                await session.scalar(
+                    select(func.count(User.id)).where(
+                        User.school_id == school_id,
+                        User.role == UserRole.STUDENT,
+                        User.status == UserStatus.ACTIVE,
+                    )
                 )
+                or 0
             )
         visible, message = _renewal_notice(school.contract_end, self._today())
         return SubscriptionRecord(
@@ -55,8 +65,12 @@ class SqlAlchemyBillingRepository:
             renewal_banner_visible=visible,
             renewal_message=message,
             billing_contact=_contact_record(contact) if contact else None,
-            payment_method=(
-                _payment_method_record(payment_method) if payment_method else None
+            payment_method=(_payment_method_record(payment_method) if payment_method else None),
+            active_student_count=active_student_count,
+            per_student_annual_rate=(
+                (school.contract_value / active_student_count).quantize(Decimal("0.01"))
+                if school.contract_value is not None and active_student_count > 0
+                else None
             ),
         )
 
@@ -68,9 +82,7 @@ class SqlAlchemyBillingRepository:
         date_to: date | None,
         status: InvoiceStatus | None,
     ) -> tuple[InvoiceRecord, ...]:
-        query: Select[tuple[Invoice]] = select(Invoice).where(
-            Invoice.school_id == school_id
-        )
+        query: Select[tuple[Invoice]] = select(Invoice).where(Invoice.school_id == school_id)
         if date_from is not None:
             query = query.where(Invoice.issued_at >= date_from)
         if date_to is not None:
@@ -92,9 +104,7 @@ class SqlAlchemyBillingRepository:
                 select(Invoice)
                 .where(
                     Invoice.school_id == school_id,
-                    Invoice.status.in_(
-                        [InvoiceStatus.PENDING, InvoiceStatus.OVERDUE]
-                    ),
+                    Invoice.status.in_([InvoiceStatus.PENDING, InvoiceStatus.OVERDUE]),
                     Invoice.due_at >= today,
                 )
                 .order_by(Invoice.due_at)
@@ -130,16 +140,12 @@ class SqlAlchemyBillingRepository:
     ) -> PaymentMethodRecord:
         async with self._sessions.begin() as session:
             record = await session.scalar(
-                select(BillingPaymentMethod).where(
-                    BillingPaymentMethod.school_id == school_id
-                )
+                select(BillingPaymentMethod).where(BillingPaymentMethod.school_id == school_id)
             )
             values = {
                 "method_type": update_data.method_type,
                 "processor_name": update_data.processor_name,
-                "processor_payment_method_ref": (
-                    update_data.processor_payment_method_ref
-                ),
+                "processor_payment_method_ref": (update_data.processor_payment_method_ref),
                 "display_name": update_data.display_name,
                 "last_four": update_data.last_four,
                 "card_brand": update_data.card_brand,
@@ -205,9 +211,7 @@ class SqlAlchemyBillingRepository:
                 )
             else:
                 await session.execute(
-                    update(BillingContact)
-                    .where(BillingContact.id == record.id)
-                    .values(**values)
+                    update(BillingContact).where(BillingContact.id == record.id).values(**values)
                 )
                 await session.refresh(record)
         return _contact_record(record)

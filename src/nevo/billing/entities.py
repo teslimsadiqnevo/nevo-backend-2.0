@@ -52,6 +52,10 @@ class SubscriptionRecord:
     renewal_message: str | None
     billing_contact: BillingContactRecord | None
     payment_method: PaymentMethodRecord | None
+    active_student_count: int = 0
+    per_student_annual_rate: Decimal | None = None
+    pricing_model: str = "per_student"
+    currency: PricingCurrency = PricingCurrency.USD
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,7 +4,10 @@ from contextlib import asynccontextmanager
 from time import perf_counter
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 
 from nevo.ai_gateway.config import AiGatewaySettings
 from nevo.ai_gateway.wiring import build_ai_gateway
@@ -229,6 +232,32 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request,
+    error: RequestValidationError,
+) -> JSONResponse:
+    del request
+    errors = [
+        {
+            "type": item["type"],
+            "location": list(item["loc"]),
+            "message": item["msg"],
+        }
+        for item in error.errors()
+    ]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {
+                "code": "validation_error",
+                "message": "Request validation failed.",
+                "errors": errors,
+            }
+        },
+    )
+
+
 @app.middleware("http")
 async def request_timing(request: Request, call_next):  # type: ignore[no-untyped-def]
     started_at = perf_counter()
@@ -289,3 +318,51 @@ async def health(request: Request) -> dict[str, str]:
         "media": "configured" if getattr(media, "configured", False) else "not_configured",
         "email": "configured" if getattr(email, "configured", False) else "not_configured",
     }
+
+
+def custom_openapi() -> dict[str, object]:
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        summary=app.summary,
+        description=app.description,
+        routes=app.routes,
+        tags=app.openapi_tags,
+    )
+    components = schema.setdefault("components", {}).setdefault("schemas", {})
+    components["HTTPValidationError"] = {
+        "type": "object",
+        "required": ["detail"],
+        "properties": {
+            "detail": {
+                "type": "object",
+                "required": ["code", "message", "errors"],
+                "properties": {
+                    "code": {"type": "string", "const": "validation_error"},
+                    "message": {"type": "string"},
+                    "errors": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["type", "location", "message"],
+                            "properties": {
+                                "type": {"type": "string"},
+                                "location": {
+                                    "type": "array",
+                                    "items": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                                },
+                                "message": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            }
+        },
+    }
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi  # type: ignore[method-assign]

@@ -39,6 +39,9 @@ class SchoolInvitation(Base):
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     parent_contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    consent_request_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="not_sent", server_default="not_sent"
+    )
     class_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("classes.id", ondelete="SET NULL"), nullable=True
     )
@@ -53,6 +56,28 @@ class SchoolInvitation(Base):
         Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class DpaAcceptance(Base):
+    __tablename__ = "dpa_acceptances"
+    __table_args__ = (
+        UniqueConstraint("school_id", "version", name="uq_dpa_acceptances_school_version"),
+        Index("ix_dpa_acceptances_school_accepted", "school_id", "accepted_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[str] = mapped_column(String(40), nullable=False)
+    accepted_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    accepted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
@@ -335,9 +360,7 @@ class NotificationPreference(Base):
 
 class PostLessonProcessing(Base):
     __tablename__ = "post_lesson_processing"
-    __table_args__ = (
-        Index("ix_post_lesson_processing_due", "status", "next_attempt_at"),
-    )
+    __table_args__ = (Index("ix_post_lesson_processing_due", "status", "next_attempt_at"),)
 
     session_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     student_id: Mapped[uuid.UUID] = mapped_column(

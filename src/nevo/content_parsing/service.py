@@ -50,6 +50,7 @@ class ContentParsingService:
         *,
         request: ContentParseRequest,
         requested_by_user_id: UUID,
+        existing_lesson_id: UUID | None = None,
     ) -> StoredParsedLesson:
         source = _source_for_prompt(request)
         chunks = _chunks(source)
@@ -105,11 +106,11 @@ class ContentParsingService:
             if self._visual_generation is not None and self._visual_generation.configured:
                 segment = await self._generate_segment_visual(segment)
             prepared_segments.append(segment)
-        normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
         if self._audio_generation is not None and self._audio_generation.configured:
-            normalized_segments = [
-                await self._generate_segment_audio(segment) for segment in normalized_segments
+            prepared_segments = [
+                await self._generate_segment_audio(segment) for segment in prepared_segments
             ]
+        normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
 
         parsed = ParsedLesson(
             title=request.title,
@@ -119,10 +120,17 @@ class ContentParsingService:
             gemini_call_count=ai_call_count,
             chunk_count=len(chunks),
         )
+        if existing_lesson_id is None:
+            return await self._repository.store(
+                request=request,
+                parsed=parsed,
+                requested_by_user_id=requested_by_user_id,
+            )
         return await self._repository.store(
             request=request,
             parsed=parsed,
             requested_by_user_id=requested_by_user_id,
+            existing_lesson_id=existing_lesson_id,
         )
 
     async def _generate_segment_audio(
@@ -405,8 +413,21 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
         )
         needs_review = True
         reasons.append("visual_variant_image_generation_failed")
+    audio_variant = segment.audio_variant
+    if ContentModality.AUDIO in modalities and not _has_audio_delivery(audio_variant):
+        audio_variant = None
+        modalities = tuple(
+            modality for modality in modalities if modality is not ContentModality.AUDIO
+        )
+        needs_review = True
+        reasons.append("audio_generation_failed")
     if segment.content_type is LessonContentType.CALCULATION:
-        modalities = (ContentModality.INTERACTIVE, ContentModality.VISUAL)
+        modalities = tuple(
+            modality
+            for modality in (ContentModality.INTERACTIVE, ContentModality.VISUAL)
+            if (modality is ContentModality.INTERACTIVE and segment.calculation_variant is not None)
+            or (modality is ContentModality.VISUAL and _has_visual_delivery(segment))
+        )
     elif ContentModality.TEXT not in modalities:
         modalities = (ContentModality.TEXT, *modalities)
     if len(modalities) < 2:
@@ -422,7 +443,7 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
         comprehension_checkpoints=segment.comprehension_checkpoints,
         text_variant=segment.text_variant or {"body": segment.body},
         visual_variant=visual_variant,
-        audio_variant=segment.audio_variant,
+        audio_variant=audio_variant,
         interactive_variant=segment.interactive_variant,
         calculation_variant=segment.calculation_variant,
         needs_review=needs_review,
@@ -444,6 +465,10 @@ def _is_generated_image_variant(value: dict[str, object] | None) -> bool:
         return False
     required = ("imageUrl", "prompt", "provider", "generatedAt")
     return all(isinstance(value.get(field), str) and value.get(field) for field in required)
+
+
+def _has_audio_delivery(value: dict[str, object] | None) -> bool:
+    return bool(isinstance(value, dict) and str(value.get("audioUrl") or "").strip())
 
 
 def _validated_calculation_variant(
@@ -586,9 +611,7 @@ def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
     return {
         "type": str(value.get("type") or "practice_problem"),
         "prompt": str(value.get("prompt") or body[:500]),
-        "expectedInteraction": str(
-            value.get("expectedInteraction") or "teacher_review"
-        ),
+        "expectedInteraction": str(value.get("expectedInteraction") or "teacher_review"),
         "options": options,
         "answerKey": answer_key,
         "instructions": str(instructions) if instructions is not None else None,

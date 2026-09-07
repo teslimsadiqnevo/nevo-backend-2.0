@@ -3,8 +3,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.dependencies import DatabaseSession
 from nevo.api.lesson_contracts import (
     AudioVariant,
     CalculationVariant,
@@ -14,6 +16,7 @@ from nevo.api.lesson_contracts import (
     VisualVariant,
     checkpoint_payloads,
 )
+from nevo.api.product_common import require_school_actor
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLessonSegment,
@@ -21,6 +24,7 @@ from nevo.content_parsing.entities import (
     StoredParsedLesson,
 )
 from nevo.content_parsing.service import ContentParsingService
+from nevo.db.models.content import Lesson, LessonSegment
 from nevo.domain.intelligence.vocabulary import (
     ContentModality,
     ContentParseStatus,
@@ -59,9 +63,7 @@ class ParseContentRequest(BaseModel):
             return self
         if self.source_metadata.get("importReference"):
             return self
-        raise ValueError(
-            "sourceText, pages, or sourceMetadata.importReference is required"
-        )
+        raise ValueError("sourceText, pages, or sourceMetadata.importReference is required")
 
 
 class ParsedLessonSegmentResponse(BaseModel):
@@ -136,8 +138,7 @@ class ParseContentResponse(BaseModel):
             confirmation_summary=result.confirmation_summary,
             review_notes=list(result.review_notes),
             segments=[
-                ParsedLessonSegmentResponse.from_segment(segment)
-                for segment in result.segments
+                ParsedLessonSegmentResponse.from_segment(segment) for segment in result.segments
             ],
         )
 
@@ -206,12 +207,59 @@ async def parse_content(
             source_type=payload.source_type,
             source_text=payload.source_text,
             pages=tuple(
-                SourcePage(page_number=page.page_number, text=page.text)
-                for page in payload.pages
+                SourcePage(page_number=page.page_number, text=page.text) for page in payload.pages
             ),
             source_metadata=payload.source_metadata,
         ),
         requested_by_user_id=principal.user_id,
+    )
+    return ParseContentResponse.from_result(result)
+
+
+@router.post("/lessons/{lesson_id}/regenerate", response_model=ParseContentResponse)
+async def regenerate_lesson(
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    service: ContentParsingDependency,
+) -> ParseContentResponse:
+    """Rebuild a legacy lesson in place using the current content contract."""
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={"teacher", "senco_admin", "other_admin"},
+    )
+    lesson = await session.get(Lesson, lesson_id)
+    if lesson is None or lesson.school_id != actor.school_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
+    segments = list(
+        await session.scalars(
+            select(LessonSegment)
+            .where(LessonSegment.lesson_id == lesson_id)
+            .order_by(LessonSegment.sequence_order)
+        )
+    )
+    source_text = "\n\n".join(segment.body.strip() for segment in segments if segment.body.strip())
+    if not source_text:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "lesson_source_unavailable",
+                "message": "This lesson has no stored content to regenerate.",
+            },
+        )
+    metadata = dict(lesson.source_reference or {})
+    if lesson.subject:
+        metadata["subject"] = lesson.subject
+    result = await service.parse(
+        request=ContentParseRequest(
+            title=lesson.title,
+            source_type=lesson.source_type,
+            source_text=source_text,
+            source_metadata=metadata,
+        ),
+        requested_by_user_id=principal.user_id,
+        existing_lesson_id=lesson.id,
     )
     return ParseContentResponse.from_result(result)
 

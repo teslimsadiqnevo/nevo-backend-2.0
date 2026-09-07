@@ -372,14 +372,14 @@ class ConsentRecord(TimestampMixin, Base):
         ),
         CheckConstraint(
             "("
-            "status = 'pending'"
+            "status IN ('pending', 'not_sent')"
             " AND confirmation_source IS NULL"
             " AND confirmed_by_admin_id IS NULL"
             " AND confirmed_by_parent_id IS NULL"
             " AND confirmed_via IS NULL"
             " AND confirmed_at IS NULL"
             ") OR ("
-            "status = 'confirmed'"
+            "status IN ('confirmed', 'withdrawn')"
             " AND confirmed_via IS NOT NULL"
             " AND confirmed_at IS NOT NULL"
             " AND ("
@@ -440,3 +440,14 @@ class ConsentRecord(TimestampMixin, Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    last_actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    last_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_channel: Mapped[str | None] = mapped_column(String(40), nullable=True)

@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, update
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.consent_summary import empty_consent_summary, student_consent_summaries
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import (
     actor_user,
@@ -41,6 +42,7 @@ from nevo.db.models.auth import AuthSession
 from nevo.db.models.content import Lesson
 from nevo.db.models.frontend_support import LessonAssignment, Notification
 from nevo.db.models.product import (
+    DpaAcceptance,
     EnrollmentHistory,
     FeedbackSubmission,
     NotificationPreference,
@@ -122,6 +124,31 @@ PreferenceWriteList = Annotated[list[PreferenceWrite], Field(max_length=50)]
 
 class PersonalSettingsWrite(BaseModel):
     preferences: dict[str, object] = Field(default_factory=dict)
+
+
+class SchoolNarrativeResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    headline: str
+    summary: str
+    highlights: list[str]
+    generated_at: datetime = Field(alias="generatedAt")
+    source: Literal["live_school_data"] = "live_school_data"
+
+
+class DpaAcceptanceRequest(BaseModel):
+    version: str = Field(min_length=1, max_length=40)
+
+
+class DpaAcceptanceResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID
+    school_id: UUID = Field(alias="schoolId")
+    version: str
+    accepted_by_user_id: UUID = Field(alias="acceptedByUserId")
+    accepted_by_name: str = Field(alias="acceptedByName")
+    accepted_at: datetime = Field(alias="acceptedAt")
 
 
 def _name(user: User) -> str:
@@ -208,6 +235,127 @@ async def school_overview(
         )
     )
     return {"schoolId": str(school_id), "counts": counts}
+
+
+@router.get("/school/narrative", response_model=SchoolNarrativeResponse)
+async def school_narrative(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> SchoolNarrativeResponse:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    student_count = int(
+        await session.scalar(
+            select(func.count(User.id)).where(
+                User.school_id == actor.school_id,
+                User.role == UserRole.STUDENT,
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+        or 0
+    )
+    class_count = int(
+        await session.scalar(
+            select(func.count(Class.id)).where(
+                Class.school_id == actor.school_id,
+                Class.archived_at.is_(None),
+            )
+        )
+        or 0
+    )
+    sessions_count = int(
+        await session.scalar(
+            select(func.count(LessonSession.id))
+            .join(User, User.id == LessonSession.student_id)
+            .where(User.school_id == actor.school_id)
+        )
+        or 0
+    )
+    highlights = [
+        f"{student_count} active learner{'s' if student_count != 1 else ''}",
+        f"{class_count} active class{'es' if class_count != 1 else ''}",
+        f"{sessions_count} lesson session{'s' if sessions_count != 1 else ''} recorded",
+    ]
+    return SchoolNarrativeResponse(
+        headline="Your school at a glance",
+        summary=(
+            f"Your school currently supports {student_count} active learners across "
+            f"{class_count} active classes. Nevo has recorded {sessions_count} lesson "
+            "sessions so far."
+        ),
+        highlights=highlights,
+        generatedAt=datetime.now(UTC),
+    )
+
+
+async def _dpa_response(
+    session: DatabaseSession,
+    acceptance: DpaAcceptance,
+) -> DpaAcceptanceResponse:
+    accepted_by = await session.get(User, acceptance.accepted_by_user_id)
+    return DpaAcceptanceResponse(
+        id=acceptance.id,
+        schoolId=acceptance.school_id,
+        version=acceptance.version,
+        acceptedByUserId=acceptance.accepted_by_user_id,
+        acceptedByName=_name(accepted_by) if accepted_by else "Former administrator",
+        acceptedAt=acceptance.accepted_at,
+    )
+
+
+@router.get("/school/dpa-acceptance", response_model=DpaAcceptanceResponse | None)
+async def current_dpa_acceptance(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> DpaAcceptanceResponse | None:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    acceptance = await session.scalar(
+        select(DpaAcceptance)
+        .where(DpaAcceptance.school_id == actor.school_id)
+        .order_by(DpaAcceptance.accepted_at.desc())
+        .limit(1)
+    )
+    return await _dpa_response(session, acceptance) if acceptance else None
+
+
+@router.post(
+    "/school/dpa-acceptance",
+    response_model=DpaAcceptanceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def accept_dpa(
+    payload: DpaAcceptanceRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> DpaAcceptanceResponse:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    acceptance = await session.scalar(
+        select(DpaAcceptance).where(
+            DpaAcceptance.school_id == actor.school_id,
+            DpaAcceptance.version == payload.version.strip(),
+        )
+    )
+    if acceptance is None:
+        acceptance = DpaAcceptance(
+            school_id=actor.school_id,
+            version=payload.version.strip(),
+            accepted_by_user_id=actor.id,
+            accepted_at=datetime.now(UTC),
+        )
+        session.add(acceptance)
+        await session.commit()
+    return await _dpa_response(session, acceptance)
 
 
 @router.get("/classes", response_model=list[ClassSummaryResponse])
@@ -482,6 +630,7 @@ async def list_students(
             StudentClassEnrollment.class_id == class_id
         )
     students = (await session.scalars(query.order_by(User.first_name))).all()
+    consent = await student_consent_summaries(session, (item.id for item in students))
     return [
         {
             "id": str(item.id),
@@ -489,6 +638,7 @@ async def list_students(
             "loginIdentifier": item.login_identifier,
             "status": item.status.value,
             "ageBand": item.age_band,
+            "consent": consent.get(item.id, empty_consent_summary()),
         }
         for item in students
     ]
@@ -553,6 +703,7 @@ async def student_detail(
             )
         )
     ).all()
+    consent = await student_consent_summaries(session, [student.id])
     return {
         "id": str(student.id),
         "firstName": student.first_name,
@@ -563,6 +714,7 @@ async def student_detail(
         "ageBand": student.age_band,
         "classIds": [str(item) for item in class_ids],
         "firstUse": student.is_first_use,
+        "consent": consent.get(student.id, empty_consent_summary()),
     }
 
 

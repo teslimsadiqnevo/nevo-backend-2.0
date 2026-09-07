@@ -57,9 +57,7 @@ class AuthService:
         ip_address: str,
     ) -> IssuedSession:
         normalized_email = email.casefold().strip()
-        identity_digest = self._token_service.protect_identifier(
-            f"email:{normalized_email}"
-        )
+        identity_digest = self._token_service.protect_identifier(f"email:{normalized_email}")
         ip_digest = self._token_service.protect_identifier(f"ip:{ip_address}")
         await self._rate_limiter.check(identity_digest, ip_digest)
 
@@ -68,11 +66,7 @@ class AuthService:
             user.password_hash if user else None,
             password,
         )
-        if (
-            not user
-            or not verified
-            or not self._can_use_manual_method(user, "email_password")
-        ):
+        if not user or not verified or not self._can_use_manual_method(user, "email_password"):
             await self._reject_login(
                 user=user,
                 identity_digest=identity_digest,
@@ -190,9 +184,7 @@ class AuthService:
 
     async def logout(self, access_token: str) -> None:
         now = self._now()
-        session = await self._sessions.find_by_digest(
-            self._token_service.digest(access_token)
-        )
+        session = await self._sessions.find_by_digest(self._token_service.digest(access_token))
         if session is None or session.revoked_at is not None:
             return
 
@@ -208,6 +200,26 @@ class AuthService:
             session_id=session.id,
             identity_digest=None,
             ip_digest=None,
+        )
+
+    async def refresh(self, access_token: str) -> IssuedSession:
+        """Extend an active session and return the expiry the client should keep.
+
+        Authentication already uses a sliding idle timeout. This method makes
+        that renewed deadline visible to clients without rotating the token or
+        interrupting a student's in-progress lesson.
+        """
+        principal = await self.authenticate(access_token)
+        session = await self._sessions.find_by_digest(self._token_service.digest(access_token))
+        if session is None or session.revoked_at is not None:
+            raise InvalidSessionError
+        return IssuedSession(
+            access_token=access_token,
+            token_type="bearer",
+            expires_at=session.expires_at,
+            user_id=principal.user_id,
+            role=principal.role,
+            replaced_session=False,
         )
 
     async def _complete_login(

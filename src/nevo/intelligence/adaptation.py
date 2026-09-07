@@ -64,9 +64,7 @@ MODALITY_SHIFT_EVENT_TYPES = {
     SignalEventType.MODALITY_SWITCH_OUTCOME,
     SignalEventType.MODALITY_MANUAL_SWITCH,
 }
-CHANNEL_BY_MODALITY = {
-    modality: channel for channel, modality in MODALITY_BY_CHANNEL.items()
-}
+CHANNEL_BY_MODALITY = {modality: channel for channel, modality in MODALITY_BY_CHANNEL.items()}
 SEGMENT_TYPE_PRIORITY = {
     "visual_spatial_preference": {
         ContentSegmentType.DIAGRAM,
@@ -184,10 +182,7 @@ def rule_based_adaptation_plan(
     active_channels = _active_channels(profile)
     segments = tuple(
         sorted(
-            (
-                _adapt_segment(segment, active_channels, profile)
-                for segment in request.segments
-            ),
+            (_adapt_segment(segment, active_channels, profile) for segment in request.segments),
             key=lambda item: item.priority,
             reverse=True,
         )
@@ -219,9 +214,7 @@ class SqlAlchemyLearnerProfileRepository:
     async def get_profile(self, student_id: UUID) -> LearnerProfileSnapshot:
         async with self._sessions() as session:
             profile = await session.scalar(
-                select(LearnerProfile).where(
-                    LearnerProfile.learner_id == student_id
-                )
+                select(LearnerProfile).where(LearnerProfile.learner_id == student_id)
             )
         if profile is None:
             return balanced_profile()
@@ -314,9 +307,7 @@ class SqlAlchemyAdaptationRateLimitRepository:
             "currentSegmentElapsedSeconds": candidate.current_segment_elapsed_seconds,
             "secondsSinceLastAdaptation": candidate.seconds_since_last_adaptation,
             "sessionModalityShiftCount": candidate.session_modality_shift_count,
-            "engagementBelowBaselineSeconds": (
-                candidate.engagement_below_baseline_seconds
-            ),
+            "engagementBelowBaselineSeconds": (candidate.engagement_below_baseline_seconds),
             "comprehensionScore": candidate.comprehension_score,
             "sessionAverageComprehension": candidate.session_average_comprehension,
             "consecutiveErrors": candidate.consecutive_errors,
@@ -433,9 +424,7 @@ def _suppression_attempt(
         current_segment_id=request.signals.current_segment_id,
         current_modality=request.signals.current_modality,
         suggested_modality=(
-            plan.modality_suggestion.suggested
-            if plan.modality_suggestion is not None
-            else None
+            plan.modality_suggestion.suggested if plan.modality_suggestion is not None else None
         ),
         confidence=_plan_confidence(plan),
         trigger_signals=_plan_trigger_signals(plan),
@@ -487,20 +476,13 @@ def _adapt_segment(
     ):
         density = DensityLevel.LOW
         scaffolding = ScaffoldingLevel.STRONG
-    if (
-        "reading_writing_preference" in active_channels
-        and segment.segment_type
-        in {
-            ContentSegmentType.DEFINITION,
-            ContentSegmentType.SUMMARY,
-            ContentSegmentType.EXPLANATION,
-        }
-    ):
+    if "reading_writing_preference" in active_channels and segment.segment_type in {
+        ContentSegmentType.DEFINITION,
+        ContentSegmentType.SUMMARY,
+        ContentSegmentType.EXPLANATION,
+    }:
         density = DensityLevel.HIGH
-    if (
-        profile.working_memory_capacity is not None
-        and profile.working_memory_capacity <= 2
-    ):
+    if profile.working_memory_capacity is not None and profile.working_memory_capacity <= 2:
         scaffolding = ScaffoldingLevel.STRONG
         density = DensityLevel.LOW
     return SegmentAdaptation(
@@ -614,6 +596,12 @@ def _modality_suggestion(
         declined_modalities=signals.declined_modalities,
     )
     if candidate is None:
+        candidate = _neutral_available_channel(
+            current_modality=signals.current_modality,
+            available_modalities=signals.available_modalities,
+            declined_modalities=signals.declined_modalities,
+        )
+    if candidate is None:
         return None
     trigger_signals = _trigger_signals(signals=signals, profile=profile)
     profile_signal = TriggerSignal(
@@ -631,6 +619,26 @@ def _modality_suggestion(
         adaptation_confidence=_combined_confidence(trigger_signals),
         trigger_signals=trigger_signals,
     )
+
+
+def _neutral_available_channel(
+    *,
+    current_modality: ContentModality,
+    available_modalities: tuple[ContentModality, ...],
+    declined_modalities: tuple[ContentModality, ...],
+) -> str | None:
+    """Choose a real alternative when evidence is strong but the profile is new.
+
+    This does not bypass multi-signal confirmation. It only prevents a balanced
+    first-use profile from making every valid modality suggestion impossible.
+    """
+    for modality in available_modalities:
+        if modality == current_modality or modality in declined_modalities:
+            continue
+        channel = CHANNEL_BY_MODALITY.get(modality)
+        if channel is not None:
+            return channel
+    return None
 
 
 def _modality_constraints_allow(signals: RuntimeSignals) -> bool:
@@ -655,10 +663,7 @@ def _engagement_declining(signals: RuntimeSignals) -> bool:
         return True
     if signals.replay_count_on_segment >= 3:
         return True
-    if (
-        signals.engagement_score is not None
-        and signals.engagement_baseline is not None
-    ):
+    if signals.engagement_score is not None and signals.engagement_baseline is not None:
         return signals.engagement_score <= signals.engagement_baseline - 0.15
     return False
 
@@ -865,7 +870,5 @@ def _profile_channels(
         "visual_spatial_preference": profile.visual_spatial_preference,
         "auditory_preference": profile.auditory_preference,
         "reading_writing_preference": profile.reading_writing_preference,
-        "interactive_kinesthetic_preference": (
-            profile.interactive_kinesthetic_preference
-        ),
+        "interactive_kinesthetic_preference": (profile.interactive_kinesthetic_preference),
     }

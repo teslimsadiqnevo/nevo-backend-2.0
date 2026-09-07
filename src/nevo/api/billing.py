@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -126,6 +126,10 @@ class SubscriptionResponse(BaseModel):
     renewal_message: str | None = Field(alias="renewalMessage")
     billing_contact: BillingContactResponse | None = Field(alias="billingContact")
     payment_method: PaymentMethodResponse | None = Field(alias="paymentMethod")
+    pricing_model: Literal["per_student"] = Field(alias="pricingModel")
+    active_student_count: int = Field(alias="activeStudentCount")
+    per_student_annual_rate: Decimal | None = Field(alias="perStudentAnnualRate")
+    currency: PricingCurrency
 
     @classmethod
     def from_record(cls, record: SubscriptionRecord) -> "SubscriptionResponse":
@@ -149,6 +153,10 @@ class SubscriptionResponse(BaseModel):
                 if record.payment_method
                 else None
             ),
+            pricing_model="per_student",
+            active_student_count=record.active_student_count,
+            per_student_annual_rate=record.per_student_annual_rate,
+            currency=record.currency,
         )
 
 

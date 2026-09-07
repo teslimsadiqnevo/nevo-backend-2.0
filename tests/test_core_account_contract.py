@@ -65,7 +65,12 @@ def test_auth_method_enum_is_shared_and_exact() -> None:
 
 
 def test_consent_enums_are_exact() -> None:
-    assert enum_values("consent_records", "status") == ["pending", "confirmed"]
+    assert enum_values("consent_records", "status") == [
+        "not_sent",
+        "pending",
+        "confirmed",
+        "withdrawn",
+    ]
     assert enum_values("consent_records", "confirmed_via") == [
         "written",
         "verbal",
@@ -78,12 +83,8 @@ def test_unique_constraints_present() -> None:
     assert ("school_code",) in unique_column_sets("schools")
     assert ("school_url_slug",) in unique_column_sets("schools")
     assert ("email",) in unique_column_sets("users")
-    assert ("student_id", "class_id") in unique_column_sets(
-        "student_class_enrollments"
-    )
-    assert ("subject_user_id", "consent_type") in unique_column_sets(
-        "consent_records"
-    )
+    assert ("student_id", "class_id") in unique_column_sets("student_class_enrollments")
+    assert ("subject_user_id", "consent_type") in unique_column_sets("consent_records")
 
 
 def test_state_invariants_have_database_checks() -> None:
@@ -105,15 +106,9 @@ def test_learner_profiles_now_reference_users() -> None:
 
 
 def test_profile_attention_flags_reference_profile_session_and_student() -> None:
-    assert ("users", "id") in foreign_key_targets(
-        "learner_profile_attention_flags"
-    )
-    assert ("learner_profiles", "id") in foreign_key_targets(
-        "learner_profile_attention_flags"
-    )
-    assert ("lesson_sessions", "id") in foreign_key_targets(
-        "learner_profile_attention_flags"
-    )
+    assert ("users", "id") in foreign_key_targets("learner_profile_attention_flags")
+    assert ("learner_profiles", "id") in foreign_key_targets("learner_profile_attention_flags")
+    assert ("lesson_sessions", "id") in foreign_key_targets("learner_profile_attention_flags")
     assert enum_values("learner_profile_attention_flags", "status") == [
         "open",
         "reviewed",
@@ -129,15 +124,9 @@ def test_attention_workflow_tables_have_required_references() -> None:
     assert ("users", "id") in foreign_key_targets("attention_flags")
     assert ("attention_flags", "id") in foreign_key_targets("escalations")
     assert ("users", "id") in foreign_key_targets("escalations")
-    assert ("attention_flags", "id") in foreign_key_targets(
-        "intervention_recommendations"
-    )
-    assert ("users", "id") in foreign_key_targets(
-        "intervention_recommendations"
-    )
-    assert ("ai_gateway_calls", "id") in foreign_key_targets(
-        "intervention_recommendations"
-    )
+    assert ("attention_flags", "id") in foreign_key_targets("intervention_recommendations")
+    assert ("users", "id") in foreign_key_targets("intervention_recommendations")
+    assert ("ai_gateway_calls", "id") in foreign_key_targets("intervention_recommendations")
 
 
 def test_sso_and_ask_nevo_tables_have_required_references() -> None:
@@ -153,6 +142,4 @@ def test_sso_and_ask_nevo_tables_have_required_references() -> None:
         "teacher",
     ]
     assert ("users", "id") in foreign_key_targets("ask_nevo_interactions")
-    assert ("ai_gateway_calls", "id") in foreign_key_targets(
-        "ask_nevo_interactions"
-    )
+    assert ("ai_gateway_calls", "id") in foreign_key_targets("ask_nevo_interactions")

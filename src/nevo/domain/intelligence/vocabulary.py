@@ -22,6 +22,7 @@ class ContentSegmentType(StrEnum):
     PRACTICE = "practice"
     INTERACTION = "interaction"
     CHECKPOINT = "checkpoint"
+    CALCULATION = "calculation"
 
 
 class LessonContentType(StrEnum):

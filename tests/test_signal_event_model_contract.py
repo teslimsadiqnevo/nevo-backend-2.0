@@ -102,6 +102,7 @@ def test_lesson_sessions_table_tracks_resume_and_counts() -> None:
         "id",
         "student_id",
         "lesson_id",
+        "session_type",
         "started_at",
         "ended_at",
         "completion_status",

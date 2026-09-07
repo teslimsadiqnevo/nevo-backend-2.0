@@ -145,9 +145,31 @@ def test_rule_based_adaptation_requires_all_three_modality_signals() -> None:
     assert plan.modality_suggestion.suggested is ContentModality.VISUAL
     assert plan.modality_suggestion.trigger_reason == "combined"
     assert plan.modality_suggestion.adaptation_confidence >= 0.6
-    assert {
-        signal.category for signal in plan.modality_suggestion.trigger_signals
-    }.issuperset({"comprehension", "engagement", "profile"})
+    assert {signal.category for signal in plan.modality_suggestion.trigger_signals}.issuperset(
+        {"comprehension", "engagement", "profile"}
+    )
+
+
+def test_new_learner_can_receive_a_supported_alternative_modality() -> None:
+    plan = rule_based_adaptation_plan(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            mode=AdaptationMode.IN_LESSON,
+            segments=segments(),
+            signals=RuntimeSignals(
+                current_modality=ContentModality.TEXT,
+                available_modalities=(ContentModality.TEXT, ContentModality.VISUAL),
+                engagement_below_baseline_seconds=190,
+                accuracy_below_baseline=True,
+                segments_since_last_suggestion=2,
+            ),
+        ),
+        profile=balanced_profile(),
+    )
+
+    assert plan.modality_suggestion is not None
+    assert plan.modality_suggestion.suggested is ContentModality.VISUAL
 
 
 def test_rule_based_adaptation_ignores_single_pause_signal() -> None:

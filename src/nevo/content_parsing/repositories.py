@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.api.lesson_contracts import checkpoint_payloads
@@ -41,8 +41,9 @@ class SqlAlchemyContentParsingRepository:
         request: ContentParseRequest,
         parsed: ParsedLesson,
         requested_by_user_id: UUID,
+        existing_lesson_id: UUID | None = None,
     ) -> StoredParsedLesson:
-        lesson_id = uuid4()
+        lesson_id = existing_lesson_id or uuid4()
         parse_run_id = uuid4()
         school_id = await self.requester_school_id(requested_by_user_id)
         review_segment_count = sum(1 for segment in parsed.segments if segment.needs_review)
@@ -58,29 +59,53 @@ class SqlAlchemyContentParsingRepository:
         )
         tts_call_count = _count_tts_calls(parsed.segments)
         async with self._sessions.begin() as session:
-            session.add(
-                Lesson(
-                    id=lesson_id,
-                    school_id=school_id,
-                    created_by_user_id=requested_by_user_id,
-                    title=parsed.title,
-                    subject=(
-                        str(request.source_metadata["subject"])
-                        if request.source_metadata.get("subject")
-                        else None
-                    ),
-                    source_type=request.source_type,
-                    source_reference=request.source_metadata,
-                    parser_version=1,
-                    status=status,
-                    segment_count=len(parsed.segments),
-                    review_segment_count=review_segment_count,
-                    estimated_minutes=sum(
-                        segment.estimated_minutes for segment in parsed.segments
-                    ),
-                    confirmation_summary=parsed.confirmation_summary,
+            if existing_lesson_id is None:
+                session.add(
+                    Lesson(
+                        id=lesson_id,
+                        school_id=school_id,
+                        created_by_user_id=requested_by_user_id,
+                        title=parsed.title,
+                        subject=(
+                            str(request.source_metadata["subject"])
+                            if request.source_metadata.get("subject")
+                            else None
+                        ),
+                        source_type=request.source_type,
+                        source_reference=request.source_metadata,
+                        parser_version=1,
+                        status=status,
+                        segment_count=len(parsed.segments),
+                        review_segment_count=review_segment_count,
+                        estimated_minutes=sum(
+                            segment.estimated_minutes for segment in parsed.segments
+                        ),
+                        confirmation_summary=parsed.confirmation_summary,
+                    )
                 )
-            )
+            else:
+                lesson = await session.get(Lesson, existing_lesson_id)
+                if lesson is None or lesson.school_id != school_id:
+                    raise ValueError("lesson is not available to this school")
+                lesson.title = parsed.title
+                lesson.subject = (
+                    str(request.source_metadata["subject"])
+                    if request.source_metadata.get("subject")
+                    else lesson.subject
+                )
+                lesson.source_type = request.source_type
+                lesson.source_reference = request.source_metadata
+                lesson.parser_version += 1
+                lesson.status = status
+                lesson.segment_count = len(parsed.segments)
+                lesson.review_segment_count = review_segment_count
+                lesson.estimated_minutes = sum(
+                    segment.estimated_minutes for segment in parsed.segments
+                )
+                lesson.confirmation_summary = parsed.confirmation_summary
+                await session.execute(
+                    delete(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
+                )
             await session.flush()
             session.add(
                 ContentParseRun(
@@ -102,15 +127,14 @@ class SqlAlchemyContentParsingRepository:
                 checkpoints: list[dict[str, object]] = []
                 for index, checkpoint in enumerate(segment.comprehension_checkpoints, start=1):
                     concept_name = str(
-                        checkpoint.get("conceptName")
-                        or segment.title
-                        or parsed.title
+                        checkpoint.get("conceptName") or segment.title or parsed.title
                     ).strip()
                     concept = await session.scalar(
                         select(Concept).where(
                             Concept.school_id == school_id,
                             Concept.name == concept_name,
-                            Concept.subject == (
+                            Concept.subject
+                            == (
                                 str(request.source_metadata.get("subject"))
                                 if request.source_metadata.get("subject")
                                 else None

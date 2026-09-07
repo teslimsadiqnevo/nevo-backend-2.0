@@ -15,6 +15,7 @@ from nevo.api.lesson_contracts import (
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     ClassSource,
+    ConsentStatus,
     InvitationDeliveryStatus,
     NotificationCategory,
     UserRole,
@@ -96,12 +97,21 @@ class TeacherDetailResponse(TeacherSummaryResponse):
     class_ids: list[UUID]
 
 
+class StudentConsentSummaryResponse(CamelResponse):
+    status: ConsentStatus
+    actor_id: UUID | None = None
+    actor_name: str | None = None
+    timestamp: datetime | None = None
+    channel: str | None = None
+
+
 class StudentSummaryResponse(CamelResponse):
     id: UUID
     name: str
     login_identifier: str | None
     status: UserStatus
     age_band: str | None
+    consent: StudentConsentSummaryResponse
 
 
 class StudentDetailResponse(CamelResponse):
@@ -114,6 +124,7 @@ class StudentDetailResponse(CamelResponse):
     age_band: str | None
     class_ids: list[UUID]
     first_use: bool
+    consent: StudentConsentSummaryResponse
 
 
 class StudentEnrollmentResponse(CamelResponse):
@@ -187,6 +198,7 @@ class InvitationResponse(CamelResponse):
     status: str | None = None
     expires_at: datetime
     delivery_status: InvitationDeliveryStatus | None = None
+    consent_status: ConsentStatus | None = None
 
 
 class RejectedInvitationResponse(CamelResponse):
@@ -210,6 +222,7 @@ class JoinAcceptedResponse(CamelResponse):
     user_id: UUID
     role: UserRole
     login_identifier: str | None
+    consent_status: ConsentStatus | None = None
 
 
 class ParentRightResponse(CamelResponse):

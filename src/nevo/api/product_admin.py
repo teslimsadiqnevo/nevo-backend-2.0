@@ -212,29 +212,60 @@ async def school_overview(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
+    """Roster headcounts for this school.
+
+    Students are reported active and invited separately. A plan-cost screen
+    multiplies a headcount by a rate, and whether a student who was invited
+    but has never signed in should be billed is a commercial decision - not
+    one this endpoint should make silently by returning a single total.
+    """
     user = await require_school_actor(session, principal)
     school_id = user.school_id
-    counts = {}
-    for role in (
-        UserRole.STUDENT,
-        UserRole.TEACHER,
-        UserRole.SENCO_ADMIN,
-        UserRole.OTHER_ADMIN,
-    ):
-        counts[role.value] = await session.scalar(
-            select(func.count(User.id)).where(
-                User.school_id == school_id,
-                User.role == role,
-                User.status != UserStatus.DEACTIVATED,
+
+    async def students_with(status: UserStatus) -> int:
+        return int(
+            await session.scalar(
+                select(func.count(User.id)).where(
+                    User.school_id == school_id,
+                    User.role == UserRole.STUDENT,
+                    User.status == status,
+                )
+            )
+            or 0
+        )
+
+    async def staff(role: UserRole) -> int:
+        return int(
+            await session.scalar(
+                select(func.count(User.id)).where(
+                    User.school_id == school_id,
+                    User.role == role,
+                    User.status != UserStatus.DEACTIVATED,
+                )
+            )
+            or 0
+        )
+
+    classes = int(
+        await session.scalar(
+            select(func.count(Class.id)).where(
+                Class.school_id == school_id,
+                Class.archived_at.is_(None),
             )
         )
-    counts["classes"] = await session.scalar(
-        select(func.count(Class.id)).where(
-            Class.school_id == school_id,
-            Class.archived_at.is_(None),
-        )
+        or 0
     )
-    return {"schoolId": str(school_id), "counts": counts}
+    return {
+        "schoolId": str(school_id),
+        "counts": {
+            "activeStudents": await students_with(UserStatus.ACTIVE),
+            "invitedStudents": await students_with(UserStatus.INVITED),
+            "teachers": await staff(UserRole.TEACHER),
+            "sencoAdmins": await staff(UserRole.SENCO_ADMIN),
+            "otherAdmins": await staff(UserRole.OTHER_ADMIN),
+            "classes": classes,
+        },
+    }
 
 
 @router.get("/school/narrative", response_model=SchoolNarrativeResponse)

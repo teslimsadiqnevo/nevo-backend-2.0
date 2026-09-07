@@ -28,6 +28,7 @@ class FakePaymentRepository:
     settlements: list[dict[str, Any]] = field(default_factory=list)
     webhook_events: dict[str, WebhookEventStatus] = field(default_factory=dict)
     invoice_paid: bool = False
+    manual_references: dict[str, UUID] = field(default_factory=dict)
 
     async def payable_invoice(
         self, *, school_id: UUID, invoice_id: UUID
@@ -98,6 +99,26 @@ class FakePaymentRepository:
         paid = not self.invoice_paid
         self.invoice_paid = True
         return paid, bool(authorization and authorization.reusable)
+
+    async def record_manual_settlement(
+        self,
+        *,
+        school_id: UUID,
+        invoice_id: UUID,
+        reference: str,
+        bank_reference: str,
+        amount: Decimal,
+        currency: PricingCurrency,
+        confirmed_by_user_id: UUID,
+        confirmed_at: datetime,
+    ) -> tuple[UUID, bool]:
+        if bank_reference in self.manual_references:
+            return self.manual_references[bank_reference], False
+        transaction_id = uuid4()
+        self.manual_references[bank_reference] = transaction_id
+        paid = not self.invoice_paid
+        self.invoice_paid = True
+        return transaction_id, paid
 
     async def saved_method(self, school_id: UUID) -> SavedMethod | None:
         return self.method

@@ -526,6 +526,40 @@ async def verify_payment(
     return PaymentOutcomeResponse.from_record(outcome)
 
 
+class ManualTransferRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    invoice_id: UUID = Field(alias="invoiceId")
+    #: The reference from the bank, used as the idempotency key so confirming
+    #: the same transfer twice cannot settle an invoice twice.
+    bank_reference: str = Field(alias="bankReference", min_length=3, max_length=120)
+
+
+@router.post("/payments/manual-transfer", response_model=PaymentOutcomeResponse)
+async def confirm_manual_transfer(
+    payload: ManualTransferRequest,
+    actor: BillingScopeDependency,
+    service: PaymentDependency,
+) -> PaymentOutcomeResponse:
+    """Record a bank transfer this school has been confirmed as sending.
+
+    Separate from verify, which asks Paystack about a transaction it opened.
+    Money moved by bank transfer never reaches the processor, so the only
+    thing that can confirm it is a person with the billing scope looking at a
+    bank statement - never the payer asserting it in the UI.
+    """
+    try:
+        outcome = await service.confirm_manual_transfer(
+            school_id=_school_id(actor),
+            invoice_id=payload.invoice_id,
+            bank_reference=payload.bank_reference,
+            confirmed_by_user_id=actor.user_id,
+        )
+    except PaymentError as error:
+        raise public_payment_error(error) from error
+    return PaymentOutcomeResponse.from_record(outcome)
+
+
 @router.post("/payments/webhook", response_model=WebhookAckResponse, include_in_schema=True)
 async def paystack_webhook(
     request: Request,

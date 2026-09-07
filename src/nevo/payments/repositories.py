@@ -24,6 +24,9 @@ from nevo.domain.billing.vocabulary import (
 )
 from nevo.payments.entities import ProviderAuthorization
 
+MANUAL_PROVIDER = "manual_transfer"
+"""Distinguishes money confirmed by a human from money the processor saw."""
+
 
 @dataclass(frozen=True, slots=True)
 class PayableInvoice:
@@ -316,3 +319,60 @@ class SqlAlchemyPaymentRepository:
                 record.status = status
                 record.last_error = error
                 record.processed_at = datetime.now(UTC)
+
+    async def record_manual_settlement(
+        self,
+        *,
+        school_id: UUID,
+        invoice_id: UUID,
+        reference: str,
+        bank_reference: str,
+        amount: Decimal,
+        currency: PricingCurrency,
+        confirmed_by_user_id: UUID,
+        confirmed_at: datetime,
+    ) -> tuple[UUID, bool]:
+        """Record money that arrived outside the processor.
+
+        Written as a transaction so a bank transfer appears in the same ledger
+        as a card payment - a finance view that only sees Paystack rows would
+        show a paid school as unpaid.
+
+        Returns ``(transaction_id, invoice_paid)``. Idempotent on the bank
+        reference: confirming the same transfer twice reports the original and
+        does not re-settle.
+        """
+        async with self._sessions.begin() as session:
+            existing = await session.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.provider_reference == bank_reference,
+                    PaymentTransaction.provider == MANUAL_PROVIDER,
+                )
+            )
+            if existing is not None:
+                return existing.id, False
+
+            transaction_id = uuid4()
+            session.add(
+                PaymentTransaction(
+                    id=transaction_id,
+                    school_id=school_id,
+                    invoice_id=invoice_id,
+                    reference=reference,
+                    provider=MANUAL_PROVIDER,
+                    provider_reference=bank_reference,
+                    status=PaymentTransactionStatus.SUCCESS,
+                    amount=amount,
+                    amount_minor=int(amount * 100),
+                    currency=currency,
+                    initiated_by_user_id=confirmed_by_user_id,
+                    paid_at=confirmed_at,
+                )
+            )
+            invoice = await session.get(Invoice, invoice_id)
+            invoice_paid = False
+            if invoice is not None and invoice.status is not InvoiceStatus.PAID:
+                invoice.status = InvoiceStatus.PAID
+                invoice.paid_at = confirmed_at
+                invoice_paid = True
+            return transaction_id, invoice_paid

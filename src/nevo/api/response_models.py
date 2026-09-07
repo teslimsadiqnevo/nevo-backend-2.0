@@ -54,9 +54,34 @@ class SchoolResponse(CamelResponse):
     retention_days: int
 
 
+class SchoolRosterCounts(CamelResponse):
+    """Who is on the roster, in numbers a screen can be built on.
+
+    Previously an untyped dict, so nothing here was discoverable from the
+    schema and a caller had to know the keys by hearsay.
+
+    Students are split by status deliberately. A plan-cost estimate multiplies
+    a headcount by a rate, and whether a student who was invited but has never
+    signed in should be billed is a commercial decision, not one this endpoint
+    should quietly make by folding them into a single total.
+    """
+
+    active_students: int = 0
+    invited_students: int = 0
+    teachers: int = 0
+    senco_admins: int = 0
+    other_admins: int = 0
+    classes: int = 0
+
+    @property
+    def enrolled_students(self) -> int:
+        """Every student on the roster, however they got there."""
+        return self.active_students + self.invited_students
+
+
 class SchoolOverviewResponse(CamelResponse):
     school_id: UUID
-    counts: dict[str, int]
+    counts: SchoolRosterCounts
 
 
 class ClassSummaryResponse(CamelResponse):

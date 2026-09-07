@@ -150,6 +150,58 @@ class PaymentService:
         )
         return await self._settle(provider_transaction)
 
+    async def confirm_manual_transfer(
+        self,
+        *,
+        school_id: UUID,
+        invoice_id: UUID,
+        bank_reference: str,
+        confirmed_by_user_id: UUID,
+    ) -> PaymentOutcome:
+        """Record a bank transfer an administrator has confirmed receiving.
+
+        Deliberately separate from verify_reference. That one asks Paystack
+        whether money arrived; this one is a human asserting it did, for money
+        that never went near the processor. Conflating them would mean either
+        trusting a payer's claim or asking Paystack about a transaction it has
+        never seen.
+
+        Requires no provider configuration - a school can pay by transfer into
+        a bank account whether or not card payments are switched on.
+        """
+        invoice = await self._repository.payable_invoice(
+            school_id=school_id,
+            invoice_id=invoice_id,
+        )
+        if invoice is None:
+            raise PaymentNotFoundError
+        if invoice.status is InvoiceStatus.PAID:
+            raise InvoiceNotPayableError
+
+        transaction_id, invoice_paid = await self._repository.record_manual_settlement(
+            school_id=school_id,
+            invoice_id=invoice_id,
+            reference=self._reference(invoice.invoice_number),
+            bank_reference=bank_reference.strip(),
+            amount=invoice.amount,
+            currency=self._client.currency,
+            confirmed_by_user_id=confirmed_by_user_id,
+            confirmed_at=datetime.now(UTC),
+        )
+        return PaymentOutcome(
+            transaction_id=transaction_id,
+            invoice_id=invoice_id,
+            reference=bank_reference.strip(),
+            status=PaymentTransactionStatus.SUCCESS,
+            invoice_paid=invoice_paid,
+            payment_method_saved=False,
+            message=(
+                "Transfer recorded and the invoice is settled."
+                if invoice_paid
+                else "This transfer reference was already recorded."
+            ),
+        )
+
     async def handle_webhook(
         self,
         *,

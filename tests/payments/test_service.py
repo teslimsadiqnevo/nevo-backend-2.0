@@ -286,3 +286,79 @@ async def test_charge_saved_method_collects_and_settles() -> None:
     assert outcome.status is PaymentTransactionStatus.SUCCESS
     assert outcome.invoice_paid is True
     assert client.charged[0]["authorization_code"] == "AUTH_abc123"
+
+
+# --- money that never went near the processor ------------------------------
+
+
+async def test_a_transfer_is_recorded_by_an_admin_not_claimed_by_the_payer() -> None:
+    """verify_reference asks Paystack about a transaction it opened. A bank
+    transfer never reaches Paystack, so the only thing that can confirm it is
+    a person with the billing scope reading a bank statement."""
+    repository = FakePaymentRepository(invoice=payable_invoice())
+    service = _service(repository, FakePaystackClient())
+
+    outcome = await service.confirm_manual_transfer(
+        school_id=SCHOOL_ID,
+        invoice_id=INVOICE_ID,
+        bank_reference="GTB/2026/0917",
+        confirmed_by_user_id=ACTOR_ID,
+    )
+
+    assert outcome.status is PaymentTransactionStatus.SUCCESS
+    assert outcome.invoice_paid is True
+    assert outcome.payment_method_saved is False
+
+
+async def test_confirming_the_same_transfer_twice_settles_once() -> None:
+    """A bank reference is the idempotency key: a second confirmation of the
+    same money must not clear a second invoice."""
+    repository = FakePaymentRepository(invoice=payable_invoice())
+    service = _service(repository, FakePaystackClient())
+
+    first = await service.confirm_manual_transfer(
+        school_id=SCHOOL_ID,
+        invoice_id=INVOICE_ID,
+        bank_reference="GTB/2026/0917",
+        confirmed_by_user_id=ACTOR_ID,
+    )
+    second = await service.confirm_manual_transfer(
+        school_id=SCHOOL_ID,
+        invoice_id=INVOICE_ID,
+        bank_reference="GTB/2026/0917",
+        confirmed_by_user_id=ACTOR_ID,
+    )
+
+    assert first.invoice_paid is True
+    assert second.invoice_paid is False
+    assert "already recorded" in second.message
+
+
+async def test_a_transfer_cannot_re_settle_a_paid_invoice() -> None:
+    from nevo.domain.billing.vocabulary import InvoiceStatus
+
+    repository = FakePaymentRepository(invoice=payable_invoice(status=InvoiceStatus.PAID))
+    service = _service(repository, FakePaystackClient())
+
+    with pytest.raises(InvoiceNotPayableError):
+        await service.confirm_manual_transfer(
+            school_id=SCHOOL_ID,
+            invoice_id=INVOICE_ID,
+            bank_reference="GTB/2026/0917",
+            confirmed_by_user_id=ACTOR_ID,
+        )
+
+
+async def test_a_transfer_can_be_recorded_without_a_payment_provider() -> None:
+    """A school can pay into a bank account whether or not cards are on."""
+    repository = FakePaymentRepository(invoice=payable_invoice())
+    service = _service(repository, FakePaystackClient(configured=False))
+
+    outcome = await service.confirm_manual_transfer(
+        school_id=SCHOOL_ID,
+        invoice_id=INVOICE_ID,
+        bank_reference="GTB/2026/0917",
+        confirmed_by_user_id=ACTOR_ID,
+    )
+
+    assert outcome.invoice_paid is True

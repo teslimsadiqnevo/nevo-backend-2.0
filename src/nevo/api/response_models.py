@@ -22,6 +22,7 @@ from nevo.domain.accounts.vocabulary import (
     UserStatus,
 )
 from nevo.domain.attention_flags.vocabulary import AttentionFlagType
+from nevo.domain.consent.vocabulary import ParentRightType
 from nevo.domain.intelligence.vocabulary import (
     AssignmentStatus,
     ContentParseStatus,
@@ -252,7 +253,9 @@ class JoinAcceptedResponse(CamelResponse):
 
 class ParentRightResponse(CamelResponse):
     request_id: UUID
+    request_type: ParentRightType
     status: str
+    reason_recorded: bool
 
 
 class LessonSummaryResponse(CamelResponse):

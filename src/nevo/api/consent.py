@@ -4,7 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.permissions import RequireScope
@@ -13,6 +13,7 @@ from nevo.consent.entities import (
     ConsentGate,
     ConsentRecordView,
     ParentConsentCompletion,
+    ParentInvitationView,
     ParentLinkView,
     QueuedParentConsentRequest,
 )
@@ -142,6 +143,41 @@ class ParentLinkResponse(BaseModel):
         return cls(**asdict(link))
 
 
+class ParentConsentInvitationResponse(BaseModel):
+    """Everything D01b must name before a parent can consent informedly."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    invitation_id: UUID = Field(alias="invitationId")
+    student_first_name: str = Field(alias="studentFirstName")
+    school_name: str = Field(alias="schoolName")
+    school_phone: str | None = Field(alias="schoolPhone")
+    school_email: str | None = Field(alias="schoolEmail")
+    parent_name: str = Field(alias="parentName")
+    status: ConsentStatus
+    consent_types: list[ConsentType] = Field(alias="consentTypes")
+    expires_at: datetime = Field(alias="expiresAt")
+    decided_at: datetime | None = Field(alias="decidedAt")
+
+    @classmethod
+    def from_invitation(
+        cls,
+        invitation: ParentInvitationView,
+    ) -> "ParentConsentInvitationResponse":
+        return cls(
+            invitationId=invitation.invitation_id,
+            studentFirstName=invitation.student_first_name,
+            schoolName=invitation.school_name,
+            schoolPhone=invitation.school_phone,
+            schoolEmail=invitation.school_email,
+            parentName=invitation.parent_name,
+            status=invitation.status,
+            consentTypes=sorted(invitation.consent_types, key=lambda item: item.value),
+            expiresAt=invitation.expires_at,
+            decidedAt=invitation.decided_at,
+        )
+
+
 class ConsentGateResponse(BaseModel):
     student_id: UUID
     granted: bool
@@ -239,6 +275,32 @@ async def complete_parent_consent(
     except ConsentError as error:
         raise public_consent_error(error) from error
     return ParentConsentCompletionResponse.from_completion(completion)
+
+
+@router.get(
+    "/consents/parent/{token}",
+    response_model=ParentConsentInvitationResponse,
+)
+async def inspect_parent_consent(
+    token: str,
+    service: ConsentServiceDependency,
+) -> ParentConsentInvitationResponse:
+    """Resolve a parent's consent token into the screen it has to render.
+
+    Unauthenticated by design - the token is the credential, exactly as it is
+    for the join link. It is scoped to one child, so it reveals only the names
+    the parent was already told in the message that carried it.
+    """
+    invitation = await service.parent_invitation(token=token)
+    if invitation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": InvalidConsentInvitationError.code,
+                "message": InvalidConsentInvitationError.public_message,
+            },
+        )
+    return ParentConsentInvitationResponse.from_invitation(invitation)
 
 
 @router.get(

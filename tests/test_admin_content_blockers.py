@@ -46,3 +46,38 @@ def test_calculation_is_a_native_segment_type() -> None:
     values = app.openapi()["components"]["schemas"]["LessonContentType"]["enum"]
 
     assert "calculation" in values
+
+
+def test_parent_consent_screen_contracts_are_typed() -> None:
+    spec = app.openapi()
+    paths, schemas = spec["paths"], spec["components"]["schemas"]
+
+    read = paths["/api/v1/consents/parent/{token}"]["get"]["responses"]["200"]
+    assert read["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/ParentConsentInvitationResponse"
+    )
+    invitation = schemas["ParentConsentInvitationResponse"]["properties"]
+    for field in ("studentFirstName", "schoolName", "schoolPhone", "schoolEmail"):
+        assert field in invitation
+
+    # A generated client should not have to discover these by sending a bad one.
+    request_type = schemas["ParentRightRequest"]["properties"]["requestType"]
+    assert schemas["ParentRightType"]["enum"] == [
+        "request_data",
+        "object",
+        "withdraw_consent",
+    ]
+    assert "reason" in schemas["ParentRightRequest"]["properties"]
+    assert "$ref" in request_type or "allOf" in request_type
+
+
+def test_consent_gate_can_report_a_withdrawal() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+
+    assert schemas["ConsentStatus"]["enum"] == [
+        "not_sent",
+        "pending",
+        "confirmed",
+        "withdrawn",
+    ]
+    assert schemas["ConsentGateResponse"]["properties"]["status"]

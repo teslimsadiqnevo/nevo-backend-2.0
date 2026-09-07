@@ -6,10 +6,13 @@ from nevo.consent.entities import (
     ConsentRecordView,
     ParentConsentCompletion,
     ParentConsentRequestDraft,
+    ParentInvitationView,
     ParentLinkView,
+    ParentRightOutcome,
     QueuedParentConsentRequest,
 )
-from nevo.domain.accounts.vocabulary import ConsentMethod, ConsentType
+from nevo.domain.accounts.vocabulary import ConsentMethod, ConsentStatus, ConsentType
+from nevo.domain.consent.vocabulary import ParentRightType
 
 
 class ConsentRepository(Protocol):
@@ -36,6 +39,22 @@ class ConsentRepository(Protocol):
         completed_at: datetime,
     ) -> ParentConsentCompletion | None: ...
 
+    async def parent_invitation(
+        self,
+        *,
+        token_digest: str,
+        now: datetime,
+    ) -> ParentInvitationView | None: ...
+
+    async def exercise_parent_right(
+        self,
+        *,
+        token_digest: str,
+        request_type: ParentRightType,
+        reason: str | None,
+        now: datetime,
+    ) -> ParentRightOutcome | None: ...
+
     async def parent_links(
         self,
         *,
@@ -49,6 +68,13 @@ class ConsentRepository(Protocol):
         student_id: UUID,
         consent_type: ConsentType,
     ) -> bool: ...
+
+    async def consent_status(
+        self,
+        *,
+        student_id: UUID,
+        consent_type: ConsentType,
+    ) -> ConsentStatus: ...
 
     async def ensure_pending(
         self,

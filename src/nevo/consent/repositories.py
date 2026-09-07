@@ -9,20 +9,24 @@ from nevo.consent.entities import (
     ConsentRecordView,
     ParentConsentCompletion,
     ParentConsentRequestDraft,
+    ParentInvitationView,
     ParentLinkView,
+    ParentRightOutcome,
     QueuedParentConsentRequest,
 )
 from nevo.consent.errors import (
     ParentAccountConflictError,
     StudentNotFoundError,
 )
-from nevo.db.models.account import ConsentRecord, User
+from nevo.db.models.account import ConsentRecord, School, User
+from nevo.db.models.billing import BillingContact
 from nevo.db.models.consent import (
     ConsentInvitation,
     ConsentInvitationItem,
     ConsentNotificationOutbox,
     ParentLink,
 )
+from nevo.db.models.product import ParentDataRequest
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     ConsentMethod,
@@ -32,9 +36,11 @@ from nevo.domain.accounts.vocabulary import (
     UserStatus,
 )
 from nevo.domain.consent.vocabulary import (
+    REQUIRED_LEARNING_CONSENT,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
     ParentContactMethod,
+    ParentRightType,
 )
 
 
@@ -304,6 +310,29 @@ class SqlAlchemyConsentRepository:
             )
         return record_id is not None
 
+    async def consent_status(
+        self,
+        *,
+        student_id: UUID,
+        consent_type: ConsentType,
+    ) -> ConsentStatus:
+        """The stored status, so a withdrawal is not reported as pending.
+
+        A learner who was never asked and a learner whose parent withdrew both
+        fail the gate, but the screens they need are opposite: one is a
+        reminder to the school, the other is a suspension notice.
+        """
+        async with self._sessions() as session:
+            status = await session.scalar(
+                select(ConsentRecord.status)
+                .where(
+                    ConsentRecord.subject_user_id == student_id,
+                    ConsentRecord.consent_type == consent_type,
+                )
+                .limit(1)
+            )
+        return status or ConsentStatus.NOT_SENT
+
     async def ensure_pending(
         self,
         *,
@@ -327,6 +356,159 @@ class SqlAlchemyConsentRepository:
                     student_id=student_id,
                     consent_type=consent_type,
                 )
+
+    async def parent_invitation(
+        self,
+        *,
+        token_digest: str,
+        now: datetime,
+    ) -> ParentInvitationView | None:
+        """Resolve a parent's token into the details their screen must name.
+
+        Returns None for a link that is unknown, revoked, or expired. An
+        accepted link still resolves: a parent who already decided needs to
+        arrive at the state of that decision, not at the question again.
+        """
+        async with self._sessions() as session:
+            invitation = await session.scalar(
+                select(ConsentInvitation).where(
+                    ConsentInvitation.token_digest == token_digest,
+                    ConsentInvitation.revoked_at.is_(None),
+                )
+            )
+            if invitation is None or invitation.expires_at <= now:
+                return None
+
+            row = (
+                await session.execute(
+                    select(
+                        User.first_name,
+                        School.name,
+                        BillingContact.phone,
+                        BillingContact.email,
+                    )
+                    .select_from(ConsentInvitation)
+                    .join(User, User.id == ConsentInvitation.student_id)
+                    .join(School, School.id == ConsentInvitation.school_id)
+                    .outerjoin(
+                        BillingContact,
+                        BillingContact.school_id == ConsentInvitation.school_id,
+                    )
+                    .where(ConsentInvitation.id == invitation.id)
+                )
+            ).first()
+            if row is None:
+                return None
+            student_first_name, school_name, school_phone, school_email = row
+
+            parent_link = await session.get(ParentLink, invitation.parent_link_id)
+            consent_types = frozenset(
+                await session.scalars(
+                    select(ConsentInvitationItem.consent_type).where(
+                        ConsentInvitationItem.invitation_id == invitation.id
+                    )
+                )
+            )
+            record = (
+                await session.execute(
+                    select(ConsentRecord.status, ConsentRecord.last_changed_at)
+                    .where(
+                        ConsentRecord.subject_user_id == invitation.student_id,
+                        ConsentRecord.consent_type == REQUIRED_LEARNING_CONSENT,
+                    )
+                )
+            ).first()
+
+        status = record[0] if record is not None else ConsentStatus.PENDING
+        decided_at = record[1] if record is not None else None
+        if invitation.accepted_at is not None and status is ConsentStatus.PENDING:
+            # The link was used but the record was seeded for a different type.
+            status = ConsentStatus.CONFIRMED
+            decided_at = invitation.accepted_at
+        return ParentInvitationView(
+            invitation_id=invitation.id,
+            student_id=invitation.student_id,
+            student_first_name=student_first_name or "your child",
+            school_name=school_name,
+            school_phone=school_phone,
+            school_email=school_email,
+            parent_name=parent_link.parent_name if parent_link else "Parent or guardian",
+            status=status,
+            consent_types=consent_types,
+            expires_at=invitation.expires_at,
+            decided_at=decided_at if status is not ConsentStatus.PENDING else None,
+        )
+
+    async def exercise_parent_right(
+        self,
+        *,
+        token_digest: str,
+        request_type: ParentRightType,
+        reason: str | None,
+        now: datetime,
+    ) -> ParentRightOutcome | None:
+        """Record a right the parent exercised against their own child.
+
+        The token is the authorisation: it was sent to that parent, for that
+        child. Withdrawal both suspends the learner and moves the consent
+        record, so the gate and the roster agree about what happened.
+        """
+        async with self._sessions.begin() as session:
+            invitation = await session.scalar(
+                select(ConsentInvitation).where(
+                    ConsentInvitation.token_digest == token_digest,
+                    ConsentInvitation.revoked_at.is_(None),
+                )
+            )
+            if invitation is None or invitation.expires_at <= now:
+                return None
+            link = await session.get(ParentLink, invitation.parent_link_id)
+            if link is None:
+                return None
+            parent_id = link.parent_id
+            if parent_id is None:
+                # A parent who never completed the link still holds rights over
+                # their child's data, so create the account the link implies
+                # rather than turning them away.
+                parent = await self._parent_for_link(session, parent_link=link)
+                await session.flush()
+                link.parent_id = parent.id
+                # ck_parent_links_account_created_matches_parent: the flag and
+                # the id have to move together.
+                link.account_created = True
+                link.updated_at = now
+                parent_id = parent.id
+
+            request = ParentDataRequest(
+                student_id=link.student_id,
+                parent_id=parent_id,
+                request_type=request_type.value,
+                reason=reason,
+            )
+            session.add(request)
+
+            if request_type is ParentRightType.WITHDRAW_CONSENT:
+                student = await session.get(User, link.student_id)
+                if student is not None:
+                    student.status = UserStatus.DEACTIVATED
+                    student.deactivated_at = now
+                consent = await self._ensure_pending_record(
+                    session,
+                    student_id=link.student_id,
+                    consent_type=REQUIRED_LEARNING_CONSENT,
+                )
+                if consent.status is not ConsentStatus.WITHDRAWN:
+                    consent.status = ConsentStatus.WITHDRAWN
+                    consent.last_actor_user_id = parent_id
+                    consent.last_changed_at = now
+                    consent.last_channel = "parent_portal"
+            await session.flush()
+            return ParentRightOutcome(
+                request_id=request.id,
+                request_type=request_type,
+                status=request.status,
+                reason_recorded=bool(reason),
+            )
 
     @staticmethod
     async def _require_student(

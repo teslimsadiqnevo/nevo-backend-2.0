@@ -10,7 +10,9 @@ from nevo.consent.entities import (
     ConsentRecordView,
     ParentConsentCompletion,
     ParentConsentRequestDraft,
+    ParentInvitationView,
     ParentLinkView,
+    ParentRightOutcome,
     QueuedParentConsentRequest,
 )
 from nevo.consent.errors import (
@@ -25,10 +27,13 @@ from nevo.domain.accounts.vocabulary import (
     ConsentStatus,
     ConsentType,
 )
-from nevo.domain.consent.vocabulary import ParentContactMethod
+from nevo.domain.consent.vocabulary import (
+    REQUIRED_LEARNING_CONSENT,
+    ParentContactMethod,
+    ParentRightType,
+)
 
 PARENT_CONSENT_LIFETIME = timedelta(days=7)
-REQUIRED_LEARNING_CONSENT = ConsentType.DATA_PROCESSING
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,14}$")
 
@@ -114,6 +119,31 @@ class ConsentService:
             completed_at=self._now(),
         )
 
+    async def parent_invitation(
+        self,
+        *,
+        token: str,
+    ) -> ParentInvitationView | None:
+        """Read the consent screen's own content back out of a parent token."""
+        return await self._repository.parent_invitation(
+            token_digest=self._token_service.digest(token),
+            now=self._now(),
+        )
+
+    async def exercise_parent_right(
+        self,
+        *,
+        token: str,
+        request_type: ParentRightType,
+        reason: str | None,
+    ) -> ParentRightOutcome | None:
+        return await self._repository.exercise_parent_right(
+            token_digest=self._token_service.digest(token),
+            request_type=request_type,
+            reason=(reason or "").strip() or None,
+            now=self._now(),
+        )
+
     async def parent_links(
         self,
         actor: ConsentActor,
@@ -131,19 +161,18 @@ class ConsentService:
     ) -> ConsentGate:
         if principal.role != "student":
             raise StudentConsentAccessError
-        granted = await self._repository.has_confirmed_consent(
+        status = await self._repository.consent_status(
             student_id=principal.user_id,
             consent_type=REQUIRED_LEARNING_CONSENT,
         )
+        # Report the stored status rather than collapsing everything that is
+        # not confirmed into "pending". A withdrawn learner and one nobody has
+        # asked about yet need different screens.
         return ConsentGate(
             student_id=principal.user_id,
-            granted=granted,
+            granted=status is ConsentStatus.CONFIRMED,
             required_type=REQUIRED_LEARNING_CONSENT,
-            status=(
-                ConsentStatus.CONFIRMED
-                if granted
-                else ConsentStatus.PENDING
-            ),
+            status=status,
         )
 
     async def require_student_consent(

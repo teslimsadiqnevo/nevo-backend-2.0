@@ -11,6 +11,7 @@ from nevo.domain.consent.vocabulary import (
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
     ParentContactMethod,
+    ParentRightType,
 )
 
 
@@ -86,3 +87,33 @@ class ConsentGate:
     granted: bool
     required_type: ConsentType
     status: ConsentStatus
+
+
+@dataclass(frozen=True, slots=True)
+class ParentInvitationView:
+    """What a parent may see before they decide, resolved from their token.
+
+    Named for the child and the school on purpose. A consent screen that says
+    "your child's school" has not told the parent which child or which school,
+    and NDPA s.31 consent given against that is not informed.
+    """
+
+    invitation_id: UUID
+    student_id: UUID
+    student_first_name: str
+    school_name: str
+    school_phone: str | None
+    school_email: str | None
+    parent_name: str
+    status: ConsentStatus
+    consent_types: frozenset[ConsentType]
+    expires_at: datetime
+    decided_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ParentRightOutcome:
+    request_id: UUID
+    request_type: ParentRightType
+    status: str
+    reason_recorded: bool

@@ -5,8 +5,9 @@ from functools import lru_cache
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from sqlalchemy import func, select, update
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from sqlalchemy import func, insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from nevo.api.auth import (
     AuthServiceDependency,
@@ -14,6 +15,7 @@ from nevo.api.auth import (
     PrincipalDependency,
     SessionResponse,
 )
+from nevo.api.consent import ConsentServiceDependency
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import actor_user, require_school_actor
 from nevo.api.response_models import (
@@ -32,17 +34,14 @@ from nevo.consent.errors import ConsentError
 from nevo.consent.service import ConsentService
 from nevo.db.models.account import (
     Class,
-    ConsentRecord,
     School,
     StudentClassEnrollment,
     User,
 )
 from nevo.db.models.auth import AuthSession
-from nevo.db.models.consent import ConsentInvitation, ParentLink
 from nevo.db.models.frontend_support import Notification, PasswordResetToken
 from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.product import (
-    ParentDataRequest,
     SchoolInvitation,
     StudentOnboardingGrant,
 )
@@ -54,7 +53,7 @@ from nevo.domain.accounts.vocabulary import (
     UserRole,
     UserStatus,
 )
-from nevo.domain.consent.vocabulary import ParentContactMethod
+from nevo.domain.consent.vocabulary import ParentContactMethod, ParentRightType
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 
@@ -123,6 +122,19 @@ class SchoolRegistrationRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=1024)
 
+    @field_validator("school_name", "admin_name")
+    @classmethod
+    def _must_not_be_blank(cls, value: str) -> str:
+        """min_length counts characters, so "  " reached the handler.
+
+        There it named a school nothing at all, and raised IndexError on the
+        administrator's name split - a 500 for what is a bad request.
+        """
+        stripped = value.strip()
+        if len(stripped) < 2:
+            raise ValueError("must contain at least two non-blank characters")
+        return stripped
+
 
 class InvitationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -143,10 +155,10 @@ class JoinRequest(BaseModel):
 
 
 class ParentRightRequest(BaseModel):
-    request_type: str = Field(
-        alias="requestType",
-        pattern="^(request_data|object|withdraw_consent)$",
-    )
+    model_config = ConfigDict(populate_by_name=True)
+
+    request_type: ParentRightType = Field(alias="requestType")
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 @router.post("/auth/school-code/verify", response_model=SchoolCodeResponse)
@@ -441,16 +453,18 @@ async def register_school(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already belongs to an account",
         )
+    school_name = payload.school_name
+    admin_name = payload.admin_name
     school_id, user_id, admin_id = uuid4(), uuid4(), uuid4()
-    slug_base = "-".join(payload.school_name.casefold().split())[:80] or "school"
+    slug_base = "-".join(school_name.casefold().split())[:80] or "school"
     school = School(
         id=school_id,
-        name=payload.school_name.strip(),
+        name=school_name,
         school_code=secrets.token_hex(4).upper(),
         school_url_slug=f"{slug_base}-{secrets.token_hex(2)}",
         auth_method=AuthMethod.EMAIL_PASSWORD,
     )
-    names = payload.admin_name.strip().split(maxsplit=1)
+    names = admin_name.split(maxsplit=1)
     user = User(
         id=user_id,
         school_id=school_id,
@@ -482,15 +496,30 @@ async def register_school(
     )
     session.add(Admin(id=admin_id, user_id=user_id, school_id=school_id))
     await session.flush()
-    for scope in PermissionScope:
-        session.add(
-            AdminScopeAssignment(
-                admin_id=admin_id,
-                scope=scope,
-                granted_by_user_id=user_id,
-            )
-        )
-    await session.commit()
+    # One statement for every scope. Seven separate inserts meant seven round
+    # trips to the database, which is most of what registration used to spend
+    # its time on.
+    await session.execute(
+        insert(AdminScopeAssignment),
+        [
+            {
+                "admin_id": admin_id,
+                "scope": scope,
+                "granted_by_user_id": user_id,
+            }
+            for scope in PermissionScope
+        ],
+    )
+    try:
+        await session.commit()
+    except IntegrityError as error:
+        # Two registrations for the same address can both pass the check above
+        # before either commits. The loser is a duplicate, not a server fault.
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already belongs to an account",
+        ) from error
     return SchoolRegistrationResponse(
         schoolId=school_id,
         adminId=user_id,
@@ -784,40 +813,27 @@ async def accept_join(
 async def exercise_parent_right(
     token: str,
     payload: ParentRightRequest,
-    session: DatabaseSession,
-) -> dict[str, object]:
-    invitation = await session.scalar(
-        select(ConsentInvitation).where(
-            ConsentInvitation.token_digest == _digest(token),
-            ConsentInvitation.revoked_at.is_(None),
-        )
-    )
-    link = (
-        await session.get(ParentLink, invitation.parent_link_id) if invitation is not None else None
-    )
-    if link is None or link.parent_id is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parent link not found")
-    request = ParentDataRequest(
-        student_id=link.student_id,
-        parent_id=link.parent_id,
+    service: ConsentServiceDependency,
+) -> ParentRightResponse:
+    """Record a right the parent exercises against their own child's data.
+
+    The token is hashed by the consent token service, not by this module's
+    plain digest. Using the wrong one here meant every valid link resolved to
+    "Parent link not found", so no parent could object or withdraw at all.
+    """
+    outcome = await service.exercise_parent_right(
+        token=token,
         request_type=payload.request_type,
+        reason=payload.reason,
     )
-    session.add(request)
-    if payload.request_type == "withdraw_consent":
-        student = await session.get(User, link.student_id)
-        if student:
-            student.status = UserStatus.DEACTIVATED
-            student.deactivated_at = datetime.now(UTC)
-        consent = await session.scalar(
-            select(ConsentRecord).where(
-                ConsentRecord.subject_user_id == link.student_id,
-                ConsentRecord.consent_type == ConsentType.DATA_PROCESSING,
-            )
+    if outcome is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This consent link is invalid, expired, or already used",
         )
-        if consent is not None and consent.status is ConsentStatus.CONFIRMED:
-            consent.status = ConsentStatus.WITHDRAWN
-            consent.last_actor_user_id = link.parent_id
-            consent.last_changed_at = datetime.now(UTC)
-            consent.last_channel = "parent_portal"
-    await session.commit()
-    return {"requestId": str(request.id), "status": request.status}
+    return ParentRightResponse(
+        request_id=outcome.request_id,
+        request_type=outcome.request_type,
+        status=outcome.status,
+        reason_recorded=outcome.reason_recorded,
+    )

@@ -6,7 +6,9 @@ from nevo.consent.entities import (
     ConsentRecordView,
     ParentConsentCompletion,
     ParentConsentRequestDraft,
+    ParentInvitationView,
     ParentLinkView,
+    ParentRightOutcome,
     QueuedParentConsentRequest,
 )
 from nevo.domain.accounts.vocabulary import (
@@ -15,8 +17,10 @@ from nevo.domain.accounts.vocabulary import (
     ConsentType,
 )
 from nevo.domain.consent.vocabulary import (
+    REQUIRED_LEARNING_CONSENT,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
+    ParentRightType,
 )
 
 
@@ -29,6 +33,11 @@ class MemoryConsentRepository:
         self.pending_initializations: list[
             tuple[UUID, frozenset[ConsentType]]
         ] = []
+        self.rights: list[tuple[UUID, ParentRightType, str | None]] = []
+        self.student_first_names: dict[UUID, str] = {}
+        self.school_names: dict[UUID, str] = {}
+        self.school_phone: str | None = None
+        self.school_email: str | None = None
 
     async def confirm_by_school(
         self,
@@ -61,6 +70,19 @@ class MemoryConsentRepository:
         draft: ParentConsentRequestDraft,
     ) -> QueuedParentConsentRequest:
         self.requests[draft.token_digest] = draft
+        for consent_type in draft.consent_types:
+            self.records.setdefault(
+                (draft.student_id, consent_type),
+                ConsentRecordView(
+                    id=uuid4(),
+                    student_id=draft.student_id,
+                    consent_type=consent_type,
+                    status=ConsentStatus.PENDING,
+                    confirmation_source=None,
+                    confirmed_via=None,
+                    confirmed_at=None,
+                ),
+            )
         self.links[draft.parent_link_id] = ParentLinkView(
             id=draft.parent_link_id,
             school_id=draft.school_id,
@@ -136,6 +158,81 @@ class MemoryConsentRepository:
     ) -> bool:
         record = self.records.get((student_id, consent_type))
         return record is not None and record.status is ConsentStatus.CONFIRMED
+
+    async def consent_status(
+        self,
+        *,
+        student_id: UUID,
+        consent_type: ConsentType,
+    ) -> ConsentStatus:
+        record = self.records.get((student_id, consent_type))
+        return record.status if record is not None else ConsentStatus.NOT_SENT
+
+    async def parent_invitation(
+        self,
+        *,
+        token_digest: str,
+        now: datetime,
+    ) -> ParentInvitationView | None:
+        draft = self.requests.get(token_digest)
+        if draft is None or draft.expires_at <= now:
+            return None
+        record = self.records.get((draft.student_id, REQUIRED_LEARNING_CONSENT))
+        status = record.status if record is not None else ConsentStatus.PENDING
+        return ParentInvitationView(
+            invitation_id=draft.invitation_id,
+            student_id=draft.student_id,
+            student_first_name=self.student_first_names.get(
+                draft.student_id,
+                "your child",
+            ),
+            school_name=self.school_names.get(draft.school_id, "The school"),
+            school_phone=self.school_phone,
+            school_email=self.school_email,
+            parent_name=draft.parent_name,
+            status=status,
+            consent_types=draft.consent_types,
+            expires_at=draft.expires_at,
+            decided_at=(
+                record.confirmed_at
+                if record is not None and status is not ConsentStatus.PENDING
+                else None
+            ),
+        )
+
+    async def exercise_parent_right(
+        self,
+        *,
+        token_digest: str,
+        request_type: ParentRightType,
+        reason: str | None,
+        now: datetime,
+    ) -> ParentRightOutcome | None:
+        draft = self.requests.get(token_digest)
+        if draft is None or draft.expires_at <= now:
+            return None
+        self.rights.append((draft.student_id, request_type, reason))
+        link = self.links[draft.parent_link_id]
+        if link.parent_id is None:
+            # The real table checks that these two move together.
+            self.links[link.id] = replace(
+                link,
+                parent_id=uuid4(),
+                account_created=True,
+            )
+        if request_type is ParentRightType.WITHDRAW_CONSENT:
+            record = self.records.get((draft.student_id, REQUIRED_LEARNING_CONSENT))
+            if record is not None:
+                self.records[(draft.student_id, REQUIRED_LEARNING_CONSENT)] = replace(
+                    record,
+                    status=ConsentStatus.WITHDRAWN,
+                )
+        return ParentRightOutcome(
+            request_id=uuid4(),
+            request_type=request_type,
+            status="open",
+            reason_recorded=bool(reason),
+        )
 
     async def ensure_pending(
         self,

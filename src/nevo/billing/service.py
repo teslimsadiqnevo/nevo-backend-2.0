@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 from uuid import UUID
@@ -10,18 +10,37 @@ from nevo.billing.entities import (
     InvoiceRecord,
     PaymentMethodRecord,
     PaymentMethodUpdate,
+    PerStudentQuote,
     SubscriptionRecord,
     UpcomingCharge,
 )
 from nevo.billing.errors import BillingPaymentMethodError
 from nevo.domain.billing.vocabulary import (
+    AccessWindow,
     InvoiceStatus,
     PaymentMethodType,
     PricingCurrency,
+    PricingPlan,
+    RateType,
     SubscriptionTier,
 )
 
 VAT_RATE = Decimal("7.50")
+PUBLISHED_RATES_NGN: dict[PricingPlan, Decimal] = {
+    PricingPlan.ANNUAL: Decimal("150000.00"),
+    PricingPlan.PER_TERM: Decimal("55000.00"),
+}
+"""The rate card, per student, in naira.
+
+Annual buys 365 days including breaks; per-term buys the school's session
+only. A school with a negotiated rate carries its own on the school row and
+this is the fallback, so the published price is stated once.
+"""
+
+ACCESS_WINDOWS: dict[PricingPlan, AccessWindow] = {
+    PricingPlan.ANNUAL: AccessWindow.YEAR_ROUND,
+    PricingPlan.PER_TERM: AccessWindow.SCHOOL_SESSION,
+}
 VOLATILITY_BUFFER_PERCENT = Decimal("5.00")
 FOUNDING_PARTNER_RATES_USD = {
     SubscriptionTier.BOUTIQUE: Decimal("25000.00"),
@@ -129,6 +148,48 @@ class BillingService:
             actor_user_id=actor_user_id,
             update_data=update_data,
         )
+
+
+def published_rate(plan: PricingPlan) -> Decimal:
+    return PUBLISHED_RATES_NGN[plan]
+
+
+def quote_per_student(
+    *,
+    plan: PricingPlan,
+    student_count: int,
+    rate_type: RateType,
+    per_student_rate: Decimal | None = None,
+    rate_locked_until: datetime | None = None,
+    currency: PricingCurrency = PricingCurrency.NGN,
+) -> PerStudentQuote:
+    """Price a school off its head count.
+
+    The rate is the input and the total is derived, which is the way round
+    per-student pricing works. It used to be inferred the other way - a
+    contract value divided by however many learners happened to be active -
+    so the rate moved every time somebody was enrolled.
+    """
+    if student_count < 0:
+        raise ValueError("student_count cannot be negative")
+    rate = per_student_rate if per_student_rate is not None else published_rate(plan)
+    if rate < 0:
+        raise ValueError("per_student_rate cannot be negative")
+    total_before_vat = _money(rate * student_count)
+    vat_amount = _money(total_before_vat * VAT_RATE / Decimal("100"))
+    return PerStudentQuote(
+        pricing_plan=plan,
+        student_count=student_count,
+        per_student_rate=_money(rate),
+        rate_type=rate_type,
+        rate_locked_until=rate_locked_until,
+        access_window=ACCESS_WINDOWS[plan],
+        total_before_vat=total_before_vat,
+        vat_rate=VAT_RATE,
+        vat_amount=vat_amount,
+        total_with_vat=_money(total_before_vat + vat_amount),
+        currency=currency,
+    )
 
 
 def quote_annual_invoice(

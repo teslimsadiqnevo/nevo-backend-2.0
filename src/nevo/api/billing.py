@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
+from functools import lru_cache
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -9,12 +10,15 @@ from sqlalchemy import select
 
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.permissions import RequireScope
+from nevo.billing.config import BankTransferSettings
 from nevo.billing.entities import (
+    BankTransferDetails,
     BillingContactRecord,
     BillingContactUpdate,
     InvoiceRecord,
     PaymentMethodRecord,
     PaymentMethodUpdate,
+    PerStudentQuote,
     SubscriptionRecord,
     UpcomingCharge,
 )
@@ -27,13 +31,14 @@ from nevo.billing.errors import (
 from nevo.billing.service import BillingService
 from nevo.db.models.account import School
 from nevo.db.models.billing import Invoice
-from nevo.domain.accounts.vocabulary import SchoolEnrollmentBand
 from nevo.domain.billing.vocabulary import (
+    AccessWindow,
     InvoiceStatus,
     PaymentMethodType,
     PaymentTransactionStatus,
     PricingCurrency,
-    SubscriptionTier,
+    PricingPlan,
+    RateType,
 )
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.intelligence.compliance_audit import render_simple_pdf
@@ -112,33 +117,60 @@ class PaymentMethodResponse(BaseModel):
         )
 
 
+class PricingResponse(BaseModel):
+    """The cost sheet: head count times rate, then VAT."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pricing_model: Literal["per_student"] = Field(alias="pricingModel")
+    pricing_plan: PricingPlan = Field(alias="pricingPlan")
+    access_window: AccessWindow = Field(alias="accessWindow")
+    student_count: int = Field(alias="studentCount")
+    per_student_rate: Decimal = Field(alias="perStudentRate")
+    rate_type: RateType = Field(alias="rateType")
+    rate_locked_until: datetime | None = Field(alias="rateLockedUntil")
+    total_before_vat: Decimal = Field(alias="totalBeforeVat")
+    vat_rate: Decimal = Field(alias="vatRate")
+    vat_amount: Decimal = Field(alias="vatAmount")
+    total_with_vat: Decimal = Field(alias="totalWithVat")
+    currency: PricingCurrency
+
+    @classmethod
+    def from_quote(cls, quote: PerStudentQuote) -> "PricingResponse":
+        return cls(
+            pricingModel="per_student",
+            pricingPlan=quote.pricing_plan,
+            accessWindow=quote.access_window,
+            studentCount=quote.student_count,
+            perStudentRate=quote.per_student_rate,
+            rateType=quote.rate_type,
+            rateLockedUntil=quote.rate_locked_until,
+            totalBeforeVat=quote.total_before_vat,
+            vatRate=quote.vat_rate,
+            vatAmount=quote.vat_amount,
+            totalWithVat=quote.total_with_vat,
+            currency=quote.currency,
+        )
+
+
 class SubscriptionResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     school_id: UUID = Field(alias="schoolId")
     school_name: str = Field(alias="schoolName")
-    subscription_tier: SubscriptionTier | None = Field(alias="subscriptionTier")
-    student_count_band: SchoolEnrollmentBand | None = Field(alias="studentCountBand")
-    contract_value: Decimal | None = Field(alias="contractValue")
     contract_start: datetime | None = Field(alias="contractStart")
     contract_end: datetime | None = Field(alias="contractEnd")
     renewal_banner_visible: bool = Field(alias="renewalBannerVisible")
     renewal_message: str | None = Field(alias="renewalMessage")
     billing_contact: BillingContactResponse | None = Field(alias="billingContact")
     payment_method: PaymentMethodResponse | None = Field(alias="paymentMethod")
-    pricing_model: Literal["per_student"] = Field(alias="pricingModel")
-    active_student_count: int = Field(alias="activeStudentCount")
-    per_student_annual_rate: Decimal | None = Field(alias="perStudentAnnualRate")
-    currency: PricingCurrency
+    pricing: PricingResponse
 
     @classmethod
     def from_record(cls, record: SubscriptionRecord) -> "SubscriptionResponse":
         return cls(
             school_id=record.school_id,
             school_name=record.school_name,
-            subscription_tier=record.subscription_tier,
-            student_count_band=record.student_count_band,
-            contract_value=record.contract_value,
             contract_start=record.contract_start,
             contract_end=record.contract_end,
             renewal_banner_visible=record.renewal_banner_visible,
@@ -153,9 +185,26 @@ class SubscriptionResponse(BaseModel):
                 if record.payment_method
                 else None
             ),
-            pricing_model="per_student",
-            active_student_count=record.active_student_count,
-            per_student_annual_rate=record.per_student_annual_rate,
+            pricing=PricingResponse.from_quote(record.quote),
+        )
+
+
+class BankTransferDetailsResponse(BaseModel):
+    """Where to send a bank transfer, so the panel stops hardcoding it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    bank_name: str = Field(alias="bankName")
+    account_number: str = Field(alias="accountNumber")
+    account_name: str = Field(alias="accountName")
+    currency: PricingCurrency
+
+    @classmethod
+    def from_record(cls, record: BankTransferDetails) -> "BankTransferDetailsResponse":
+        return cls(
+            bankName=record.bank_name,
+            accountNumber=record.account_number,
+            accountName=record.account_name,
             currency=record.currency,
         )
 
@@ -312,6 +361,11 @@ def get_billing_service(request: Request) -> BillingService:
     return service
 
 
+@lru_cache(maxsize=1)
+def bank_transfer_settings() -> BankTransferSettings:
+    return BankTransferSettings()
+
+
 BillingDependency = Annotated[BillingService, Depends(get_billing_service)]
 BillingScopeDependency = Annotated[
     PermissionSnapshot,
@@ -362,6 +416,20 @@ async def upcoming_charge(
         return UpcomingChargeResponse.from_record(await service.upcoming(_school_id(actor)))
     except BillingError as error:
         raise public_billing_error(error) from error
+
+
+@router.get("/bank-transfer-details", response_model=BankTransferDetailsResponse)
+async def bank_transfer_details(
+    actor: BillingScopeDependency,
+) -> BankTransferDetailsResponse:
+    """The account a school pays into, so no client has to hardcode it.
+
+    Served rather than embedded because a stale account number in a shipped
+    bundle sends fees somewhere they cannot be recovered from, and a frontend
+    deploy is the slowest way to correct one.
+    """
+    del actor
+    return BankTransferDetailsResponse.from_record(bank_transfer_settings().details())
 
 
 @router.put("/payment-method", response_model=PaymentMethodResponse)

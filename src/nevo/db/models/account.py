@@ -30,7 +30,7 @@ from nevo.domain.accounts.vocabulary import (
     UserRole,
     UserStatus,
 )
-from nevo.domain.billing.vocabulary import PaymentSource, SubscriptionTier
+from nevo.domain.billing.vocabulary import PaymentSource, PricingPlan, SubscriptionTier
 from nevo.domain.consent.vocabulary import ConsentConfirmationSource
 
 user_role_enum = Enum(
@@ -51,6 +51,11 @@ user_status_enum = Enum(
 enrollment_band_enum = Enum(
     SchoolEnrollmentBand,
     name="school_enrollment_band",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+pricing_plan_enum = Enum(
+    PricingPlan,
+    name="pricing_plan",
     values_callable=lambda enum: [item.value for item in enum],
 )
 subscription_tier_enum = Enum(
@@ -181,6 +186,16 @@ class School(TimestampMixin, Base):
         server_default=PaymentSource.DIRECT.value,
     )
     contract_value: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+    )
+    pricing_plan: Mapped[PricingPlan] = mapped_column(
+        pricing_plan_enum,
+        nullable=False,
+        default=PricingPlan.ANNUAL,
+        server_default=PricingPlan.ANNUAL.value,
+    )
+    per_student_rate: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2),
         nullable=True,
     )

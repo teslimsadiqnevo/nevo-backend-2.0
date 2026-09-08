@@ -3,11 +3,13 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from nevo.domain.accounts.vocabulary import SchoolEnrollmentBand
 from nevo.domain.billing.vocabulary import (
+    AccessWindow,
     InvoiceStatus,
     PaymentMethodType,
     PricingCurrency,
+    PricingPlan,
+    RateType,
     SubscriptionTier,
 )
 
@@ -40,22 +42,43 @@ class PaymentMethodRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PerStudentQuote:
+    """What a school owes, derived from its head count and its rate."""
+
+    pricing_plan: PricingPlan
+    student_count: int
+    per_student_rate: Decimal
+    rate_type: RateType
+    rate_locked_until: datetime | None
+    access_window: AccessWindow
+    total_before_vat: Decimal
+    vat_rate: Decimal
+    vat_amount: Decimal
+    total_with_vat: Decimal
+    currency: PricingCurrency
+
+
+@dataclass(frozen=True, slots=True)
 class SubscriptionRecord:
     school_id: UUID
     school_name: str
-    subscription_tier: SubscriptionTier | None
-    student_count_band: SchoolEnrollmentBand | None
-    contract_value: Decimal | None
     contract_start: datetime | None
     contract_end: datetime | None
     renewal_banner_visible: bool
     renewal_message: str | None
     billing_contact: BillingContactRecord | None
     payment_method: PaymentMethodRecord | None
-    active_student_count: int = 0
-    per_student_annual_rate: Decimal | None = None
-    pricing_model: str = "per_student"
-    currency: PricingCurrency = PricingCurrency.USD
+    quote: PerStudentQuote
+
+
+@dataclass(frozen=True, slots=True)
+class BankTransferDetails:
+    """Where a school sends money when it pays by transfer."""
+
+    bank_name: str
+    account_number: str
+    account_name: str
+    currency: PricingCurrency
 
 
 @dataclass(frozen=True, slots=True)

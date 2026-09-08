@@ -1,6 +1,5 @@
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, func, select, update
@@ -16,10 +15,11 @@ from nevo.billing.entities import (
     UpcomingCharge,
 )
 from nevo.billing.errors import BillingNotFoundError
+from nevo.billing.service import quote_per_student
 from nevo.db.models.account import School, User
 from nevo.db.models.billing import BillingContact, BillingPaymentMethod, Invoice
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
-from nevo.domain.billing.vocabulary import InvoiceStatus
+from nevo.domain.billing.vocabulary import InvoiceStatus, RateType
 
 RENEWAL_NOTICE_DAYS = 60
 
@@ -57,20 +57,22 @@ class SqlAlchemyBillingRepository:
         return SubscriptionRecord(
             school_id=school.id,
             school_name=school.name,
-            subscription_tier=school.subscription_tier,
-            student_count_band=school.enrollment_band,
-            contract_value=school.contract_value,
             contract_start=school.contract_start,
             contract_end=school.contract_end,
             renewal_banner_visible=visible,
             renewal_message=message,
             billing_contact=_contact_record(contact) if contact else None,
             payment_method=(_payment_method_record(payment_method) if payment_method else None),
-            active_student_count=active_student_count,
-            per_student_annual_rate=(
-                (school.contract_value / active_student_count).quantize(Decimal("0.01"))
-                if school.contract_value is not None and active_student_count > 0
-                else None
+            quote=quote_per_student(
+                plan=school.pricing_plan,
+                student_count=active_student_count,
+                rate_type=(
+                    RateType.FOUNDING_PARTNER
+                    if school.is_founding_partner
+                    else RateType.STANDARD
+                ),
+                per_student_rate=school.per_student_rate,
+                rate_locked_until=school.price_lock_expiry,
             ),
         )
 

@@ -15,12 +15,12 @@ from nevo.billing.entities import (
     SubscriptionRecord,
     UpcomingCharge,
 )
-from nevo.billing.service import BillingService
-from nevo.domain.accounts.vocabulary import SchoolEnrollmentBand
+from nevo.billing.service import BillingService, quote_per_student
 from nevo.domain.billing.vocabulary import (
     InvoiceStatus,
     PaymentMethodType,
-    SubscriptionTier,
+    PricingPlan,
+    RateType,
 )
 from nevo.permissions.entities import PermissionSnapshot
 
@@ -38,9 +38,12 @@ class FakeBillingService(BillingService):
         return SubscriptionRecord(
             school_id=school_id,
             school_name="Nevo School",
-            subscription_tier=SubscriptionTier.PREMIUM,
-            student_count_band=SchoolEnrollmentBand.MEDIUM,
-            contract_value=Decimal("1200000.00"),
+            quote=quote_per_student(
+                plan=PricingPlan.ANNUAL,
+                student_count=8,
+                rate_type=RateType.FOUNDING_PARTNER,
+                rate_locked_until=datetime(2029, 9, 1, tzinfo=UTC),
+            ),
             contract_start=datetime(2026, 1, 1, tzinfo=UTC),
             contract_end=datetime(2026, 9, 15, tzinfo=UTC),
             renewal_banner_visible=True,
@@ -146,8 +149,20 @@ def test_subscription_endpoint_returns_contract_and_masked_payment_details() -> 
 
     assert response.status_code == 200
     body = response.json()
-    assert body["subscriptionTier"] == "premium"
-    assert body["contractValue"] == "1200000.00"
+    # The tier fields are gone: pricing is per student on one rate card.
+    assert "subscriptionTier" not in body
+    assert "studentCountBand" not in body
+    assert "contractValue" not in body
+    pricing = body["pricing"]
+    assert pricing["pricingPlan"] == "annual"
+    assert pricing["accessWindow"] == "year_round"
+    assert pricing["studentCount"] == 8
+    assert pricing["perStudentRate"] == "150000.00"
+    assert pricing["rateType"] == "founding_partner"
+    assert pricing["totalBeforeVat"] == "1200000.00"
+    assert pricing["vatAmount"] == "90000.00"
+    assert pricing["totalWithVat"] == "1290000.00"
+    assert pricing["currency"] == "NGN"
     assert body["renewalBannerVisible"] is True
     assert body["paymentMethod"]["lastFour"] == "4242"
     assert "processor" not in body["paymentMethod"]
@@ -223,3 +238,37 @@ def test_billing_endpoints_require_school_context() -> None:
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "missing_school_context"
+
+
+def test_bank_transfer_details_are_served_not_hardcoded() -> None:
+    client, _ = client_for()
+
+    response = client.get("/api/billing/bank-transfer-details")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "bankName": "Kuda Bank",
+        "accountNumber": "3004167012",
+        "accountName": "Nevo Learning Limited",
+        "currency": "NGN",
+    }
+
+
+def test_bank_transfer_details_require_the_billing_scope() -> None:
+    """The account is not secret, but it is not anonymous either."""
+    from nevo.api.billing import router as billing_router
+    from nevo.api.permissions import RequireScope
+    from nevo.domain.permissions.vocabulary import PermissionScope
+
+    route = next(
+        item
+        for item in billing_router.routes
+        if getattr(item, "path", None) == "/api/billing/bank-transfer-details"
+    )
+    guards = [
+        dependency.call
+        for dependency in route.dependant.dependencies
+        if isinstance(dependency.call, RequireScope)
+    ]
+
+    assert any(guard.scope is PermissionScope.BILLING for guard in guards)

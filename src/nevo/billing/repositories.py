@@ -282,6 +282,12 @@ def _invoice_record(record: Invoice) -> InvoiceRecord:
         due_at=record.due_at,
         paid_at=record.paid_at,
         pdf_url=record.pdf_url,
+        currency=record.currency,
+        period_label=record.period_label,
+        student_count=record.student_count,
+        per_student_rate=record.per_student_rate,
+        total_before_vat=record.total_before_vat,
+        vat_amount=record.vat_amount,
     )
 
 

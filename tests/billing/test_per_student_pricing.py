@@ -110,3 +110,37 @@ def test_bank_transfer_details_default_to_the_receiving_account() -> None:
     assert details.account_number == "3004167012"
     assert details.account_name == "Nevo Learning Limited"
     assert details.currency is PricingCurrency.NGN
+
+
+def test_the_invoice_pdf_shows_the_working_not_just_the_total() -> None:
+    """A bursar has to be able to check a per-student bill, not trust it."""
+    from decimal import Decimal as D
+
+    from nevo.api.billing import _invoice_working
+    from nevo.db.models.billing import Invoice
+
+    lines = _invoice_working(
+        Invoice(
+            currency=PricingCurrency.NGN,
+            period_label="Year 1 Term 2",
+            student_count=200,
+            per_student_rate=D("55000.00"),
+            total_before_vat=D("11000000.00"),
+            vat_amount=D("825000.00"),
+        )
+    )
+
+    assert lines == [
+        "Period: Year 1 Term 2",
+        "Students: 200",
+        "Rate per student: NGN 55000.00",
+        "Subtotal: NGN 11000000.00",
+        "VAT (7.5%): NGN 825000.00",
+    ]
+
+
+def test_an_invoice_with_no_breakdown_renders_no_working() -> None:
+    from nevo.api.billing import _invoice_working
+    from nevo.db.models.billing import Invoice
+
+    assert _invoice_working(Invoice(currency=PricingCurrency.NGN)) == []

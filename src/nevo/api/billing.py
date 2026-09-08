@@ -220,6 +220,12 @@ class InvoiceResponse(BaseModel):
     due_at: date = Field(alias="dueAt")
     paid_at: datetime | None = Field(alias="paidAt")
     pdf_url: str = Field(alias="pdfUrl")
+    currency: PricingCurrency
+    period_label: str | None = Field(alias="periodLabel")
+    student_count: int | None = Field(alias="studentCount")
+    per_student_rate: Decimal | None = Field(alias="perStudentRate")
+    total_before_vat: Decimal | None = Field(alias="totalBeforeVat")
+    vat_amount: Decimal | None = Field(alias="vatAmount")
 
     @classmethod
     def from_record(cls, record: InvoiceRecord) -> "InvoiceResponse":
@@ -232,6 +238,12 @@ class InvoiceResponse(BaseModel):
             due_at=record.due_at,
             paid_at=record.paid_at,
             pdf_url=record.pdf_url,
+            currency=record.currency,
+            period_label=record.period_label,
+            student_count=record.student_count,
+            per_student_rate=record.per_student_rate,
+            total_before_vat=record.total_before_vat,
+            vat_amount=record.vat_amount,
         )
 
 
@@ -335,7 +347,8 @@ async def invoice_pdf(
             f"School: {school.name}",
             f"Issued: {invoice.issued_at.isoformat()}",
             f"Due: {invoice.due_at.isoformat()}",
-            f"Amount: {invoice.amount}",
+            *_invoice_working(invoice),
+            f"Total: {invoice.currency.value} {invoice.amount}",
             f"Status: {invoice.status.value}",
             "This document was generated from the school's billing record.",
         ]
@@ -346,6 +359,20 @@ async def invoice_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _invoice_working(invoice: Invoice) -> list[str]:
+    """The lines that let a bursar check the total rather than trust it."""
+    if invoice.student_count is None or invoice.per_student_rate is None:
+        return []
+    currency = invoice.currency.value
+    return [
+        f"Period: {invoice.period_label or 'Contract period'}",
+        f"Students: {invoice.student_count}",
+        f"Rate per student: {currency} {invoice.per_student_rate}",
+        f"Subtotal: {currency} {invoice.total_before_vat}",
+        f"VAT (7.5%): {currency} {invoice.vat_amount}",
+    ]
 
 
 def get_billing_service(request: Request) -> BillingService:

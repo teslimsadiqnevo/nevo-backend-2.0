@@ -11,6 +11,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -440,6 +441,19 @@ class Invoice(Base):
         nullable=True,
     )
     pdf_url: Mapped[str] = mapped_column(Text, nullable=False)
+    currency: Mapped[PricingCurrency] = mapped_column(
+        pricing_currency_enum,
+        nullable=False,
+        default=PricingCurrency.NGN,
+        server_default=PricingCurrency.NGN.value,
+    )
+    # What the amount was worked out from. Head count moves constantly, so an
+    # invoice that only stores its total cannot be explained later.
+    student_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    per_student_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    total_before_vat: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    vat_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    period_label: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

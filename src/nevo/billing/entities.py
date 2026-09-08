@@ -10,7 +10,6 @@ from nevo.domain.billing.vocabulary import (
     PricingCurrency,
     PricingPlan,
     RateType,
-    SubscriptionTier,
 )
 
 
@@ -91,6 +90,14 @@ class InvoiceRecord:
     due_at: date
     paid_at: datetime | None
     pdf_url: str
+    currency: PricingCurrency = PricingCurrency.NGN
+    # How the amount was reached. Null on anything issued before per-student
+    # pricing; a school cannot check a total it cannot see the working for.
+    period_label: str | None = None
+    student_count: int | None = None
+    per_student_rate: Decimal | None = None
+    total_before_vat: Decimal | None = None
+    vat_amount: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,16 +135,3 @@ class BillingContactUpdate:
     region: str | None
     postal_code: str | None
     country: str
-
-
-@dataclass(frozen=True, slots=True)
-class BillingLedgerQuote:
-    tier: SubscriptionTier
-    amount_usd: Decimal
-    applied_discount_percent: Decimal
-    net_amount_usd: Decimal
-    vat_amount_usd: Decimal
-    total_with_vat_usd: Decimal
-    billed_currency: PricingCurrency
-    fx_rate_applied: Decimal
-    total_billed_local: Decimal

@@ -20,6 +20,7 @@ from nevo.consent.entities import (
 from nevo.consent.errors import (
     ConsentError,
     ConsentRequiredError,
+    ConsentWithdrawnError,
     InvalidConsentInvitationError,
     ParentAccountConflictError,
     StudentConsentAccessError,
@@ -181,6 +182,7 @@ class ParentConsentInvitationResponse(BaseModel):
 class ConsentGateResponse(BaseModel):
     student_id: UUID
     granted: bool
+    blocked: bool
     required_type: ConsentType
     status: ConsentStatus
 
@@ -377,6 +379,7 @@ def public_consent_error(error: ConsentError) -> HTTPException:
         (
             StudentConsentAccessError,
             ConsentRequiredError,
+            ConsentWithdrawnError,
         ),
     ):
         status_code = status.HTTP_403_FORBIDDEN

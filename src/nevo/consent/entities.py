@@ -83,8 +83,19 @@ class ParentConsentCompletion:
 
 @dataclass(frozen=True, slots=True)
 class ConsentGate:
+    """Whether a learner may proceed, and whether consent has been recorded.
+
+    These are deliberately two questions. Three of the four statuses answer
+    ``granted`` with False, but only a withdrawal stops a child: consent the
+    school has not got round to recording is the school's task, not the
+    learner's problem. A client reading ``granted`` to decide access blocks
+    exactly the children that ruling protects, so ``blocked`` answers the
+    access question directly and is the one to branch on.
+    """
+
     student_id: UUID
     granted: bool
+    blocked: bool
     required_type: ConsentType
     status: ConsentStatus
 

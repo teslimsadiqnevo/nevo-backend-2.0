@@ -6,7 +6,6 @@ import pytest
 from nevo.auth.entities import AuthPrincipal
 from nevo.consent.entities import ConsentActor
 from nevo.consent.errors import (
-    ConsentRequiredError,
     InvalidConsentMethodError,
     InvalidParentContactError,
     StudentConsentAccessError,
@@ -155,7 +154,12 @@ async def test_parent_completion_is_one_time_and_opens_gate() -> None:
     assert gate.granted
 
 
-async def test_learning_gate_blocks_pending_student() -> None:
+async def test_learning_gate_lets_a_student_learn_before_consent_is_recorded() -> None:
+    """Reversed by Lydia's ruling: the notice never blocks a child.
+
+    A school that has not recorded consent yet has an administrative task
+    outstanding. Stopping the learner made that the child's problem.
+    """
     consent_service, _ = service()
     principal = AuthPrincipal(
         user_id=uuid4(),
@@ -163,8 +167,10 @@ async def test_learning_gate_blocks_pending_student() -> None:
         session_id=uuid4(),
     )
 
-    with pytest.raises(ConsentRequiredError):
-        await consent_service.require_student_consent(principal)
+    gate = await consent_service.require_student_consent(principal)
+
+    assert gate.granted is False
+    assert gate.blocked is False
 
 
 async def test_non_student_cannot_query_student_gate() -> None:

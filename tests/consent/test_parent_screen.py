@@ -192,3 +192,90 @@ def test_a_right_exercised_before_completion_creates_the_parent_account() -> Non
     updated = next(iter(repository.links.values()))
     assert updated.parent_id is not None
     assert updated.account_created is True
+
+
+def _gate_for(status: ConsentStatus):  # type: ignore[no-untyped-def]
+    import anyio
+
+    from nevo.auth.entities import AuthPrincipal
+
+    repository = MemoryConsentRepository()
+    service = ConsentService(
+        repository=repository,
+        token_service=FixedConsentTokenService(),
+        public_base_url="https://app.nevo.test",
+        now=lambda: NOW,
+    )
+    student_id = uuid4()
+    if status is not ConsentStatus.NOT_SENT:
+        repository.records[(student_id, ConsentType.DATA_PROCESSING)] = ConsentRecordView(
+            id=uuid4(),
+            student_id=student_id,
+            consent_type=ConsentType.DATA_PROCESSING,
+            status=status,
+            confirmation_source=None,
+            confirmed_via=None,
+            confirmed_at=None,
+        )
+    principal = AuthPrincipal(user_id=student_id, role="student", session_id=uuid4())
+    return service, principal, anyio.run(lambda: service.student_gate(principal))
+
+
+def test_only_a_withdrawal_blocks_a_learner() -> None:
+    """Lydia's ruling: an unrecorded consent is the school's task, not the
+    child's problem. Three statuses report granted=False; only one stops them."""
+    blocked = {
+        status: _gate_for(status)[2].blocked
+        for status in (
+            ConsentStatus.NOT_SENT,
+            ConsentStatus.PENDING,
+            ConsentStatus.CONFIRMED,
+            ConsentStatus.WITHDRAWN,
+        )
+    }
+
+    assert blocked == {
+        ConsentStatus.NOT_SENT: False,
+        ConsentStatus.PENDING: False,
+        ConsentStatus.CONFIRMED: False,
+        ConsentStatus.WITHDRAWN: True,
+    }
+
+
+def test_granted_is_false_for_three_statuses_so_it_is_not_the_access_answer() -> None:
+    """The trap this guards: granted is about consent, blocked is about access."""
+    not_granted = [
+        status
+        for status in (
+            ConsentStatus.NOT_SENT,
+            ConsentStatus.PENDING,
+            ConsentStatus.CONFIRMED,
+            ConsentStatus.WITHDRAWN,
+        )
+        if not _gate_for(status)[2].granted
+    ]
+
+    assert len(not_granted) == 3
+    assert ConsentStatus.CONFIRMED not in not_granted
+
+
+def test_a_pending_learner_may_still_learn() -> None:
+    import anyio
+
+    service, principal, _ = _gate_for(ConsentStatus.PENDING)
+
+    gate = anyio.run(lambda: service.require_student_consent(principal))
+
+    assert gate.blocked is False
+
+
+def test_a_withdrawn_learner_is_stopped_and_told_why() -> None:
+    import anyio
+    import pytest
+
+    from nevo.consent.errors import ConsentWithdrawnError
+
+    service, principal, _ = _gate_for(ConsentStatus.WITHDRAWN)
+
+    with pytest.raises(ConsentWithdrawnError):
+        anyio.run(lambda: service.require_student_consent(principal))

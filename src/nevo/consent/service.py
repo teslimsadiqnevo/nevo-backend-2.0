@@ -16,7 +16,7 @@ from nevo.consent.entities import (
     QueuedParentConsentRequest,
 )
 from nevo.consent.errors import (
-    ConsentRequiredError,
+    ConsentWithdrawnError,
     InvalidConsentMethodError,
     InvalidParentContactError,
     StudentConsentAccessError,
@@ -171,6 +171,7 @@ class ConsentService:
         return ConsentGate(
             student_id=principal.user_id,
             granted=status is ConsentStatus.CONFIRMED,
+            blocked=status is ConsentStatus.WITHDRAWN,
             required_type=REQUIRED_LEARNING_CONSENT,
             status=status,
         )
@@ -180,8 +181,12 @@ class ConsentService:
         principal: AuthPrincipal,
     ) -> ConsentGate:
         gate = await self.student_gate(principal)
-        if not gate.granted:
-            raise ConsentRequiredError
+        if gate.blocked:
+            # Only an explicit withdrawal stops processing. A learner nobody
+            # has recorded consent for yet carries on: that is an
+            # administrative gap at the school, not a reason to lock a child
+            # out of their lessons.
+            raise ConsentWithdrawnError
         return gate
 
     async def initialize_roster_student(self, student_id: UUID) -> None:

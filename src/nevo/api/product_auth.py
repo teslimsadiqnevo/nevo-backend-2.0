@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -57,6 +58,9 @@ from nevo.domain.accounts.vocabulary import (
 from nevo.domain.consent.vocabulary import ParentContactMethod, ParentRightType
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
+from nevo.ops.background import spawn
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["product access"])
 
@@ -539,6 +543,8 @@ async def _create_invitation(
     actor: User,
     session: DatabaseSession,
     mailer: ResendEmailDelivery,
+    *,
+    defer_delivery: bool = False,
 ) -> dict[str, object]:
     if payload.class_id:
         school_class = await session.get(Class, payload.class_id)
@@ -560,7 +566,26 @@ async def _create_invitation(
     session.add(record)
     await session.commit()
     delivery_status = "not_requested"
-    if record.email:
+    if record.email and defer_delivery:
+        # A bulk import can carry five hundred rows. Sending each email while
+        # the caller waits turns a roster upload into minutes of provider
+        # round trips, so the rows are created now and the sending follows.
+        invitation_id = record.id
+        recipient = record.email
+
+        async def deliver() -> None:
+            try:
+                await _send_invitation(mailer, record, token)
+            except EmailDeliveryUnavailableError:
+                logger.warning(
+                    "Invitation %s to %s was not sent: email is not configured",
+                    invitation_id,
+                    recipient,
+                )
+
+        spawn(deliver, name=f"invitation-email-{invitation_id}")
+        delivery_status = "queued"
+    elif record.email:
         try:
             await _send_invitation(mailer, record, token)
             delivery_status = "sent"
@@ -602,7 +627,15 @@ async def create_bulk_invites(
     created, rejected = [], []
     for index, payload in enumerate(payloads[:500]):
         try:
-            created.append(await _create_invitation(payload, actor, session, _mailer(request)))
+            created.append(
+                await _create_invitation(
+                    payload,
+                    actor,
+                    session,
+                    _mailer(request),
+                    defer_delivery=True,
+                )
+            )
         except HTTPException as error:
             rejected.append({"row": index + 1, "reason": str(error.detail)})
     return {"created": created, "rejected": rejected}

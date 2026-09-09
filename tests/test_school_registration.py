@@ -55,3 +55,17 @@ def test_surrounding_whitespace_is_kept_out_of_the_stored_name() -> None:
 
     assert request.school_name == "Bright Star Academy"
     assert request.admin_name == "Ngozi Okafor"
+
+
+def test_a_bulk_import_does_not_send_its_email_before_answering() -> None:
+    """Five hundred rows, each sending an email inline, turns a roster upload
+    into minutes of provider round trips while the caller waits."""
+    import inspect
+
+    from nevo.api import product_auth
+
+    source = inspect.getsource(product_auth.create_bulk_invites)
+
+    assert "defer_delivery=True" in source
+    deferred = inspect.getsource(product_auth._create_invitation)
+    assert '"queued"' in deferred

@@ -2,8 +2,16 @@ from enum import StrEnum
 
 
 class AskNevoRole(StrEnum):
+    """Who is asking, which decides both the prompt and the tools offered.
+
+    Not the same list as UserRole: an admin asks the same kind of question a
+    teacher does and gets the same voice, but reaches further into the school.
+    """
+
     STUDENT = "student"
     TEACHER = "teacher"
+    PARENT = "parent"
+    ADMIN = "admin"
 
 
 class AskNevoQuestionCategory(StrEnum):

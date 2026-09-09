@@ -42,8 +42,8 @@ class FakeSession:
         return type("Interaction", (), {"actor_user_id": self._principal.user_id})()
 
 
-def client_for() -> tuple[TestClient, FakeAskNevoService, AuthPrincipal]:
-    principal = AuthPrincipal(user_id=uuid4(), role="student", session_id=uuid4())
+def client_for(role: str = "student") -> tuple[TestClient, FakeAskNevoService, AuthPrincipal]:
+    principal = AuthPrincipal(user_id=uuid4(), role=role, session_id=uuid4())
     service = FakeAskNevoService()
     app = FastAPI()
     app.state.ask_nevo_service = service
@@ -104,3 +104,44 @@ def test_records_helpfulness_signal() -> None:
 
     assert response.status_code == 204
     assert service.helpful == (INTERACTION_ID, True)
+
+
+def test_an_asker_cannot_claim_a_role_they_do_not_hold() -> None:
+    """The role decides the toolset, so a learner claiming to be a teacher
+    would otherwise be handed the roster."""
+    from nevo.domain.ask_nevo.vocabulary import AskNevoRole
+
+    client, _, _ = client_for(role="student")
+
+    response = client.post(
+        "/api/v1/ask-nevo/",
+        json={
+            "role": AskNevoRole.TEACHER.value,
+            "currentPage": "teacher_dashboard",
+            "question": "Who needs attention in my class?",
+            "contextIds": {},
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ask_role_forbidden"
+
+
+def test_an_administrator_may_also_ask_as_a_teacher() -> None:
+    """A SENCO reading one class is doing a teacher's job."""
+    from nevo.domain.ask_nevo.vocabulary import AskNevoRole
+
+    for asking in (AskNevoRole.ADMIN, AskNevoRole.TEACHER):
+        client, _, _ = client_for(role="senco_admin")
+
+        response = client.post(
+            "/api/v1/ask-nevo/",
+            json={
+                "role": asking.value,
+                "currentPage": "teacher_dashboard",
+                "question": "How is the class getting on?",
+                "contextIds": {},
+            },
+        )
+
+        assert response.status_code == 200, asking

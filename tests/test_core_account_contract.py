@@ -137,9 +137,13 @@ def test_sso_and_ask_nevo_tables_have_required_references() -> None:
     assert ("schools", "id") in foreign_key_targets("school_sso_configurations")
     assert ("schools", "id") in foreign_key_targets("roster_sync_runs")
     assert ("roster_sync_runs", "id") in foreign_key_targets("roster_sync_issues")
+    # Parents and administrators ask too, and their interactions are recorded
+    # against the same table.
     assert enum_values("ask_nevo_interactions", "role") == [
         "student",
         "teacher",
+        "parent",
+        "admin",
     ]
     assert ("users", "id") in foreign_key_targets("ask_nevo_interactions")
     assert ("ai_gateway_calls", "id") in foreign_key_targets("ask_nevo_interactions")

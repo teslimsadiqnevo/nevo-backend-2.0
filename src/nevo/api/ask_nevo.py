@@ -112,12 +112,34 @@ def get_ask_nevo_service(request: Request) -> AskNevoService:
 AskNevoDependency = Annotated[AskNevoService, Depends(get_ask_nevo_service)]
 
 
+#: Which asking roles each signed-in role may use. An administrator may ask as
+#: a teacher too, because a SENCO reading one class is doing a teacher's job.
+_ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
+    "student": (AskNevoRole.STUDENT,),
+    "teacher": (AskNevoRole.TEACHER,),
+    "parent_guardian": (AskNevoRole.PARENT,),
+    "senco_admin": (AskNevoRole.ADMIN, AskNevoRole.TEACHER),
+    "other_admin": (AskNevoRole.ADMIN, AskNevoRole.TEACHER),
+}
+
+
 @router.post("/", response_model=AskResponse)
 async def ask_nevo(
     payload: AskRequest,
     principal: PrincipalDependency,
     service: AskNevoDependency,
 ) -> AskResponse:
+    # The asking role decides both the voice and the tools, so it cannot be
+    # whatever the client sends. A learner claiming to be a teacher would
+    # otherwise be offered the roster.
+    if payload.role not in _ROLES_FOR_PRINCIPAL.get(principal.role, ()):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "ask_role_forbidden",
+                "message": "You cannot ask Nevo in that role.",
+            },
+        )
     if payload.role is AskNevoRole.STUDENT:
         context_student_id = payload.context_ids.student_id or principal.user_id
         if context_student_id != principal.user_id:

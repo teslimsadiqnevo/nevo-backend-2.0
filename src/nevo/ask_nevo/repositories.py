@@ -5,14 +5,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.ask_nevo.directory import PseudonymDirectory
 from nevo.ask_nevo.entities import AskNevoContext, AskNevoRequest
-from nevo.ask_nevo.tools import TOOL_SCHEMAS, ToolContext, execute_tool
+from nevo.ask_nevo.tools import ToolContext, execute_tool, schemas_for
 from nevo.db.models.account import Class, User
 from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.db.models.attention_flag import AttentionFlag, Escalation
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
-from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory
+from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
 
 
 class SqlAlchemyAskNevoRepository:
@@ -158,6 +158,7 @@ class SqlAlchemyAskNevoRepository:
         self,
         *,
         actor_user_id: UUID,
+        role: AskNevoRole,
     ) -> tuple[tuple[dict[str, object], ...], object, "PseudonymDirectory | None"]:
         """Tools bound to one asking user.
 
@@ -181,12 +182,13 @@ class SqlAlchemyAskNevoRepository:
                         session=tool_session,
                         actor=tool_actor,
                         directory=directory,
+                        role=role,
                     ),
                     name,
                     arguments,
                 )
 
-        return tuple(TOOL_SCHEMAS), execute, directory
+        return schemas_for(role), execute, directory
 
 
 

@@ -26,6 +26,7 @@ class AskNevoRepository(Protocol):
         self,
         *,
         actor_user_id: UUID,
+        role: AskNevoRole,
     ) -> tuple[tuple[dict[str, object], ...], object, Any]: ...
 
     async def log_interaction(
@@ -73,18 +74,15 @@ class AskNevoService:
         # directory is built from this actor's own accessible set, so it also
         # bounds what any tool can reach.
         tools, executor, directory = await self._repository.build_toolset(
-            actor_user_id=actor_user_id
+            actor_user_id=actor_user_id,
+            role=request.role,
         )
         result = await self._gateway.generate(
             AiGenerationRequest(
                 requester_user_id=actor_user_id,
                 student_id=context.student_id_for_gateway,
                 service=AiService.NARRATIVE,
-                prompt_name=(
-                    "ask_nevo.teacher"
-                    if request.role is AskNevoRole.TEACHER
-                    else "ask_nevo.student"
-                ),
+                prompt_name=_prompt_for(request.role),
                 variables={
                     "question": request.question,
                     "context": json.dumps(context.payload, sort_keys=True, default=str),
@@ -101,11 +99,7 @@ class AskNevoService:
                     requester_user_id=actor_user_id,
                     student_id=context.student_id_for_gateway,
                     service=AiService.NARRATIVE,
-                    prompt_name=(
-                        "ask_nevo.teacher"
-                        if request.role is AskNevoRole.TEACHER
-                        else "ask_nevo.student"
-                    ),
+                    prompt_name=_prompt_for(request.role),
                     variables={
                         "question": (
                             f"{request.question}\n\nRewrite your answer using only "
@@ -167,3 +161,17 @@ def classify_question(question: str) -> AskNevoQuestionCategory:
     if any(word in text for word in ("explain", "help", "understand")):
         return AskNevoQuestionCategory.LESSON_HELP
     return AskNevoQuestionCategory.GENERAL
+
+
+def _prompt_for(role: AskNevoRole) -> str:
+    """Which voice answers.
+
+    An administrator gets the teacher's voice - the questions are the same
+    shape - but a wider toolset. A parent has their own, because the thing
+    they must never be handed is a number about their child.
+    """
+    if role is AskNevoRole.STUDENT:
+        return "ask_nevo.student"
+    if role is AskNevoRole.PARENT:
+        return "ask_nevo.parent"
+    return "ask_nevo.teacher"

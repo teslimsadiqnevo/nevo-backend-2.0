@@ -19,6 +19,7 @@ from nevo.ask_nevo.tools import (
     execute_tool,
 )
 from nevo.domain.accounts.vocabulary import UserRole
+from nevo.domain.ask_nevo.vocabulary import AskNevoRole
 
 AMARA = UUID("aaaaaaaa-0000-4000-8000-000000000001")
 DARA = UUID("aaaaaaaa-0000-4000-8000-000000000002")
@@ -213,14 +214,43 @@ def test_every_tool_schema_is_well_formed() -> None:
         assert "properties" in schema["input_schema"]
 
 
-async def test_every_declared_tool_is_executable() -> None:
+def test_every_declared_tool_is_executable() -> None:
     """A schema with no handler would be a tool the model can call into nothing."""
-    actor = SimpleNamespace(id=uuid4(), school_id=None, role=UserRole.TEACHER)
-    ctx = ToolContext(session=None, actor=actor, directory=directory())  # type: ignore[arg-type]
+    from nevo.ask_nevo.tools import _HANDLERS
 
-    for schema in TOOL_SCHEMAS:
-        result = await execute_tool(ctx, schema["name"], {})
-        assert result.get("error") != "unknown_tool", schema["name"]
+    declared = {schema["name"] for schema in TOOL_SCHEMAS}
+
+    assert declared == set(_HANDLERS)
+
+
+async def test_a_tool_that_falls_over_refuses_rather_than_raising() -> None:
+    """One broken lookup must not take the whole answer with it."""
+    actor = SimpleNamespace(id=uuid4(), school_id=None, role=UserRole.STUDENT)
+    ctx = ToolContext(
+        session=None,  # type: ignore[arg-type]
+        actor=actor,
+        directory=directory(),
+        role=AskNevoRole.STUDENT,
+    )
+
+    result = await execute_tool(ctx, "get_my_progress", {})
+
+    assert result["error"] == "unavailable"
+
+
+async def test_a_tool_is_refused_to_a_role_that_was_not_offered_it() -> None:
+    """The offered list is a convenience; the gate is checked on execution."""
+    actor = SimpleNamespace(id=uuid4(), school_id=None, role=UserRole.STUDENT)
+    ctx = ToolContext(
+        session=None,  # type: ignore[arg-type]
+        actor=actor,
+        directory=directory(),
+        role=AskNevoRole.STUDENT,
+    )
+
+    result = await execute_tool(ctx, "get_recent_flags", {})
+
+    assert result["error"] == "not_permitted"
 
 
 def test_the_tool_descriptions_tell_the_model_names_are_unavailable() -> None:
@@ -293,3 +323,51 @@ def test_dates_read_the_way_a_teacher_would_say_them() -> None:
 
     assert _date(datetime(2026, 8, 28, 9, 30, tzinfo=UTC)) == "28 August"
     assert _date(None) is None
+
+
+def test_each_asker_is_offered_only_tools_that_can_work_for_them() -> None:
+    """Every role used to get the same six, so a learner was handed
+    get_class_overview - a tool that can only ever refuse for them."""
+    from nevo.ask_nevo.tools import schemas_for
+
+    for role in AskNevoRole:
+        offered = {schema["name"] for schema in schemas_for(role)}
+        assert offered, role
+
+    student = {s["name"] for s in schemas_for(AskNevoRole.STUDENT)}
+    parent = {s["name"] for s in schemas_for(AskNevoRole.PARENT)}
+    teacher = {s["name"] for s in schemas_for(AskNevoRole.TEACHER)}
+    admin = {s["name"] for s in schemas_for(AskNevoRole.ADMIN)}
+
+    # A learner and a parent never reach the roster.
+    for roster_tool in ("find_learners", "get_class_overview", "get_recent_flags"):
+        assert roster_tool not in student
+        assert roster_tool not in parent
+
+    # A parent's tools are about their own children and nothing else.
+    assert parent == {"get_my_children", "get_child_progress"}
+
+    # A teacher does not get the school-wide administrative reads.
+    assert "get_school_overview" not in teacher
+    assert "get_consent_status" not in teacher
+    assert {"get_school_overview", "get_consent_status"} <= admin
+
+
+def test_the_offered_schemas_carry_no_gating_to_the_model() -> None:
+    """`roles` is ours; sending it would just be noise in the tool definition."""
+    from nevo.ask_nevo.tools import schemas_for
+
+    for schema in schemas_for(AskNevoRole.ADMIN):
+        assert set(schema) == {"name", "description", "input_schema"}
+
+
+def test_no_tool_lets_a_learner_name_someone_else() -> None:
+    """A student's tools take no learner argument at all - they are about the
+    asker, so there is nothing to point somewhere else."""
+    from nevo.ask_nevo.tools import schemas_for
+
+    for schema in schemas_for(AskNevoRole.STUDENT):
+        properties = schema["input_schema"]["properties"]
+        assert "learner" not in properties, schema["name"]
+        assert "student_id" not in properties, schema["name"]
+        assert "class_id" not in properties, schema["name"]

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.permissions import RequireScope
+from nevo.api.response_models import CamelResponse
 from nevo.domain.accounts.vocabulary import (
     RosterSyncStatus,
     SsoConnectionStatus,
@@ -76,7 +77,7 @@ class SsoCallbackResponse(BaseModel):
         )
 
 
-class RosterSyncResponse(BaseModel):
+class RosterSyncResponse(CamelResponse):
     status: RosterSyncStatus
     imported_students: int
     imported_teachers: int
@@ -163,14 +164,14 @@ class SsoConnectionHealthResponse(BaseModel):
         )
 
 
-class RosterSyncIssueResponse(BaseModel):
+class RosterSyncIssueResponse(CamelResponse):
     id: UUID
     external_reference: str
     description: str
     resolution_hint: str | None
 
 
-class RosterSyncRunResponse(BaseModel):
+class RosterSyncRunResponse(CamelResponse):
     id: UUID
     provider: SsoProvider
     status: RosterSyncStatus
@@ -208,7 +209,7 @@ class RosterSyncRunResponse(BaseModel):
         )
 
 
-class RosterSyncHistoryResponse(BaseModel):
+class RosterSyncHistoryResponse(CamelResponse):
     window_days: int
     successful_runs: int
     failed_runs: int

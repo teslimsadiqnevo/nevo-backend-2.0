@@ -231,8 +231,8 @@ def test_sso_roster_sync_endpoint() -> None:
     response = client.post("/api/v1/schools/nevo-school/sso/google/roster-sync")
 
     assert response.status_code == 200
-    assert response.json()["missing_teacher_class_mappings"] == 1
-    assert response.json()["issue_ids"] == [str(ISSUE_ID)]
+    assert response.json()["missingTeacherClassMappings"] == 1
+    assert response.json()["issueIds"] == [str(ISSUE_ID)]
 
 
 def test_admin_status_reports_health_and_data_flow() -> None:
@@ -267,11 +267,11 @@ def test_admin_sync_history_explains_failed_events() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["successful_runs"] == 4
-    assert body["failed_runs"] == 1
+    assert body["successfulRuns"] == 4
+    assert body["failedRuns"] == 1
     issue = body["runs"][0]["issues"][0]
-    assert issue["resolution_hint"] == "Create the class in Nevo."
-    assert body["runs"][0]["triggered_manually"] is True
+    assert issue["resolutionHint"] == "Create the class in Nevo."
+    assert body["runs"][0]["triggeredManually"] is True
 
 
 def test_admin_sync_history_window_is_bounded() -> None:

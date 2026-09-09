@@ -218,3 +218,17 @@ def test_a_sync_can_report_that_it_is_still_running() -> None:
     statuses = app.openapi()["components"]["schemas"]["RosterSyncStatus"]["enum"]
 
     assert "running" in statuses
+
+
+def test_the_roster_sync_shapes_speak_the_same_case_as_everything_else() -> None:
+    """These were the only new surface still emitting snake_case."""
+    schemas = app.openapi()["components"]["schemas"]
+
+    for name in (
+        "RosterSyncRunResponse",
+        "RosterSyncIssueResponse",
+        "RosterSyncHistoryResponse",
+        "RosterSyncAcceptedResponse",
+    ):
+        for field in schemas[name]["properties"]:
+            assert "_" not in field, f"{name}.{field}"

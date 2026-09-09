@@ -21,6 +21,7 @@ from nevo.db.models.account import consent_type_enum
 from nevo.domain.accounts.vocabulary import ConsentType
 from nevo.domain.consent.vocabulary import (
     ConsentDeliveryStatus,
+    ConsentNotificationKind,
     ParentContactMethod,
 )
 
@@ -32,6 +33,11 @@ parent_contact_method_enum = Enum(
 consent_delivery_status_enum = Enum(
     ConsentDeliveryStatus,
     name="consent_delivery_status",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+consent_notification_kind_enum = Enum(
+    ConsentNotificationKind,
+    name="consent_notification_kind",
     values_callable=lambda enum: [item.value for item in enum],
 )
 
@@ -191,7 +197,8 @@ class ConsentNotificationOutbox(Base):
     __table_args__ = (
         UniqueConstraint(
             "invitation_id",
-            name="uq_consent_notification_outbox_invitation_id",
+            "kind",
+            name="uq_consent_notification_outbox_invitation_kind",
         ),
         CheckConstraint(
             "(status = 'sent') = (sent_at IS NOT NULL)",
@@ -215,6 +222,12 @@ class ConsentNotificationOutbox(Base):
     )
     destination: Mapped[str] = mapped_column(String(255), nullable=False)
     consent_url: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[ConsentNotificationKind] = mapped_column(
+        consent_notification_kind_enum,
+        nullable=False,
+        default=ConsentNotificationKind.REQUEST,
+        server_default=ConsentNotificationKind.REQUEST.value,
+    )
     status: Mapped[ConsentDeliveryStatus] = mapped_column(
         consent_delivery_status_enum,
         nullable=False,

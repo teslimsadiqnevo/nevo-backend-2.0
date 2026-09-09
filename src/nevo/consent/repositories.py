@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.consent.entities import (
     ConsentRecordView,
+    ParentAccount,
+    ParentChildView,
     ParentConsentCompletion,
     ParentConsentRequestDraft,
     ParentInvitationView,
@@ -16,6 +18,7 @@ from nevo.consent.entities import (
 )
 from nevo.consent.errors import (
     ParentAccountConflictError,
+    ParentContactNotEmailError,
     StudentNotFoundError,
 )
 from nevo.db.models.account import ConsentRecord, School, User
@@ -39,6 +42,7 @@ from nevo.domain.consent.vocabulary import (
     REQUIRED_LEARNING_CONSENT,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
+    ConsentNotificationKind,
     ParentContactMethod,
     ParentRightType,
 )
@@ -255,6 +259,18 @@ class SqlAlchemyConsentRepository:
                     .where(ConsentNotificationOutbox.invitation_id == invitation.id)
                     .values(consent_url="")
                 )
+                # The copy the consent page promises. Queued rather than sent
+                # inline so a mail outage cannot fail a consent the parent has
+                # already given.
+                session.add(
+                    ConsentNotificationOutbox(
+                        invitation_id=invitation.id,
+                        contact_method=parent_link.contact_method,
+                        destination=parent_link.parent_contact,
+                        consent_url="",
+                        kind=ConsentNotificationKind.RECEIPT,
+                    )
+                )
                 await session.flush()
                 return ParentConsentCompletion(
                     invitation_id=invitation.id,
@@ -263,9 +279,103 @@ class SqlAlchemyConsentRepository:
                     student_id=invitation.student_id,
                     confirmed_types=consent_types,
                     completed_at=completed_at,
+                    receipt_sent_to=parent_link.contact_method,
                 )
         except IntegrityError as error:
             raise ParentAccountConflictError from error
+
+    async def activate_parent_account(
+        self,
+        *,
+        token_digest: str,
+        password_hash: str,
+        now: datetime,
+    ) -> ParentAccount | None:
+        """Give the parent row that consent created a way to sign in.
+
+        Consent already mints a parent user, linked to the child, in the
+        invited state with no credential. Setting the password here is what
+        turns it into an account, and the token is the authorisation: it was
+        sent to that parent for that child.
+
+        Idempotent in the sense that matters: an account that is already
+        active is returned untouched rather than having its password reset by
+        anyone holding an old link.
+        """
+        async with self._sessions.begin() as session:
+            invitation = await session.scalar(
+                select(ConsentInvitation).where(
+                    ConsentInvitation.token_digest == token_digest,
+                    ConsentInvitation.revoked_at.is_(None),
+                )
+            )
+            if invitation is None or invitation.expires_at <= now:
+                return None
+            link = await session.get(ParentLink, invitation.parent_link_id)
+            if link is None:
+                return None
+            if link.contact_method is not ParentContactMethod.EMAIL:
+                raise ParentContactNotEmailError
+
+            parent = await self._parent_for_link(session, parent_link=link)
+            await session.flush()
+            link.parent_id = parent.id
+            link.account_created = True
+            link.updated_at = now
+            if parent.status is UserStatus.ACTIVE and parent.password_hash:
+                return ParentAccount(
+                    user_id=parent.id,
+                    email=parent.email or link.parent_contact,
+                    student_id=link.student_id,
+                    already_active=True,
+                )
+            parent.email = parent.email or link.parent_contact.casefold()
+            parent.auth_method = AuthMethod.EMAIL_PASSWORD
+            parent.password_hash = password_hash
+            parent.status = UserStatus.ACTIVE
+            parent.deactivated_at = None
+            await session.flush()
+            return ParentAccount(
+                user_id=parent.id,
+                email=parent.email,
+                student_id=link.student_id,
+                already_active=False,
+            )
+
+    async def children_for_parent(self, parent_id: UUID) -> list[ParentChildView]:
+        """The children this parent is linked to, and nobody else's.
+
+        Every parent-facing read starts here: the link table is the only thing
+        that says which learners are theirs.
+        """
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        ParentLink.student_id,
+                        User.first_name,
+                        User.last_name,
+                        User.status,
+                        ParentLink.school_id,
+                        School.name,
+                    )
+                    .join(User, User.id == ParentLink.student_id)
+                    .join(School, School.id == ParentLink.school_id)
+                    .where(ParentLink.parent_id == parent_id)
+                    .order_by(User.first_name, User.last_name)
+                )
+            ).all()
+        return [
+            ParentChildView(
+                student_id=student_id,
+                first_name=first_name,
+                last_name=last_name,
+                status=status,
+                school_id=school_id,
+                school_name=school_name,
+            )
+            for student_id, first_name, last_name, status, school_id, school_name in rows
+        ]
 
     async def parent_links(
         self,

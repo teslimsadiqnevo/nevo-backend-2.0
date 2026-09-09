@@ -81,3 +81,47 @@ def test_consent_gate_can_report_a_withdrawal() -> None:
         "withdrawn",
     ]
     assert schemas["ConsentGateResponse"]["properties"]["status"]
+
+
+def test_the_parent_surface_is_in_the_contract() -> None:
+    spec = app.openapi()
+    paths, schemas = spec["paths"], spec["components"]["schemas"]
+
+    for path in (
+        "/api/v1/parents/me/children",
+        "/api/v1/parents/me/children/{student_id}/growth",
+        "/api/v1/consents/parent/{token}/account",
+    ):
+        assert path in paths, path
+
+    # The declared invite roles are the ones the flow actually creates. It
+    # used to advertise five and accept two.
+    assert schemas["InvitableRole"]["enum"] == ["student", "teacher"]
+
+    growth = schemas["GrowthNarrativeResponse"]["properties"]
+    assert schemas["GrowthDimension"]["enum"] == [
+        "staying_with_hard_problems",
+        "knowing_what_she_knows",
+        "connecting_ideas",
+        "learning_new_things_faster",
+    ]
+    assert schemas["GrowthTrend"]["enum"] == [
+        "growing",
+        "steady",
+        "emerging",
+        "not_enough_yet",
+    ]
+    # Provenance, so the page can say when it was written.
+    for field in ("generatedAt", "source", "periodStart", "comparisonStart"):
+        assert field in growth
+    # And nothing countable anywhere in the payload.
+    statement = schemas["GrowthStatementResponse"]["properties"]
+    assert set(statement) == {"dimension", "trend", "statement"}
+
+
+def test_consent_completion_reports_the_copy_it_sent() -> None:
+    completion = app.openapi()["components"]["schemas"][
+        "ParentConsentCompletionResponse"
+    ]["properties"]
+
+    assert "receipt_sent_to" in completion

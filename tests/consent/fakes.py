@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 
 from nevo.consent.entities import (
     ConsentRecordView,
+    ParentAccount,
+    ParentChildView,
     ParentConsentCompletion,
     ParentConsentRequestDraft,
     ParentInvitationView,
@@ -11,15 +13,18 @@ from nevo.consent.entities import (
     ParentRightOutcome,
     QueuedParentConsentRequest,
 )
+from nevo.consent.errors import ParentContactNotEmailError
 from nevo.domain.accounts.vocabulary import (
     ConsentMethod,
     ConsentStatus,
     ConsentType,
+    UserStatus,
 )
 from nevo.domain.consent.vocabulary import (
     REQUIRED_LEARNING_CONSENT,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
+    ParentContactMethod,
     ParentRightType,
 )
 
@@ -34,6 +39,8 @@ class MemoryConsentRepository:
             tuple[UUID, frozenset[ConsentType]]
         ] = []
         self.rights: list[tuple[UUID, ParentRightType, str | None]] = []
+        self.activated: set[str] = set()
+        self.children: dict[UUID, list[ParentChildView]] = {}
         self.student_first_names: dict[UUID, str] = {}
         self.school_names: dict[UUID, str] = {}
         self.school_phone: str | None = None
@@ -158,6 +165,43 @@ class MemoryConsentRepository:
     ) -> bool:
         record = self.records.get((student_id, consent_type))
         return record is not None and record.status is ConsentStatus.CONFIRMED
+
+    async def activate_parent_account(
+        self,
+        *,
+        token_digest: str,
+        password_hash: str,
+        now: datetime,
+    ) -> ParentAccount | None:
+        draft = self.requests.get(token_digest)
+        if draft is None or draft.expires_at <= now:
+            return None
+        if draft.contact_method is not ParentContactMethod.EMAIL:
+            raise ParentContactNotEmailError
+        link = self.links[draft.parent_link_id]
+        already = link.parent_id is not None and draft.token_digest in self.activated
+        parent_id = link.parent_id or uuid4()
+        self.links[link.id] = replace(link, parent_id=parent_id, account_created=True)
+        self.activated.add(draft.token_digest)
+        self.children.setdefault(parent_id, []).append(
+            ParentChildView(
+                student_id=draft.student_id,
+                first_name=self.student_first_names.get(draft.student_id),
+                last_name=None,
+                status=UserStatus.ACTIVE,
+                school_id=draft.school_id,
+                school_name=self.school_names.get(draft.school_id, "The school"),
+            )
+        )
+        return ParentAccount(
+            user_id=parent_id,
+            email=draft.parent_contact,
+            student_id=draft.student_id,
+            already_active=already,
+        )
+
+    async def children_for_parent(self, parent_id: UUID) -> list[ParentChildView]:
+        return self.children.get(parent_id, [])
 
     async def consent_status(
         self,

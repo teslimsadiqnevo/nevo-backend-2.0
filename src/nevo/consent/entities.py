@@ -6,6 +6,7 @@ from nevo.domain.accounts.vocabulary import (
     ConsentMethod,
     ConsentStatus,
     ConsentType,
+    UserStatus,
 )
 from nevo.domain.consent.vocabulary import (
     ConsentConfirmationSource,
@@ -79,6 +80,9 @@ class ParentConsentCompletion:
     student_id: UUID
     confirmed_types: frozenset[ConsentType]
     completed_at: datetime
+    #: Where the parent's copy was sent, so the page states a fact rather
+    #: than a hope. None when we hold no contact to send one to.
+    receipt_sent_to: ParentContactMethod | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,3 +132,25 @@ class ParentRightOutcome:
     request_type: ParentRightType
     status: str
     reason_recorded: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ParentAccount:
+    """The account a parent can actually sign in with."""
+
+    user_id: UUID
+    email: str
+    student_id: UUID
+    already_active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ParentChildView:
+    """One learner a signed-in parent is entitled to see."""
+
+    student_id: UUID
+    first_name: str | None
+    last_name: str | None
+    status: UserStatus
+    school_id: UUID
+    school_name: str

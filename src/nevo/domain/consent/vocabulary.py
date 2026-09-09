@@ -13,6 +13,13 @@ class ConsentConfirmationSource(StrEnum):
     PARENT = "parent"
 
 
+class ConsentNotificationKind(StrEnum):
+    """What an outbox row is for: asking, or confirming afterwards."""
+
+    REQUEST = "request"
+    RECEIPT = "receipt"
+
+
 class ConsentDeliveryStatus(StrEnum):
     QUEUED = "queued"
     PROCESSING = "processing"

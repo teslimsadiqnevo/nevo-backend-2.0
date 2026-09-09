@@ -4,6 +4,8 @@ from uuid import UUID
 
 from nevo.consent.entities import (
     ConsentRecordView,
+    ParentAccount,
+    ParentChildView,
     ParentConsentCompletion,
     ParentConsentRequestDraft,
     ParentInvitationView,
@@ -38,6 +40,19 @@ class ConsentRepository(Protocol):
         token_digest: str,
         completed_at: datetime,
     ) -> ParentConsentCompletion | None: ...
+
+    async def activate_parent_account(
+        self,
+        *,
+        token_digest: str,
+        password_hash: str,
+        now: datetime,
+    ) -> ParentAccount | None: ...
+
+    async def children_for_parent(
+        self,
+        parent_id: UUID,
+    ) -> list[ParentChildView]: ...
 
     async def parent_invitation(
         self,

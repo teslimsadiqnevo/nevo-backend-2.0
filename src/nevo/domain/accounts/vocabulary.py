@@ -1,6 +1,18 @@
 from enum import StrEnum
 
 
+class InvitableRole(StrEnum):
+    """The roles a school administrator can invite into their school.
+
+    A subset of UserRole on purpose. Administrators are created by school
+    registration, and parents by the consent link - the only place the child
+    they belong to is known.
+    """
+
+    STUDENT = "student"
+    TEACHER = "teacher"
+
+
 class UserRole(StrEnum):
     """Primary account role.
 

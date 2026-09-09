@@ -29,6 +29,7 @@ from nevo.api.frontend_unblockers import router as frontend_unblockers_router
 from nevo.api.insights import router as insights_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.mastery import router as mastery_router
+from nevo.api.parents import router as parent_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
 from nevo.api.partner_inquiries import tosse_router
 from nevo.api.permissions import router as permission_router
@@ -71,6 +72,7 @@ from nevo.ops.config import OpsSettings
 from nevo.ops.jobs import ScheduledJobRunner
 from nevo.ops.scheduled_jobs import build_scheduled_jobs
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
+from nevo.parents.wiring import build_parent_insight_service
 from nevo.partner_inquiries.wiring import build_partner_inquiry_service
 from nevo.payments.wiring import build_payment_service
 from nevo.permissions.wiring import build_permission_service
@@ -117,6 +119,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         token_pepper=auth_settings.auth_session_pepper.get_secret_value(),
         public_base_url=str(consent_settings.public_base_url),
+    )
+    app.state.parent_insight_service = build_parent_insight_service(
+        sessions,
+        consent=app.state.consent_service,
     )
     app.state.sms_delivery = TermiiSmsDelivery(SmsSettings())
     app.state.consent_delivery_worker = ConsentDeliveryWorker(
@@ -286,6 +292,7 @@ app.include_router(frontend_unblockers_router)
 app.include_router(intelligence_router)
 app.include_router(insights_router)
 app.include_router(mastery_router)
+app.include_router(parent_router)
 app.include_router(partner_inquiry_router)
 app.include_router(tosse_router)
 app.include_router(permission_router)

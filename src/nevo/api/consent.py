@@ -110,6 +110,7 @@ class ParentConsentCompletionResponse(BaseModel):
     student_id: UUID
     confirmed_types: list[ConsentType]
     completed_at: datetime
+    receipt_sent_to: ParentContactMethod | None = None
 
     @classmethod
     def from_completion(
@@ -126,6 +127,7 @@ class ParentConsentCompletionResponse(BaseModel):
                 key=lambda item: item.value,
             ),
             completed_at=completion.completed_at,
+            receipt_sent_to=completion.receipt_sent_to,
         )
 
 

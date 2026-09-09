@@ -15,7 +15,7 @@ from nevo.api.auth import (
     PrincipalDependency,
     SessionResponse,
 )
-from nevo.api.consent import ConsentServiceDependency
+from nevo.api.consent import ConsentServiceDependency, public_consent_error
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import actor_user, require_school_actor
 from nevo.api.response_models import (
@@ -49,6 +49,7 @@ from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     ConsentStatus,
     ConsentType,
+    InvitableRole,
     NotificationType,
     UserRole,
     UserStatus,
@@ -138,7 +139,13 @@ class SchoolRegistrationRequest(BaseModel):
 
 class InvitationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    role: UserRole = Field(pattern="^(teacher|student)$")
+    #: Only the roles this flow can actually create. It used to declare the
+    #: full UserRole enum and then reject three of its five values in a
+    #: pattern, so a client generated from the spec would send
+    #: parent_guardian and 422 at runtime. Parents are not invited here:
+    #: they arrive through the consent link, which is the only place the
+    #: child they belong to is known.
+    role: InvitableRole
     first_name: str | None = Field(default=None, alias="firstName", max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
     email: EmailStr | None = None
@@ -802,6 +809,70 @@ async def accept_join(
         "role": user.role.value,
         "loginIdentifier": user.login_identifier,
         "consentStatus": consent_status,
+    }
+
+
+class ParentAccountRequest(BaseModel):
+    password: str = Field(min_length=8, max_length=1024)
+
+
+class ParentAccountResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_id: UUID = Field(alias="userId")
+    email: str
+    student_id: UUID = Field(alias="studentId")
+    session: SessionResponse
+
+
+@router.post(
+    "/consents/parent/{token}/account",
+    response_model=ParentAccountResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_parent_account(
+    token: str,
+    payload: ParentAccountRequest,
+    service: ConsentServiceDependency,
+    auth_service: AuthServiceDependency,
+    response: Response,
+) -> dict[str, object]:
+    """Give a parent a way to sign in, from the consent link they hold.
+
+    Consent already creates the parent row, linked to the child, in the
+    invited state with no credential - an account that exists and cannot be
+    used. This is what turns it into one, and the token is the authorisation:
+    it was sent to that parent, for that child.
+
+    Deliberately not the admin invite path. An invited parent would have no
+    link to a learner, so they would sign in and correctly see nothing.
+    """
+    try:
+        account = await service.activate_parent_account(
+            token=token,
+            password_hash=credential_hasher().hash_password(payload.password),
+        )
+    except ConsentError as error:
+        raise public_consent_error(error) from error
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This consent link is invalid, expired, or already used",
+        )
+    if account.already_active:
+        # Never reset a live credential from a link somebody may still have
+        # in an old message.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This parent account already exists. Sign in, or reset the password.",
+        )
+    issued = await auth_service.issue_for_provisioned_user(account.user_id)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "userId": account.user_id,
+        "email": account.email,
+        "studentId": account.student_id,
+        "session": SessionResponse.from_issued(issued),
     }
 
 

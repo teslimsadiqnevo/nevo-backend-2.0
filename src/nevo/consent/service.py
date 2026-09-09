@@ -8,6 +8,8 @@ from nevo.consent.entities import (
     ConsentActor,
     ConsentGate,
     ConsentRecordView,
+    ParentAccount,
+    ParentChildView,
     ParentConsentCompletion,
     ParentConsentRequestDraft,
     ParentInvitationView,
@@ -143,6 +145,22 @@ class ConsentService:
             reason=(reason or "").strip() or None,
             now=self._now(),
         )
+
+    async def activate_parent_account(
+        self,
+        *,
+        token: str,
+        password_hash: str,
+    ) -> ParentAccount | None:
+        """Turn the parent row consent created into one that can sign in."""
+        return await self._repository.activate_parent_account(
+            token_digest=self._token_service.digest(token),
+            password_hash=password_hash,
+            now=self._now(),
+        )
+
+    async def children_for_parent(self, parent_id: UUID) -> list[ParentChildView]:
+        return await self._repository.children_for_parent(parent_id)
 
     async def parent_links(
         self,

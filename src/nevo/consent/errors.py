@@ -46,3 +46,11 @@ class ConsentRequiredError(ConsentError):
 class ConsentWithdrawnError(ConsentError):
     code = "consent_withdrawn"
     public_message = "A parent or guardian has withdrawn consent for this learner."
+
+
+class ParentContactNotEmailError(ConsentError):
+    code = "parent_contact_not_email"
+    public_message = (
+        "This consent request was sent by text message, so there is no email "
+        "address to sign in with."
+    )

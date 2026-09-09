@@ -270,6 +270,10 @@ class LessonSummaryResponse(CamelResponse):
     #: Sum of the lesson's segment estimates, so a list view can show a
     #: duration without fetching every segment.
     estimated_minutes: int = 0
+    #: Who wrote the lesson. Without it a client cannot tell its own teacher's
+    #: work from the rest of the school's, even after fetching the list.
+    created_by_id: UUID | None = None
+    created_by_name: str | None = None
     created_at: datetime
 
 

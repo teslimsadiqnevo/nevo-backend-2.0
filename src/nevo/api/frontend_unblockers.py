@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
+from nevo.access import accessible_lessons
 from nevo.api.auth import PrincipalDependency
 from nevo.api.consent_summary import empty_consent_summary, student_consent_summaries
 from nevo.api.content import (
@@ -94,6 +95,7 @@ from nevo.domain.accounts.vocabulary import (
 from nevo.domain.intelligence.vocabulary import (
     ContentParseStatus,
     LessonContentType,
+    LessonScope,
     LessonSourceType,
     SegmentReviewReason,
 )
@@ -220,6 +222,10 @@ class LessonSummaryResponse(BaseModel):
     subject: str | None = None
     assignment_count: int = Field(default=0, alias="assignmentCount")
     estimated_minutes: int = Field(default=0, alias="estimatedMinutes")
+    #: Who wrote the lesson. Without it a client cannot tell its own teacher's
+    #: work from the rest of the school's, even after fetching the list.
+    created_by_id: UUID | None = Field(default=None, alias="createdById")
+    created_by_name: str | None = Field(default=None, alias="createdByName")
     created_at: datetime = Field(alias="createdAt")
 
 
@@ -692,18 +698,18 @@ async def list_lessons(
     principal: PrincipalDependency,
     session: DatabaseSession,
     limit: int = Query(default=50, ge=1, le=200),
+    scope: LessonScope | None = None,
 ) -> list[LessonSummaryResponse]:
+    """The same lessons GET /api/v1/lessons returns.
+
+    These two used to disagree - this one also returned school-less lessons -
+    so the same teacher saw a different library depending on which endpoint
+    the client happened to call.
+    """
     user = await session.get(User, principal.user_id)
-    query = select(Lesson)
-    if user and user.role == UserRole.STUDENT:
-        query = query.join(LessonAssignment, LessonAssignment.lesson_id == Lesson.id).where(
-            LessonAssignment.student_id == user.id,
-            LessonAssignment.status != "cancelled",
-        )
-    elif user and user.school_id:
-        query = query.where(or_(Lesson.school_id == user.school_id, Lesson.school_id.is_(None)))
-    query = query.order_by(Lesson.created_at.desc()).limit(limit)
-    lessons = (await session.scalars(query)).all()
+    if user is None:
+        return []
+    lessons = await accessible_lessons(session, user, scope=scope, limit=limit)
     counts = dict(
         (
             await session.execute(
@@ -716,7 +722,30 @@ async def list_lessons(
             )
         ).all()
     )
-    return [_lesson_summary(item, assignment_count=int(counts.get(item.id, 0))) for item in lessons]
+    authors = await _author_names(session, list(lessons))
+    return [
+        _lesson_summary(
+            item,
+            assignment_count=int(counts.get(item.id, 0)),
+            author_names=authors,
+        )
+        for item in lessons
+    ]
+
+
+async def _author_names(session: DatabaseSession, lessons: list[Lesson]) -> dict[UUID, str]:
+    ids = {lesson.created_by_user_id for lesson in lessons if lesson.created_by_user_id}
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(User.id, User.first_name, User.last_name).where(User.id.in_(ids))
+        )
+    ).all()
+    return {
+        user_id: " ".join(part for part in (first, last) if part).strip() or "Unknown"
+        for user_id, first, last in rows
+    }
 
 
 @router.get(
@@ -1541,7 +1570,12 @@ def _uuid(value: str) -> UUID:
         ) from error
 
 
-def _lesson_summary(lesson: Lesson, *, assignment_count: int = 0) -> LessonSummaryResponse:
+def _lesson_summary(
+    lesson: Lesson,
+    *,
+    assignment_count: int = 0,
+    author_names: dict[UUID, str] | None = None,
+) -> LessonSummaryResponse:
     return LessonSummaryResponse(
         id=lesson.id,
         title=lesson.title,
@@ -1552,6 +1586,8 @@ def _lesson_summary(lesson: Lesson, *, assignment_count: int = 0) -> LessonSumma
         subject=lesson.subject,
         assignmentCount=assignment_count,
         estimatedMinutes=lesson.estimated_minutes,
+        createdById=lesson.created_by_user_id,
+        createdByName=(author_names or {}).get(lesson.created_by_user_id),
         createdAt=lesson.created_at,
     )
 

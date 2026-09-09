@@ -149,3 +149,31 @@ def test_generation_endpoints_declare_the_refusals_they_actually_make() -> None:
 
     for path in ("/api/content/parse", "/api/content/lessons/{lesson_id}/regenerate"):
         assert "403" in paths[path]["post"]["responses"], path
+
+
+def test_a_lesson_list_says_who_wrote_each_lesson() -> None:
+    """Without it a dashboard cannot tell its own teacher's work from the
+    rest of the school's, even after fetching the list."""
+    schemas = app.openapi()["components"]["schemas"]
+    # Two classes still share this name, so the spec namespaces them. Both
+    # are served, so both have to carry the author.
+    summaries = [
+        body["properties"]
+        for name, body in schemas.items()
+        if name.endswith("LessonSummaryResponse")
+    ]
+
+    assert summaries
+    for summary in summaries:
+        assert "createdById" in summary
+        assert "createdByName" in summary
+    assert schemas["LessonScope"]["enum"] == ["mine", "school"]
+
+
+def test_both_lesson_listings_take_the_same_scope() -> None:
+    """They used to disagree about what a teacher could see."""
+    paths = app.openapi()["paths"]
+
+    for path in ("/api/v1/lessons", "/api/content/lessons"):
+        names = {p["name"] for p in paths[path]["get"].get("parameters", [])}
+        assert "scope" in names, path

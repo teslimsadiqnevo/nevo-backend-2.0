@@ -135,3 +135,15 @@ class AssignmentType(StrEnum):
 
     CLASS = "class"
     STUDENT = "student"
+
+
+class LessonScope(StrEnum):
+    """Which lessons a listing is asking for.
+
+    A teacher defaults to MINE. A shared library is useful to browse, but a
+    dashboard that opens on every lesson anyone in the school ever made is not
+    a view of that teacher's work.
+    """
+
+    MINE = "mine"
+    SCHOOL = "school"

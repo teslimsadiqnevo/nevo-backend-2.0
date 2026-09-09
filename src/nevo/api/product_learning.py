@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
+from nevo.access import accessible_lessons
 from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.content import get_content_parsing_service
 from nevo.api.dependencies import DatabaseSession
@@ -72,7 +73,11 @@ from nevo.db.models.product import (
 )
 from nevo.db.models.signal_event import LessonSession
 from nevo.domain.accounts.vocabulary import SsoProvider, UserRole
-from nevo.domain.intelligence.vocabulary import AssignmentStatus, LessonSourceType
+from nevo.domain.intelligence.vocabulary import (
+    AssignmentStatus,
+    LessonScope,
+    LessonSourceType,
+)
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 from nevo.sso.service import SsoService
@@ -86,6 +91,8 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_BATCH_UPLOAD_FILES = 20
 UploadSubject = Annotated[str | None, Form(max_length=120)]
 StudentFilter = Annotated[UUID | None, Query(alias="studentId")]
+#: Defaults to mine for a teacher and school for an administrator.
+LessonScopeFilter = Annotated[LessonScope | None, Query()]
 ClassFilter = Annotated[UUID | None, Query(alias="classId")]
 
 
@@ -167,7 +174,12 @@ class RetryPagesRequest(BaseModel):
     page_numbers: list[int] = Field(alias="pageNumbers", min_length=1, max_length=100)
 
 
-def _lesson_summary(lesson: Lesson, *, assignment_count: int = 0) -> dict[str, object]:
+def _lesson_summary(
+    lesson: Lesson,
+    *,
+    assignment_count: int = 0,
+    author_names: dict[UUID, str] | None = None,
+) -> dict[str, object]:
     return {
         "id": str(lesson.id),
         "title": lesson.title,
@@ -178,6 +190,8 @@ def _lesson_summary(lesson: Lesson, *, assignment_count: int = 0) -> dict[str, o
         "subject": lesson.subject,
         "assignmentCount": assignment_count,
         "estimatedMinutes": lesson.estimated_minutes,
+        "createdById": str(lesson.created_by_user_id) if lesson.created_by_user_id else None,
+        "createdByName": (author_names or {}).get(lesson.created_by_user_id),
         "createdAt": lesson.created_at,
     }
 
@@ -214,32 +228,10 @@ async def _lesson_for_actor(
 async def lessons(
     principal: PrincipalDependency,
     session: DatabaseSession,
+    scope: LessonScopeFilter = None,
 ) -> list[dict[str, object]]:
     actor = await require_school_actor(session, principal)
-    if actor.role == UserRole.STUDENT:
-        rows = (
-            await session.scalars(
-                select(Lesson)
-                .join(LessonAssignment, LessonAssignment.lesson_id == Lesson.id)
-                .where(
-                    LessonAssignment.student_id == actor.id,
-                    LessonAssignment.status != "cancelled",
-                    or_(
-                        LessonAssignment.available_from.is_(None),
-                        LessonAssignment.available_from <= datetime.now(UTC),
-                    ),
-                )
-                .order_by(Lesson.created_at.desc())
-            )
-        ).all()
-    else:
-        rows = (
-            await session.scalars(
-                select(Lesson)
-                .where(Lesson.school_id == actor.school_id)
-                .order_by(Lesson.created_at.desc())
-            )
-        ).all()
+    rows = await accessible_lessons(session, actor, scope=scope)
     counts = dict(
         (
             await session.execute(
@@ -252,7 +244,31 @@ async def lessons(
             )
         ).all()
     )
-    return [_lesson_summary(item, assignment_count=int(counts.get(item.id, 0))) for item in rows]
+    authors = await _author_names(session, rows)
+    return [
+        _lesson_summary(
+            item,
+            assignment_count=int(counts.get(item.id, 0)),
+            author_names=authors,
+        )
+        for item in rows
+    ]
+
+
+async def _author_names(session: DatabaseSession, lessons: list[Lesson]) -> dict[UUID, str]:
+    """One query for every author, rather than one per lesson."""
+    ids = {lesson.created_by_user_id for lesson in lessons if lesson.created_by_user_id}
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(User.id, User.first_name, User.last_name).where(User.id.in_(ids))
+        )
+    ).all()
+    return {
+        user_id: " ".join(part for part in (first, last) if part).strip() or "Unknown"
+        for user_id, first, last in rows
+    }
 
 
 @router.get("/lessons/{lesson_id}", response_model=LessonDetailResponse)

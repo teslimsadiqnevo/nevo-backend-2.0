@@ -33,20 +33,33 @@ def test_student_reply_and_non_lesson_signal_contracts_are_exposed() -> None:
 
 
 def test_lesson_variants_and_checkpoints_are_typed() -> None:
-    schema = app.openapi()
-    segment = schema["components"]["schemas"]["ParsedLessonSegmentResponse"]
-    properties = segment["properties"]
-    for field, model in {
-        "textVariant": "TextVariant",
-        "visualVariant": "VisualVariant",
-        "audioVariant": "AudioVariant",
-        "interactiveVariant": "InteractiveVariant",
-        "calculationVariant": "CalculationVariant",
-    }.items():
-        assert properties[field]["anyOf"][0]["$ref"].endswith(model)
-    assert properties["comprehensionCheckpoints"]["items"]["$ref"].endswith(
-        "ComprehensionCheckpoint"
-    )
+    """Asserted on the segment schemas a client is actually served.
+
+    This used to check ParsedLessonSegmentResponse, which was only ever
+    reachable through the synchronous parse response. That response is gone
+    now the parse endpoints answer 202, so the guarantee has to be pinned to
+    the lesson reads that carry segments to the student app.
+    """
+    schemas = app.openapi()["components"]["schemas"]
+    served = [
+        body["properties"]
+        for name, body in schemas.items()
+        if name.endswith("LessonSegmentResponse")
+    ]
+
+    assert served
+    for properties in served:
+        for field, model in {
+            "textVariant": "TextVariant",
+            "visualVariant": "VisualVariant",
+            "audioVariant": "AudioVariant",
+            "interactiveVariant": "InteractiveVariant",
+            "calculationVariant": "CalculationVariant",
+        }.items():
+            assert properties[field]["anyOf"][0]["$ref"].endswith(model)
+        assert properties["comprehensionCheckpoints"]["items"]["$ref"].endswith(
+            "ComprehensionCheckpoint"
+        )
 
 
 def test_legacy_checkpoint_is_normalized_without_inventing_an_answer() -> None:

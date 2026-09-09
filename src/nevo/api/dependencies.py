@@ -29,3 +29,10 @@ async def database_session(
 
 
 DatabaseSession = Annotated[AsyncSession, Depends(database_session)]
+#: For work that outlives the request. A background task cannot use the
+#: request's session - it is closed the moment the response is sent - so it
+#: opens its own from this.
+SessionFactory = Annotated[
+    async_sessionmaker[AsyncSession],
+    Depends(get_session_factory),
+]

@@ -177,3 +177,25 @@ def test_both_lesson_listings_take_the_same_scope() -> None:
     for path in ("/api/v1/lessons", "/api/content/lessons"):
         names = {p["name"] for p in paths[path]["get"].get("parameters", [])}
         assert "scope" in names, path
+
+
+def test_no_content_endpoint_still_parses_inside_the_request() -> None:
+    """Every route that starts a parse answers immediately.
+
+    An upload that holds the request open for minutes of model work is a
+    request every proxy in front of it hangs up on first.
+    """
+    paths = app.openapi()["paths"]
+
+    for path in (
+        "/api/content/parse",
+        "/api/content/upload",
+        "/api/content/lessons/{lesson_id}/regenerate",
+    ):
+        assert "202" in paths[path]["post"]["responses"], path
+        assert "200" not in paths[path]["post"]["responses"], path
+
+    # The staged upload routes answer 201 with a job to poll instead.
+    for path in ("/api/v1/uploads", "/api/v1/uploads/text", "/api/v1/uploads/import"):
+        assert "201" in paths[path]["post"]["responses"], path
+    assert "/api/v1/uploads/{upload_id}" in paths

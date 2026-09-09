@@ -8,29 +8,16 @@ from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.lesson_contracts import (
-    AudioVariant,
-    CalculationVariant,
-    ComprehensionCheckpoint,
-    InteractiveVariant,
-    TextVariant,
-    VisualVariant,
-    checkpoint_payloads,
-)
 from nevo.api.product_common import require_school_actor
 from nevo.content_parsing.entities import (
     ContentParseRequest,
-    ParsedLessonSegment,
     ParseRunState,
     SourcePage,
-    StoredParsedLesson,
 )
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.domain.intelligence.vocabulary import (
-    ContentModality,
     ContentParseStatus,
-    LessonContentType,
     LessonSourceType,
 )
 from nevo.storage import InvalidMediaPathError, LessonMediaService, StorageError
@@ -66,83 +53,6 @@ class ParseContentRequest(BaseModel):
         if self.source_metadata.get("importReference"):
             return self
         raise ValueError("sourceText, pages, or sourceMetadata.importReference is required")
-
-
-class ParsedLessonSegmentResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    id: str
-    content_type: LessonContentType = Field(alias="contentType")
-    sequence_order: int = Field(alias="sequenceOrder")
-    title: str | None
-    body: str
-    available_modalities: list[ContentModality] = Field(alias="availableModalities")
-    comprehension_checkpoints: list[ComprehensionCheckpoint] = Field(
-        alias="comprehensionCheckpoints"
-    )
-    text_variant: TextVariant | None = Field(alias="textVariant")
-    visual_variant: VisualVariant | None = Field(alias="visualVariant")
-    audio_variant: AudioVariant | None = Field(alias="audioVariant")
-    interactive_variant: InteractiveVariant | None = Field(alias="interactiveVariant")
-    calculation_variant: CalculationVariant | None = Field(alias="calculationVariant")
-    needs_review: bool = Field(alias="needsReview")
-    review_reasons: list[str] = Field(alias="reviewReasons")
-    estimated_minutes: int = Field(alias="estimatedMinutes")
-
-    @classmethod
-    def from_segment(
-        cls,
-        segment: ParsedLessonSegment,
-    ) -> "ParsedLessonSegmentResponse":
-        return cls(
-            id=segment.segment_key,
-            content_type=segment.content_type,
-            sequence_order=segment.sequence_order,
-            title=segment.title,
-            body=segment.body,
-            available_modalities=list(segment.available_modalities),
-            comprehension_checkpoints=checkpoint_payloads(
-                list(segment.comprehension_checkpoints), segment_key=segment.segment_key
-            ),
-            text_variant=segment.text_variant,
-            visual_variant=segment.visual_variant,
-            audio_variant=segment.audio_variant,
-            interactive_variant=segment.interactive_variant,
-            calculation_variant=segment.calculation_variant,
-            needs_review=segment.needs_review,
-            review_reasons=list(segment.review_reasons),
-            estimated_minutes=segment.estimated_minutes,
-        )
-
-
-class ParseContentResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    lesson_id: UUID = Field(alias="lessonId")
-    parse_run_id: UUID = Field(alias="parseRunId")
-    status: ContentParseStatus
-    title: str
-    segment_count: int = Field(alias="segmentCount")
-    review_segment_count: int = Field(alias="reviewSegmentCount")
-    confirmation_summary: str | None = Field(alias="confirmationSummary")
-    review_notes: list[dict[str, object]] = Field(alias="reviewNotes")
-    segments: list[ParsedLessonSegmentResponse]
-
-    @classmethod
-    def from_result(cls, result: StoredParsedLesson) -> "ParseContentResponse":
-        return cls(
-            lesson_id=result.lesson_id,
-            parse_run_id=result.parse_run_id,
-            status=result.status,
-            title=result.title,
-            segment_count=result.segment_count,
-            review_segment_count=result.review_segment_count,
-            confirmation_summary=result.confirmation_summary,
-            review_notes=list(result.review_notes),
-            segments=[
-                ParsedLessonSegmentResponse.from_segment(segment) for segment in result.segments
-            ],
-        )
 
 
 def get_content_parsing_service(request: Request) -> ContentParsingService:

@@ -22,11 +22,12 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.access import accessible_lessons
 from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.content import get_content_parsing_service
-from nevo.api.dependencies import DatabaseSession
+from nevo.api.dependencies import DatabaseSession, SessionFactory
 from nevo.api.frontend_unblockers import _extract_text, _source_type, _title_from_filename
 from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.api.product_common import (
@@ -80,6 +81,7 @@ from nevo.domain.intelligence.vocabulary import (
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
+from nevo.ops.background import spawn
 from nevo.sso.service import SsoService
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
@@ -849,6 +851,7 @@ async def staged_upload(
     principal: PrincipalDependency,
     session: DatabaseSession,
     parser: ParsingService,
+    sessions: SessionFactory,
 ) -> dict[str, object]:
     actor = await require_school_actor(
         session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
@@ -863,25 +866,21 @@ async def staged_upload(
     )
     session.add(job)
     await session.commit()
-    try:
-        parsed = await parser.parse(
-            request=ContentParseRequest(
-                title=payload.title,
-                source_type=payload.source_type,
-                source_text=payload.source_text,
-                source_metadata={"subject": payload.subject} if payload.subject else {},
-            ),
-            requested_by_user_id=actor.id,
-        )
-        job.status = "ready"
-        job.stage = "structure"
-        job.structure = _upload_structure(parsed)
-        job.completed_at = datetime.now(UTC)
-        await session.commit()
-    except Exception as error:
-        job.status = "failed"
-        job.error_message = str(error)[:1000]
-        await session.commit()
+    # The job row and GET /uploads/{id} already existed to report progress,
+    # but the parse ran inside this request anyway, so the caller waited for
+    # minutes of model calls and media generation before being told to poll.
+    _parse_into_job(
+        job_id=job.id,
+        request=ContentParseRequest(
+            title=payload.title,
+            source_type=payload.source_type,
+            source_text=payload.source_text,
+            source_metadata={"subject": payload.subject} if payload.subject else {},
+        ),
+        actor_id=actor.id,
+        parser=parser,
+        sessions=sessions,
+    )
     return {"uploadId": str(job.id), "status": job.status, "stage": job.stage}
 
 
@@ -905,6 +904,38 @@ async def staged_file_upload(
     )
 
 
+def _parse_into_job(
+    *,
+    job_id: UUID,
+    request: ContentParseRequest,
+    actor_id: UUID,
+    parser: ContentParsingService,
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    """Parse behind the response, then write the outcome onto the job."""
+
+    async def work() -> None:
+        try:
+            parsed = await parser.parse(request=request, requested_by_user_id=actor_id)
+        except Exception as error:
+            async with sessions.begin() as session:
+                job = await session.get(UploadJob, job_id)
+                if job is not None:
+                    job.status = "failed"
+                    job.error_message = str(error)[:1000]
+            raise
+        async with sessions.begin() as session:
+            job = await session.get(UploadJob, job_id)
+            if job is None:
+                return
+            job.status = "ready"
+            job.stage = "structure"
+            job.structure = _upload_structure(parsed)
+            job.completed_at = datetime.now(UTC)
+
+    spawn(work, name=f"upload-parse-{job_id}")
+
+
 async def _ingest_one_file(
     *,
     file: UploadFile,
@@ -914,6 +945,7 @@ async def _ingest_one_file(
     principal: PrincipalDependency,
     session: DatabaseSession,
     parser: ParsingService,
+    sessions: SessionFactory,
 ) -> dict[str, object]:
     """Parse one uploaded file into a staged upload job.
 
@@ -938,6 +970,7 @@ async def _ingest_one_file(
         principal,
         session,
         parser,
+        sessions,
     )
     session.add(
         UploadSourceBlob(
@@ -1019,6 +1052,7 @@ async def import_cloud_file(
     principal: PrincipalDependency,
     session: DatabaseSession,
     parser: ParsingService,
+    sessions: SessionFactory,
     request: Request,
 ) -> dict[str, object]:
     actor = await require_school_actor(
@@ -1060,6 +1094,7 @@ async def import_cloud_file(
         principal,
         session,
         parser,
+        sessions,
     )
     session.add(
         UploadSourceBlob(
@@ -1083,6 +1118,7 @@ async def retry_upload_pages(
     principal: PrincipalDependency,
     session: DatabaseSession,
     parser: ParsingService,
+    sessions: SessionFactory,
 ) -> dict[str, object]:
     actor = await require_school_actor(
         session,
@@ -1098,26 +1134,31 @@ async def retry_upload_pages(
     pages = _extract_pdf_pages(blob.content, payload.page_numbers)
     if not pages:
         raise HTTPException(status_code=422, detail="None of those pages exist in the PDF")
-    parsed = await parser.parse(
+    # Same reason as the first parse: re-reading pages is minutes of model
+    # work, so the job records that it is running and the client polls.
+    job.undo_stack = [*job.undo_stack, job.structure][-20:]
+    job.status = "processing"
+    job.stage = "lessons"
+    job.error_message = None
+    await session.commit()
+    _parse_into_job(
+        job_id=upload_id,
         request=ContentParseRequest(
             title=_title_from_filename(blob.filename),
             source_type=LessonSourceType.PDF,
             pages=tuple(pages),
             source_metadata={"retryOfUploadId": str(upload_id)},
         ),
-        requested_by_user_id=actor.id,
+        actor_id=actor.id,
+        parser=parser,
+        sessions=sessions,
     )
-    structure = _upload_structure(parsed)
-    job.undo_stack = [*job.undo_stack, job.structure][-20:]
-    job.structure = structure
-    job.status = "ready"
-    job.error_message = None
-    await session.commit()
     return {
         "uploadId": str(upload_id),
-        "lessonId": str(parsed.lesson_id),
+        "status": job.status,
+        "stage": job.stage,
         "pagesRetried": sorted(set(payload.page_numbers)),
-        "structure": structure,
+        "structure": job.structure,
     }
 
 

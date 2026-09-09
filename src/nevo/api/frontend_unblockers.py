@@ -26,7 +26,7 @@ from nevo.access import accessible_lessons
 from nevo.api.auth import PrincipalDependency
 from nevo.api.consent_summary import empty_consent_summary, student_consent_summaries
 from nevo.api.content import (
-    ParseContentResponse,
+    ParseAcceptedResponse,
     get_content_parsing_service,
 )
 from nevo.api.dependencies import DatabaseSession
@@ -827,15 +827,28 @@ async def lesson_detail(
 
 @router.post(
     "/api/content/upload",
-    response_model=ParseContentResponse,
+    response_model=ParseAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     tags=["content"],
+    responses={
+        400: {"description": "No readable lesson text was found in the file"},
+        403: {"description": "Role is not permitted to upload content"},
+    },
 )
 async def upload_content(
     principal: PrincipalDependency,
     session: DatabaseSession,
     service: ContentParsingDependency,
     file: UploadedLessonFile,
-) -> ParseContentResponse:
+) -> ParseAcceptedResponse:
+    """Take the file, then parse it behind the response.
+
+    Reading the document is fast and its failures are worth answering
+    immediately - an unreadable file should say so rather than be discovered
+    minutes later. Everything after that is model calls and media generation,
+    which is why it is not something to hold a request open for. Poll
+    ``pollUrl`` until it reports finished.
+    """
     del session
     if service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -846,7 +859,7 @@ async def upload_content(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Nevo could not extract readable lesson text from this file.",
         )
-    result = await service.parse(
+    lesson_id, parse_run_id = await service.start(
         request=ContentParseRequest(
             title=_title_from_filename(file.filename),
             source_type=_source_type(file.filename),
@@ -860,7 +873,7 @@ async def upload_content(
         ),
         requested_by_user_id=principal.user_id,
     )
-    return ParseContentResponse.from_result(result)
+    return ParseAcceptedResponse.started(lesson_id=lesson_id, parse_run_id=parse_run_id)
 
 
 @router.post(

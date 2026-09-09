@@ -572,7 +572,11 @@ class UploadConfirmedResponse(CamelResponse):
 
 class UploadRetryResponse(CamelResponse):
     upload_id: UUID
-    lesson_id: UUID
+    #: The retry runs behind the response, so poll GET /uploads/{uploadId}
+    #: until status leaves processing. The structure here is the one being
+    #: replaced, kept so a review screen has something to show meanwhile.
+    status: str
+    stage: str
     pages_retried: list[int]
     structure: UploadStructureDocument
 

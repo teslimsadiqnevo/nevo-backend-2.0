@@ -6,7 +6,11 @@ from nevo.db.models.account import (
     User,
 )
 from nevo.db.models.ai_gateway import AiGatewayCall, AiPromptTemplate
-from nevo.db.models.ask_nevo import AskNevoInteraction
+from nevo.db.models.ask_nevo import (
+    AskNevoInteraction,
+    AskNevoMessage,
+    AskNevoThread,
+)
 from nevo.db.models.attention_flag import (
     AttentionFlag,
     Escalation,
@@ -90,6 +94,8 @@ __all__ = [
     "AiGatewayCall",
     "AiPromptTemplate",
     "AskNevoInteraction",
+    "AskNevoMessage",
+    "AskNevoThread",
     "AttentionFlag",
     "AuthAuditEvent",
     "AuthLoginAttempt",

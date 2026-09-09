@@ -1,18 +1,33 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.ask_nevo.directory import PseudonymDirectory
-from nevo.ask_nevo.entities import AskNevoContext, AskNevoRequest
+from nevo.ask_nevo.entities import (
+    AskNevoContext,
+    AskNevoRequest,
+    ThreadMessage,
+    ThreadSummary,
+    ThreadTranscript,
+)
 from nevo.ask_nevo.tools import ToolContext, execute_tool, schemas_for
 from nevo.db.models.account import Class, User
-from nevo.db.models.ask_nevo import AskNevoInteraction
+from nevo.db.models.ask_nevo import (
+    AskNevoInteraction,
+    AskNevoMessage,
+    AskNevoThread,
+)
 from nevo.db.models.attention_flag import AttentionFlag, Escalation
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
-from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
+from nevo.domain.ask_nevo.vocabulary import (
+    AskNevoMessageAuthor,
+    AskNevoQuestionCategory,
+    AskNevoRole,
+)
 
 
 class SqlAlchemyAskNevoRepository:
@@ -140,6 +155,166 @@ class SqlAlchemyAskNevoRepository:
             )
         return interaction_id
 
+    async def append_exchange(
+        self,
+        *,
+        thread_id: UUID,
+        actor_user_id: UUID,
+        role: AskNevoRole,
+        question: str,
+        answer: str,
+        blocks: list[dict[str, object]],
+        interaction_id: UUID | None,
+    ) -> None:
+        """Write one question and its answer into a conversation.
+
+        Called after the answer has gone out, never before: the person asking
+        has already waited on a model, and two more round trips before they
+        see anything would be latency spent on our own record keeping.
+        """
+        async with self._sessions.begin() as session:
+            actor = await session.get(User, actor_user_id)
+            if actor is None:
+                return
+            thread = await session.get(AskNevoThread, thread_id)
+            now = datetime.now(UTC)
+            if thread is None:
+                thread = AskNevoThread(
+                    id=thread_id,
+                    actor_user_id=actor_user_id,
+                    school_id=actor.school_id,
+                    role=role,
+                    title=_thread_title(question),
+                    message_count=0,
+                    last_message_at=now,
+                )
+                session.add(thread)
+                await session.flush()
+            elif thread.actor_user_id != actor_user_id or thread.deleted_at is not None:
+                # A thread id the asker does not own, or one they deleted.
+                # Neither is a conversation to append to.
+                return
+            start = thread.message_count
+            session.add(
+                AskNevoMessage(
+                    thread_id=thread.id,
+                    author=AskNevoMessageAuthor.ASKER,
+                    sequence=start + 1,
+                    body=question,
+                    blocks=[],
+                )
+            )
+            session.add(
+                AskNevoMessage(
+                    thread_id=thread.id,
+                    interaction_id=interaction_id,
+                    author=AskNevoMessageAuthor.NEVO,
+                    sequence=start + 2,
+                    body=answer,
+                    blocks=blocks,
+                )
+            )
+            thread.message_count = start + 2
+            thread.last_message_at = now
+
+    async def list_threads(
+        self,
+        *,
+        actor_user_id: UUID,
+        limit: int = 50,
+    ) -> list[ThreadSummary]:
+        """This asker's own conversations, most recent first."""
+        async with self._sessions() as session:
+            rows = list(
+                await session.scalars(
+                    select(AskNevoThread)
+                    .where(
+                        AskNevoThread.actor_user_id == actor_user_id,
+                        AskNevoThread.deleted_at.is_(None),
+                    )
+                    .order_by(AskNevoThread.last_message_at.desc())
+                    .limit(limit)
+                )
+            )
+        return [
+            ThreadSummary(
+                thread_id=item.id,
+                title=item.title,
+                role=item.role,
+                message_count=item.message_count,
+                last_message_at=item.last_message_at,
+                created_at=item.created_at,
+            )
+            for item in rows
+        ]
+
+    async def read_thread(
+        self,
+        *,
+        actor_user_id: UUID,
+        thread_id: UUID,
+    ) -> ThreadTranscript | None:
+        """One conversation, in order.
+
+        Scoped to the person who had it. A learner's questions are not a
+        staffroom read, so nobody else resolves this - not their teacher, not
+        an administrator.
+        """
+        async with self._sessions() as session:
+            thread = await session.get(AskNevoThread, thread_id)
+            if (
+                thread is None
+                or thread.actor_user_id != actor_user_id
+                or thread.deleted_at is not None
+            ):
+                return None
+            messages = list(
+                await session.scalars(
+                    select(AskNevoMessage)
+                    .where(AskNevoMessage.thread_id == thread_id)
+                    .order_by(AskNevoMessage.sequence)
+                )
+            )
+        return ThreadTranscript(
+            thread_id=thread.id,
+            title=thread.title,
+            role=thread.role,
+            created_at=thread.created_at,
+            messages=tuple(
+                ThreadMessage(
+                    message_id=item.id,
+                    author=item.author,
+                    sequence=item.sequence,
+                    body=item.body,
+                    blocks=tuple(item.blocks or ()),
+                    created_at=item.created_at,
+                )
+                for item in messages
+            ),
+        )
+
+    async def delete_thread(
+        self,
+        *,
+        actor_user_id: UUID,
+        thread_id: UUID,
+    ) -> bool:
+        """Let the asker throw a conversation away.
+
+        Marked rather than removed here, and swept out for good on retention.
+        Nothing reads a marked thread in the meantime.
+        """
+        async with self._sessions.begin() as session:
+            thread = await session.get(AskNevoThread, thread_id)
+            if (
+                thread is None
+                or thread.actor_user_id != actor_user_id
+                or thread.deleted_at is not None
+            ):
+                return False
+            thread.deleted_at = datetime.now(UTC)
+        return True
+
     async def record_helpfulness(
         self,
         *,
@@ -236,3 +411,11 @@ def _profile_payload(profile: LearnerProfile | None) -> dict[str, object | None]
         "working_memory_capacity": profile.working_memory_capacity,
         "attention_span": profile.attention_span,
     }
+
+
+def _thread_title(question: str) -> str:
+    """What a list of past chats shows: the opening question, trimmed."""
+    cleaned = " ".join(question.split()).strip()
+    if len(cleaned) <= 160:
+        return cleaned or "New chat"
+    return cleaned[:157].rstrip() + "..."

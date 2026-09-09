@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -6,11 +7,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
-from nevo.ask_nevo.entities import AskNevoContextIds, AskNevoRequest, AskNevoResponse
+from nevo.ask_nevo.entities import (
+    AskNevoContextIds,
+    AskNevoRequest,
+    AskNevoResponse,
+    ThreadSummary,
+    ThreadTranscript,
+)
 from nevo.ask_nevo.formatting import AnswerBlockType, AnswerFormat, structure_answer
 from nevo.ask_nevo.service import AskNevoService
 from nevo.db.models.ask_nevo import AskNevoInteraction
-from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
+from nevo.domain.ask_nevo.vocabulary import (
+    AskNevoMessageAuthor,
+    AskNevoQuestionCategory,
+    AskNevoRole,
+)
 
 router = APIRouter(prefix="/api/v1/ask-nevo", tags=["ask-nevo"])
 
@@ -69,6 +80,9 @@ class AskResponse(BaseModel):
     question_category: AskNevoQuestionCategory
     interaction_id: UUID
     ai_gateway_call_id: UUID
+    #: The conversation this answer belongs to. Send it back as
+    #: contextIds.threadId on the next question to continue the same chat.
+    thread_id: UUID | None = Field(default=None, alias="threadId")
 
     @classmethod
     def from_result(cls, result: AskNevoResponse) -> "AskResponse":
@@ -89,6 +103,7 @@ class AskResponse(BaseModel):
             question_category=result.question_category,
             interaction_id=result.interaction_id,
             ai_gateway_call_id=result.ai_gateway_call_id,
+            thread_id=result.thread_id,
         )
 
 
@@ -166,6 +181,136 @@ async def ask_nevo(
         ),
     )
     return AskResponse.from_result(result)
+
+
+class ThreadSummaryResponse(BaseModel):
+    """One past conversation, as a list of them shows it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: UUID = Field(alias="threadId")
+    title: str
+    role: AskNevoRole
+    message_count: int = Field(alias="messageCount")
+    last_message_at: datetime = Field(alias="lastMessageAt")
+    created_at: datetime = Field(alias="createdAt")
+
+    @classmethod
+    def from_summary(cls, summary: ThreadSummary) -> "ThreadSummaryResponse":
+        return cls(
+            threadId=summary.thread_id,
+            title=summary.title,
+            role=summary.role,
+            messageCount=summary.message_count,
+            lastMessageAt=summary.last_message_at,
+            createdAt=summary.created_at,
+        )
+
+
+class ThreadMessageResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    message_id: UUID = Field(alias="messageId")
+    author: AskNevoMessageAuthor
+    sequence: int
+    text: str
+    #: The blocks as they were rendered at the time, so reopening a chat shows
+    #: what was shown.
+    blocks: list[AnswerBlockResponse]
+    created_at: datetime = Field(alias="createdAt")
+
+
+class ThreadTranscriptResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: UUID = Field(alias="threadId")
+    title: str
+    role: AskNevoRole
+    created_at: datetime = Field(alias="createdAt")
+    messages: list[ThreadMessageResponse]
+
+    @classmethod
+    def from_transcript(cls, transcript: ThreadTranscript) -> "ThreadTranscriptResponse":
+        return cls(
+            threadId=transcript.thread_id,
+            title=transcript.title,
+            role=transcript.role,
+            createdAt=transcript.created_at,
+            messages=[
+                ThreadMessageResponse(
+                    messageId=item.message_id,
+                    author=item.author,
+                    sequence=item.sequence,
+                    text=item.body,
+                    blocks=[
+                        AnswerBlockResponse(
+                            type=AnswerBlockType(block.get("type") or "paragraph"),
+                            text=str(block.get("text") or ""),
+                            items=[str(entry) for entry in (block.get("items") or [])],
+                        )
+                        for block in item.blocks
+                    ],
+                    createdAt=item.created_at,
+                )
+                for item in transcript.messages
+            ],
+        )
+
+
+@router.get("/threads", response_model=list[ThreadSummaryResponse])
+async def list_threads(
+    principal: PrincipalDependency,
+    service: AskNevoDependency,
+) -> list[ThreadSummaryResponse]:
+    """This asker's own past conversations, most recent first."""
+    return [
+        ThreadSummaryResponse.from_summary(item)
+        for item in await service.list_threads(actor_user_id=principal.user_id)
+    ]
+
+
+@router.get(
+    "/threads/{thread_id}",
+    response_model=ThreadTranscriptResponse,
+    responses={404: {"description": "No such conversation for this user"}},
+)
+async def read_thread(
+    thread_id: UUID,
+    principal: PrincipalDependency,
+    service: AskNevoDependency,
+) -> ThreadTranscriptResponse:
+    """One conversation, in order, ready to render.
+
+    Scoped to the person who had it. A learner's questions are not a
+    staffroom read, so a teacher resolving this gets a 404 like anyone else.
+    """
+    transcript = await service.read_thread(
+        actor_user_id=principal.user_id,
+        thread_id=thread_id,
+    )
+    if transcript is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "thread_not_found", "message": "No such conversation."},
+        )
+    return ThreadTranscriptResponse.from_transcript(transcript)
+
+
+@router.delete("/threads/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_thread(
+    thread_id: UUID,
+    principal: PrincipalDependency,
+    service: AskNevoDependency,
+) -> None:
+    """Let someone throw away a conversation they had."""
+    if not await service.delete_thread(
+        actor_user_id=principal.user_id,
+        thread_id=thread_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "thread_not_found", "message": "No such conversation."},
+        )
 
 
 @router.post("/{interaction_id}/helpfulness", status_code=status.HTTP_204_NO_CONTENT)

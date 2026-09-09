@@ -1,6 +1,6 @@
 import json
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from nevo.ai_gateway.compliance import ZeroTagCompliancePolicy
 from nevo.ai_gateway.entities import AiGenerationRequest
@@ -9,9 +9,13 @@ from nevo.ask_nevo.entities import (
     AskNevoContext,
     AskNevoRequest,
     AskNevoResponse,
+    ThreadSummary,
+    ThreadTranscript,
 )
+from nevo.ask_nevo.formatting import structure_answer
 from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
+from nevo.ops.background import spawn
 
 
 class AskNevoRepository(Protocol):
@@ -44,6 +48,39 @@ class AskNevoRepository(Protocol):
         interaction_id: UUID,
         helpful: bool,
     ) -> None: ...
+
+    async def append_exchange(
+        self,
+        *,
+        thread_id: UUID,
+        actor_user_id: UUID,
+        role: AskNevoRole,
+        question: str,
+        answer: str,
+        blocks: list[dict[str, object]],
+        interaction_id: UUID | None,
+    ) -> None: ...
+
+    async def list_threads(
+        self,
+        *,
+        actor_user_id: UUID,
+        limit: int = 50,
+    ) -> list[ThreadSummary]: ...
+
+    async def read_thread(
+        self,
+        *,
+        actor_user_id: UUID,
+        thread_id: UUID,
+    ) -> ThreadTranscript | None: ...
+
+    async def delete_thread(
+        self,
+        *,
+        actor_user_id: UUID,
+        thread_id: UUID,
+    ) -> bool: ...
 
 
 class AskNevoService:
@@ -129,11 +166,54 @@ class AskNevoService:
             category=category,
             ai_gateway_call_id=result.call_id,
         )
+        thread_id = request.context_ids.thread_id or uuid4()
+        # Written behind the response. The person asking has already waited on
+        # a model; two more round trips before they see anything would be
+        # latency spent on our own record keeping. The cost is that a crash
+        # between answering and writing loses that one exchange.
+        spawn(
+            lambda: self._repository.append_exchange(
+                thread_id=thread_id,
+                actor_user_id=actor_user_id,
+                role=request.role,
+                question=request.question,
+                answer=answer,
+                blocks=blocks_for(answer),
+                interaction_id=interaction_id,
+            ),
+            name=f"ask-nevo-thread-{thread_id}",
+        )
         return AskNevoResponse(
             answer=answer,
             question_category=category,
             interaction_id=interaction_id,
             ai_gateway_call_id=result.call_id,
+            thread_id=thread_id,
+        )
+
+    async def list_threads(self, *, actor_user_id: UUID) -> list[ThreadSummary]:
+        return await self._repository.list_threads(actor_user_id=actor_user_id)
+
+    async def read_thread(
+        self,
+        *,
+        actor_user_id: UUID,
+        thread_id: UUID,
+    ) -> ThreadTranscript | None:
+        return await self._repository.read_thread(
+            actor_user_id=actor_user_id,
+            thread_id=thread_id,
+        )
+
+    async def delete_thread(
+        self,
+        *,
+        actor_user_id: UUID,
+        thread_id: UUID,
+    ) -> bool:
+        return await self._repository.delete_thread(
+            actor_user_id=actor_user_id,
+            thread_id=thread_id,
         )
 
     async def record_helpfulness(
@@ -175,3 +255,16 @@ def _prompt_for(role: AskNevoRole) -> str:
     if role is AskNevoRole.PARENT:
         return "ask_nevo.parent"
     return "ask_nevo.teacher"
+
+
+def blocks_for(answer: str) -> list[dict[str, object]]:
+    """The rendered shape, stored beside the text.
+
+    Kept so reopening a chat shows what was shown, rather than a fresh
+    derivation that may have drifted as the formatter changes.
+    """
+    structured = structure_answer(answer)
+    return [
+        {"type": block.type.value, "text": block.text, "items": list(block.items)}
+        for block in structured.blocks
+    ]

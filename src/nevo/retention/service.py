@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import School, User
+from nevo.db.models.ask_nevo import AskNevoThread
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.retention.anonymisation import anonymise_student
 
@@ -15,9 +16,13 @@ DEFAULT_BATCH_SIZE = 200
 class RetentionSweepResult:
     scanned: int
     anonymised: int
+    chats_removed: int = 0
 
     def summary(self) -> str:
-        return f"anonymised {self.anonymised} of {self.scanned} expired student records"
+        return (
+            f"anonymised {self.anonymised} of {self.scanned} expired student "
+            f"records, removed {self.chats_removed} expired chats"
+        )
 
 
 class RetentionService:
@@ -60,7 +65,47 @@ class RetentionService:
                 if self._is_expired(student.deactivated_at, retention_days, current_time):
                     anonymise_student(student, now=current_time)
                     anonymised += 1
-        return RetentionSweepResult(scanned=len(rows), anonymised=anonymised)
+        chats_removed = await self._sweep_chats(current_time)
+        return RetentionSweepResult(
+            scanned=len(rows),
+            anonymised=anonymised,
+            chats_removed=chats_removed,
+        )
+
+    async def _sweep_chats(self, now: datetime) -> int:
+        """Remove Ask Nevo conversations past their school's window.
+
+        A chat holds a child's own words, which is about as sensitive as this
+        product gets. It expires on the same clock as everything else rather
+        than sitting there indefinitely, and one the asker deleted goes at the
+        next sweep regardless of age.
+        """
+        async with self._sessions.begin() as session:
+            expired = list(
+                await session.scalars(
+                    select(AskNevoThread.id)
+                    .outerjoin(School, School.id == AskNevoThread.school_id)
+                    .where(
+                        or_(
+                            AskNevoThread.deleted_at.is_not(None),
+                            AskNevoThread.last_message_at
+                            < now
+                            - func.make_interval(
+                                0,
+                                0,
+                                0,
+                                func.coalesce(School.data_retention_days, 365),
+                            ),
+                        )
+                    )
+                    .limit(DEFAULT_BATCH_SIZE)
+                )
+            )
+            if expired:
+                await session.execute(
+                    delete(AskNevoThread).where(AskNevoThread.id.in_(expired))
+                )
+        return len(expired)
 
     @staticmethod
     def _is_expired(

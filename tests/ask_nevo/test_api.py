@@ -145,3 +145,33 @@ def test_an_administrator_may_also_ask_as_a_teacher() -> None:
         )
 
         assert response.status_code == 200, asking
+
+
+def test_the_answer_says_which_conversation_it_belongs_to() -> None:
+    """Send it back as contextIds.threadId to continue the same chat."""
+    client, _, _ = client_for()
+
+    body = client.post(
+        "/api/v1/ask-nevo/",
+        json={
+            "role": "student",
+            "currentPage": "lesson_player",
+            "contextIds": {},
+            "question": "What is a fraction?",
+        },
+    ).json()
+
+    assert "threadId" in body
+
+
+def test_the_chat_endpoints_are_in_the_contract() -> None:
+    from nevo.main import app
+
+    paths = app.openapi()["paths"]
+
+    assert "/api/v1/ask-nevo/threads" in paths
+    assert "get" in paths["/api/v1/ask-nevo/threads"]
+    thread = paths["/api/v1/ask-nevo/threads/{thread_id}"]
+    assert "get" in thread
+    # Someone can throw away a conversation they had.
+    assert "delete" in thread

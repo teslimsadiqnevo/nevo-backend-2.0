@@ -21,3 +21,14 @@ class AskNevoQuestionCategory(StrEnum):
     FAMILY_MESSAGE = "family_message"
     FLAG_REVIEW = "flag_review"
     GENERAL = "general"
+
+
+class AskNevoMessageAuthor(StrEnum):
+    """Who said a thing in a thread.
+
+    ``asker`` rather than ``user`` because the asker may be a learner, a
+    teacher, a parent or an administrator, and the word has to fit all four.
+    """
+
+    ASKER = "asker"
+    NEVO = "nevo"

@@ -81,6 +81,10 @@ def build_scheduled_jobs(
         failed = await content_parsing_service.fail_stale_runs()
         return f"closed {failed} stale parse runs"
 
+    async def close_stale_roster_syncs() -> str:
+        failed = await sso_service.fail_stale_roster_syncs()
+        return f"closed {failed} stale roster syncs"
+
     async def collect_due_invoices() -> str:
         if not payment_service.configured:
             return "skipped: no payment provider configured"
@@ -115,6 +119,11 @@ def build_scheduled_jobs(
             name="content.close_stale_parse_runs",
             interval=HOURLY,
             run=close_stale_parse_runs,
+        ),
+        ScheduledJob(
+            name="sso.close_stale_roster_syncs",
+            interval=HOURLY,
+            run=close_stale_roster_syncs,
         ),
         # Issuance runs before collection so a freshly raised invoice that is
         # already due is picked up on the same sweep.

@@ -127,7 +127,7 @@ class FakeSsoService(SsoService):
             ),
         )
 
-    async def sync_roster_for_school(self, *, school_id, triggered_by_user_id):
+    async def start_roster_sync_for_school(self, *, school_id, triggered_by_user_id):
         if not self.configured:
             raise LookupError("SSO is not configured for this school")
         if self.disconnected:
@@ -135,12 +135,24 @@ class FakeSsoService(SsoService):
                 "Single sign-on is disconnected for this school."
             )
         self.manual_sync_actor = triggered_by_user_id
-        return RosterSyncResult(
-            status=RosterSyncStatus.COMPLETED,
-            imported_students=10,
-            imported_teachers=2,
+        return RUN_ID
+
+    async def roster_sync_run(self, *, run_id, school_id):
+        del school_id
+        if run_id != RUN_ID:
+            return None
+        return RosterSyncRunView(
+            id=RUN_ID,
+            provider=SsoProvider.GOOGLE,
+            status=RosterSyncStatus.RUNNING,
+            imported_students=0,
+            imported_teachers=0,
             missing_teacher_class_mappings=0,
-            issue_ids=(),
+            failure_reason=None,
+            triggered_manually=True,
+            started_at=datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+            completed_at=None,
+            issues=(),
         )
 
     async def reauthorise(self, school_id):
@@ -279,14 +291,34 @@ def test_admin_sync_history_window_is_bounded() -> None:
         assert response.status_code == 422
 
 
-def test_admin_manual_sync_is_attributed_to_the_actor() -> None:
+def test_admin_manual_sync_is_accepted_and_attributed_to_the_actor() -> None:
+    """A sync walks every class and member through the provider, so it is
+    started and watched rather than waited on."""
     client, service, _ = client_for()
 
     response = client.post("/api/v1/admin/sso/roster-sync")
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "completed"
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "running"
+    assert body["runId"] == str(RUN_ID)
+    assert body["pollUrl"] == f"/api/v1/admin/sso/roster-sync/{RUN_ID}"
     assert service.manual_sync_actor == USER_ID
+
+
+def test_a_running_sync_can_be_watched() -> None:
+    client, _, _ = client_for()
+
+    response = client.get(f"/api/v1/admin/sso/roster-sync/{RUN_ID}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+
+
+def test_an_unknown_sync_run_is_not_found() -> None:
+    client, _, _ = client_for()
+
+    assert client.get(f"/api/v1/admin/sso/roster-sync/{uuid4()}").status_code == 404
 
 
 def test_admin_manual_sync_conflicts_while_disconnected() -> None:

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -161,29 +162,7 @@ class SqlAlchemySsoRepository:
                 1 for run in runs if run.status is RosterSyncStatus.FAILED
             ),
             runs=tuple(
-                RosterSyncRunView(
-                    id=run.id,
-                    provider=run.provider,
-                    status=run.status,
-                    imported_students=run.imported_students,
-                    imported_teachers=run.imported_teachers,
-                    missing_teacher_class_mappings=(
-                        run.missing_teacher_class_mappings
-                    ),
-                    failure_reason=run.failure_reason,
-                    triggered_manually=run.triggered_manually,
-                    started_at=run.started_at,
-                    completed_at=run.completed_at,
-                    issues=tuple(
-                        RosterSyncIssueView(
-                            id=issue.id,
-                            external_reference=issue.external_reference,
-                            description=issue.description,
-                            resolution_hint=issue.resolution_hint,
-                        )
-                        for issue in issues_by_run.get(run.id, ())
-                    ),
-                )
+                _roster_sync_run_view(run, issues_by_run.get(run.id, ()))
                 for run in runs
             ),
         )
@@ -384,6 +363,90 @@ class SqlAlchemySsoRepository:
             )
         return profile_id is not None
 
+    async def begin_roster_sync(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        triggered_by_user_id: UUID | None,
+        started_at: datetime,
+    ) -> UUID:
+        """Record that a sync started, before any of the provider is walked."""
+        run_id = uuid4()
+        async with self._sessions.begin() as session:
+            session.add(
+                RosterSyncRun(
+                    id=run_id,
+                    school_id=school_id,
+                    provider=provider,
+                    status=RosterSyncStatus.RUNNING,
+                    triggered_manually=triggered_by_user_id is not None,
+                    triggered_by_user_id=triggered_by_user_id,
+                    started_at=started_at,
+                )
+            )
+        return run_id
+
+    async def fail_roster_sync_run(
+        self,
+        *,
+        run_id: UUID,
+        failure_reason: str,
+        failed_at: datetime,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            run = await session.get(RosterSyncRun, run_id)
+            if run is None:
+                return
+            run.status = RosterSyncStatus.FAILED
+            run.failure_reason = failure_reason
+            run.completed_at = failed_at
+
+    async def fail_stale_roster_syncs(self, *, older_than: timedelta) -> int:
+        """Close out syncs whose worker went away.
+
+        A sync runs in the process that accepted it, so a deploy mid-walk
+        leaves a row saying running that nothing will ever finish.
+        """
+        cutoff = datetime.now(UTC) - older_than
+        async with self._sessions.begin() as session:
+            runs = list(
+                await session.scalars(
+                    select(RosterSyncRun).where(
+                        RosterSyncRun.status == RosterSyncStatus.RUNNING,
+                        RosterSyncRun.started_at < cutoff,
+                    )
+                )
+            )
+            for run in runs:
+                run.status = RosterSyncStatus.FAILED
+                run.completed_at = datetime.now(UTC)
+                run.failure_reason = (
+                    "The sync did not finish. It was most likely interrupted "
+                    "by a restart; start it again."
+                )
+        return len(runs)
+
+    async def roster_sync_run(
+        self,
+        *,
+        run_id: UUID,
+        school_id: UUID,
+    ) -> RosterSyncRunView | None:
+        """One run, in the same shape the history endpoint returns."""
+        async with self._sessions() as session:
+            run = await session.get(RosterSyncRun, run_id)
+            if run is None or run.school_id != school_id:
+                return None
+            issues = list(
+                await session.scalars(
+                    select(RosterSyncIssue).where(
+                        RosterSyncIssue.roster_sync_run_id == run.id
+                    )
+                )
+            )
+            return _roster_sync_run_view(run, issues)
+
     async def record_roster_sync(
         self,
         *,
@@ -391,23 +454,27 @@ class SqlAlchemySsoRepository:
         provider: SsoProvider,
         batch: RosterSyncBatch,
         triggered_by_user_id: UUID | None = None,
+        run_id: UUID | None = None,
     ) -> RosterSyncResult:
         now = datetime.now(UTC)
         async with self._sessions.begin() as session:
             imported_students = 0
             imported_teachers = 0
             missing_mappings = 0
-            run = RosterSyncRun(
-                id=uuid4(),
-                school_id=school_id,
-                provider=provider,
-                status=RosterSyncStatus.COMPLETED,
-                triggered_manually=triggered_by_user_id is not None,
-                triggered_by_user_id=triggered_by_user_id,
-                started_at=now,
-                completed_at=now,
-            )
-            session.add(run)
+            run = await session.get(RosterSyncRun, run_id) if run_id else None
+            if run is None:
+                run = RosterSyncRun(
+                    id=run_id or uuid4(),
+                    school_id=school_id,
+                    provider=provider,
+                    triggered_manually=triggered_by_user_id is not None,
+                    triggered_by_user_id=triggered_by_user_id,
+                    started_at=now,
+                )
+                session.add(run)
+            run.status = RosterSyncStatus.COMPLETED
+            run.failure_reason = None
+            run.completed_at = now
             await session.flush()
 
             for student in batch.students:
@@ -642,4 +709,32 @@ def _auth_user(user: User) -> AuthUser:
         pin_hash=user.pin_hash,
         login_identifier=user.login_identifier,
         deactivated_at=user.deactivated_at,
+    )
+
+
+def _roster_sync_run_view(
+    run: RosterSyncRun,
+    issues: Sequence[RosterSyncIssue],
+) -> RosterSyncRunView:
+    """One shape for a sync run, whether it is running, done, or historical."""
+    return RosterSyncRunView(
+        id=run.id,
+        provider=run.provider,
+        status=run.status,
+        imported_students=run.imported_students,
+        imported_teachers=run.imported_teachers,
+        missing_teacher_class_mappings=run.missing_teacher_class_mappings,
+        failure_reason=run.failure_reason,
+        triggered_manually=run.triggered_manually,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        issues=tuple(
+            RosterSyncIssueView(
+                id=issue.id,
+                external_reference=issue.external_reference,
+                description=issue.description,
+                resolution_hint=issue.resolution_hint,
+            )
+            for issue in issues
+        ),
     )

@@ -94,6 +94,29 @@ class RosterSyncResponse(BaseModel):
         )
 
 
+class RosterSyncAcceptedResponse(BaseModel):
+    """What starting a roster sync hands back, and how to watch it finish.
+
+    A sync pages through every class and every member of every class through
+    the provider's API. For a real school that is minutes, so it is not
+    something to hold a request open for.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_id: UUID = Field(alias="runId")
+    status: RosterSyncStatus
+    poll_url: str = Field(alias="pollUrl")
+
+    @classmethod
+    def started(cls, run_id: UUID) -> "RosterSyncAcceptedResponse":
+        return cls(
+            runId=run_id,
+            status=RosterSyncStatus.RUNNING,
+            pollUrl=f"/api/v1/admin/sso/roster-sync/{run_id}",
+        )
+
+
 class SsoDataFlowCategoryResponse(BaseModel):
     key: str
     description: str
@@ -389,14 +412,20 @@ async def roster_sync_history(
 
 @router.post(
     "/admin/sso/roster-sync",
-    response_model=RosterSyncResponse,
+    response_model=RosterSyncAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        403: {"description": "Role is not permitted; the IT SSO scope is required"},
+        409: {"description": "Single sign-on is disconnected for this school"},
+    },
 )
 async def trigger_manual_roster_sync(
     actor: ItSsoDependency,
     service: SsoDependency,
-) -> RosterSyncResponse:
+) -> RosterSyncAcceptedResponse:
+    """Start a roster sync. Poll ``pollUrl`` until it reports finished."""
     try:
-        result = await service.sync_roster_for_school(
+        run_id = await service.start_roster_sync_for_school(
             school_id=_school_id(actor),
             triggered_by_user_id=actor.user_id,
         )
@@ -407,7 +436,35 @@ async def trigger_manual_roster_sync(
         ) from error
     except LookupError as error:
         raise _sso_not_configured(error) from error
-    return RosterSyncResponse.from_result(result)
+    return RosterSyncAcceptedResponse.started(run_id)
+
+
+@router.get(
+    "/admin/sso/roster-sync/{run_id}",
+    response_model=RosterSyncRunResponse,
+    responses={404: {"description": "Sync run not found in this school"}},
+)
+async def roster_sync_run(
+    run_id: UUID,
+    actor: ItSsoDependency,
+    service: SsoDependency,
+) -> RosterSyncRunResponse:
+    """How a client observes one roster sync finishing.
+
+    The same shape the history endpoint already returns, so a client that can
+    render a past run can render a running one. It is finished when status
+    leaves running.
+    """
+    run = await service.roster_sync_run(
+        run_id=run_id,
+        school_id=_school_id(actor),
+    )
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "sync_run_not_found", "message": "Sync run not found."},
+        )
+    return RosterSyncRunResponse.from_run(run)
 
 
 @router.post(

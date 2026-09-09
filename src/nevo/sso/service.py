@@ -12,10 +12,12 @@ from nevo.domain.accounts.vocabulary import (
     SsoFirstUseDestination,
     SsoProvider,
 )
+from nevo.ops.background import spawn
 from nevo.sso.entities import (
     RosterSyncBatch,
     RosterSyncHistory,
     RosterSyncResult,
+    RosterSyncRunView,
     SsoCloudFile,
     SsoConnectionHealth,
     SsoDataFlowCategory,
@@ -138,6 +140,32 @@ class SsoRepository(Protocol):
 
     async def learner_profile_exists(self, user_id: UUID) -> bool: ...
 
+    async def begin_roster_sync(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        triggered_by_user_id: UUID | None,
+        started_at: datetime,
+    ) -> UUID: ...
+
+    async def fail_roster_sync_run(
+        self,
+        *,
+        run_id: UUID,
+        failure_reason: str,
+        failed_at: datetime,
+    ) -> None: ...
+
+    async def fail_stale_roster_syncs(self, *, older_than: timedelta) -> int: ...
+
+    async def roster_sync_run(
+        self,
+        *,
+        run_id: UUID,
+        school_id: UUID,
+    ) -> RosterSyncRunView | None: ...
+
     async def record_roster_sync(
         self,
         *,
@@ -145,6 +173,7 @@ class SsoRepository(Protocol):
         provider: SsoProvider,
         batch: RosterSyncBatch,
         triggered_by_user_id: UUID | None = None,
+        run_id: UUID | None = None,
     ) -> RosterSyncResult: ...
 
     async def record_failed_roster_sync(
@@ -188,6 +217,10 @@ class SsoProviderClient(Protocol):
         file_id: str,
         drive_id: str | None = None,
     ) -> SsoCloudFile: ...
+
+
+STALE_SYNC_AFTER = timedelta(minutes=30)
+"""Longer than any real sync, short enough that nobody watches a dead one."""
 
 
 class SsoService:
@@ -344,13 +377,84 @@ class SsoService:
             window_days=window_days,
         )
 
+    async def start_roster_sync_for_school(
+        self,
+        *,
+        school_id: UUID,
+        triggered_by_user_id: UUID | None,
+    ) -> UUID:
+        """Record that a sync has started, and do the walking behind it.
+
+        A sync pages through every class and every member of every class
+        through the provider's API. For a real school that is minutes, which
+        is not something to hold an HTTP request open for - and the run row
+        was only written at the end, so a sync in progress looked identical
+        to one that had died.
+
+        Returns the run id. Poll it for the outcome.
+        """
+        config = await self._require_school_config(school_id)
+        health = await self._repository.connection_health(school_id)
+        if health is not None and health.status is SsoConnectionStatus.DISCONNECTED:
+            raise SsoDisconnectedError(
+                "Single sign-on is disconnected for this school. Reconnect "
+                "it before syncing your roster."
+            )
+        run_id = await self._repository.begin_roster_sync(
+            school_id=school_id,
+            provider=config.provider,
+            triggered_by_user_id=triggered_by_user_id,
+            started_at=self._now(),
+        )
+
+        async def work() -> None:
+            try:
+                batch = await self._provider(config.provider).roster_for_school(
+                    config=self._provider_config(config),
+                )
+            except Exception as error:
+                await self._repository.fail_roster_sync_run(
+                    run_id=run_id,
+                    failure_reason=str(error)[:1000],
+                    failed_at=self._now(),
+                )
+                raise
+            await self._repository.record_roster_sync(
+                school_id=school_id,
+                provider=config.provider,
+                batch=batch,
+                triggered_by_user_id=triggered_by_user_id,
+                run_id=run_id,
+            )
+
+        spawn(work, name=f"roster-sync-{run_id}")
+        return run_id
+
+    async def fail_stale_roster_syncs(
+        self,
+        *,
+        older_than: timedelta = STALE_SYNC_AFTER,
+    ) -> int:
+        return await self._repository.fail_stale_roster_syncs(older_than=older_than)
+
+    async def roster_sync_run(
+        self,
+        *,
+        run_id: UUID,
+        school_id: UUID,
+    ) -> RosterSyncRunView | None:
+        return await self._repository.roster_sync_run(
+            run_id=run_id,
+            school_id=school_id,
+        )
+
     async def sync_roster_for_school(
         self,
         *,
         school_id: UUID,
         triggered_by_user_id: UUID | None,
     ) -> RosterSyncResult:
-        """Manual sync from the admin dashboard, in the actor's own school.
+        """Sync and wait. Used by the nightly sweep, which has the time.
 
         A provider failure is recorded as a failed run rather than vanishing,
         so the health card can explain what happened and what to do about it.

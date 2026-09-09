@@ -199,3 +199,22 @@ def test_no_content_endpoint_still_parses_inside_the_request() -> None:
     for path in ("/api/v1/uploads", "/api/v1/uploads/text", "/api/v1/uploads/import"):
         assert "201" in paths[path]["post"]["responses"], path
     assert "/api/v1/uploads/{upload_id}" in paths
+
+
+def test_no_endpoint_walks_a_provider_inside_the_request() -> None:
+    """A roster sync pages every class and every member through the
+    provider's API, with no cap. That is not a request to hold open."""
+    paths = app.openapi()["paths"]
+
+    sync = paths["/api/v1/admin/sso/roster-sync"]["post"]["responses"]
+    assert "202" in sync
+    assert "200" not in sync
+    assert "/api/v1/admin/sso/roster-sync/{run_id}" in paths
+
+
+def test_a_sync_can_report_that_it_is_still_running() -> None:
+    """The run row was only written once the walk finished, so a sync in
+    progress was indistinguishable from one that had died."""
+    statuses = app.openapi()["components"]["schemas"]["RosterSyncStatus"]["enum"]
+
+    assert "running" in statuses

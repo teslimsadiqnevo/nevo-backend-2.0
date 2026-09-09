@@ -47,6 +47,8 @@ class SsoFirstUseDestination(StrEnum):
 
 
 class RosterSyncStatus(StrEnum):
+    #: Started, and still walking the provider's pages.
+    RUNNING = "running"
     COMPLETED = "completed"
     PARTIAL_MANUAL_REVIEW = "partial_manual_review"
     FAILED = "failed"

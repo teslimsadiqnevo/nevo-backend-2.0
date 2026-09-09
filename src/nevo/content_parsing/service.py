@@ -1,8 +1,11 @@
+import asyncio
 import json
+import logging
 import math
 import re
 from collections.abc import Iterable
 from dataclasses import replace
+from datetime import timedelta
 from uuid import UUID
 
 from nevo.ai_gateway.entities import AiGenerationRequest
@@ -13,6 +16,7 @@ from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
     ParsedLessonSegment,
+    ParseRunState,
     SourcePage,
     StoredParsedLesson,
 )
@@ -24,6 +28,21 @@ from nevo.domain.intelligence.vocabulary import (
     LessonSourceType,
 )
 from nevo.visuals import EducationalImageService, VisualGenerationError
+
+logger = logging.getLogger(__name__)
+
+STALE_RUN_AFTER = timedelta(minutes=30)
+"""Longer than any real parse, short enough that nobody polls a dead run for
+an afternoon."""
+
+PARSE_OUTPUT_TOKENS = 16_384
+"""Room for the lesson the prompt actually asks for.
+
+The prompt requires at least three segments, each with variants, checkpoints
+and a narration script. At 4,096 tokens the model ran out of room mid-object
+and every response failed to parse, so every lesson in the library was
+deterministic fallback while the call log said the provider had succeeded.
+"""
 
 MAX_CHUNK_CHARS = 24_000
 PROMPT_NAME = "content_parse.default"
@@ -44,6 +63,73 @@ class ContentParsingService:
         self._ai_gateway = ai_gateway
         self._audio_generation = audio_generation
         self._visual_generation = visual_generation
+        self._running: set[asyncio.Task[None]] = set()
+
+    async def start(
+        self,
+        *,
+        request: ContentParseRequest,
+        requested_by_user_id: UUID,
+        existing_lesson_id: UUID | None = None,
+    ) -> tuple[UUID, UUID]:
+        """Record the run, hand back its id, and do the work behind it.
+
+        A full parse is minutes of image generation and speech synthesis, so
+        it cannot be an HTTP request that a client waits on: every proxy
+        between here and the browser will hang up first, and hanging up on
+        work that is still running is indistinguishable from a backend that
+        never answers.
+
+        Returns ``(lesson_id, parse_run_id)``. The run id is what the client
+        polls.
+        """
+        lesson_id, parse_run_id = await self._repository.begin_run(
+            request=request,
+            requested_by_user_id=requested_by_user_id,
+            existing_lesson_id=existing_lesson_id,
+        )
+        task = asyncio.create_task(
+            self._run(
+                request=request,
+                requested_by_user_id=requested_by_user_id,
+                lesson_id=lesson_id,
+                parse_run_id=parse_run_id,
+            ),
+            name=f"content-parse-{parse_run_id}",
+        )
+        # Held so the task is not garbage collected mid-flight.
+        self._running.add(task)
+        task.add_done_callback(self._running.discard)
+        return lesson_id, parse_run_id
+
+    async def _run(
+        self,
+        *,
+        request: ContentParseRequest,
+        requested_by_user_id: UUID,
+        lesson_id: UUID,
+        parse_run_id: UUID,
+    ) -> None:
+        try:
+            await self.parse(
+                request=request,
+                requested_by_user_id=requested_by_user_id,
+                existing_lesson_id=lesson_id,
+                parse_run_id=parse_run_id,
+            )
+        except Exception as error:
+            # Whatever went wrong, the run must stop saying "processing".
+            logger.exception("Content parse run %s failed", parse_run_id)
+            await self._repository.fail_run(
+                parse_run_id,
+                reason=f"{error.__class__.__name__}: {error}",
+            )
+
+    async def run_state(self, parse_run_id: UUID) -> ParseRunState | None:
+        return await self._repository.run_state(parse_run_id)
+
+    async def fail_stale_runs(self, *, older_than: timedelta = STALE_RUN_AFTER) -> int:
+        return await self._repository.fail_stale_runs(older_than=older_than)
 
     async def parse(
         self,
@@ -51,6 +137,7 @@ class ContentParsingService:
         request: ContentParseRequest,
         requested_by_user_id: UUID,
         existing_lesson_id: UUID | None = None,
+        parse_run_id: UUID | None = None,
     ) -> StoredParsedLesson:
         source = _source_for_prompt(request)
         chunks = _chunks(source)
@@ -72,7 +159,7 @@ class ContentParsingService:
                             "chunk_count": str(len(chunks)),
                             "source_text": chunk,
                         },
-                        max_output_tokens=4_096,
+                        max_output_tokens=PARSE_OUTPUT_TOKENS,
                     )
                 )
                 ai_call_count += 1
@@ -83,6 +170,10 @@ class ContentParsingService:
                     )
                 )
             except (AiGatewayError, ValueError, json.JSONDecodeError) as error:
+                # Say what went wrong, not just that something did. This note
+                # was the only record that the AI had contributed nothing, and
+                # it named the exception class and no more - which is how a
+                # whole library of fallback lessons went unnoticed.
                 review_notes.append(
                     {
                         "code": "ai_parse_fallback",
@@ -92,6 +183,8 @@ class ContentParsingService:
                             "could not return valid structured lesson data."
                         ),
                         "error": error.__class__.__name__,
+                        "reason": str(error)[:300],
+                        "looksTruncated": _looks_truncated(locals().get("result")),
                     }
                 )
                 segments.extend(
@@ -101,15 +194,22 @@ class ContentParsingService:
                     )
                 )
 
-        prepared_segments = []
-        for segment in segments:
-            if self._visual_generation is not None and self._visual_generation.configured:
-                segment = await self._generate_segment_visual(segment)
-            prepared_segments.append(segment)
+        # Segments are independent, so their images and narration are drawn
+        # together. Sequentially, a lesson cost the sum of every generation;
+        # the slowest one is enough.
+        prepared_segments = list(segments)
+        if self._visual_generation is not None and self._visual_generation.configured:
+            prepared_segments = list(
+                await asyncio.gather(
+                    *(self._generate_segment_visual(segment) for segment in prepared_segments)
+                )
+            )
         if self._audio_generation is not None and self._audio_generation.configured:
-            prepared_segments = [
-                await self._generate_segment_audio(segment) for segment in prepared_segments
-            ]
+            prepared_segments = list(
+                await asyncio.gather(
+                    *(self._generate_segment_audio(segment) for segment in prepared_segments)
+                )
+            )
         normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
 
         parsed = ParsedLesson(
@@ -120,17 +220,12 @@ class ContentParsingService:
             gemini_call_count=ai_call_count,
             chunk_count=len(chunks),
         )
-        if existing_lesson_id is None:
-            return await self._repository.store(
-                request=request,
-                parsed=parsed,
-                requested_by_user_id=requested_by_user_id,
-            )
         return await self._repository.store(
             request=request,
             parsed=parsed,
             requested_by_user_id=requested_by_user_id,
             existing_lesson_id=existing_lesson_id,
+            parse_run_id=parse_run_id,
         )
 
     async def _generate_segment_audio(
@@ -270,6 +365,19 @@ def _segments_from_ai(
     if not parsed:
         raise ValueError("AI provider returned only malformed segments")
     return tuple(parsed)
+
+
+def _looks_truncated(result: object) -> bool:
+    """Whether the model ran out of room rather than returned something odd.
+
+    Truncation and malformed output need different fixes - more tokens versus
+    a better prompt - and they are indistinguishable from the exception alone.
+    """
+    text = getattr(result, "text", None)
+    if not isinstance(text, str) or not text.strip():
+        return False
+    stripped = text.strip()
+    return stripped.count("{") > stripped.count("}")
 
 
 def _json_payload(text: str) -> dict[str, object]:

@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from uuid import UUID
 
 from nevo.domain.intelligence.vocabulary import (
@@ -64,3 +65,27 @@ class StoredParsedLesson:
     confirmation_summary: str | None
     review_notes: tuple[dict[str, object], ...]
     segments: tuple[ParsedLessonSegment, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ParseRunState:
+    """Where a parse has got to, which is what a client actually needs.
+
+    The response to starting a parse used to hand back a run id that nothing
+    in the API accepted as a parameter, so there was no way to find out
+    whether the work had finished.
+    """
+
+    parse_run_id: UUID
+    lesson_id: UUID
+    school_id: UUID | None
+    status: ContentParseStatus
+    requested_by_user_id: UUID
+    started_at: datetime
+    completed_at: datetime | None
+    failure_reason: str | None
+    review_notes: tuple[dict[str, object], ...]
+    segment_count: int
+    #: Segments the AI contributed nothing to. Every lesson in the library was
+    #: once entirely these, while the run reported completed_with_review.
+    fallback_segment_count: int

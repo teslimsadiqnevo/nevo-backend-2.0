@@ -12,9 +12,11 @@ def test_admin_and_content_blocker_routes_are_typed() -> None:
         (
             "/api/content/lessons/{lesson_id}/regenerate",
             "post",
-            "200",
-            "ParseContentResponse",
+            "202",
+            "ParseAcceptedResponse",
         ),
+        ("/api/content/parse", "post", "202", "ParseAcceptedResponse"),
+        ("/api/content/parse-runs/{parse_run_id}", "get", "200", "ParseRunResponse"),
     }
     for path, method, status, schema_name in expected:
         schema = paths[path][method]["responses"][status]["content"]["application/json"]["schema"]
@@ -125,3 +127,25 @@ def test_consent_completion_reports_the_copy_it_sent() -> None:
     ]["properties"]
 
     assert "receipt_sent_to" in completion
+
+
+def test_a_parse_run_id_is_something_a_client_can_use() -> None:
+    """It was returned by two endpoints and accepted as a parameter by none."""
+    spec = app.openapi()
+    run_id_params = [
+        f"{method.upper()} {path}"
+        for path, operations in spec["paths"].items()
+        for method, operation in operations.items()
+        for parameter in operation.get("parameters", [])
+        if parameter["name"] == "parse_run_id"
+    ]
+
+    assert run_id_params, "nothing in the contract takes a parse run id"
+
+
+def test_generation_endpoints_declare_the_refusals_they_actually_make() -> None:
+    """A 403 was reachable on these and documented on none of them."""
+    paths = app.openapi()["paths"]
+
+    for path in ("/api/content/parse", "/api/content/lessons/{lesson_id}/regenerate"):
+        assert "403" in paths[path]["post"]["responses"], path

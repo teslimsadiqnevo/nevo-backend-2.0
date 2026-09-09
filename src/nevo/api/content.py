@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from nevo.api.product_common import require_school_actor
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLessonSegment,
+    ParseRunState,
     SourcePage,
     StoredParsedLesson,
 )
@@ -195,13 +197,86 @@ class MediaUrlResponse(BaseModel):
     expires_in_seconds: int | None = Field(alias="expiresInSeconds")
 
 
-@router.post("/parse", response_model=ParseContentResponse)
+class ParseAcceptedResponse(BaseModel):
+    """What starting a parse hands back, and how to watch it finish.
+
+    A parse is minutes of image generation and speech synthesis. It used to
+    be answered synchronously, which meant every proxy in front of the API
+    hung up before it finished - and a hang-up on work that is still running
+    looks exactly like a backend that never answers.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    lesson_id: UUID = Field(alias="lessonId")
+    parse_run_id: UUID = Field(alias="parseRunId")
+    status: ContentParseStatus
+    #: Poll this until status leaves processing.
+    poll_url: str = Field(alias="pollUrl")
+
+    @classmethod
+    def started(cls, *, lesson_id: UUID, parse_run_id: UUID) -> "ParseAcceptedResponse":
+        return cls(
+            lessonId=lesson_id,
+            parseRunId=parse_run_id,
+            status=ContentParseStatus.PROCESSING,
+            pollUrl=f"/api/content/parse-runs/{parse_run_id}",
+        )
+
+
+class ParseRunResponse(BaseModel):
+    """Where a parse has got to."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    parse_run_id: UUID = Field(alias="parseRunId")
+    lesson_id: UUID = Field(alias="lessonId")
+    status: ContentParseStatus
+    #: True once status is terminal, so a client can stop polling on one field.
+    finished: bool
+    started_at: datetime = Field(alias="startedAt")
+    completed_at: datetime | None = Field(alias="completedAt")
+    failure_reason: str | None = Field(alias="failureReason")
+    review_notes: list[dict[str, object]] = Field(alias="reviewNotes")
+    segment_count: int = Field(alias="segmentCount")
+    #: Segments the AI contributed nothing to. Equal to segmentCount means the
+    #: lesson is deterministic fallback text and is worth regenerating.
+    fallback_segment_count: int = Field(alias="fallbackSegmentCount")
+
+    @classmethod
+    def from_state(cls, state: ParseRunState) -> "ParseRunResponse":
+        return cls(
+            parseRunId=state.parse_run_id,
+            lessonId=state.lesson_id,
+            status=state.status,
+            finished=state.status
+            in {
+                ContentParseStatus.COMPLETED,
+                ContentParseStatus.COMPLETED_WITH_REVIEW,
+                ContentParseStatus.FAILED,
+            },
+            startedAt=state.started_at,
+            completedAt=state.completed_at,
+            failureReason=state.failure_reason,
+            reviewNotes=list(state.review_notes),
+            segmentCount=state.segment_count,
+            fallbackSegmentCount=state.fallback_segment_count,
+        )
+
+
+@router.post(
+    "/parse",
+    response_model=ParseAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={403: {"description": "Role is not permitted to parse content"}},
+)
 async def parse_content(
     payload: ParseContentRequest,
     principal: PrincipalDependency,
     service: ContentParsingDependency,
-) -> ParseContentResponse:
-    result = await service.parse(
+) -> ParseAcceptedResponse:
+    """Start a parse. Poll ``pollUrl`` until it reports finished."""
+    lesson_id, parse_run_id = await service.start(
         request=ContentParseRequest(
             title=payload.title,
             source_type=payload.source_type,
@@ -213,17 +288,31 @@ async def parse_content(
         ),
         requested_by_user_id=principal.user_id,
     )
-    return ParseContentResponse.from_result(result)
+    return ParseAcceptedResponse.started(lesson_id=lesson_id, parse_run_id=parse_run_id)
 
 
-@router.post("/lessons/{lesson_id}/regenerate", response_model=ParseContentResponse)
+@router.post(
+    "/lessons/{lesson_id}/regenerate",
+    response_model=ParseAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        403: {"description": "Role is not permitted; teacher or admin only"},
+        404: {"description": "Lesson not found in this school"},
+        409: {"description": "Lesson has no stored content to regenerate"},
+    },
+)
 async def regenerate_lesson(
     lesson_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
     service: ContentParsingDependency,
-) -> ParseContentResponse:
-    """Rebuild a legacy lesson in place using the current content contract."""
+) -> ParseAcceptedResponse:
+    """Rebuild a lesson in place. Poll ``pollUrl`` until it reports finished.
+
+    Regeneration re-parses the lesson's own stored segment text, so it does
+    not need the original upload and works on a lesson that was seeded
+    directly.
+    """
     actor = await require_school_actor(
         session,
         principal,
@@ -251,7 +340,7 @@ async def regenerate_lesson(
     metadata = dict(lesson.source_reference or {})
     if lesson.subject:
         metadata["subject"] = lesson.subject
-    result = await service.parse(
+    lesson_id_started, parse_run_id = await service.start(
         request=ContentParseRequest(
             title=lesson.title,
             source_type=lesson.source_type,
@@ -261,7 +350,37 @@ async def regenerate_lesson(
         requested_by_user_id=principal.user_id,
         existing_lesson_id=lesson.id,
     )
-    return ParseContentResponse.from_result(result)
+    return ParseAcceptedResponse.started(
+        lesson_id=lesson_id_started,
+        parse_run_id=parse_run_id,
+    )
+
+
+@router.get(
+    "/parse-runs/{parse_run_id}",
+    response_model=ParseRunResponse,
+    responses={404: {"description": "Parse run not found in this school"}},
+)
+async def read_parse_run(
+    parse_run_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    service: ContentParsingDependency,
+) -> ParseRunResponse:
+    """How a client observes a parse finishing.
+
+    The run id was previously returned by the parse endpoints and accepted by
+    nothing, so there was no way to find out whether the work had completed.
+    """
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={"teacher", "senco_admin", "other_admin"},
+    )
+    state = await service.run_state(parse_run_id)
+    if state is None or state.school_id != actor.school_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parse run not found")
+    return ParseRunResponse.from_state(state)
 
 
 @router.post("/media/url", response_model=MediaUrlResponse)

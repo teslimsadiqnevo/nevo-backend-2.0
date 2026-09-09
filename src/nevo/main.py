@@ -194,6 +194,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             sso_service=app.state.sso_service,
             payment_service=app.state.payment_service,
             issuance_service=InvoiceIssuanceService(sessions),
+            content_parsing_service=app.state.content_parsing_service,
         ),
     )
     app.state.scheduled_job_runner.start()
@@ -318,13 +319,24 @@ async def health(request: Request) -> dict[str, str]:
     payments = getattr(request.app.state, "payment_service", None)
     media = getattr(request.app.state, "lesson_media_service", None)
     email = getattr(request.app.state, "email_delivery", None)
+    parsing = getattr(request.app.state, "content_parsing_service", None)
     return {
         "status": "ok",
         "ai": "configured" if getattr(ai_gateway, "configured", False) else "fallback_only",
         "payments": "configured" if getattr(payments, "configured", False) else "not_configured",
         "media": "configured" if getattr(media, "configured", False) else "not_configured",
         "email": "configured" if getattr(email, "configured", False) else "not_configured",
+        # Whether a lesson parse will draw images and record narration, which
+        # is the difference between a ten-second parse and a several-minute
+        # one. It was previously only discoverable by timing a parse.
+        "lessonImages": _generator_state(parsing, "_visual_generation"),
+        "lessonAudio": _generator_state(parsing, "_audio_generation"),
     }
+
+
+def _generator_state(service: object, attribute: str) -> str:
+    generator = getattr(service, attribute, None)
+    return "configured" if getattr(generator, "configured", False) else "not_configured"
 
 
 def custom_openapi() -> dict[str, object]:

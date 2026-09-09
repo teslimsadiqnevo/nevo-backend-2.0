@@ -1,6 +1,8 @@
+import asyncio
 import base64
 import hashlib
 import json
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -99,10 +101,29 @@ class EducationalImageService:
 
     async def _draw_until_approved(self, prompt: str, lesson_text: str) -> tuple[bytes, int]:
         issues = ""
+        deadline = time.monotonic() + self._settings.budget_seconds
         for attempt in range(1, self._settings.max_attempts + 1):
+            if time.monotonic() >= deadline:
+                raise VisualGenerationError(
+                    f"Image generation ran out of time after {attempt - 1} attempts"
+                )
             correction = f"\n\nCorrect these problems from the previous attempt: {issues}"
-            image = await self._generate_image(prompt + (correction if issues else ""))
-            approved, issues = await self._review_image(image=image, lesson_text=lesson_text)
+            try:
+                image = await asyncio.wait_for(
+                    self._generate_image(prompt + (correction if issues else "")),
+                    timeout=max(1.0, deadline - time.monotonic()),
+                )
+                approved, issues = await asyncio.wait_for(
+                    self._review_image(image=image, lesson_text=lesson_text),
+                    timeout=max(1.0, deadline - time.monotonic()),
+                )
+            except TimeoutError as error:
+                # A lesson with an unreviewable image is still a lesson. The
+                # segment loses its picture and is flagged for review, which
+                # is better than the whole parse never finishing.
+                raise VisualGenerationError(
+                    "Image generation exceeded its time budget"
+                ) from error
             if approved:
                 return image, attempt
         raise VisualGenerationError(

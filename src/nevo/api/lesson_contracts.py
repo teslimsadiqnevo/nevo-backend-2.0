@@ -148,7 +148,16 @@ def checkpoint_payloads(
         item.setdefault("position", "after_segment")
         if concept_id is not None:
             item.setdefault("conceptId", str(concept_id))
-        result.append(ComprehensionCheckpoint.model_validate(item).model_dump(by_alias=True))
+        # mode="json" because this payload is written straight into a JSONB
+        # column. A plain dump leaves conceptId as a UUID object, and the
+        # insert then fails on every segment that carries a checkpoint - which
+        # is why a parse could run to completion and still store nothing.
+        result.append(
+            ComprehensionCheckpoint.model_validate(item).model_dump(
+                by_alias=True,
+                mode="json",
+            )
+        )
     return result
 
 

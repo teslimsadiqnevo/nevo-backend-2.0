@@ -37,7 +37,15 @@ class FakeRepository:
     def __init__(self) -> None:
         self.parsed: ParsedLesson | None = None
 
-    async def store(self, *, request, parsed, requested_by_user_id):
+    async def store(
+        self,
+        *,
+        request,
+        parsed,
+        requested_by_user_id,
+        existing_lesson_id=None,
+        parse_run_id=None,
+    ):
         self.parsed = parsed
         return type(
             "Stored",
@@ -245,3 +253,26 @@ async def test_visual_modality_is_removed_when_generated_image_is_missing() -> N
     assert ContentModality.VISUAL not in segment.available_modalities
     assert segment.visual_variant is None
     assert "visual_variant_image_generation_failed" in segment.review_reasons
+
+
+def test_truncated_json_is_reported_as_truncated_not_just_invalid() -> None:
+    """More tokens and a better prompt are different fixes; the exception
+    class alone cannot tell them apart."""
+    from nevo.content_parsing.service import _looks_truncated
+
+    class Result:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    assert _looks_truncated(Result('{"segments": [{"title": "A"'))
+    assert not _looks_truncated(Result('{"segments": []}'))
+    assert not _looks_truncated(Result("not json at all"))
+    assert not _looks_truncated(None)
+
+
+def test_the_parse_asks_for_enough_room_to_answer() -> None:
+    """At 4,096 the model ran out mid-object and every lesson silently fell
+    back to deterministic text."""
+    from nevo.content_parsing.service import PARSE_OUTPUT_TOKENS
+
+    assert PARSE_OUTPUT_TOKENS >= 16_000

@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, select
@@ -9,6 +10,7 @@ from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
     ParsedLessonSegment,
+    ParseRunState,
     StoredParsedLesson,
 )
 from nevo.db.models.account import User
@@ -35,6 +37,149 @@ class SqlAlchemyContentParsingRepository:
                 )
             )
 
+    async def begin_run(
+        self,
+        *,
+        request: ContentParseRequest,
+        requested_by_user_id: UUID,
+        existing_lesson_id: UUID | None = None,
+    ) -> tuple[UUID, UUID]:
+        """Record that a parse has started, before any of it is done.
+
+        The run row used to be written only once the whole pipeline finished,
+        which is why a call that was still working looked identical to one
+        that had died: there was nothing to look at either way. Creating it up
+        front is what makes the work observable.
+
+        Returns ``(lesson_id, parse_run_id)``.
+        """
+        school_id = await self.requester_school_id(requested_by_user_id)
+        lesson_id = existing_lesson_id or uuid4()
+        parse_run_id = uuid4()
+        async with self._sessions.begin() as session:
+            if existing_lesson_id is None:
+                session.add(
+                    Lesson(
+                        id=lesson_id,
+                        school_id=school_id,
+                        created_by_user_id=requested_by_user_id,
+                        title=request.title,
+                        subject=(
+                            str(request.source_metadata["subject"])
+                            if request.source_metadata.get("subject")
+                            else None
+                        ),
+                        source_type=request.source_type,
+                        source_reference=request.source_metadata,
+                        parser_version=1,
+                        status=ContentParseStatus.PROCESSING,
+                        segment_count=0,
+                        review_segment_count=0,
+                        estimated_minutes=0,
+                        confirmation_summary=None,
+                    )
+                )
+            else:
+                lesson = await session.get(Lesson, existing_lesson_id)
+                if lesson is None or lesson.school_id != school_id:
+                    raise ValueError("lesson is not available to this school")
+            await session.flush()
+            session.add(
+                ContentParseRun(
+                    id=parse_run_id,
+                    lesson_id=lesson_id,
+                    requested_by_user_id=requested_by_user_id,
+                    status=ContentParseStatus.PROCESSING,
+                    source_type=request.source_type,
+                    source_metadata=request.source_metadata,
+                    chunk_count=1,
+                    gemini_call_count=0,
+                    calculation_segment_count=0,
+                    tts_call_count=0,
+                    review_notes=[],
+                )
+            )
+        return lesson_id, parse_run_id
+
+    async def fail_run(self, parse_run_id: UUID, *, reason: str) -> None:
+        """Say why a run stopped, rather than leaving it processing forever."""
+        async with self._sessions.begin() as session:
+            run = await session.get(ContentParseRun, parse_run_id)
+            if run is None:
+                return
+            run.status = ContentParseStatus.FAILED
+            run.error_message = reason[:2000]
+            run.completed_at = datetime.now(UTC)
+            lesson = await session.get(Lesson, run.lesson_id)
+            if lesson is not None and lesson.status is ContentParseStatus.PROCESSING:
+                lesson.status = ContentParseStatus.FAILED
+
+    async def fail_stale_runs(self, *, older_than: timedelta) -> int:
+        """Close out runs whose worker went away.
+
+        A parse runs in the process that accepted it, so a deploy or a crash
+        mid-run leaves a row saying "processing" that nothing will ever
+        finish. A client polling that row would wait for ever.
+        """
+        cutoff = datetime.now(UTC) - older_than
+        async with self._sessions.begin() as session:
+            runs = list(
+                await session.scalars(
+                    select(ContentParseRun).where(
+                        ContentParseRun.status == ContentParseStatus.PROCESSING,
+                        ContentParseRun.created_at < cutoff,
+                    )
+                )
+            )
+            for run in runs:
+                run.status = ContentParseStatus.FAILED
+                run.completed_at = datetime.now(UTC)
+                run.error_message = (
+                    "The parse did not finish. It was most likely interrupted by a "
+                    "restart; start it again."
+                )
+                lesson = await session.get(Lesson, run.lesson_id)
+                if lesson is not None and lesson.status is ContentParseStatus.PROCESSING:
+                    lesson.status = ContentParseStatus.FAILED
+        return len(runs)
+
+    async def run_state(self, parse_run_id: UUID) -> ParseRunState | None:
+        async with self._sessions() as session:
+            row = (
+                await session.execute(
+                    select(ContentParseRun, Lesson.school_id)
+                    .join(Lesson, Lesson.id == ContentParseRun.lesson_id)
+                    .where(ContentParseRun.id == parse_run_id)
+                )
+            ).first()
+        if row is None:
+            return None
+        run, school_id = row
+        async with self._sessions() as session:
+            segments = list(
+                await session.scalars(
+                    select(LessonSegment.review_reasons).where(
+                        LessonSegment.parse_run_id == run.id
+                    )
+                )
+            )
+        fallback_segments = sum(
+            1 for reasons in segments if "deterministic_parse_used" in (reasons or [])
+        )
+        return ParseRunState(
+            parse_run_id=run.id,
+            lesson_id=run.lesson_id,
+            school_id=school_id,
+            status=run.status,
+            requested_by_user_id=run.requested_by_user_id,
+            started_at=run.created_at,
+            completed_at=run.completed_at,
+            failure_reason=run.error_message,
+            review_notes=tuple(run.review_notes or ()),
+            segment_count=len(segments),
+            fallback_segment_count=fallback_segments,
+        )
+
     async def store(
         self,
         *,
@@ -42,9 +187,10 @@ class SqlAlchemyContentParsingRepository:
         parsed: ParsedLesson,
         requested_by_user_id: UUID,
         existing_lesson_id: UUID | None = None,
+        parse_run_id: UUID | None = None,
     ) -> StoredParsedLesson:
         lesson_id = existing_lesson_id or uuid4()
-        parse_run_id = uuid4()
+        parse_run_id = parse_run_id or uuid4()
         school_id = await self.requester_school_id(requested_by_user_id)
         review_segment_count = sum(1 for segment in parsed.segments if segment.needs_review)
         status = (
@@ -107,21 +253,24 @@ class SqlAlchemyContentParsingRepository:
                     delete(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
                 )
             await session.flush()
-            session.add(
-                ContentParseRun(
+            run = await session.get(ContentParseRun, parse_run_id)
+            if run is None:
+                run = ContentParseRun(
                     id=parse_run_id,
                     lesson_id=lesson_id,
                     requested_by_user_id=requested_by_user_id,
-                    status=status,
                     source_type=request.source_type,
                     source_metadata=request.source_metadata,
-                    chunk_count=parsed.chunk_count,
-                    gemini_call_count=parsed.gemini_call_count,
-                    calculation_segment_count=calculation_segment_count,
-                    tts_call_count=tts_call_count,
-                    review_notes=list(parsed.review_notes),
                 )
-            )
+                session.add(run)
+            run.status = status
+            run.completed_at = datetime.now(UTC)
+            run.error_message = None
+            run.chunk_count = parsed.chunk_count
+            run.gemini_call_count = parsed.gemini_call_count
+            run.calculation_segment_count = calculation_segment_count
+            run.tts_call_count = tts_call_count
+            run.review_notes = list(parsed.review_notes)
             await session.flush()
             for segment in parsed.segments:
                 checkpoints: list[dict[str, object]] = []

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.billing.issuance import InvoiceIssuanceService
+from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.billing import Invoice
 from nevo.db.models.sso import SchoolSsoConfiguration
 from nevo.domain.accounts.vocabulary import SsoConnectionStatus
@@ -31,6 +32,7 @@ def build_scheduled_jobs(
     sso_service: SsoService,
     payment_service: PaymentService,
     issuance_service: InvoiceIssuanceService,
+    content_parsing_service: ContentParsingService,
 ) -> tuple[ScheduledJob, ...]:
     """The recurring work that used to require someone to press a button."""
 
@@ -75,6 +77,10 @@ def build_scheduled_jobs(
                 checked += 1
         return f"probed {checked} of {len(school_ids)} connections"
 
+    async def close_stale_parse_runs() -> str:
+        failed = await content_parsing_service.fail_stale_runs()
+        return f"closed {failed} stale parse runs"
+
     async def collect_due_invoices() -> str:
         if not payment_service.configured:
             return "skipped: no payment provider configured"
@@ -105,6 +111,11 @@ def build_scheduled_jobs(
         ScheduledJob(name="scheduler.refresh_due_dates", interval=DAILY, run=refresh_due_dates),
         ScheduledJob(name="sso.roster_sync", interval=DAILY, run=roster_sync),
         ScheduledJob(name="sso.health_probe", interval=HOURLY, run=sso_health_probe),
+        ScheduledJob(
+            name="content.close_stale_parse_runs",
+            interval=HOURLY,
+            run=close_stale_parse_runs,
+        ),
         # Issuance runs before collection so a freshly raised invoice that is
         # already due is picked up on the same sweep.
         ScheduledJob(name="billing.issue_invoices", interval=DAILY, run=issue_invoices),

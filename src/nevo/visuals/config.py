@@ -26,6 +26,13 @@ class VisualGenerationSettings(BaseSettings):
     image_quality: str = Field(default="high", validation_alias="IMAGE_GENERATION_QUALITY")
     image_size: str = Field(default="1536x1024", validation_alias="IMAGE_GENERATION_SIZE")
     max_attempts: PositiveInt = Field(default=3, validation_alias="IMAGE_GENERATION_MAX_ATTEMPTS")
+    #: Total wall clock for one image, retries included. Three attempts at the
+    #: provider's own 180-second ceiling is nine minutes for a single picture,
+    #: which is long enough that a lesson looks hung rather than slow.
+    budget_seconds: PositiveInt = Field(
+        default=210,
+        validation_alias="IMAGE_GENERATION_BUDGET_SECONDS",
+    )
 
     anthropic_api_key: SecretStr | None = Field(
         default=None,

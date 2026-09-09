@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 from datetime import timedelta
 from uuid import UUID
@@ -42,6 +42,15 @@ The prompt requires at least three segments, each with variants, checkpoints
 and a narration script. At 4,096 tokens the model ran out of room mid-object
 and every response failed to parse, so every lesson in the library was
 deterministic fallback while the call log said the provider had succeeded.
+"""
+
+GENERATION_CONCURRENCY = 2
+"""How many segments have their media made at once.
+
+Sequential cost a lesson the sum of every generation. Unbounded went the
+other way and lost media to provider rate limits - a four-segment lesson
+came back missing audio on two segments and a picture on a third. Two at a
+time keeps most of the speed without hammering the provider.
 """
 
 PARSE_TIMEOUT_SECONDS = 180.0
@@ -203,21 +212,20 @@ class ContentParsingService:
                     )
                 )
 
-        # Segments are independent, so their images and narration are drawn
-        # together. Sequentially, a lesson cost the sum of every generation;
-        # the slowest one is enough.
+        # Segments are independent, so their media is made concurrently rather
+        # than one lesson-length queue at a time - but only a couple at once,
+        # because the providers rate limit and a dropped image is a segment
+        # the learner never sees.
         prepared_segments = list(segments)
         if self._visual_generation is not None and self._visual_generation.configured:
-            prepared_segments = list(
-                await asyncio.gather(
-                    *(self._generate_segment_visual(segment) for segment in prepared_segments)
-                )
+            prepared_segments = await _in_parallel(
+                self._generate_segment_visual,
+                prepared_segments,
             )
         if self._audio_generation is not None and self._audio_generation.configured:
-            prepared_segments = list(
-                await asyncio.gather(
-                    *(self._generate_segment_audio(segment) for segment in prepared_segments)
-                )
+            prepared_segments = await _in_parallel(
+                self._generate_segment_audio,
+                prepared_segments,
             )
         normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
 
@@ -254,9 +262,14 @@ class ContentParsingService:
                 audio_variant = await generator.generate(
                     str(audio_variant.get("script") or segment.body)
                 )
-            except AudioGenerationError:
+            except AudioGenerationError as error:
                 needs_review = True
                 reasons.append("audio_generation_failed")
+                logger.warning(
+                    "Audio generation failed for segment %s: %s",
+                    segment.segment_key,
+                    error,
+                )
 
         if calculation_variant is not None:
             calculation_variant = dict(calculation_variant)
@@ -303,7 +316,12 @@ class ContentParsingService:
                 lesson_text=segment.body,
                 requested_prompt=requested_prompt,
             )
-        except VisualGenerationError:
+        except VisualGenerationError as error:
+            logger.warning(
+                "Visual generation failed for segment %s: %s",
+                segment.segment_key,
+                error,
+            )
             return replace(
                 segment,
                 visual_variant=None,
@@ -374,6 +392,19 @@ def _segments_from_ai(
     if not parsed:
         raise ValueError("AI provider returned only malformed segments")
     return tuple(parsed)
+
+
+async def _in_parallel(
+    step: Callable[[ParsedLessonSegment], Awaitable[ParsedLessonSegment]],
+    segments: list[ParsedLessonSegment],
+) -> list[ParsedLessonSegment]:
+    limit = asyncio.Semaphore(GENERATION_CONCURRENCY)
+
+    async def bounded(segment: ParsedLessonSegment) -> ParsedLessonSegment:
+        async with limit:
+            return await step(segment)
+
+    return list(await asyncio.gather(*(bounded(segment) for segment in segments)))
 
 
 def _looks_truncated(result: object) -> bool:

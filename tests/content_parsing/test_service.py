@@ -284,3 +284,29 @@ def test_a_lesson_parse_asks_for_the_time_it_needs() -> None:
     from nevo.content_parsing.service import PARSE_TIMEOUT_SECONDS
 
     assert PARSE_TIMEOUT_SECONDS >= 120
+
+
+async def test_media_generation_runs_a_few_at_a_time_not_all_at_once() -> None:
+    """Unbounded lost media to provider rate limits; sequential was slow."""
+    import asyncio
+
+    from nevo.content_parsing.service import GENERATION_CONCURRENCY, _in_parallel
+
+    in_flight = 0
+    peak = 0
+
+    async def step(segment):  # type: ignore[no-untyped-def]
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        return segment
+
+    segments = [object() for _ in range(8)]
+
+    result = await _in_parallel(step, segments)  # type: ignore[arg-type]
+
+    assert len(result) == 8
+    assert peak <= GENERATION_CONCURRENCY
+    assert GENERATION_CONCURRENCY > 1

@@ -98,3 +98,50 @@ async def test_claude_provider_allows_sonnet_step_up_per_request() -> None:
 
     assert result.model == "claude-sonnet"
     await client.aclose()
+
+
+async def test_a_caller_can_ask_for_longer_than_the_shared_ceiling() -> None:
+    """A lesson parse needs minutes; a learner's question needs an answer now.
+    One global timeout cannot serve both."""
+    seen: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(
+            200,
+            json={
+                "content": [{"type": "text", "text": "ok"}],
+                "model": "claude-haiku-4-5",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        timeout=httpx.Timeout(20),
+    )
+    provider = ClaudeRestProvider(
+        api_key="key",
+        model="claude-haiku-4-5",
+        base_url="https://example.test/v1",
+        anthropic_version="2023-06-01",
+        timeout_seconds=20,
+        prompt_caching_enabled=False,
+        client=client,
+    )
+
+    await provider.generate(
+        ProviderRequest(
+            system_instruction="s",
+            user_content="u",
+            max_output_tokens=16_384,
+            timeout_seconds=180,
+        )
+    )
+
+    assert seen["timeout"] == {
+        "connect": 180,
+        "read": 180,
+        "write": 180,
+        "pool": 180,
+    }

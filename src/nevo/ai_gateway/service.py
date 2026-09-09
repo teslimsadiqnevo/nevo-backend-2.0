@@ -126,6 +126,7 @@ class AiGatewayService:
                 model=request.model,
                 cache_prompt=request.cache_prompt,
                 tools=request.tools,
+                timeout_seconds=request.timeout_seconds,
             )
 
             async def generate_once(

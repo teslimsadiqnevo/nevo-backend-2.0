@@ -106,6 +106,11 @@ class ClaudeRestProvider:
                     "Content-Type": "application/json",
                 },
                 json=payload,
+                timeout=(
+                    httpx.Timeout(request.timeout_seconds)
+                    if request.timeout_seconds is not None
+                    else httpx.USE_CLIENT_DEFAULT
+                ),
             )
             response.raise_for_status()
             parsed = _ClaudeResponse.model_validate(response.json())

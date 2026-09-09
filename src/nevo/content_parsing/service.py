@@ -44,6 +44,14 @@ and every response failed to parse, so every lesson in the library was
 deterministic fallback while the call log said the provider had succeeded.
 """
 
+PARSE_TIMEOUT_SECONDS = 180.0
+"""A lesson takes minutes to write, not the twenty seconds a question takes.
+
+Raising the token budget without this simply moved the failure: the model
+was still writing when the shared twenty-second ceiling cut it off, and the
+gateway recorded provider_unavailable and fell back to splitting the source.
+"""
+
 MAX_CHUNK_CHARS = 24_000
 PROMPT_NAME = "content_parse.default"
 CALCULATION_INPUT_TYPES = {"selection", "numeric", "text", "drag"}
@@ -160,6 +168,7 @@ class ContentParsingService:
                             "source_text": chunk,
                         },
                         max_output_tokens=PARSE_OUTPUT_TOKENS,
+                        timeout_seconds=PARSE_TIMEOUT_SECONDS,
                     )
                 )
                 ai_call_count += 1

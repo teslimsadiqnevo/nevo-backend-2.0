@@ -29,6 +29,8 @@ class AiGenerationRequest:
     variables: dict[str, str]
     student_id: UUID | None = None
     max_output_tokens: int = 1_024
+    #: Seconds to wait for this call. None uses the configured default.
+    timeout_seconds: float | None = None
     model: str | None = None
     cache_prompt: bool = True
     #: Tool schemas offered to the model. When set, the gateway drives a tool
@@ -88,6 +90,10 @@ class ProviderRequest:
     #: conversation. The provider owns the wire format; callers pass these
     #: back opaquely.
     history: tuple[dict[str, Any], ...] = ()
+    #: Overrides the configured ceiling for this one call. A lesson parse asks
+    #: for thousands of tokens and needs minutes; a learner's question needs
+    #: an answer now. One global timeout cannot serve both.
+    timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -276,3 +276,11 @@ def test_the_parse_asks_for_enough_room_to_answer() -> None:
     from nevo.content_parsing.service import PARSE_OUTPUT_TOKENS
 
     assert PARSE_OUTPUT_TOKENS >= 16_000
+
+
+def test_a_lesson_parse_asks_for_the_time_it_needs() -> None:
+    """Raising the token budget without the timeout only moved the failure:
+    the model was still writing when the shared 20s ceiling cut it off."""
+    from nevo.content_parsing.service import PARSE_TIMEOUT_SECONDS
+
+    assert PARSE_TIMEOUT_SECONDS >= 120

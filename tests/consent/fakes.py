@@ -13,7 +13,6 @@ from nevo.consent.entities import (
     ParentRightOutcome,
     QueuedParentConsentRequest,
 )
-from nevo.consent.errors import ParentContactNotEmailError
 from nevo.domain.accounts.vocabulary import (
     ConsentMethod,
     ConsentStatus,
@@ -24,7 +23,6 @@ from nevo.domain.consent.vocabulary import (
     REQUIRED_LEARNING_CONSENT,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
-    ParentContactMethod,
     ParentRightType,
 )
 
@@ -176,8 +174,6 @@ class MemoryConsentRepository:
         draft = self.requests.get(token_digest)
         if draft is None or draft.expires_at <= now:
             return None
-        if draft.contact_method is not ParentContactMethod.EMAIL:
-            raise ParentContactNotEmailError
         link = self.links[draft.parent_link_id]
         already = link.parent_id is not None and draft.token_digest in self.activated
         parent_id = link.parent_id or uuid4()
@@ -195,7 +191,8 @@ class MemoryConsentRepository:
         )
         return ParentAccount(
             user_id=parent_id,
-            email=draft.parent_contact,
+            contact=draft.parent_contact,
+            contact_method=draft.contact_method,
             student_id=draft.student_id,
             already_active=already,
         )

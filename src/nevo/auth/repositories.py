@@ -9,7 +9,7 @@ from nevo.auth.entities import AuthUser, SessionDraft, SessionRecord
 from nevo.auth.errors import RateLimitExceededError
 from nevo.db.models.account import School, User
 from nevo.db.models.auth import AuthAuditEvent, AuthLoginAttempt, AuthSession
-from nevo.domain.accounts.vocabulary import UserRole
+from nevo.domain.accounts.vocabulary import AuthMethod, UserRole
 
 
 class SqlAlchemyUserRepository:
@@ -41,6 +41,40 @@ class SqlAlchemyUserRepository:
         )
         return await self._find(statement)
 
+    async def find_parents_by_contact(
+        self,
+        contact: str,
+        *,
+        school_code: str | None = None,
+    ) -> list[AuthUser]:
+        """Parents matching an email address or a phone number.
+
+        A school reaches a parent however it has them - email for some, SMS
+        for others - and the parent does not know which. One lookup covers
+        both so the sign-in screen can ask for "email or phone" rather than
+        making the parent guess which account they were given.
+
+        Returns every match rather than the first: the same phone can belong
+        to a parent at two schools, and picking one arbitrarily would sign
+        somebody into the wrong child's records.
+        """
+        statement = (
+            select(User, School.auth_method)
+            .join(School, School.id == User.school_id)
+            .where(
+                User.role == UserRole.PARENT_GUARDIAN,
+                or_(
+                    func.lower(User.email) == contact,
+                    func.lower(User.login_identifier) == contact,
+                ),
+            )
+        )
+        if school_code is not None:
+            statement = statement.where(func.lower(School.school_code) == school_code)
+        async with self._sessions() as session:
+            rows = (await session.execute(statement)).all()
+        return [self._to_auth_user(user, auth_method) for user, auth_method in rows]
+
     async def find_by_id(self, user_id: UUID) -> AuthUser | None:
         statement = (
             select(User, School.auth_method)
@@ -57,6 +91,10 @@ class SqlAlchemyUserRepository:
         if row is None:
             return None
         user, school_auth_method = row
+        return self._to_auth_user(user, school_auth_method)
+
+    @staticmethod
+    def _to_auth_user(user: User, school_auth_method: AuthMethod | None) -> AuthUser:
         return AuthUser(
             id=user.id,
             school_id=user.school_id,

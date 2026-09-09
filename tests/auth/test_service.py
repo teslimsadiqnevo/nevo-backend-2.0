@@ -352,3 +352,81 @@ async def test_rate_limited_login_is_rejected_before_credentials() -> None:
 
     assert harness.limiter.attempts == []
     assert harness.audit.events == []
+
+
+def parent_user(
+    *,
+    email: str | None = None,
+    login_identifier: str | None = None,
+    school_id: UUID | None = None,
+) -> AuthUser:
+    return AuthUser(
+        id=uuid4(),
+        school_id=school_id or uuid4(),
+        role="parent_guardian",
+        auth_method="email_password",
+        status="active",
+        email=email,
+        password_hash="password:correct horse",
+        login_identifier=login_identifier,
+        school_auth_method="email_password",
+    )
+
+
+async def test_a_parent_reached_by_sms_signs_in_with_their_phone() -> None:
+    """The email-only path left SMS parents with unusable credentials."""
+    parent = parent_user(login_identifier="+2348012345678")
+    harness = harness_for(parent)
+
+    issued = await harness.service.login_with_parent_contact(
+        contact="+2348012345678",
+        password="correct horse",
+        ip_address="1.2.3.4",
+    )
+
+    assert issued.user_id == parent.id
+
+
+async def test_a_parent_reached_by_email_signs_in_the_same_way() -> None:
+    parent = parent_user(email="ngozi@example.com")
+    harness = harness_for(parent)
+
+    issued = await harness.service.login_with_parent_contact(
+        contact="NGOZI@example.com",
+        password="correct horse",
+        ip_address="1.2.3.4",
+    )
+
+    assert issued.user_id == parent.id
+
+
+async def test_a_contact_at_two_schools_asks_for_the_school_code() -> None:
+    """Choosing one would sign a parent into the wrong child's records."""
+    from nevo.auth.errors import SchoolCodeRequiredError
+
+    first = parent_user(login_identifier="+2348012345678")
+    second = parent_user(login_identifier="+2348012345678")
+    harness = harness_for(first)
+    harness.users.users.append(second)
+
+    with pytest.raises(SchoolCodeRequiredError):
+        await harness.service.login_with_parent_contact(
+            contact="+2348012345678",
+            password="correct horse",
+            ip_address="1.2.3.4",
+        )
+
+
+async def test_only_parents_are_reachable_through_the_parent_login() -> None:
+    teacher = replace(
+        parent_user(email="teacher@example.com"),
+        role="teacher",
+    )
+    harness = harness_for(teacher)
+
+    with pytest.raises(InvalidCredentialsError):
+        await harness.service.login_with_parent_contact(
+            contact="teacher@example.com",
+            password="correct horse",
+            ip_address="1.2.3.4",
+        )

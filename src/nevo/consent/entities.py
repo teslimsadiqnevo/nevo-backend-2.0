@@ -136,10 +136,16 @@ class ParentRightOutcome:
 
 @dataclass(frozen=True, slots=True)
 class ParentAccount:
-    """The account a parent can actually sign in with."""
+    """The account a parent can actually sign in with.
+
+    ``contact`` is whatever their school holds - an email address or a phone
+    number. The parent did not choose which, so the sign-in screen should ask
+    for either rather than making them guess.
+    """
 
     user_id: UUID
-    email: str
+    contact: str
+    contact_method: ParentContactMethod
     student_id: UUID
     already_active: bool
 

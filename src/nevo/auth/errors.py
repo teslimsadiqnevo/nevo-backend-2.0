@@ -27,3 +27,11 @@ class SessionReplacedError(InvalidSessionError):
     public_message = (
         "You logged in on another device, your progress has been saved."
     )
+
+
+class SchoolCodeRequiredError(AuthError):
+    code = "school_code_required"
+    public_message = (
+        "That email or phone number is registered at more than one school. "
+        "Enter your school code to continue."
+    )

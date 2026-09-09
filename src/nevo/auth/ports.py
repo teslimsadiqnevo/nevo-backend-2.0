@@ -14,6 +14,13 @@ class UserRepository(Protocol):
         login_identifier: str,
     ) -> AuthUser | None: ...
 
+    async def find_parents_by_contact(
+        self,
+        contact: str,
+        *,
+        school_code: str | None = None,
+    ) -> list[AuthUser]: ...
+
     async def find_by_id(self, user_id: UUID) -> AuthUser | None: ...
 
 

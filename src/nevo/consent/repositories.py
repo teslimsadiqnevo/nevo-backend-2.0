@@ -18,7 +18,6 @@ from nevo.consent.entities import (
 )
 from nevo.consent.errors import (
     ParentAccountConflictError,
-    ParentContactNotEmailError,
     StudentNotFoundError,
 )
 from nevo.db.models.account import ConsentRecord, School, User
@@ -314,22 +313,25 @@ class SqlAlchemyConsentRepository:
             link = await session.get(ParentLink, invitation.parent_link_id)
             if link is None:
                 return None
-            if link.contact_method is not ParentContactMethod.EMAIL:
-                raise ParentContactNotEmailError
 
             parent = await self._parent_for_link(session, parent_link=link)
             await session.flush()
             link.parent_id = parent.id
             link.account_created = True
             link.updated_at = now
+            contact = link.parent_contact.casefold()
             if parent.status is UserStatus.ACTIVE and parent.password_hash:
                 return ParentAccount(
                     user_id=parent.id,
-                    email=parent.email or link.parent_contact,
+                    contact=parent.email or parent.login_identifier or contact,
+                    contact_method=link.contact_method,
                     student_id=link.student_id,
                     already_active=True,
                 )
-            parent.email = parent.email or link.parent_contact.casefold()
+            if link.contact_method is ParentContactMethod.EMAIL:
+                parent.email = parent.email or contact
+            else:
+                parent.login_identifier = parent.login_identifier or contact
             parent.auth_method = AuthMethod.EMAIL_PASSWORD
             parent.password_hash = password_hash
             parent.status = UserStatus.ACTIVE
@@ -337,7 +339,8 @@ class SqlAlchemyConsentRepository:
             await session.flush()
             return ParentAccount(
                 user_id=parent.id,
-                email=parent.email,
+                contact=contact,
+                contact_method=link.contact_method,
                 student_id=link.student_id,
                 already_active=False,
             )
@@ -693,19 +696,24 @@ class SqlAlchemyConsentRepository:
                 raise ParentAccountConflictError
             return linked_parent
 
-        parent: User | None = None
-        if parent_link.contact_method is ParentContactMethod.EMAIL:
-            parent = await session.scalar(
-                select(User)
-                .where(func.lower(User.email) == parent_link.parent_contact.casefold())
-                .with_for_update()
-                .limit(1)
+        contact = parent_link.parent_contact.casefold()
+        by_email = parent_link.contact_method is ParentContactMethod.EMAIL
+        # Match on whichever contact the school holds. Without this, a parent
+        # reached by SMS about a second child got a second account, and each
+        # one could see only one of their children.
+        parent = await session.scalar(
+            select(User)
+            .where(
+                User.school_id == parent_link.school_id,
+                func.lower(User.email) == contact
+                if by_email
+                else func.lower(User.login_identifier) == contact,
             )
-            if parent is not None and (
-                parent.role is not UserRole.PARENT_GUARDIAN
-                or parent.school_id != parent_link.school_id
-            ):
-                raise ParentAccountConflictError
+            .with_for_update()
+            .limit(1)
+        )
+        if parent is not None and parent.role is not UserRole.PARENT_GUARDIAN:
+            raise ParentAccountConflictError
         if parent is None:
             parent = User(
                 id=uuid4(),
@@ -713,11 +721,10 @@ class SqlAlchemyConsentRepository:
                 role=UserRole.PARENT_GUARDIAN,
                 auth_method=AuthMethod.EMAIL_PASSWORD,
                 first_name=parent_link.parent_name,
-                email=(
-                    parent_link.parent_contact
-                    if parent_link.contact_method is ParentContactMethod.EMAIL
-                    else None
-                ),
+                email=contact if by_email else None,
+                # A phone number is the only handle an SMS parent has, so it
+                # is what they sign in with.
+                login_identifier=None if by_email else contact,
                 status=UserStatus.INVITED,
             )
             session.add(parent)

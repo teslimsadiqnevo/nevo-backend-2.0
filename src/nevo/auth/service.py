@@ -12,6 +12,7 @@ from nevo.auth.entities import (
 from nevo.auth.errors import (
     InvalidCredentialsError,
     InvalidSessionError,
+    SchoolCodeRequiredError,
     SessionExpiredError,
     SessionReplacedError,
 )
@@ -73,6 +74,51 @@ class AuthService:
                 ip_digest=ip_digest,
             )
 
+        return await self._complete_login(
+            user=user,
+            identity_digest=identity_digest,
+            ip_digest=ip_digest,
+        )
+
+    async def login_with_parent_contact(
+        self,
+        *,
+        contact: str,
+        password: str,
+        ip_address: str,
+        school_code: str | None = None,
+    ) -> IssuedSession:
+        """Sign a parent in by whichever contact their school holds.
+
+        A parent reached by SMS has no email address on their account, so the
+        email-only path left them with credentials they could not use. The
+        school chose the channel, not the parent, and the sign-in screen
+        should not make them guess which one it was.
+        """
+        normalized = contact.casefold().strip()
+        identity_digest = self._token_service.protect_identifier(f"parent:{normalized}")
+        ip_digest = self._token_service.protect_identifier(f"ip:{ip_address}")
+        await self._rate_limiter.check(identity_digest, ip_digest)
+
+        candidates = await self._users.find_parents_by_contact(
+            normalized,
+            school_code=school_code.casefold().strip() if school_code else None,
+        )
+        if len(candidates) > 1:
+            # The same phone can belong to a parent at two schools. Choosing
+            # one would sign them into the wrong child's records.
+            raise SchoolCodeRequiredError
+        user = candidates[0] if candidates else None
+        verified = self._credential_hasher.verify_password(
+            user.password_hash if user else None,
+            password,
+        )
+        if not user or not verified or not self._is_active(user):
+            await self._reject_login(
+                user=user,
+                identity_digest=identity_digest,
+                ip_digest=ip_digest,
+            )
         return await self._complete_login(
             user=user,
             identity_digest=identity_digest,

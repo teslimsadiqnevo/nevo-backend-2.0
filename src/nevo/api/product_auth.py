@@ -820,7 +820,10 @@ class ParentAccountResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     user_id: UUID = Field(alias="userId")
-    email: str
+    #: What this parent signs in with: their email address or their phone
+    #: number, depending on how their school reached them.
+    contact: str
+    contact_method: ParentContactMethod = Field(alias="contactMethod")
     student_id: UUID = Field(alias="studentId")
     session: SessionResponse
 
@@ -870,7 +873,8 @@ async def create_parent_account(
     response.headers["Cache-Control"] = "no-store"
     return {
         "userId": account.user_id,
-        "email": account.email,
+        "contact": account.contact,
+        "contactMethod": account.contact_method,
         "studentId": account.student_id,
         "session": SessionResponse.from_issued(issued),
     }

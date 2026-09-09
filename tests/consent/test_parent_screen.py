@@ -285,8 +285,6 @@ def test_a_parent_can_turn_the_consent_link_into_an_account() -> None:
     """The root blocker: consent minted a parent row that could not sign in."""
     import anyio
 
-    from nevo.consent.errors import ParentContactNotEmailError
-
     _, service, repository = build()
     anyio.run(_invite, service, repository)
 
@@ -297,9 +295,9 @@ def test_a_parent_can_turn_the_consent_link_into_an_account() -> None:
     )
 
     assert account is not None
-    assert account.email == "parent@example.test"
+    assert account.contact == "parent@example.test"
+    assert account.contact_method is ParentContactMethod.EMAIL
     assert account.already_active is False
-    assert ParentContactNotEmailError  # imported for the sms case below
 
 
 def test_a_new_parent_account_can_find_its_own_child() -> None:
@@ -319,19 +317,15 @@ def test_a_new_parent_account_can_find_its_own_child() -> None:
     assert [child.student_id for child in children] == [account.student_id]
 
 
-def test_an_sms_parent_cannot_be_given_an_email_login() -> None:
-    """Told plainly rather than handed an account with no way in."""
+def test_a_parent_reached_by_sms_also_gets_an_account() -> None:
+    """The school chose the channel, not the parent."""
     import anyio
-    import pytest
-
-    from nevo.consent.errors import ParentContactNotEmailError
 
     _, service, _repository = build()
 
     async def sms_invite() -> None:
-        actor = ConsentActor(user_id=uuid4(), school_id=uuid4())
         await service.request_parent_consent(
-            actor,
+            ConsentActor(user_id=uuid4(), school_id=uuid4()),
             student_id=uuid4(),
             parent_name="Ngozi Okafor",
             parent_contact="+2348012345678",
@@ -340,10 +334,12 @@ def test_an_sms_parent_cannot_be_given_an_email_login() -> None:
         )
 
     anyio.run(sms_invite)
-
-    with pytest.raises(ParentContactNotEmailError):
-        anyio.run(
-            lambda: service.activate_parent_account(
-                token=TOKEN, password_hash="argon2:whatever"
-            )
+    account = anyio.run(
+        lambda: service.activate_parent_account(
+            token=TOKEN, password_hash="argon2:whatever"
         )
+    )
+
+    assert account is not None
+    assert account.contact == "+2348012345678"
+    assert account.contact_method is ParentContactMethod.SMS

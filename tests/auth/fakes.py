@@ -36,6 +36,26 @@ class MemoryUserRepository:
             None,
         )
 
+    async def find_parents_by_contact(
+        self,
+        contact: str,
+        *,
+        school_code: str | None = None,
+    ) -> list[AuthUser]:
+        del school_code
+        wanted = contact.casefold()
+        return [
+            user
+            for user in self.users
+            if user.role == "parent_guardian"
+            and wanted
+            in {
+                value.casefold()
+                for value in (user.email, user.login_identifier)
+                if value is not None
+            }
+        ]
+
     async def find_by_id(self, user_id: UUID) -> AuthUser | None:
         return next((user for user in self.users if user.id == user_id), None)
 

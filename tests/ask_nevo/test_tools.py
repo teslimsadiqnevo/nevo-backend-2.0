@@ -371,3 +371,36 @@ def test_no_tool_lets_a_learner_name_someone_else() -> None:
         assert "learner" not in properties, schema["name"]
         assert "student_id" not in properties, schema["name"]
         assert "class_id" not in properties, schema["name"]
+
+
+def test_the_directory_maps_names_back_out_before_a_replay() -> None:
+    """A stored answer holds the names the person read. Replaying one into a
+    prompt without this hands the provider what pseudonyms exist to withhold."""
+    from nevo.ask_nevo.directory import DirectoryEntry, PseudonymDirectory
+
+    built = PseudonymDirectory(
+        (
+            DirectoryEntry(uuid4(), "Learner-AAA", "Ada"),
+            DirectoryEntry(uuid4(), "Learner-BBB", "Adaeze Okonkwo"),
+        )
+    )
+
+    out = built.dehydrate("Adaeze Okonkwo finished before Ada did.")
+
+    assert out == "Learner-BBB finished before Learner-AAA did."
+    # And the round trip is stable.
+    assert built.rehydrate(out) == "Adaeze Okonkwo finished before Ada did."
+
+
+def test_a_longer_name_is_not_broken_by_a_shorter_one() -> None:
+    """"Ada" must not eat the start of "Adaeze"."""
+    from nevo.ask_nevo.directory import DirectoryEntry, PseudonymDirectory
+
+    built = PseudonymDirectory(
+        (
+            DirectoryEntry(uuid4(), "Learner-AAA", "Ada"),
+            DirectoryEntry(uuid4(), "Learner-BBB", "Adaeze"),
+        )
+    )
+
+    assert built.dehydrate("Adaeze") == "Learner-BBB"

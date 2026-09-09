@@ -155,6 +155,37 @@ class SqlAlchemyAskNevoRepository:
             )
         return interaction_id
 
+    async def recent_turns(
+        self,
+        *,
+        thread_id: UUID,
+        actor_user_id: UUID,
+        limit: int = 8,
+    ) -> list[tuple[str, str]]:
+        """The last few turns of a conversation, oldest first.
+
+        Bounded because a long chat would otherwise grow the prompt without
+        limit, and the turns that matter to a follow-up are the recent ones.
+        Returns ``(author, text)`` pairs.
+        """
+        async with self._sessions() as session:
+            thread = await session.get(AskNevoThread, thread_id)
+            if (
+                thread is None
+                or thread.actor_user_id != actor_user_id
+                or thread.deleted_at is not None
+            ):
+                return []
+            messages = list(
+                await session.scalars(
+                    select(AskNevoMessage)
+                    .where(AskNevoMessage.thread_id == thread_id)
+                    .order_by(AskNevoMessage.sequence.desc())
+                    .limit(limit)
+                )
+            )
+        return [(item.author.value, item.body) for item in reversed(messages)]
+
     async def append_exchange(
         self,
         *,

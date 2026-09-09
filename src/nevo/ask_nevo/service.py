@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -48,6 +49,14 @@ class AskNevoRepository(Protocol):
         interaction_id: UUID,
         helpful: bool,
     ) -> None: ...
+
+    async def recent_turns(
+        self,
+        *,
+        thread_id: UUID,
+        actor_user_id: UUID,
+        limit: int = 8,
+    ) -> list[tuple[str, str]]: ...
 
     async def append_exchange(
         self,
@@ -114,6 +123,20 @@ class AskNevoService:
             actor_user_id=actor_user_id,
             role=request.role,
         )
+        # What was already said, so "explain that again more simply" has
+        # something to refer to. Names come back out first: a stored answer
+        # holds the ones the person read, and replaying one as it stands would
+        # hand the provider exactly what the pseudonyms exist to withhold.
+        history = await self._conversation_so_far(
+            thread_id=request.context_ids.thread_id,
+            actor_user_id=actor_user_id,
+            directory=directory,
+        )
+        if history:
+            context = replace(
+                context,
+                payload={**context.payload, "conversation_so_far": history},
+            )
         result = await self._gateway.generate(
             AiGenerationRequest(
                 requester_user_id=actor_user_id,
@@ -190,6 +213,28 @@ class AskNevoService:
             ai_gateway_call_id=result.call_id,
             thread_id=thread_id,
         )
+
+    async def _conversation_so_far(
+        self,
+        *,
+        thread_id: UUID | None,
+        actor_user_id: UUID,
+        directory: object,
+    ) -> list[dict[str, str]]:
+        if thread_id is None:
+            return []
+        turns = await self._repository.recent_turns(
+            thread_id=thread_id,
+            actor_user_id=actor_user_id,
+        )
+        dehydrate = getattr(directory, "dehydrate", None)
+        return [
+            {
+                "who": "them" if author == "asker" else "you",
+                "said": dehydrate(text) if callable(dehydrate) else text,
+            }
+            for author, text in turns
+        ]
 
     async def list_threads(self, *, actor_user_id: UUID) -> list[ThreadSummary]:
         return await self._repository.list_threads(actor_user_id=actor_user_id)

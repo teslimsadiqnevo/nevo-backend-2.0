@@ -188,3 +188,63 @@ async def test_a_chat_past_its_school_window_is_swept_away() -> None:
     assert result.chats_removed >= 1
     assert fresh in surviving
     assert stale not in surviving
+
+
+async def test_a_follow_up_can_see_what_was_already_said() -> None:
+    """Storage was only half of it: the model has to be given the turns."""
+
+    async def check(sessions, asker, other):  # type: ignore[no-untyped-def]
+        repo = SqlAlchemyAskNevoRepository(sessions)
+        thread_id = uuid.uuid4()
+        await repo.append_exchange(
+            thread_id=thread_id,
+            actor_user_id=asker.id,
+            role=AskNevoRole.STUDENT,
+            question="What is a fraction?",
+            answer="A fraction is a part of a whole.",
+            blocks=[],
+            interaction_id=None,
+        )
+        return (
+            await repo.recent_turns(thread_id=thread_id, actor_user_id=asker.id),
+            await repo.recent_turns(thread_id=thread_id, actor_user_id=other.id),
+        )
+
+    mine, theirs = await with_world(check)
+
+    assert mine == [
+        ("asker", "What is a fraction?"),
+        ("nevo", "A fraction is a part of a whole."),
+    ]
+    # Somebody else's thread id is not a way into the conversation.
+    assert theirs == []
+
+
+async def test_only_the_recent_turns_are_replayed() -> None:
+    """A long chat would otherwise grow the prompt without limit."""
+
+    async def check(sessions, asker, other):  # type: ignore[no-untyped-def]
+        repo = SqlAlchemyAskNevoRepository(sessions)
+        thread_id = uuid.uuid4()
+        for index in range(6):
+            await repo.append_exchange(
+                thread_id=thread_id,
+                actor_user_id=asker.id,
+                role=AskNevoRole.STUDENT,
+                question=f"Question {index}",
+                answer=f"Answer {index}",
+                blocks=[],
+                interaction_id=None,
+            )
+        return await repo.recent_turns(
+            thread_id=thread_id,
+            actor_user_id=asker.id,
+            limit=4,
+        )
+
+    turns = await with_world(check)
+
+    assert len(turns) == 4
+    # Oldest first within the window, and it is the tail of the conversation.
+    assert turns[0] == ("asker", "Question 4")
+    assert turns[-1] == ("nevo", "Answer 5")

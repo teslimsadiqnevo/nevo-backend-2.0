@@ -63,6 +63,26 @@ class PseudonymDirectory:
         entry = self._by_id.get(student_id)
         return entry.pseudonym if entry else None
 
+    def dehydrate(self, text: str) -> str:
+        """Take real names back out, before text goes to a provider.
+
+        The mirror of rehydrate, and needed because a stored answer holds the
+        names the person read. Replaying one into a prompt without this would
+        hand the provider exactly what the pseudonyms exist to withhold.
+
+        Longest names first, so a learner called "Ada" cannot partially
+        replace one called "Adaeze".
+        """
+        result = text
+        for entry in sorted(
+            self._entries,
+            key=lambda item: len(item.display_name),
+            reverse=True,
+        ):
+            if entry.display_name:
+                result = result.replace(entry.display_name, entry.pseudonym)
+        return result
+
     def rehydrate(self, text: str) -> str:
         """Put real names back, on the way out to the user only.
 

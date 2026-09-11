@@ -15,6 +15,16 @@ from nevo.visuals.config import VisualGenerationSettings
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 """Statuses that mean "later", not "no"."""
 
+TERMINAL_PROVIDER_CODES = frozenset(
+    {"credit_balance_exhausted", "insufficient_quota", "billing_hard_limit_reached"}
+)
+"""A 429 that will still be a 429 tomorrow.
+
+Out of credit arrives with the same status as too busy, and waiting it out
+costs every image in a lesson half a minute of backoff for an answer that
+cannot change. This one is somebody's billing page.
+"""
+
 RATE_LIMIT_RETRIES = 4
 BASE_RETRY_PAUSE = 2.0
 
@@ -180,6 +190,8 @@ class EducationalImageService:
                 )
                 if response.status_code not in RETRYABLE_STATUSES:
                     break
+                if _provider_code(response) in TERMINAL_PROVIDER_CODES:
+                    break
                 pause = _retry_pause(response, attempt)
                 if attempt == RATE_LIMIT_RETRIES or time.monotonic() + pause >= deadline:
                     break
@@ -296,6 +308,15 @@ def _retry_pause(response: httpx.Response, attempt: int) -> float:
             pass
     backoff: float = BASE_RETRY_PAUSE * float(2**attempt)
     return min(60.0, backoff)
+
+
+def _provider_code(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    error = body.get("error") if isinstance(body, dict) else None
+    return str(error.get("code") or "") if isinstance(error, dict) else ""
 
 
 def _provider_detail(response: httpx.Response | None) -> str:

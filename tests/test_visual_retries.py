@@ -133,3 +133,49 @@ async def test_retrying_stops_at_the_deadline_rather_than_running_past_it() -> N
 
     # One call, then the pause would have overshot the deadline.
     assert calls["n"] == 1
+
+
+async def test_running_out_of_credit_is_not_waited_out() -> None:
+    """Out of credit arrives as a 429, same as too busy. Backing off costs
+    every image in a lesson half a minute for an answer that cannot change."""
+    calls = {"n": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "code": "credit_balance_exhausted",
+                    "message": "You have no credits remaining.",
+                }
+            },
+        )
+
+    with pytest.raises(VisualGenerationError) as raised:
+        await service_calling(handler)._generate_image(
+            "draw a bar model",
+            deadline=time.monotonic() + 120,
+        )
+
+    assert calls["n"] == 1
+    assert "credit_balance_exhausted" in str(raised.value)
+
+
+async def test_a_busy_provider_is_still_waited_out() -> None:
+    """The fast path for quota must not swallow ordinary rate limiting."""
+    calls = {"n": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"retry-after": "0"})
+        return httpx.Response(200, json={"data": [{"b64_json": "aGVsbG8="}]})
+
+    image = await service_calling(handler)._generate_image(
+        "draw a bar model",
+        deadline=time.monotonic() + 60,
+    )
+
+    assert image == b"hello"
+    assert calls["n"] == 2

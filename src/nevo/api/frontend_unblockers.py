@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Annotated
 from uuid import UUID
+from xml.sax.saxutils import unescape
 from zipfile import ZipFile
 
 from fastapi import (
@@ -799,8 +800,7 @@ async def lesson_detail(
         confirmationSummary=lesson.confirmation_summary,
         recap=lesson.recap,
         assessment=[
-            ComprehensionCheckpoint.model_validate(item)
-            for item in (lesson.assessment or [])
+            ComprehensionCheckpoint.model_validate(item) for item in (lesson.assessment or [])
         ],
         segments=[
             LessonSegmentResponse(
@@ -1683,23 +1683,67 @@ def _extract_text(filename: str, content: bytes) -> str:
     raise HTTPException(status_code=400, detail="Upload a TXT, PDF, DOCX, or PPTX file")
 
 
+def _office_parts(archive: ZipFile) -> list[str]:
+    """The parts that hold what the author wrote, in reading order.
+
+    Everything else in the package is styles, fonts and theme colours, which
+    contribute nothing but noise.
+    """
+
+    names = set(archive.namelist())
+    if "word/document.xml" in names:
+        return ["word/document.xml"]
+    slides = [name for name in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", name) is not None]
+    # slide10 sorts before slide2 as a string, and a lesson read out of order
+    # is worse than one read badly.
+    return sorted(slides, key=lambda name: int(re.findall(r"\d+", name)[-1]))
+
+
+#: Stands in for a line break the author typed, so it survives the whitespace
+#: tidying that follows without being confused for XML indentation.
+BREAK = "\x00"
+
+
+def _paragraph_text(raw: str) -> list[str]:
+    # A soft break inside a paragraph is still a line to the person who typed
+    # it, and a tab is a column in a table of values.
+    raw = re.sub(r"<(w|a):br\b[^>]*/?>", BREAK, raw)
+    raw = re.sub(r"<(w|a):tab\b[^>]*/?>", "\t", raw)
+    lines = []
+    for block in re.split(r"</(?:w|a):p>", raw):
+        text = unescape(re.sub(r"<[^>]+>", "", block))
+        for line in text.split(BREAK):
+            # Drop the newlines and runs of spaces the XML itself carries,
+            # while leaving tabs alone.
+            line = re.sub(r"[^\S\t]+", " ", line).strip()
+            if line:
+                lines.append(line)
+    return lines
+
+
 def _extract_office_text(content: bytes) -> str:
+    """Read a DOCX or PPTX as lines, not as one long smear of words.
+
+    The parse leans on line and paragraph boundaries to tell a heading from a
+    sentence and one working step from the next. Flattening the document to a
+    single line costs it all of that, so paragraphs come back as paragraphs.
+    """
+
     try:
         with ZipFile(BytesIO(content)) as archive:
-            texts = []
-            for name in archive.namelist():
-                if not name.endswith(".xml"):
-                    continue
-                if not (name.startswith("word/") or name.startswith("ppt/")):
-                    continue
+            parts = _office_parts(archive)
+            if not parts:
+                raise ValueError("no document part in the package")
+            lines: list[str] = []
+            for name in parts:
                 raw = archive.read(name).decode("utf-8", errors="ignore")
-                texts.append(re.sub(r"<[^>]+>", " ", raw))
+                lines.extend(_paragraph_text(raw))
     except Exception as error:
         raise HTTPException(
             status_code=400,
             detail="Could not read Office document text",
         ) from error
-    return re.sub(r"\s+", " ", "\n".join(texts)).strip()
+    return "\n".join(lines).strip()
 
 
 async def _thread_response(

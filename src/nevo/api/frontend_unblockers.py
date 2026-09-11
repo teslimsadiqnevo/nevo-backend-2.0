@@ -19,7 +19,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
@@ -65,6 +65,7 @@ from nevo.api.response_models import (
     ProfileAliasResponse,
     SchoolHealthResponse,
     StudentConsentSummaryResponse,
+    renderable_review_reasons,
 )
 from nevo.api.response_models import (
     LessonModuleResponse as SharedLessonModuleResponse,
@@ -210,6 +211,8 @@ class LessonSegmentResponse(BaseModel):
     needs_review: bool = Field(alias="needsReview")
     review_reasons: list[SegmentReviewReason] = Field(alias="reviewReasons")
     estimated_minutes: int = Field(default=0, alias="estimatedMinutes")
+
+    _keep_renderable = field_validator("review_reasons", mode="before")(renderable_review_reasons)
 
 
 class LessonSummaryResponse(BaseModel):

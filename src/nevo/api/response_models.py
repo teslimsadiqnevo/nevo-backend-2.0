@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from nevo.api.lesson_contracts import (
     AudioVariant,
@@ -42,6 +42,21 @@ def _camel(value: str) -> str:
 
 class CamelResponse(BaseModel):
     model_config = ConfigDict(alias_generator=_camel, populate_by_name=True)
+
+
+def renderable_review_reasons(value: object) -> object:
+    """Never fail a whole lesson over a reason we cannot name.
+
+    Rows written before the parse filtered these can hold free text the model
+    wrote in its own words, and one such sentence made every read of that
+    lesson a 500. The lesson is what the teacher came for; a reason the
+    console has no copy for is not worth losing it over.
+    """
+
+    if not isinstance(value, list):
+        return value
+    known = {reason.value for reason in SegmentReviewReason}
+    return [reason for reason in value if reason in known]
 
 
 class SchoolResponse(CamelResponse):
@@ -296,6 +311,8 @@ class LessonSegmentResponse(CamelResponse):
     #: Estimated time to work through this segment, for the review screen's
     #: per-segment and total minute figures.
     estimated_minutes: int = 0
+
+    _keep_renderable = field_validator("review_reasons", mode="before")(renderable_review_reasons)
 
 
 class LessonModuleResponse(CamelResponse):

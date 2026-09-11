@@ -107,6 +107,9 @@ class SegmentReviewReason(StrEnum):
     CALCULATION_SEGMENT_HAS_NO_INTERACTIVE_DELIVERY = (
         "calculation_segment_has_no_interactive_delivery"
     )
+    #: The model asked for a human look in words of its own. Kept as a reason
+    #: the console can render, rather than as prose it cannot.
+    MODEL_FLAGGED_FOR_REVIEW = "model_flagged_for_review"
 
 
 class UploadStatus(StrEnum):

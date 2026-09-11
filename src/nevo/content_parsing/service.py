@@ -28,6 +28,7 @@ from nevo.domain.intelligence.vocabulary import (
     ContentModality,
     LessonContentType,
     LessonSourceType,
+    SegmentReviewReason,
 )
 from nevo.visuals import EducationalImageService, VisualGenerationError
 
@@ -512,7 +513,7 @@ def _segment_from_payload(
     raw_modalities = item.get("availableModalities") or item.get("available_modalities")
     modalities = _modalities(raw_modalities)
     calculation_variant = _dict_or_none(item.get("calculation_variant"))
-    review_reasons = list(_string_list(item.get("review_reasons")))
+    review_reasons = _review_reasons(item.get("review_reasons"))
     needs_review = bool(item.get("needs_review")) or bool(item.get("needsReview"))
     if calculation_variant is not None:
         content_type = LessonContentType.CALCULATION
@@ -892,6 +893,27 @@ def _dict_list(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _review_reasons(value: object) -> list[str]:
+    """Keep the reasons the console has copy for, and no others.
+
+    The model is asked to flag segments for review and answers in its own
+    words - a whole sentence about practice questions needing audio, say. The
+    column takes it, because it is JSON; the response model does not, because
+    it is an enum, so the sentence made the lesson unreadable and every read
+    of it a 500. A reason the console cannot render is not a reason it can
+    show anyone, so an unrecognised one becomes the fact that the model wanted
+    a human to look, which is the part that matters.
+    """
+
+    known = {reason.value for reason in SegmentReviewReason}
+    reasons: list[str] = []
+    for reason in _string_list(value):
+        reasons.append(
+            reason if reason in known else SegmentReviewReason.MODEL_FLAGGED_FOR_REVIEW.value
+        )
+    return list(dict.fromkeys(reasons))
 
 
 def _string_list(value: object) -> Iterable[str]:

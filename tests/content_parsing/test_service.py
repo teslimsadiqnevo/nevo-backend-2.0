@@ -104,6 +104,7 @@ async def test_parses_ai_segments_and_normalizes_calculation_variant() -> None:
               "availableModalities": ["text", "audio"],
               "calculation_variant": {
                 "fullEquation": "1/2 + 1/4",
+                "answer": "3/4",
                 "steps": [
                   {
                     "stepId": "s1",
@@ -367,3 +368,48 @@ def test_the_image_budget_is_not_the_thing_that_fails_a_lesson() -> None:
     from nevo.visuals.config import VisualGenerationSettings
 
     assert VisualGenerationSettings().budget_seconds >= 600
+
+
+def test_a_calculation_without_an_answer_is_refused() -> None:
+    """The contract carries an answer so no client has to infer one from the
+    last step. Accepting a variant without it puts the field on the wire and
+    leaves it permanently empty, which is worse than not having it."""
+    from nevo.content_parsing.service import _validated_calculation_variant
+
+    steps = [
+        {"prompt": "What is 3 x 4?", "expectedInput": "numeric"},
+        {"prompt": "Now add 5.", "expectedInput": "numeric"},
+    ]
+
+    without, reason = _validated_calculation_variant(
+        {"fullEquation": "3 x 4 + 5", "steps": steps, "completionStatement": "Done."}
+    )
+    assert without is None
+    assert reason == "calculation_variant_missing_answer"
+
+    with_answer, reason = _validated_calculation_variant(
+        {
+            "fullEquation": "3 x 4 + 5",
+            "answer": "17",
+            "steps": steps,
+            "completionStatement": "Done.",
+        }
+    )
+    assert reason is None
+    assert with_answer is not None
+    assert with_answer["answer"] == "17"
+
+
+def test_every_review_reason_the_parser_emits_is_one_the_console_knows() -> None:
+    """The enum exists so a console can render copy per reason rather than
+    printing the raw token. Two calculation reasons were outside it."""
+    import re
+    from pathlib import Path
+
+    from nevo.domain.intelligence.vocabulary import SegmentReviewReason
+
+    source = Path("src/nevo/content_parsing/service.py").read_text()
+    emitted = set(re.findall(r'"(calculation_variant_[a-z_]+)"', source))
+
+    assert emitted
+    assert emitted <= {item.value for item in SegmentReviewReason}

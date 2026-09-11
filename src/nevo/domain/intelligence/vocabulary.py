@@ -102,6 +102,8 @@ class SegmentReviewReason(StrEnum):
     CALCULATION_AUDIO_GENERATION_FAILED = "calculation_audio_generation_failed"
     VISUAL_GENERATION_FAILED = "visual_generation_failed"
     VISUAL_VARIANT_IMAGE_GENERATION_FAILED = "visual_variant_image_generation_failed"
+    CALCULATION_VARIANT_MALFORMED = "calculation_variant_malformed"
+    CALCULATION_VARIANT_MISSING_ANSWER = "calculation_variant_missing_answer"
 
 
 class UploadStatus(StrEnum):

@@ -717,9 +717,17 @@ def _validated_calculation_variant(
                 ),
             }
         )
+    answer = str(variant.get("answer") or "").strip()
+    if not answer:
+        # The contract carries an answer so a client never has to infer one
+        # from the last step. Accepting a variant without it would put the
+        # field on the wire and leave it permanently empty, which is worse
+        # than not having it.
+        return None, "calculation_variant_missing_answer"
     return {
         "type": "co_construction",
         "fullEquation": str(variant.get("fullEquation") or "").strip(),
+        "answer": answer,
         "steps": normalized_steps,
         "scaffoldImage": _dict_or_none(variant.get("scaffoldImage")),
         "completionStatement": str(variant.get("completionStatement") or "").strip(),

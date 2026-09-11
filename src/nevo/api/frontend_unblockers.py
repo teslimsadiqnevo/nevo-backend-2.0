@@ -1650,10 +1650,28 @@ def _notification(item: Notification) -> NotificationResponse:
 
 
 def _title_from_filename(filename: str | None) -> str:
+    """A lesson's name until the parser gives it a better one.
+
+    This is what sits in a teacher's library, so `simple-interest-jss3.docx`
+    becoming `simple interest jss3` is not good enough. Words are capitalised
+    and a year group keeps the shape a Nigerian teacher writes it in: JSS3,
+    not Jss3.
+    """
+
     if not filename:
         return "Uploaded lesson"
-    title = re.sub(r"\.[A-Za-z0-9]+$", "", filename).replace("_", " ").replace("-", " ").strip()
-    return title or "Uploaded lesson"
+    stem = re.sub(r"\.[A-Za-z0-9]+$", "", filename).replace("_", " ").replace("-", " ")
+    words = []
+    for word in stem.split():
+        if re.fullmatch(r"[A-Za-z]{2,4}\d{1,2}", word):
+            # jss3, ss2, p6: a class, and classes are written in capitals.
+            words.append(word.upper())
+        elif word.isupper():
+            # Already an acronym the teacher typed that way.
+            words.append(word)
+        else:
+            words.append(word[:1].upper() + word[1:])
+    return " ".join(words).strip() or "Uploaded lesson"
 
 
 def _source_type(filename: str | None):

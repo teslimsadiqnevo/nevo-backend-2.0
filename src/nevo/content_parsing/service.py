@@ -169,6 +169,7 @@ class ContentParsingService:
         review_notes: list[dict[str, object]] = []
         ai_call_count = 0
         recap: str | None = None
+        title: str | None = None
         assessment: list[dict[str, object]] = []
 
         for index, chunk in enumerate(chunks, start=1):
@@ -200,6 +201,9 @@ class ContentParsingService:
                 # The lesson's ending comes from whichever chunk wrote one.
                 # A multi-chunk source closes once, not once per chunk.
                 recap = recap or _optional_string(payload.get("recap"))
+                # Likewise its name. The filename is a fallback, not a title:
+                # nobody writing a lesson is naming it for a teacher's library.
+                title = title or _lesson_title(payload.get("title"))
                 if not assessment:
                     assessment = _assessment_questions(payload)
             except (AiGatewayError, ValueError, json.JSONDecodeError) as error:
@@ -246,7 +250,7 @@ class ContentParsingService:
 
         review_notes.extend(self._media_notes)
         parsed = ParsedLesson(
-            title=request.title,
+            title=title or request.title,
             segments=tuple(normalized_segments),
             review_notes=tuple(review_notes),
             confirmation_summary=_confirmation_summary(segments),
@@ -893,6 +897,26 @@ def _dict_list(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+#: Long enough to be a title, short enough to sit in a list without wrapping.
+MAX_TITLE_CHARS = 120
+
+
+def _lesson_title(value: object) -> str | None:
+    """The lesson's own name, if the parser gave one worth using.
+
+    A title has to survive a teacher's library list, so a sentence the model
+    wrote about the lesson is no better than the filename it replaces.
+    """
+
+    title = _optional_string(value)
+    if title is None:
+        return None
+    title = " ".join(title.split())
+    if not title or len(title) > MAX_TITLE_CHARS:
+        return None
+    return title
 
 
 def _review_reasons(value: object) -> list[str]:

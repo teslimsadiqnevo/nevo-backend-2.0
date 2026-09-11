@@ -291,10 +291,11 @@ def _retry_pause(response: httpx.Response, attempt: int) -> float:
     header = response.headers.get("retry-after")
     if header:
         try:
-            return float(min(60.0, max(1.0, float(header))))
+            return min(60.0, max(1.0, float(header)))
         except ValueError:
             pass
-    return min(60.0, BASE_RETRY_PAUSE * (2**attempt))
+    backoff: float = BASE_RETRY_PAUSE * float(2**attempt)
+    return min(60.0, backoff)
 
 
 def _provider_detail(response: httpx.Response | None) -> str:

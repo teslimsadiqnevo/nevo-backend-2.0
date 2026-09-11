@@ -104,6 +104,9 @@ class SegmentReviewReason(StrEnum):
     VISUAL_VARIANT_IMAGE_GENERATION_FAILED = "visual_variant_image_generation_failed"
     CALCULATION_VARIANT_MALFORMED = "calculation_variant_malformed"
     CALCULATION_VARIANT_MISSING_ANSWER = "calculation_variant_missing_answer"
+    CALCULATION_SEGMENT_HAS_NO_INTERACTIVE_DELIVERY = (
+        "calculation_segment_has_no_interactive_delivery"
+    )
 
 
 class UploadStatus(StrEnum):

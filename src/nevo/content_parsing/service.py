@@ -641,6 +641,18 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
             if (modality is ContentModality.INTERACTIVE and segment.calculation_variant is not None)
             or (modality is ContentModality.VISUAL and _has_visual_delivery(segment))
         )
+        if not modalities:
+            # The co-construction was rejected and no picture survived, which
+            # leaves a segment offering nothing at all. The database refuses
+            # that row and takes the whole lesson down with it, so fall back
+            # to what is always there: the text, and the narration if it was
+            # made. A teacher sees the segment flagged rather than losing
+            # every other segment in the lesson to one bad one.
+            modalities = (ContentModality.TEXT,)
+            if _has_audio_delivery(audio_variant):
+                modalities = (*modalities, ContentModality.AUDIO)
+            needs_review = True
+            reasons.append("calculation_segment_has_no_interactive_delivery")
     elif ContentModality.TEXT not in modalities:
         modalities = (ContentModality.TEXT, *modalities)
     if len(modalities) < 2:

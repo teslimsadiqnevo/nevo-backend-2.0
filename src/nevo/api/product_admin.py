@@ -123,6 +123,10 @@ PreferenceWriteList = Annotated[list[PreferenceWrite], Field(max_length=50)]
 
 
 class PersonalSettingsWrite(BaseModel):
+    #: Merged into what is already stored, not swapped for it. Two clients
+    #: hold different partial views of the same bag, so a replacing write
+    #: means whichever saved last erases the other's keys. Send a key as null
+    #: to remove it.
     preferences: dict[str, object] = Field(default_factory=dict)
 
 
@@ -1039,10 +1043,25 @@ async def update_personal_settings(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
+    """Merge preferences into what is stored.
+
+    This used to replace the whole bag, while /api/settings/me merged into it.
+    Same column, two write rules: a client using this one silently erased
+    every key the other had set.
+    """
     user = await actor_user(session, principal)
-    user.preferences = payload.preferences
+    user.preferences = merge_preferences(user.preferences, payload.preferences)
     await session.commit()
     return {"userId": str(user.id), "preferences": user.preferences}
+
+
+def merge_preferences(
+    stored: dict[str, object],
+    incoming: dict[str, object],
+) -> dict[str, object]:
+    """One rule for both settings paths. Null removes a key."""
+    merged = {**dict(stored), **incoming}
+    return {key: value for key, value in merged.items() if value is not None}
 
 
 @router.post("/feedback", status_code=status.HTTP_201_CREATED)

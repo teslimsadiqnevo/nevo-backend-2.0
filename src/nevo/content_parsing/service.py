@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import re
+import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 from datetime import timedelta
@@ -82,6 +83,7 @@ class ContentParsingService:
         self._audio_generation = audio_generation
         self._visual_generation = visual_generation
         self._running: set[asyncio.Task[None]] = set()
+        self._media_notes: list[dict[str, object]] = []
 
     async def start(
         self,
@@ -159,6 +161,9 @@ class ContentParsingService:
     ) -> StoredParsedLesson:
         source = _source_for_prompt(request)
         chunks = _chunks(source)
+        # Reset per parse: media notes belong to the lesson being built, not
+        # to whatever this service happened to build before it.
+        self._media_notes = []
         segments: list[ParsedLessonSegment] = []
         review_notes: list[dict[str, object]] = []
         ai_call_count = 0
@@ -238,6 +243,7 @@ class ContentParsingService:
             )
         normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
 
+        review_notes.extend(self._media_notes)
         parsed = ParsedLesson(
             title=request.title,
             segments=tuple(normalized_segments),
@@ -276,10 +282,12 @@ class ContentParsingService:
             except AudioGenerationError as error:
                 needs_review = True
                 reasons.append("audio_generation_failed")
-                logger.warning(
-                    "Audio generation failed for segment %s: %s",
-                    segment.segment_key,
-                    error,
+                self._media_notes.append(
+                    {
+                        "code": "audio_generation_failed",
+                        "segment": segment.segment_key,
+                        "reason": str(error)[:300],
+                    }
                 )
 
         if calculation_variant is not None:
@@ -321,6 +329,7 @@ class ContentParsingService:
         requested_prompt = None
         if segment.visual_variant is not None:
             requested_prompt = _optional_string(segment.visual_variant.get("prompt"))
+        started = time.perf_counter()
         try:
             visual = await generator.generate(
                 title=segment.title,
@@ -328,10 +337,17 @@ class ContentParsingService:
                 requested_prompt=requested_prompt,
             )
         except VisualGenerationError as error:
-            logger.warning(
-                "Visual generation failed for segment %s: %s",
-                segment.segment_key,
-                error,
+            # Into the run's notes, not only the log. "visual_generation_failed"
+            # on its own told nobody why, which is how every image in a lesson
+            # went missing for two days without anyone being able to say what
+            # had gone wrong.
+            self._media_notes.append(
+                {
+                    "code": "visual_generation_failed",
+                    "segment": segment.segment_key,
+                    "reason": str(error)[:300],
+                    "secondsSpent": round(time.perf_counter() - started, 1),
+                }
             )
             return replace(
                 segment,

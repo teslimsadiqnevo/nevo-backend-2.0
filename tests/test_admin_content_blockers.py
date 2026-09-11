@@ -293,3 +293,29 @@ def test_a_session_ending_says_how_it_ended() -> None:
         "session_replaced",
         "account_paused",
     }
+
+
+def test_both_settings_paths_merge_rather_than_replace() -> None:
+    """They wrote to the same column with different rules: one merged, the
+    other replaced. A client using the replacing one erased every key the
+    other had set."""
+    from nevo.api.product_admin import merge_preferences
+
+    stored = {"theme": "dark", "reduceMotion": True}
+
+    assert merge_preferences(stored, {"theme": "light"}) == {
+        "theme": "light",
+        "reduceMotion": True,
+    }
+    # Null removes a key, which is the only way to delete one under a merge.
+    assert merge_preferences(stored, {"reduceMotion": None}) == {"theme": "dark"}
+    # And an empty write changes nothing.
+    assert merge_preferences(stored, {}) == stored
+
+
+def test_the_older_settings_path_is_marked_superseded() -> None:
+    paths = app.openapi()["paths"]
+
+    for method in ("get", "put"):
+        assert paths["/api/settings/me"][method]["deprecated"] is True
+        assert "deprecated" not in paths["/api/v1/settings/me"][method]

@@ -26,11 +26,12 @@ class VisualGenerationSettings(BaseSettings):
     image_quality: str = Field(default="high", validation_alias="IMAGE_GENERATION_QUALITY")
     image_size: str = Field(default="1536x1024", validation_alias="IMAGE_GENERATION_SIZE")
     max_attempts: PositiveInt = Field(default=3, validation_alias="IMAGE_GENERATION_MAX_ATTEMPTS")
-    #: Total wall clock for one image, retries included. Three attempts at the
-    #: provider's own 180-second ceiling is nine minutes for a single picture,
-    #: which is long enough that a lesson looks hung rather than slow.
+    #: Total wall clock for one image, retries included. Set at 210 first,
+    #: which turned out to be under what a high-quality 1536x1024 image plus
+    #: its review actually takes - every image in a four-segment lesson failed
+    #: on it. Raised until there is a measurement to set it from.
     budget_seconds: PositiveInt = Field(
-        default=210,
+        default=600,
         validation_alias="IMAGE_GENERATION_BUDGET_SECONDS",
     )
 

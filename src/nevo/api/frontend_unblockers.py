@@ -49,6 +49,7 @@ from nevo.api.pagination import (
 )
 from nevo.api.permissions import RequireScope
 from nevo.api.privacy import is_private_interaction_key
+from nevo.api.product_admin import merge_preferences
 from nevo.api.product_common import (
     actor_user,
     can_access_student,
@@ -1528,6 +1529,11 @@ async def request_password_reset(
     "/api/settings/me",
     response_model=SettingsResponse,
     tags=["school administration"],
+    deprecated=True,
+    description=(
+        "Superseded by GET /api/v1/settings/me, which returns the same "
+        "preferences without the outer wrapper. Same data, same column."
+    ),
 )
 async def get_settings(
     principal: PrincipalDependency, session: DatabaseSession
@@ -1542,6 +1548,12 @@ async def get_settings(
     "/api/settings/me",
     response_model=SettingsResponse,
     tags=["school administration"],
+    deprecated=True,
+    description=(
+        "Superseded by PUT /api/v1/settings/me. Both merge into the same "
+        "preferences now; this one takes loose top-level keys where the v1 "
+        "pair takes them under `preferences`."
+    ),
 )
 async def update_settings(
     payload: UpdateSettingsRequest,
@@ -1549,7 +1561,7 @@ async def update_settings(
     session: DatabaseSession,
 ) -> SettingsResponse:
     user = await actor_user(session, principal)
-    user.preferences = {**dict(user.preferences), **(payload.model_extra or {})}
+    user.preferences = merge_preferences(user.preferences, payload.model_extra or {})
     await session.commit()
     return SettingsResponse(settings={"userId": str(user.id), "preferences": user.preferences})
 

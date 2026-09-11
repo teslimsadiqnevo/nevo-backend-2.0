@@ -310,3 +310,60 @@ async def test_media_generation_runs_a_few_at_a_time_not_all_at_once() -> None:
     assert len(result) == 8
     assert peak <= GENERATION_CONCURRENCY
     assert GENERATION_CONCURRENCY > 1
+
+
+async def test_a_lost_picture_says_why_in_the_run_notes() -> None:
+    """"visual_generation_failed" on its own told nobody anything, which is
+    how every image in a lesson went missing for two days."""
+    from nevo.visuals import VisualGenerationError
+
+    class FailingVisuals:
+        configured = True
+
+        async def generate(self, **kwargs):  # type: ignore[no-untyped-def]
+            raise VisualGenerationError("Image generation exceeded its time budget")
+
+    repository = FakeRepository()
+    service = ContentParsingService(
+        repository=repository,
+        ai_gateway=FakeGateway(
+            """
+            {
+              "segments": [
+                {
+                  "segment_key": "visual-1",
+                  "content_type": "explanatory_text",
+                  "body": "A numerator shows selected equal parts.",
+                  "availableModalities": ["text", "visual"]
+                }
+              ]
+            }
+            """
+        ),
+        visual_generation=FailingVisuals(),  # type: ignore[arg-type]
+    )
+
+    await service.parse(
+        request=ContentParseRequest(
+            title="Fractions",
+            source_type=LessonSourceType.TEXT,
+            source_text="Fractions are parts of a whole.",
+        ),
+        requested_by_user_id=uuid4(),
+    )
+    notes = [
+        note
+        for note in repository.parsed.review_notes
+        if note.get("code") == "visual_generation_failed"
+    ]
+
+    assert notes
+    assert "time budget" in str(notes[0]["reason"])
+    assert "secondsSpent" in notes[0]
+
+
+def test_the_image_budget_is_not_the_thing_that_fails_a_lesson() -> None:
+    """210 seconds was under what a high-quality image plus its review takes."""
+    from nevo.visuals.config import VisualGenerationSettings
+
+    assert VisualGenerationSettings().budget_seconds >= 600

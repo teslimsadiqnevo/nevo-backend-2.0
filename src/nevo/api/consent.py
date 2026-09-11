@@ -157,6 +157,9 @@ class ParentConsentInvitationResponse(BaseModel):
     school_phone: str | None = Field(alias="schoolPhone")
     school_email: str | None = Field(alias="schoolEmail")
     parent_name: str = Field(alias="parentName")
+    #: What the sign-in screen pre-fills.
+    parent_contact: str = Field(alias="parentContact")
+    parent_contact_method: ParentContactMethod = Field(alias="parentContactMethod")
     status: ConsentStatus
     consent_types: list[ConsentType] = Field(alias="consentTypes")
     expires_at: datetime = Field(alias="expiresAt")
@@ -174,6 +177,8 @@ class ParentConsentInvitationResponse(BaseModel):
             schoolPhone=invitation.school_phone,
             schoolEmail=invitation.school_email,
             parentName=invitation.parent_name,
+            parentContact=invitation.parent_contact,
+            parentContactMethod=invitation.parent_contact_method,
             status=invitation.status,
             consentTypes=sorted(invitation.consent_types, key=lambda item: item.value),
             expiresAt=invitation.expires_at,

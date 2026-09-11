@@ -3,9 +3,18 @@ import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
@@ -16,7 +25,7 @@ from nevo.api.auth import (
     PrincipalDependency,
     SessionResponse,
 )
-from nevo.api.consent import ConsentServiceDependency, public_consent_error
+from nevo.api.consent import ConsentServiceDependency
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import actor_user, require_school_actor
 from nevo.api.response_models import (
@@ -29,8 +38,9 @@ from nevo.api.response_models import (
     SchoolCodeResponse,
 )
 from nevo.auth.config import AuthSettings
+from nevo.auth.parent_codes import ParentLoginCodes
 from nevo.auth.security import Argon2idCredentialHasher
-from nevo.consent.entities import ConsentActor
+from nevo.consent.entities import ConsentActor, ParentAccount
 from nevo.consent.errors import ConsentError
 from nevo.consent.service import ConsentService
 from nevo.db.models.account import (
@@ -63,6 +73,25 @@ from nevo.ops.background import spawn
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["product access"])
+
+
+def get_parent_login_codes(request: Request) -> ParentLoginCodes:
+    codes = getattr(request.app.state, "parent_login_codes", None)
+    if not isinstance(codes, ParentLoginCodes):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "service_unavailable",
+                "message": "Parent sign-in is temporarily unavailable.",
+            },
+        )
+    return codes
+
+
+ParentLoginCodesDependency = Annotated[
+    ParentLoginCodes,
+    Depends(get_parent_login_codes),
+]
 
 
 @lru_cache
@@ -845,72 +874,122 @@ async def accept_join(
     }
 
 
-class ParentAccountRequest(BaseModel):
-    password: str = Field(min_length=8, max_length=1024)
-
-
-class ParentAccountResponse(BaseModel):
+class ParentCodeRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    user_id: UUID = Field(alias="userId")
-    #: What this parent signs in with: their email address or their phone
-    #: number, depending on how their school reached them.
-    contact: str
-    contact_method: ParentContactMethod = Field(alias="contactMethod")
-    student_id: UUID = Field(alias="studentId")
-    session: SessionResponse
+    #: The email address or phone number the school holds for this parent.
+    contact: str = Field(min_length=3, max_length=255)
+    #: Present while setting an account up from a consent link, absent when
+    #: signing in later. With it, the contact must be the one the school
+    #: entered - a link holder cannot redirect a code elsewhere.
+    token: str | None = Field(default=None, max_length=512)
+
+
+class ParentCodeSentResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    #: Always true. Whether we recognised the contact is deliberately not
+    #: said: this surface is tied to named children, so confirming an address
+    #: is known would be a way to find out which families use Nevo.
+    sent: bool = True
+    expires_at: datetime = Field(alias="expiresAt")
+
+
+class ParentCodeVerifyRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    contact: str = Field(min_length=3, max_length=255)
+    code: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
 
 
 @router.post(
-    "/consents/parent/{token}/account",
-    response_model=ParentAccountResponse,
-    status_code=status.HTTP_201_CREATED,
+    "/auth/parent/request-code",
+    response_model=ParentCodeSentResponse,
+    status_code=status.HTTP_202_ACCEPTED,
 )
-async def create_parent_account(
-    token: str,
-    payload: ParentAccountRequest,
+async def request_parent_code(
+    payload: ParentCodeRequest,
     service: ConsentServiceDependency,
+    codes: ParentLoginCodesDependency,
+    request: Request,
+    response: Response,
+) -> ParentCodeSentResponse:
+    """Send a sign-in code to the contact a school holds for this parent.
+
+    Answers the same way whether or not the contact is one we know. A "we
+    could not find an account" reply on a surface tied to named children is a
+    way to find out which families use Nevo, one address at a time.
+    """
+    account = await service.parent_for_login(
+        contact=payload.contact,
+        token=payload.token,
+    )
+    issued = await codes.issue(
+        contact=payload.contact,
+        parent_user_id=account.user_id if account else None,
+    )
+    if issued.code is not None and account is not None:
+        # Delivered behind the response: the caller is told a code is coming,
+        # not made to wait on a mail provider to find out.
+        spawn(
+            lambda: _deliver_parent_code(
+                request,
+                account=account,
+                code=issued.code or "",
+            ),
+            name=f"parent-code-{account.user_id}",
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return ParentCodeSentResponse(sent=True, expiresAt=issued.expires_at)
+
+
+@router.post("/auth/parent/verify-code", response_model=SessionResponse)
+async def verify_parent_code(
+    payload: ParentCodeVerifyRequest,
+    codes: ParentLoginCodesDependency,
     auth_service: AuthServiceDependency,
     response: Response,
-) -> dict[str, object]:
-    """Give a parent a way to sign in, from the consent link they hold.
-
-    Consent already creates the parent row, linked to the child, in the
-    invited state with no credential - an account that exists and cannot be
-    used. This is what turns it into one, and the token is the authorisation:
-    it was sent to that parent, for that child.
-
-    Deliberately not the admin invite path. An invited parent would have no
-    link to a learner, so they would sign in and correctly see nothing.
-    """
-    try:
-        account = await service.activate_parent_account(
-            token=token,
-            password_hash=credential_hasher().hash_password(payload.password),
-        )
-    except ConsentError as error:
-        raise public_consent_error(error) from error
-    if account is None:
+) -> SessionResponse:
+    """Exchange a code for a session, the same shape every other login returns."""
+    parent_user_id = await codes.redeem(contact=payload.contact, code=payload.code)
+    if parent_user_id is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="This consent link is invalid, expired, or already used",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "code_invalid",
+                "message": "That code is wrong or has expired. Ask for a new one.",
+            },
         )
-    if account.already_active:
-        # Never reset a live credential from a link somebody may still have
-        # in an old message.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This parent account already exists. Sign in, or reset the password.",
-        )
-    issued = await auth_service.issue_for_provisioned_user(account.user_id)
+    issued = await auth_service.issue_for_provisioned_user(parent_user_id)
     response.headers["Cache-Control"] = "no-store"
-    return {
-        "userId": account.user_id,
-        "contact": account.contact,
-        "contactMethod": account.contact_method,
-        "studentId": account.student_id,
-        "session": SessionResponse.from_issued(issued),
-    }
+    return SessionResponse.from_issued(issued)
+
+
+async def _deliver_parent_code(
+    request: Request,
+    *,
+    account: ParentAccount,
+    code: str,
+) -> None:
+    text = (
+        f"Your Nevo sign-in code is {code}. It expires in 10 minutes.\n\n"
+        "If you did not ask for this, you can ignore it."
+    )
+    if account.contact_method is ParentContactMethod.EMAIL:
+        try:
+            await _mailer(request).send(
+                to=account.contact,
+                subject="Your Nevo sign-in code",
+                text=text,
+            )
+        except EmailDeliveryUnavailableError:
+            logger.warning("Parent sign-in code not sent: email is not configured")
+        return
+    sms = getattr(request.app.state, "sms_delivery", None)
+    if sms is None:
+        logger.warning("Parent sign-in code not sent: no SMS delivery configured")
+        return
+    await sms.send(to=account.contact, text=text)
 
 
 @router.post(

@@ -197,6 +197,23 @@ class MemoryConsentRepository:
             already_active=already,
         )
 
+    async def parent_for_login(
+        self,
+        *,
+        contact: str,
+        token_digest: str | None,
+    ) -> ParentAccount | None:
+        for draft in self.requests.values():
+            if draft.parent_contact.casefold() == contact.strip().casefold():
+                return ParentAccount(
+                    user_id=self.links[draft.parent_link_id].parent_id or uuid4(),
+                    contact=draft.parent_contact,
+                    contact_method=draft.contact_method,
+                    student_id=draft.student_id,
+                    already_active=True,
+                )
+        return None
+
     async def children_for_parent(self, parent_id: UUID) -> list[ParentChildView]:
         return self.children.get(parent_id, [])
 
@@ -231,6 +248,8 @@ class MemoryConsentRepository:
             school_phone=self.school_phone,
             school_email=self.school_email,
             parent_name=draft.parent_name,
+            parent_contact=draft.parent_contact,
+            parent_contact_method=draft.contact_method,
             status=status,
             consent_types=draft.consent_types,
             expires_at=draft.expires_at,

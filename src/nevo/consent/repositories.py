@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -345,6 +345,81 @@ class SqlAlchemyConsentRepository:
                 already_active=False,
             )
 
+    async def parent_for_login(
+        self,
+        *,
+        contact: str,
+        token_digest: str | None,
+    ) -> ParentAccount | None:
+        """Find the parent a sign-in code should go to.
+
+        With a consent token this is the parent that token was sent to, and
+        the contact must be the one the school entered - a token holder cannot
+        redirect a code to an address of their choosing. Without one, it is
+        whichever parent already holds that contact.
+
+        Returns None when nothing matches. The caller answers identically
+        either way.
+        """
+        wanted = contact.strip().casefold()
+        async with self._sessions.begin() as session:
+            if token_digest is not None:
+                invitation = await session.scalar(
+                    select(ConsentInvitation).where(
+                        ConsentInvitation.token_digest == token_digest,
+                        ConsentInvitation.revoked_at.is_(None),
+                    )
+                )
+                if invitation is None:
+                    return None
+                link = await session.get(ParentLink, invitation.parent_link_id)
+                if link is None or link.parent_contact.strip().casefold() != wanted:
+                    return None
+                parent = await self._parent_for_link(session, parent_link=link)
+                await session.flush()
+                link.parent_id = parent.id
+                link.account_created = True
+                # The code is the credential now, so the account is usable the
+                # moment it is verified rather than waiting on a password.
+                parent.status = UserStatus.ACTIVE
+                parent.deactivated_at = None
+                if link.contact_method is ParentContactMethod.EMAIL:
+                    parent.email = parent.email or wanted
+                else:
+                    parent.login_identifier = parent.login_identifier or wanted
+                return ParentAccount(
+                    user_id=parent.id,
+                    contact=wanted,
+                    contact_method=link.contact_method,
+                    student_id=link.student_id,
+                    already_active=False,
+                )
+            row = (
+                await session.execute(
+                    select(User, ParentLink.contact_method)
+                    .join(ParentLink, ParentLink.parent_id == User.id)
+                    .where(
+                        User.role == UserRole.PARENT_GUARDIAN,
+                        User.status != UserStatus.DEACTIVATED,
+                        or_(
+                            func.lower(User.email) == wanted,
+                            func.lower(User.login_identifier) == wanted,
+                        ),
+                    )
+                    .limit(1)
+                )
+            ).first()
+        if row is None:
+            return None
+        parent, contact_method = row
+        return ParentAccount(
+            user_id=parent.id,
+            contact=wanted,
+            contact_method=contact_method,
+            student_id=parent.id,
+            already_active=True,
+        )
+
     async def children_for_parent(self, parent_id: UUID) -> list[ParentChildView]:
         """The children this parent is linked to, and nobody else's.
 
@@ -546,6 +621,10 @@ class SqlAlchemyConsentRepository:
             school_phone=school_phone,
             school_email=school_email,
             parent_name=parent_link.parent_name if parent_link else "Parent or guardian",
+            parent_contact=parent_link.parent_contact if parent_link else "",
+            parent_contact_method=(
+                parent_link.contact_method if parent_link else ParentContactMethod.EMAIL
+            ),
             status=status,
             consent_types=consent_types,
             expires_at=invitation.expires_at,

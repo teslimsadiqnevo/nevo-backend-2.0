@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from nevo.auth.entities import AuthPrincipal, IssuedSession
 from nevo.auth.errors import (
@@ -23,17 +23,6 @@ bearer = HTTPBearer(auto_error=False)
 class PasswordLoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=1_024)
-
-
-class ParentLoginRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    #: An email address or a phone number. Which one a parent has depends on
-    #: how their school chose to reach them, which the parent does not know.
-    contact: str = Field(min_length=3, max_length=255)
-    password: str = Field(min_length=8, max_length=1_024)
-    #: Only needed when the same contact is registered at two schools.
-    school_code: str | None = Field(default=None, alias="schoolCode", max_length=50)
 
 
 class PinLoginRequest(BaseModel):
@@ -157,27 +146,6 @@ async def login_with_password(
         issued = await service.login_with_password(
             email=str(payload.email),
             password=payload.password,
-            ip_address=client_ip(request),
-        )
-    except AuthError as error:
-        raise public_auth_error(error) from error
-    response.headers["Cache-Control"] = "no-store"
-    return SessionResponse.from_issued(issued)
-
-
-@router.post("/login/parent", response_model=SessionResponse)
-async def login_as_parent(
-    payload: ParentLoginRequest,
-    request: Request,
-    response: Response,
-    service: AuthServiceDependency,
-) -> SessionResponse:
-    """Sign in a parent by email or phone, whichever their school holds."""
-    try:
-        issued = await service.login_with_parent_contact(
-            contact=payload.contact,
-            password=payload.password,
-            school_code=payload.school_code,
             ip_address=client_ip(request),
         )
     except AuthError as error:

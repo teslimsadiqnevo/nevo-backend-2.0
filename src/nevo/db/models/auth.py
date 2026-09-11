@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Uuid,
     func,
@@ -160,3 +161,46 @@ class AuthAuditEvent(Base):
     identity_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ip_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     details: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
+
+
+class ParentLoginCode(Base):
+    """A short-lived code sent to the contact a school holds for a parent.
+
+    Stored as a digest. A readable column here would be a list of live
+    credentials for every parent using the product.
+    """
+
+    __tablename__ = "parent_login_codes"
+    __table_args__ = (
+        CheckConstraint("attempt_count >= 0", name="parent_login_code_attempts_valid"),
+        Index("ix_parent_login_codes_contact_created", "contact", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    contact: Mapped[str] = mapped_column(String(255), nullable=False)
+    code_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )

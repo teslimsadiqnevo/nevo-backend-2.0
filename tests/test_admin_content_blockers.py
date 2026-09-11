@@ -92,7 +92,10 @@ def test_the_parent_surface_is_in_the_contract() -> None:
     for path in (
         "/api/v1/parents/me/children",
         "/api/v1/parents/me/children/{student_id}/growth",
-        "/api/v1/consents/parent/{token}/account",
+        # An account is created by verifying a code now, not by setting a
+        # password, so the setup endpoint is the code pair.
+        "/api/v1/auth/parent/request-code",
+        "/api/v1/auth/parent/verify-code",
     ):
         assert path in paths, path
 
@@ -232,3 +235,61 @@ def test_the_roster_sync_shapes_speak_the_same_case_as_everything_else() -> None
     ):
         for field in schemas[name]["properties"]:
             assert "_" not in field, f"{name}.{field}"
+
+
+def test_parent_auth_is_a_code_not_a_password() -> None:
+    """Design ruled email plus code. The password flow is gone, not deprecated."""
+    paths = app.openapi()["paths"]
+    schemas = app.openapi()["components"]["schemas"]
+
+    assert "/api/v1/auth/parent/request-code" in paths
+    assert "/api/v1/auth/parent/verify-code" in paths
+    assert "/api/v1/auth/login/parent" not in paths
+    assert "/api/v1/consents/parent/{token}/account" not in paths
+
+    # Nothing on the parent path takes a password any more.
+    for name in ("ParentCodeRequest", "ParentCodeVerifyRequest"):
+        assert "password" not in schemas[name]["properties"]
+
+
+def test_requesting_a_code_never_says_whether_the_contact_is_known() -> None:
+    """This surface is tied to named children, so confirming an address is
+    known is a way to find out which families use Nevo."""
+    request_code = app.openapi()["paths"]["/api/v1/auth/parent/request-code"]["post"]
+
+    assert list(request_code["responses"]) == ["202", "422"]
+    assert "404" not in request_code["responses"]
+
+
+def test_the_setup_screen_can_prefill_the_contact_the_school_holds() -> None:
+    invitation = app.openapi()["components"]["schemas"][
+        "ParentConsentInvitationResponse"
+    ]["properties"]
+
+    assert "parentContact" in invitation
+    assert "parentContactMethod" in invitation
+
+
+def test_a_session_ending_says_how_it_ended() -> None:
+    """Revoked, paused and timed out are three different screens. They used to
+    collapse into one invalid_session."""
+    from nevo.auth.errors import (
+        AccountPausedError,
+        SessionExpiredError,
+        SessionReplacedError,
+        SessionRevokedError,
+    )
+
+    codes = {
+        SessionExpiredError.code,
+        SessionRevokedError.code,
+        SessionReplacedError.code,
+        AccountPausedError.code,
+    }
+
+    assert codes == {
+        "session_expired",
+        "session_revoked",
+        "session_replaced",
+        "account_paused",
+    }

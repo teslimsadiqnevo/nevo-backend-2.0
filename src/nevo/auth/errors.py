@@ -22,6 +22,18 @@ class SessionExpiredError(InvalidSessionError):
     public_message = "Your session has expired. Please sign in again."
 
 
+class SessionRevokedError(InvalidSessionError):
+    code = "session_revoked"
+    public_message = "You were signed out. Sign in again to continue."
+
+
+class AccountPausedError(InvalidSessionError):
+    code = "account_paused"
+    public_message = (
+        "This account is on pause. Your school can turn it back on."
+    )
+
+
 class SessionReplacedError(InvalidSessionError):
     code = "session_replaced"
     public_message = (

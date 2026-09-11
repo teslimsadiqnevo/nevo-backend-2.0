@@ -10,11 +10,13 @@ from nevo.auth.entities import (
     SessionDraft,
 )
 from nevo.auth.errors import (
+    AccountPausedError,
     InvalidCredentialsError,
     InvalidSessionError,
     SchoolCodeRequiredError,
     SessionExpiredError,
     SessionReplacedError,
+    SessionRevokedError,
 )
 from nevo.auth.policies import idle_timeout_for_role, requires_single_session
 from nevo.auth.ports import (
@@ -175,9 +177,14 @@ class AuthService:
             raise InvalidSessionError
 
         if session.revoked_at is not None:
+            # Three different endings, three different screens. They used to
+            # collapse into one invalid_session, so a client could not tell a
+            # deliberate sign-out from an ordinary timeout.
             if session.revocation_reason == "concurrent_login":
                 raise SessionReplacedError
-            raise InvalidSessionError
+            if session.revocation_reason == "user_unavailable":
+                raise AccountPausedError
+            raise SessionRevokedError
 
         if session.expires_at <= now:
             await self._sessions.revoke(
@@ -202,7 +209,10 @@ class AuthService:
                 reason="user_unavailable",
                 revoked_at=now,
             )
-            raise InvalidSessionError
+            # A learner whose parent withdrew consent lands here. Saying so
+            # is what lets the app show the paused screen rather than a bare
+            # "signed out" that reads like a fault.
+            raise AccountPausedError
 
         expires_at = now + idle_timeout_for_role(session.role)
         await self._sessions.touch(

@@ -43,6 +43,7 @@ from nevo.api.teacher_assignments import router as teacher_assignment_router
 from nevo.ask_nevo.wiring import build_ask_nevo_service
 from nevo.attention_flags.wiring import build_attention_flag_detection_service
 from nevo.auth.config import AuthSettings
+from nevo.auth.parent_codes import ParentLoginCodes
 from nevo.auth.wiring import build_auth_service, build_credential_hasher
 from nevo.billing.issuance import InvoiceIssuanceService
 from nevo.billing.wiring import build_billing_service
@@ -123,6 +124,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.parent_insight_service = build_parent_insight_service(
         sessions,
         consent=app.state.consent_service,
+    )
+    app.state.parent_login_codes = ParentLoginCodes(
+        sessions,
+        pepper=auth_settings.auth_session_pepper.get_secret_value(),
     )
     app.state.sms_delivery = TermiiSmsDelivery(SmsSettings())
     app.state.consent_delivery_worker = ConsentDeliveryWorker(

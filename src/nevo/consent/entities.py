@@ -120,6 +120,11 @@ class ParentInvitationView:
     school_phone: str | None
     school_email: str | None
     parent_name: str
+    #: The address or number the school holds, so the setup screen can
+    #: pre-fill "your email, from your school's records" rather than ask a
+    #: parent to guess which one we have.
+    parent_contact: str
+    parent_contact_method: ParentContactMethod
     status: ConsentStatus
     consent_types: frozenset[ConsentType]
     expires_at: datetime

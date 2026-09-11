@@ -159,6 +159,17 @@ class ConsentService:
             now=self._now(),
         )
 
+    async def parent_for_login(
+        self,
+        *,
+        contact: str,
+        token: str | None,
+    ) -> ParentAccount | None:
+        return await self._repository.parent_for_login(
+            contact=contact,
+            token_digest=self._token_service.digest(token) if token else None,
+        )
+
     async def children_for_parent(self, parent_id: UUID) -> list[ParentChildView]:
         return await self._repository.children_for_parent(parent_id)
 

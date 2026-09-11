@@ -49,6 +49,13 @@ class ConsentRepository(Protocol):
         now: datetime,
     ) -> ParentAccount | None: ...
 
+    async def parent_for_login(
+        self,
+        *,
+        contact: str,
+        token_digest: str | None,
+    ) -> ParentAccount | None: ...
+
     async def children_for_parent(
         self,
         parent_id: UUID,

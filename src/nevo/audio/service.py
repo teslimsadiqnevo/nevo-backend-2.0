@@ -47,7 +47,7 @@ class AudioGenerationService:
             "script": normalized,
             "audioUrl": audio_url,
             "storagePath": object_path,
-            "durationMs": 0,
+            "durationMs": None,
             "provider": "yarngpt",
             "voice": self._settings.yarngpt_voice,
             "format": "mp3",

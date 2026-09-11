@@ -11,6 +11,7 @@ from nevo.auth.entities import (
 )
 from nevo.auth.errors import (
     AccountPausedError,
+    AuthError,
     InvalidCredentialsError,
     InvalidSessionError,
     SchoolCodeRequiredError,
@@ -69,6 +70,13 @@ class AuthService:
             user.password_hash if user else None,
             password,
         )
+        if user is not None and verified and self._is_paused(user):
+            await self._reject_login(
+                user=user,
+                identity_digest=identity_digest,
+                ip_digest=ip_digest,
+                error=AccountPausedError,
+            )
         if not user or not verified or not self._can_use_manual_method(user, "email_password"):
             await self._reject_login(
                 user=user,
@@ -151,6 +159,17 @@ class AuthService:
             user.pin_hash if user else None,
             pin,
         )
+        if user is not None and verified and user.role == "student" and self._is_paused(user):
+            # The PIN was right. Telling them the account is paused reveals
+            # nothing they could not already infer from holding the credential,
+            # and it is the difference between a screen that explains and one
+            # that tells a child they cannot type their own PIN.
+            await self._reject_login(
+                user=user,
+                identity_digest=identity_digest,
+                ip_digest=ip_digest,
+                error=AccountPausedError,
+            )
         if (
             not user
             or user.role != "student"
@@ -229,8 +248,10 @@ class AuthService:
     async def issue_for_provisioned_user(self, user_id: UUID) -> IssuedSession:
         """Issue the first session after a trusted provisioning flow completes."""
         user = await self._users.find_by_id(user_id)
-        if user is None or not self._is_active(user):
+        if user is None:
             raise InvalidCredentialsError
+        if not self._is_active(user):
+            raise AccountPausedError
         identity_digest = self._token_service.protect_identifier(f"provisioned:{user.id}")
         return await self._complete_login(
             user=user,
@@ -342,6 +363,7 @@ class AuthService:
         user: AuthUser | None,
         identity_digest: str,
         ip_digest: str,
+        error: type[AuthError] = InvalidCredentialsError,
     ) -> Never:
         now = self._now()
         await self._rate_limiter.record(
@@ -363,7 +385,19 @@ class AuthService:
             identity_digest=identity_digest,
             ip_digest=ip_digest,
         )
-        raise InvalidCredentialsError
+        raise error
+
+    @staticmethod
+    def _is_paused(user: AuthUser) -> bool:
+        """Switched off, as opposed to never switched on.
+
+        Only this is worth saying out loud. Someone holding the credential for
+        a paused account already knows it exists, and telling them beats
+        telling a child their own PIN is wrong. An invited account is a
+        different thing - it is not theirs to use yet - so that stays a
+        generic refusal, which is what the enumeration tests protect.
+        """
+        return user.status == "deactivated" or user.deactivated_at is not None
 
     @staticmethod
     def _is_active(user: AuthUser) -> bool:

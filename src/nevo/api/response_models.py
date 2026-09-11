@@ -309,6 +309,14 @@ class LessonModuleResponse(CamelResponse):
 
 class LessonDetailResponse(LessonSummaryResponse):
     confirmation_summary: str | None
+    #: Written for the child. confirmationSummary is the parser talking to a
+    #: teacher about its own confidence; this is what a learner reads when the
+    #: lesson ends.
+    recap: str | None = None
+    #: Questions to close on, in the same shape as a segment checkpoint so one
+    #: renderer serves both.
+    assessment: list[ComprehensionCheckpoint] = Field(default_factory=list)
+
     segments: list[LessonSegmentResponse]
     modules: list[LessonModuleResponse]
 

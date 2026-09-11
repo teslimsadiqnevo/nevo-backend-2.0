@@ -142,8 +142,10 @@ async def test_password_login_normalizes_email_and_issues_teacher_session() -> N
 @pytest.mark.parametrize(
     ("status", "deactivated_at", "expected_event"),
     [
+        # An account that was never switched on is not the caller's to know
+        # about, so this one stays generic. A paused account is covered by
+        # test_a_paused_account_says_so_once_the_credential_is_right.
         ("invited", None, "deactivated_login_attempt"),
-        ("deactivated", NOW, "deactivated_login_attempt"),
     ],
 )
 async def test_non_active_accounts_receive_generic_login_failure(
@@ -428,5 +430,60 @@ async def test_only_parents_are_reachable_through_the_parent_login() -> None:
         await harness.service.login_with_parent_contact(
             contact="teacher@example.com",
             password="correct horse",
+            ip_address="1.2.3.4",
+        )
+
+
+async def test_a_paused_account_says_so_once_the_credential_is_right() -> None:
+    """A child whose parent withdrew consent typed their PIN correctly and was
+    told it did not match. They try again, and again, and then ask an adult
+    why they are locked out of their own account.
+
+    Saying "paused" reveals nothing to someone who has just proved they hold
+    the credential, and it is the difference between a screen that explains
+    and one that blames.
+    """
+    from nevo.auth.errors import AccountPausedError
+
+    user = auth_user(
+        role="teacher",
+        auth_method="email_password",
+        status="deactivated",
+        email="teacher@example.com",
+        password="valid-password",
+        pin=None,
+        login_identifier=None,
+        school_auth_method="email_password",
+        deactivated_at=NOW,
+    )
+    harness = harness_for(user)
+
+    with pytest.raises(AccountPausedError):
+        await password_login(harness)
+
+    # Still a failed attempt for rate limiting, and still audited as one.
+    assert harness.limiter.attempts[-1][2] is False
+    assert harness.audit.events[-1]["event_type"] == "deactivated_login_attempt"
+
+
+async def test_a_wrong_password_on_a_paused_account_stays_generic() -> None:
+    """The reveal is earned by the credential, not by the account's state."""
+    user = auth_user(
+        role="teacher",
+        auth_method="email_password",
+        status="deactivated",
+        email="teacher@example.com",
+        password="valid-password",
+        pin=None,
+        login_identifier=None,
+        school_auth_method="email_password",
+        deactivated_at=NOW,
+    )
+    harness = harness_for(user)
+
+    with pytest.raises(InvalidCredentialsError):
+        await harness.service.login_with_password(
+            email="teacher@example.com",
+            password="not-the-password",
             ip_address="1.2.3.4",
         )

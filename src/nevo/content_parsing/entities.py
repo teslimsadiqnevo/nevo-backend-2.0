@@ -50,6 +50,9 @@ class ParsedLesson:
     segments: tuple[ParsedLessonSegment, ...]
     review_notes: tuple[dict[str, object], ...] = ()
     confirmation_summary: str | None = None
+    #: Addressed to the child, and the questions they close on.
+    recap: str | None = None
+    assessment: tuple[dict[str, object], ...] = ()
     gemini_call_count: int = 0
     chunk_count: int = 1
 
@@ -65,6 +68,9 @@ class StoredParsedLesson:
     confirmation_summary: str | None
     review_notes: tuple[dict[str, object], ...]
     segments: tuple[ParsedLessonSegment, ...]
+    #: Addressed to the child, and the questions they close on.
+    recap: str | None = None
+    assessment: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -98,7 +98,19 @@ BearerDependency = Annotated[
 ]
 
 
-@router.post("/login", response_model=SessionResponse)
+@router.post(
+    "/login",
+    response_model=SessionResponse,
+    responses={
+        401: {
+            "description": (
+                "authentication_failed when the credential is wrong, "
+                "account_paused when it is right but the account is not open, "
+                "too_many_attempts when rate limited"
+            )
+        },
+    },
+)
 async def unified_login(
     payload: UnifiedLoginRequest,
     request: Request,
@@ -135,7 +147,19 @@ async def unified_login(
     return SessionResponse.from_issued(issued)
 
 
-@router.post("/login/password", response_model=SessionResponse)
+@router.post(
+    "/login/password",
+    response_model=SessionResponse,
+    responses={
+        401: {
+            "description": (
+                "authentication_failed when the credential is wrong, "
+                "account_paused when it is right but the account is not open, "
+                "too_many_attempts when rate limited"
+            )
+        },
+    },
+)
 async def login_with_password(
     payload: PasswordLoginRequest,
     request: Request,
@@ -154,7 +178,19 @@ async def login_with_password(
     return SessionResponse.from_issued(issued)
 
 
-@router.post("/login/pin", response_model=SessionResponse)
+@router.post(
+    "/login/pin",
+    response_model=SessionResponse,
+    responses={
+        401: {
+            "description": (
+                "authentication_failed when the credential is wrong, "
+                "account_paused when it is right but the account is not open, "
+                "too_many_attempts when rate limited"
+            )
+        },
+    },
+)
 async def login_with_pin(
     payload: PinLoginRequest,
     request: Request,

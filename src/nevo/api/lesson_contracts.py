@@ -58,7 +58,9 @@ class AudioVariant(BaseModel):
     script: str
     audio_url: str = Field(alias="audioUrl")
     storage_path: str | None = Field(default=None, alias="storagePath")
-    duration_ms: int = Field(default=0, alias="durationMs")
+    #: None when nothing measured it. Zero used to be sent for every
+    #: narration, which reads as a silent clip rather than an unknown length.
+    duration_ms: int | None = Field(default=None, alias="durationMs")
     provider: str
     voice: str | None = None
     format: Literal["mp3"] = "mp3"
@@ -110,6 +112,10 @@ class CalculationVariant(BaseModel):
 
     type: Literal["co_construction"] = "co_construction"
     full_equation: str = Field(alias="fullEquation")
+    #: What the whole problem comes to. Sent rather than left to be inferred
+    #: from the last step: this is what a child is marked against, and a
+    #: client guessing it would be guessing the mark.
+    answer: str = ""
     steps: list[CalculationStep]
     scaffold_image: ScaffoldImage | None = Field(default=None, alias="scaffoldImage")
     completion_statement: str = Field(alias="completionStatement")

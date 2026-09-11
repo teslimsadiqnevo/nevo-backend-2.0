@@ -11,6 +11,7 @@ from uuid import UUID
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
+from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
 from nevo.content_parsing.entities import (
     ContentParseRequest,
@@ -161,6 +162,8 @@ class ContentParsingService:
         segments: list[ParsedLessonSegment] = []
         review_notes: list[dict[str, object]] = []
         ai_call_count = 0
+        recap: str | None = None
+        assessment: list[dict[str, object]] = []
 
         for index, chunk in enumerate(chunks, start=1):
             try:
@@ -181,12 +184,18 @@ class ContentParsingService:
                     )
                 )
                 ai_call_count += 1
+                payload = _json_payload(result.text)
                 segments.extend(
-                    _segments_from_ai(
-                        result.text,
+                    _segments_from_payload_list(
+                        payload,
                         sequence_offset=len(segments),
                     )
                 )
+                # The lesson's ending comes from whichever chunk wrote one.
+                # A multi-chunk source closes once, not once per chunk.
+                recap = recap or _optional_string(payload.get("recap"))
+                if not assessment:
+                    assessment = _assessment_questions(payload)
             except (AiGatewayError, ValueError, json.JSONDecodeError) as error:
                 # Say what went wrong, not just that something did. This note
                 # was the only record that the AI had contributed nothing, and
@@ -234,6 +243,8 @@ class ContentParsingService:
             segments=tuple(normalized_segments),
             review_notes=tuple(review_notes),
             confirmation_summary=_confirmation_summary(segments),
+            recap=recap,
+            assessment=tuple(assessment),
             gemini_call_count=ai_call_count,
             chunk_count=len(chunks),
         )
@@ -370,6 +381,33 @@ def _chunks(source: str) -> list[str]:
     return chunks
 
 
+def _assessment_questions(payload: dict[str, object]) -> list[dict[str, object]]:
+    """The questions a lesson closes on, in checkpoint shape.
+
+    Same shape as a segment checkpoint on purpose: one renderer serves both,
+    and a client that can already ask a mid-lesson question can ask an
+    end-of-lesson one without new code.
+    """
+    return checkpoint_payloads(
+        _dict_list(payload.get("assessment")),
+        segment_key="lesson-assessment",
+    )
+
+
+def _segments_from_payload_list(
+    payload: dict[str, object],
+    *,
+    sequence_offset: int,
+) -> list[ParsedLessonSegment]:
+    items = _dict_list(payload.get("segments"))
+    if not items:
+        raise ValueError("AI provider payload had no segments")
+    return [
+        _segment_from_payload(item, sequence_order=sequence_offset + index)
+        for index, item in enumerate(items, start=1)
+    ]
+
+
 def _segments_from_ai(
     text: str,
     *,
@@ -405,6 +443,17 @@ async def _in_parallel(
             return await step(segment)
 
     return list(await asyncio.gather(*(bounded(segment) for segment in segments)))
+
+
+def _duration_ms(value: object) -> int | None:
+    """Keep a measured length, and keep not-measured as not-measured."""
+    if not isinstance(value, (int, float, str)):
+        return None
+    try:
+        measured = int(value)
+    except (TypeError, ValueError):
+        return None
+    return measured or None
 
 
 def _looks_truncated(result: object) -> bool:
@@ -717,7 +766,7 @@ def _audio_variant(value: object, body: str) -> dict[str, object] | None:
         return {
             "script": script,
             "audioUrl": str(value.get("audioUrl") or ""),
-            "durationMs": int(value.get("durationMs") or 0),
+            "durationMs": _duration_ms(value.get("durationMs")),
             "provider": str(value.get("provider") or "tts_provider_tbd"),
         }
     return _placeholder_audio_variant(body)
@@ -770,7 +819,7 @@ def _placeholder_audio_variant(body: str) -> dict[str, object]:
     return {
         "script": body[:700].strip(),
         "audioUrl": "",
-        "durationMs": 0,
+        "durationMs": None,
         "provider": "tts_provider_tbd",
     }
 
@@ -786,7 +835,7 @@ def _placeholder_step_narration(
         "stepId": step_id,
         "script": script,
         "audioUrl": "",
-        "durationMs": 0,
+        "durationMs": None,
         "provider": "tts_provider_tbd",
     }
 

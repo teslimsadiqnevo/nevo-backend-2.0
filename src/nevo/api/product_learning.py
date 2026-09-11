@@ -303,6 +303,8 @@ async def lesson_detail(
     return {
         **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)),
         "confirmationSummary": lesson.confirmation_summary,
+        "recap": lesson.recap,
+        "assessment": list(lesson.assessment or []),
         "segments": [
             {
                 "id": str(item.id),

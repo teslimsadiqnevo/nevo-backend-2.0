@@ -114,6 +114,18 @@ class Lesson(Base):
         server_default=text("0"),
     )
     confirmation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Written for the child, not the teacher. confirmation_summary is the
+    #: parser talking about its own confidence; this is what a learner reads
+    #: when the lesson ends.
+    recap: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Questions to close on, in the same shape as a segment checkpoint so one
+    #: renderer serves both.
+    assessment: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

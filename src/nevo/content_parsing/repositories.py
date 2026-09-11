@@ -101,6 +101,43 @@ class SqlAlchemyContentParsingRepository:
             )
         return lesson_id, parse_run_id
 
+    @staticmethod
+    async def _refuse_downgrade(
+        session: AsyncSession,
+        *,
+        lesson_id: UUID,
+        parsed: ParsedLesson,
+    ) -> None:
+        """Never replace a written lesson with deterministic fallback text.
+
+        Regenerating against an environment with no model configured produces
+        a lesson of split-up source text, and storing it silently destroys
+        work that was good. Whatever went wrong, the answer is to fail the run
+        and leave the lesson alone.
+        """
+        if not parsed.segments:
+            raise ValueError("the parse produced no segments")
+        if not all(
+            "deterministic_parse_used" in segment.review_reasons
+            for segment in parsed.segments
+        ):
+            return
+        existing = list(
+            await session.scalars(
+                select(LessonSegment.review_reasons).where(
+                    LessonSegment.lesson_id == lesson_id
+                )
+            )
+        )
+        had_real_content = any(
+            "deterministic_parse_used" not in (reasons or []) for reasons in existing
+        )
+        if had_real_content:
+            raise ValueError(
+                "refusing to replace a written lesson with fallback text: the "
+                "model produced nothing usable on this run"
+            )
+
     async def fail_run(self, parse_run_id: UUID, *, reason: str) -> None:
         """Say why a run stopped, rather than leaving it processing forever."""
         async with self._sessions.begin() as session:
@@ -227,12 +264,19 @@ class SqlAlchemyContentParsingRepository:
                             segment.estimated_minutes for segment in parsed.segments
                         ),
                         confirmation_summary=parsed.confirmation_summary,
+                        recap=parsed.recap,
+                        assessment=list(parsed.assessment),
                     )
                 )
             else:
                 lesson = await session.get(Lesson, existing_lesson_id)
                 if lesson is None or lesson.school_id != school_id:
                     raise ValueError("lesson is not available to this school")
+                await self._refuse_downgrade(
+                    session,
+                    lesson_id=existing_lesson_id,
+                    parsed=parsed,
+                )
                 lesson.title = parsed.title
                 lesson.subject = (
                     str(request.source_metadata["subject"])
@@ -249,6 +293,8 @@ class SqlAlchemyContentParsingRepository:
                     segment.estimated_minutes for segment in parsed.segments
                 )
                 lesson.confirmation_summary = parsed.confirmation_summary
+                lesson.recap = parsed.recap
+                lesson.assessment = list(parsed.assessment)
                 await session.execute(
                     delete(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
                 )
@@ -343,6 +389,8 @@ class SqlAlchemyContentParsingRepository:
             segment_count=len(parsed.segments),
             review_segment_count=review_segment_count,
             confirmation_summary=parsed.confirmation_summary,
+            recap=parsed.recap,
+            assessment=parsed.assessment,
             review_notes=parsed.review_notes,
             segments=parsed.segments,
         )

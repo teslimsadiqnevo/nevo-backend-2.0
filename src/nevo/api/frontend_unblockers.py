@@ -231,6 +231,14 @@ class LessonSummaryResponse(BaseModel):
 
 class LessonDetailResponse(LessonSummaryResponse):
     confirmation_summary: str | None = Field(alias="confirmationSummary")
+    #: Written for the child. confirmationSummary is the parser talking to a
+    #: teacher about its own confidence; this is what a learner reads when the
+    #: lesson ends.
+    recap: str | None = None
+    #: Questions to close on, in the same shape as a segment checkpoint so one
+    #: renderer serves both.
+    assessment: list[ComprehensionCheckpoint] = Field(default_factory=list)
+
     segments: list[LessonSegmentResponse]
     modules: list[SharedLessonModuleResponse]
 
@@ -788,6 +796,11 @@ async def lesson_detail(
             by_alias=True
         ),
         confirmationSummary=lesson.confirmation_summary,
+        recap=lesson.recap,
+        assessment=[
+            ComprehensionCheckpoint.model_validate(item)
+            for item in (lesson.assessment or [])
+        ],
         segments=[
             LessonSegmentResponse(
                 id=item.id,

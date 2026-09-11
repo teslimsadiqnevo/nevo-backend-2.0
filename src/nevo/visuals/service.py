@@ -12,6 +12,12 @@ from nevo.ai_gateway.privacy import AiPrivacyGuard
 from nevo.storage import StorageError, SupabaseStorage
 from nevo.visuals.config import VisualGenerationSettings
 
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+"""Statuses that mean "later", not "no"."""
+
+RATE_LIMIT_RETRIES = 4
+BASE_RETRY_PAUSE = 2.0
+
 MAX_VALIDATION_IMAGE_BYTES = 5_000_000
 """Anthropic rejects a base64 image source larger than 5MB."""
 
@@ -110,7 +116,10 @@ class EducationalImageService:
             correction = f"\n\nCorrect these problems from the previous attempt: {issues}"
             try:
                 image = await asyncio.wait_for(
-                    self._generate_image(prompt + (correction if issues else "")),
+                    self._generate_image(
+                        prompt + (correction if issues else ""),
+                        deadline=deadline,
+                    ),
                     timeout=max(1.0, deadline - time.monotonic()),
                 )
                 approved, issues = await asyncio.wait_for(
@@ -142,22 +151,45 @@ class EducationalImageService:
             f"Teacher visual direction: {requested or 'Choose the clearest instructional visual.'}"
         )
 
-    async def _generate_image(self, prompt: str) -> bytes:
-        async with httpx.AsyncClient(timeout=180) as client:
-            response = await client.post(
-                f"{str(self._settings.openai_base_url).rstrip('/')}/images/generations",
-                headers={"Authorization": f"Bearer {self._openai_key()}"},
-                json={
-                    "model": self._settings.image_model,
-                    "prompt": prompt,
-                    "quality": self._settings.image_quality,
-                    "size": self._settings.image_size,
-                    "output_format": "png",
-                },
-            )
-        if response.is_error:
+    def _image_client(self) -> httpx.AsyncClient:
+        """Seam for tests. The retry is the part worth exercising, and it
+        cannot be reached while the client is built inline."""
+        return httpx.AsyncClient(timeout=180)
+
+    async def _generate_image(self, prompt: str, *, deadline: float) -> bytes:
+        """Ask for one picture, waiting out a provider that says "not now".
+
+        A 429 is the provider asking us to come back, not a lesson that
+        cannot have an image - it used to end the attempt outright, so a
+        burst of rate limiting cost a lesson every one of its pictures.
+        """
+        payload = {
+            "model": self._settings.image_model,
+            "prompt": prompt,
+            "quality": self._settings.image_quality,
+            "size": self._settings.image_size,
+            "output_format": "png",
+        }
+        response: httpx.Response | None = None
+        async with self._image_client() as client:
+            for attempt in range(RATE_LIMIT_RETRIES + 1):
+                response = await client.post(
+                    f"{str(self._settings.openai_base_url).rstrip('/')}/images/generations",
+                    headers={"Authorization": f"Bearer {self._openai_key()}"},
+                    json=payload,
+                )
+                if response.status_code not in RETRYABLE_STATUSES:
+                    break
+                pause = _retry_pause(response, attempt)
+                if attempt == RATE_LIMIT_RETRIES or time.monotonic() + pause >= deadline:
+                    break
+                await asyncio.sleep(pause)
+        if response is None or response.is_error:
+            status_code = response.status_code if response else 0
+            detail = _provider_detail(response)
             raise VisualGenerationError(
-                f"Image provider failed with status {response.status_code}"
+                f"Image provider failed with status {status_code}"
+                + (f": {detail}" if detail else "")
             )
         try:
             encoded = response.json()["data"][0]["b64_json"]
@@ -252,3 +284,33 @@ class EducationalImageService:
         if key is None:
             raise VisualGenerationError("Image review is not configured")
         return key.get_secret_value()
+
+
+def _retry_pause(response: httpx.Response, attempt: int) -> float:
+    """Honour Retry-After when the provider sends one, else back off."""
+    header = response.headers.get("retry-after")
+    if header:
+        try:
+            return float(min(60.0, max(1.0, float(header))))
+        except ValueError:
+            pass
+    return min(60.0, BASE_RETRY_PAUSE * (2**attempt))
+
+
+def _provider_detail(response: httpx.Response | None) -> str:
+    """The provider's own words, so a quota problem is not read as a busy one.
+
+    A 429 for insufficient quota keeps coming back however long we wait, and
+    is somebody's billing page rather than anything the backend can fix.
+    """
+    if response is None:
+        return ""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return ""
+    parts = [str(error.get(key)) for key in ("code", "message") if error.get(key)]
+    return " - ".join(parts)[:200]

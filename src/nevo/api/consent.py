@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
@@ -15,6 +15,7 @@ from nevo.consent.entities import (
     ParentConsentCompletion,
     ParentInvitationView,
     ParentLinkView,
+    ParentRightLogEntry,
     QueuedParentConsentRequest,
 )
 from nevo.consent.errors import (
@@ -36,6 +37,7 @@ from nevo.domain.consent.vocabulary import (
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
     ParentContactMethod,
+    ParentRightType,
 )
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.permissions.entities import PermissionSnapshot
@@ -334,6 +336,91 @@ async def list_parent_links(
     except ConsentError as error:
         raise public_consent_error(error) from error
     return [ParentLinkResponse.from_link(link) for link in links]
+
+
+class ParentRightLogRow(BaseModel):
+    """One entry in a school's record of rights parents have exercised."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID
+    student_id: UUID = Field(alias="studentId")
+    student_name: str = Field(alias="studentName")
+    parent_id: UUID = Field(alias="parentId")
+    parent_name: str = Field(alias="parentName")
+    request_type: ParentRightType = Field(alias="requestType")
+    reason_recorded: bool = Field(
+        alias="reasonRecorded",
+        description=(
+            "Whether the parent gave a reason. The text itself is not served: "
+            "it is free text a parent wrote about their own child, and listing "
+            "it would disclose family circumstances to every admin who opens "
+            "the screen."
+        ),
+    )
+    status: str
+    created_at: datetime = Field(alias="createdAt")
+    resolved_at: datetime | None = Field(alias="resolvedAt")
+
+    @classmethod
+    def from_entry(cls, entry: ParentRightLogEntry) -> "ParentRightLogRow":
+        return cls(
+            id=entry.id,
+            studentId=entry.student_id,
+            studentName=entry.student_name,
+            parentId=entry.parent_id,
+            parentName=entry.parent_name,
+            requestType=entry.request_type,
+            reasonRecorded=entry.reason_recorded,
+            status=entry.status,
+            createdAt=entry.created_at,
+            resolvedAt=entry.resolved_at,
+        )
+
+
+class ParentRightLogResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    entries: list[ParentRightLogRow]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.get("/consents/rights-log", response_model=ParentRightLogResponse)
+async def parent_rights_log(
+    actor: SencoDependency,
+    service: ConsentServiceDependency,
+    student_id: Annotated[UUID | None, Query(alias="studentId")] = None,
+    request_type: Annotated[
+        ParentRightType | None,
+        Query(alias="requestType", description="Show only this kind of request."),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ParentRightLogResponse:
+    """What parents have asked of this school, newest first.
+
+    The requests were being recorded and never read back, so a school had no
+    way to show what had been asked of it - which is the thing NDPA expects a
+    school to be able to produce.
+    """
+    try:
+        entries, total = await service.parent_rights_log(
+            consent_actor(actor),
+            student_id=student_id,
+            request_type=request_type,
+            limit=limit,
+            offset=offset,
+        )
+    except ConsentError as error:
+        raise public_consent_error(error) from error
+    return ParentRightLogResponse(
+        entries=[ParentRightLogRow.from_entry(entry) for entry in entries],
+        total=total,
+        limit=min(max(limit, 1), 100),
+        offset=max(offset, 0),
+    )
 
 
 @router.get(

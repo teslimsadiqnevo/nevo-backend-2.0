@@ -14,6 +14,7 @@ from nevo.consent.entities import (
     ParentConsentRequestDraft,
     ParentInvitationView,
     ParentLinkView,
+    ParentRightLogEntry,
     ParentRightOutcome,
     QueuedParentConsentRequest,
 )
@@ -102,9 +103,7 @@ class ConsentService:
             contact_method=contact_method,
             consent_types=self._required_types(consent_types),
             token_digest=token_digest,
-            consent_url=(
-                f"{self._public_base_url}/consent/parent?token={token}"
-            ),
+            consent_url=(f"{self._public_base_url}/consent/parent?token={token}"),
             requested_by_user_id=actor.user_id,
             created_at=now,
             expires_at=now + PARENT_CONSENT_LIFETIME,
@@ -182,6 +181,29 @@ class ConsentService:
         return await self._repository.parent_links(
             school_id=actor.school_id,
             student_id=student_id,
+        )
+
+    async def parent_rights_log(
+        self,
+        actor: ConsentActor,
+        *,
+        student_id: UUID | None = None,
+        request_type: ParentRightType | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[ParentRightLogEntry], int]:
+        """Every right parents have exercised over this school's learners.
+
+        A school has to be able to show what was asked of it and when, and
+        until now the records were written and never readable.
+        """
+
+        return await self._repository.parent_rights_log(
+            school_id=actor.school_id,
+            student_id=student_id,
+            request_type=request_type,
+            limit=min(max(limit, 1), 100),
+            offset=max(offset, 0),
         )
 
     async def student_gate(

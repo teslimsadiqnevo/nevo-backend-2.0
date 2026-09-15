@@ -46,6 +46,29 @@ class ParentLinkView:
 
 
 @dataclass(frozen=True, slots=True)
+class ParentRightLogEntry:
+    """One right a parent exercised, for the school's own record.
+
+    NDPA requires a school to be able to show what was asked of it and when.
+    The parent's stated reason is deliberately reduced to whether one was
+    given: it is free text a parent wrote about their own child, and a log
+    that lists it turns a rights record into a disclosure of family
+    circumstances to every admin who opens the screen.
+    """
+
+    id: UUID
+    student_id: UUID
+    student_name: str
+    parent_id: UUID
+    parent_name: str
+    request_type: ParentRightType
+    reason_recorded: bool
+    status: str
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class ParentConsentRequestDraft:
     invitation_id: UUID
     parent_link_id: UUID

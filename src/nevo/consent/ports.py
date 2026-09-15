@@ -10,6 +10,7 @@ from nevo.consent.entities import (
     ParentConsentRequestDraft,
     ParentInvitationView,
     ParentLinkView,
+    ParentRightLogEntry,
     ParentRightOutcome,
     QueuedParentConsentRequest,
 )
@@ -83,6 +84,16 @@ class ConsentRepository(Protocol):
         school_id: UUID,
         student_id: UUID,
     ) -> list[ParentLinkView]: ...
+
+    async def parent_rights_log(
+        self,
+        *,
+        school_id: UUID,
+        student_id: UUID | None,
+        request_type: ParentRightType | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[ParentRightLogEntry], int]: ...
 
     async def has_confirmed_consent(
         self,

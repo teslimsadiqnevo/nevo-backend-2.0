@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from nevo.consent.entities import (
     ConsentRecordView,
@@ -13,6 +14,7 @@ from nevo.consent.entities import (
     ParentConsentRequestDraft,
     ParentInvitationView,
     ParentLinkView,
+    ParentRightLogEntry,
     ParentRightOutcome,
     QueuedParentConsentRequest,
 )
@@ -480,6 +482,46 @@ class SqlAlchemyConsentRepository:
             )
         return [self._parent_link_view(link) for link in links]
 
+    async def parent_rights_log(
+        self,
+        *,
+        school_id: UUID,
+        student_id: UUID | None,
+        request_type: ParentRightType | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[ParentRightLogEntry], int]:
+        """What parents have asked of this school, newest first."""
+
+        student = aliased(User)
+        parent = aliased(User)
+        conditions = [student.school_id == school_id]
+        if student_id is not None:
+            conditions.append(ParentDataRequest.student_id == student_id)
+        if request_type is not None:
+            conditions.append(ParentDataRequest.request_type == request_type.value)
+        base = (
+            select(ParentDataRequest, student, parent)
+            .join(student, student.id == ParentDataRequest.student_id)
+            .join(parent, parent.id == ParentDataRequest.parent_id)
+            .where(*conditions)
+        )
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    base.order_by(
+                        ParentDataRequest.created_at.desc(),
+                        ParentDataRequest.id.desc(),
+                    )
+                    .limit(limit)
+                    .offset(offset)
+                )
+            ).all()
+            total = await session.scalar(
+                base.with_only_columns(func.count(ParentDataRequest.id)).order_by(None)
+            )
+        return [_rights_log_entry(*row) for row in rows], int(total or 0)
+
     async def has_confirmed_consent(
         self,
         *,
@@ -599,8 +641,7 @@ class SqlAlchemyConsentRepository:
             )
             record = (
                 await session.execute(
-                    select(ConsentRecord.status, ConsentRecord.last_changed_at)
-                    .where(
+                    select(ConsentRecord.status, ConsentRecord.last_changed_at).where(
                         ConsentRecord.subject_user_id == invitation.student_id,
                         ConsentRecord.consent_type == REQUIRED_LEARNING_CONSENT,
                     )
@@ -833,3 +874,28 @@ class SqlAlchemyConsentRepository:
             contact_method=link.contact_method,
             account_created=link.account_created,
         )
+
+
+def _rights_log_entry(
+    request: ParentDataRequest,
+    student: User,
+    parent: User,
+) -> ParentRightLogEntry:
+    return ParentRightLogEntry(
+        id=request.id,
+        student_id=request.student_id,
+        student_name=_display_name(student),
+        parent_id=request.parent_id,
+        parent_name=_display_name(parent),
+        request_type=ParentRightType(request.request_type),
+        # The text itself stays out of the log. See ParentRightLogEntry.
+        reason_recorded=bool((request.reason or "").strip()),
+        status=request.status,
+        created_at=request.created_at,
+        resolved_at=request.resolved_at,
+    )
+
+
+def _display_name(user: User) -> str:
+    parts = [user.first_name, user.last_name]
+    return " ".join(part for part in parts if part) or "Unknown"

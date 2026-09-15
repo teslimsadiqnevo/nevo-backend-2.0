@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.permissions import RequireScope
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.teacher_assignments.vocabulary import (
@@ -36,17 +37,23 @@ router = APIRouter(prefix="/api/v1", tags=["teacher assignments"])
 
 
 class CreateAssignmentRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
     teacher_id: UUID
     class_id: UUID
     role: TeacherAssignmentRole
 
 
 class ReassignRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
     new_teacher_id: UUID
     role: TeacherAssignmentRole | None = None
 
 
-class AssignmentResponse(BaseModel):
+class TeacherAssignmentResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     id: UUID
     school_id: UUID
     teacher_id: UUID
@@ -59,7 +66,7 @@ class AssignmentResponse(BaseModel):
     def from_assignment(
         cls,
         assignment: TeacherClassAssignment,
-    ) -> "AssignmentResponse":
+    ) -> "TeacherAssignmentResponse":
         return cls(
             id=assignment.id,
             school_id=assignment.school_id,
@@ -72,6 +79,8 @@ class AssignmentResponse(BaseModel):
 
 
 class AssignedClassResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     assignment_id: UUID
     class_id: UUID
     class_name: str
@@ -85,6 +94,8 @@ class AssignedClassResponse(BaseModel):
 
 
 class AssignedTeacherResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     assignment_id: UUID
     teacher_id: UUID
     first_name: str | None
@@ -101,14 +112,16 @@ class AssignedTeacherResponse(BaseModel):
         return cls(**asdict(item))
 
 
-class RosterSyncResponse(BaseModel):
+class TeacherRosterSyncResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     status: TeacherRosterSyncStatus
     imported_assignments: int
     missing_mappings: int
     message: str
 
     @classmethod
-    def from_outcome(cls, outcome: RosterSyncOutcome) -> "RosterSyncResponse":
+    def from_outcome(cls, outcome: RosterSyncOutcome) -> "TeacherRosterSyncResponse":
         return cls(
             status=outcome.status,
             imported_assignments=outcome.imported_assignments,
@@ -150,14 +163,14 @@ ItSsoDependency = Annotated[
 
 @router.post(
     "/teacher-class-assignments",
-    response_model=AssignmentResponse,
+    response_model=TeacherAssignmentResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_assignment(
     payload: CreateAssignmentRequest,
     actor: RosterDependency,
     service: TeacherAssignmentServiceDependency,
-) -> AssignmentResponse:
+) -> TeacherAssignmentResponse:
     try:
         assignment = await service.assign(
             actor,
@@ -167,12 +180,12 @@ async def create_assignment(
         )
     except TeacherAssignmentError as error:
         raise public_assignment_error(error) from error
-    return AssignmentResponse.from_assignment(assignment)
+    return TeacherAssignmentResponse.from_assignment(assignment)
 
 
 @router.post(
     "/teacher-class-assignments/{assignment_id}/reassign",
-    response_model=AssignmentResponse,
+    response_model=TeacherAssignmentResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def reassign_teacher(
@@ -180,7 +193,7 @@ async def reassign_teacher(
     payload: ReassignRequest,
     actor: RosterDependency,
     service: TeacherAssignmentServiceDependency,
-) -> AssignmentResponse:
+) -> TeacherAssignmentResponse:
     try:
         assignment = await service.reassign(
             actor,
@@ -190,7 +203,7 @@ async def reassign_teacher(
         )
     except TeacherAssignmentError as error:
         raise public_assignment_error(error) from error
-    return AssignmentResponse.from_assignment(assignment)
+    return TeacherAssignmentResponse.from_assignment(assignment)
 
 
 @router.delete(
@@ -243,25 +256,22 @@ async def class_teachers(
     service: TeacherAssignmentServiceDependency,
 ) -> list[AssignedTeacherResponse]:
     teachers = await service.class_teachers(actor, class_id=class_id)
-    return [
-        AssignedTeacherResponse.from_assigned_teacher(item)
-        for item in teachers
-    ]
+    return [AssignedTeacherResponse.from_assigned_teacher(item) for item in teachers]
 
 
 @router.post(
     "/teacher-class-assignments/roster-sync",
-    response_model=RosterSyncResponse,
+    response_model=TeacherRosterSyncResponse,
 )
 async def sync_roster_assignments(
     actor: ItSsoDependency,
     service: TeacherAssignmentServiceDependency,
-) -> RosterSyncResponse:
+) -> TeacherRosterSyncResponse:
     try:
         outcome = await service.sync_from_roster(actor)
     except TeacherAssignmentError as error:
         raise public_assignment_error(error) from error
-    return RosterSyncResponse.from_outcome(outcome)
+    return TeacherRosterSyncResponse.from_outcome(outcome)
 
 
 def public_assignment_error(error: TeacherAssignmentError) -> HTTPException:

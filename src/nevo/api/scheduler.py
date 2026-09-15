@@ -101,10 +101,7 @@ async def due_reviews(
 ) -> list[ConceptScheduleResponse]:
     await require_student_access(session, principal, student_id)
     schedules = await service.due_reviews(student_id=student_id)
-    return [
-        ConceptScheduleResponse.from_schedule(schedule)
-        for schedule in schedules
-    ]
+    return [ConceptScheduleResponse.from_schedule(schedule) for schedule in schedules]
 
 
 @router.post("/record-review", response_model=RecordReviewResponse)

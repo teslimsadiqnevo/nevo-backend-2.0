@@ -62,8 +62,8 @@ def test_ingests_batched_signal_events_for_authenticated_student() -> None:
 
     assert response.status_code == 202
     assert response.json() == {
-        "session_id": str(session_id),
-        "accepted_events": 2,
+        "sessionId": str(session_id),
+        "acceptedEvents": 2,
     }
     batch = repository.batches[0]
     assert batch.session.student_id == principal.user_id

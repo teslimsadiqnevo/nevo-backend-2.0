@@ -29,9 +29,7 @@ async def paginate(
     tell a complete list from a capped one, which is how rows go missing
     silently rather than loudly.
     """
-    total = await session.scalar(
-        select(func.count()).select_from(query.order_by(None).subquery())
-    )
+    total = await session.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
     rows = (await session.scalars(query.limit(limit).offset(offset))).all()
     return list(rows), int(total or 0)
 

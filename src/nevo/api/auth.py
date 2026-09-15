@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.auth.entities import AuthPrincipal, IssuedSession
 from nevo.auth.errors import (
     AuthError,
@@ -26,6 +27,8 @@ class PasswordLoginRequest(BaseModel):
 
 
 class PinLoginRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
     school_code: str = Field(min_length=2, max_length=50)
     login_identifier: str = Field(min_length=1, max_length=50)
     pin: str = Field(pattern=r"^\d{6}$")
@@ -45,6 +48,8 @@ class UnifiedLoginRequest(BaseModel):
 
 
 class SessionResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     access_token: str
     token_type: Literal["bearer"]
     expires_at: datetime
@@ -65,6 +70,8 @@ class SessionResponse(BaseModel):
 
 
 class PrincipalResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     user_id: UUID
     role: UserRole
     session_id: UUID

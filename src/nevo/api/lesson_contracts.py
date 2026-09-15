@@ -20,8 +20,8 @@ class ComprehensionCheckpoint(BaseModel):
     concept_id: UUID | None = Field(default=None, alias="conceptId")
     concept_name: str | None = Field(default=None, alias="conceptName")
     prompt: str
-    answer_type: Literal["single_choice", "multiple_choice", "text", "numeric", "boolean"] = (
-        Field(default="text", alias="answerType")
+    answer_type: Literal["single_choice", "multiple_choice", "text", "numeric", "boolean"] = Field(
+        default="text", alias="answerType"
     )
     options: list[CheckpointOption] = Field(default_factory=list)
     answer_key: ScalarAnswer | list[ScalarAnswer] | None = Field(default=None, alias="answerKey")
@@ -74,9 +74,7 @@ class InteractiveVariant(BaseModel):
 
     type: str = "practice_problem"
     prompt: str = ""
-    expected_interaction: str = Field(
-        default="teacher_review", alias="expectedInteraction"
-    )
+    expected_interaction: str = Field(default="teacher_review", alias="expectedInteraction")
     options: list[CheckpointOption] = Field(default_factory=list)
     answer_key: ScalarAnswer | list[ScalarAnswer] | None = Field(default=None, alias="answerKey")
     instructions: str | None = None
@@ -88,9 +86,7 @@ class CalculationStep(BaseModel):
     step_id: str = Field(alias="stepId")
     step_number: int = Field(alias="stepNumber")
     prompt: str
-    expected_input: Literal["selection", "numeric", "text", "drag"] = Field(
-        alias="expectedInput"
-    )
+    expected_input: Literal["selection", "numeric", "text", "drag"] = Field(alias="expectedInput")
     hint: str
     confirmation_text: str = Field(alias="confirmationText")
     visual_update: str = Field(alias="visualUpdate")
@@ -142,9 +138,7 @@ def checkpoint_payloads(
         answer_key = item.get("answerKey")
         if isinstance(answer_key, list):
             item["answerKey"] = [
-                answer
-                for answer in answer_key
-                if isinstance(answer, (str, int, float, bool))
+                answer for answer in answer_key if isinstance(answer, (str, int, float, bool))
             ]
         elif not isinstance(answer_key, (str, int, float, bool, type(None))):
             item["answerKey"] = None
@@ -174,9 +168,7 @@ def _options(value: object) -> list[dict[str, ScalarAnswer]]:
     for option in value:
         if isinstance(option, (str, int, float, bool)):
             result.append({"value": option, "label": str(option)})
-        elif isinstance(option, dict) and isinstance(
-            option.get("value"), (str, int, float, bool)
-        ):
+        elif isinstance(option, dict) and isinstance(option.get("value"), (str, int, float, bool)):
             raw = option["value"]
             result.append({"value": raw, "label": str(option.get("label") or raw)})
     return result

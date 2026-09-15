@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope, navigation_for
 from nevo.permissions.entities import (
@@ -31,6 +32,8 @@ router = APIRouter(prefix="/api/v1", tags=["permissions"])
 
 
 class PermissionResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     user_id: UUID
     school_id: UUID | None
     role: UserRole
@@ -50,6 +53,8 @@ class PermissionResponse(BaseModel):
 
 
 class TeamMemberResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     user_id: UUID
     admin_id: UUID
     email: str | None
@@ -79,7 +84,9 @@ class InviteAdminRequest(BaseModel):
     scopes: set[PermissionScope]
 
 
-class InvitationResponse(BaseModel):
+class AdminInvitationResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     invitation_id: UUID
     user_id: UUID
     email: EmailStr
@@ -89,7 +96,7 @@ class InvitationResponse(BaseModel):
     expires_at: datetime
 
     @classmethod
-    def from_invitation(cls, invitation: IssuedInvitation) -> "InvitationResponse":
+    def from_invitation(cls, invitation: IssuedInvitation) -> "AdminInvitationResponse":
         return cls(
             invitation_id=invitation.invitation_id,
             user_id=invitation.user_id,
@@ -102,11 +109,15 @@ class InvitationResponse(BaseModel):
 
 
 class AcceptInvitationRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
     invitation_token: str = Field(min_length=32, max_length=512)
     password: str = Field(min_length=8, max_length=1_024)
 
 
 class AcceptedInvitationResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     user_id: UUID
     school_id: UUID
     role: UserRole
@@ -188,7 +199,7 @@ async def list_admin_team(
 
 @router.post(
     "/admin/team/invitations",
-    response_model=InvitationResponse,
+    response_model=AdminInvitationResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def invite_admin(
@@ -196,7 +207,7 @@ async def invite_admin(
     principal: PrincipalDependency,
     service: PermissionServiceDependency,
     response: Response,
-) -> InvitationResponse:
+) -> AdminInvitationResponse:
     try:
         invitation = await service.invite(
             principal,
@@ -207,7 +218,7 @@ async def invite_admin(
     except PermissionError as error:
         raise public_permission_error(error) from error
     response.headers["Cache-Control"] = "no-store"
-    return InvitationResponse.from_invitation(invitation)
+    return AdminInvitationResponse.from_invitation(invitation)
 
 
 @router.post(

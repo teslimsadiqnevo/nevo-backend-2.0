@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.privacy import is_private_interaction_key
 from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
@@ -44,6 +45,8 @@ FORBIDDEN_ASK_NEVO_TEXT_KEYS = {
     "message",
     "text",
 }
+
+
 class LessonSessionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -170,6 +173,8 @@ class SignalBatchRequest(BaseModel):
 
 
 class SignalBatchResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     session_id: UUID
     accepted_events: int
 

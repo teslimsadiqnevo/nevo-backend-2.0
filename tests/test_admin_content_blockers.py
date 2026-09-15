@@ -129,7 +129,7 @@ def test_consent_completion_reports_the_copy_it_sent() -> None:
         "ParentConsentCompletionResponse"
     ]["properties"]
 
-    assert "receipt_sent_to" in completion
+    assert "receiptSentTo" in completion
 
 
 def test_a_parse_run_id_is_something_a_client_can_use() -> None:

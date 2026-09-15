@@ -73,12 +73,12 @@ def test_invite_and_accept_flow() -> None:
     accepted = client.post(
         "/api/v1/admin/team/invitations/accept",
         json={
-            "invitation_token": invitation["invitation_token"],
+            "invitation_token": invitation["invitationToken"],
             "password": "valid-password",
         },
     )
     assert accepted.status_code == 200
-    assert accepted.json()["user_id"] == invitation["user_id"]
+    assert accepted.json()["userId"] == invitation["userId"]
 
 
 def test_student_role_cannot_be_invited() -> None:
@@ -143,7 +143,7 @@ def test_invitation_token_is_one_time_use() -> None:
         },
     ).json()
     payload = {
-        "invitation_token": invitation["invitation_token"],
+        "invitation_token": invitation["invitationToken"],
         "password": "valid-password",
     }
 

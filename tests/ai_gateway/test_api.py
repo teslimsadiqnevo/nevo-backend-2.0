@@ -90,9 +90,9 @@ def test_authenticated_generation_returns_version_and_call_id() -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["prompt_version"] == 1
-    assert response.json()["call_id"] == str(calls.call_id)
-    assert response.json()["fallback_used"] is False
+    assert response.json()["promptVersion"] == 1
+    assert response.json()["callId"] == str(calls.call_id)
+    assert response.json()["fallbackUsed"] is False
 
 
 @pytest.fixture(autouse=True)

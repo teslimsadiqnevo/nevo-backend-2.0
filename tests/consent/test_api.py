@@ -76,15 +76,15 @@ def test_senco_can_confirm_school_collected_consent() -> None:
     response = client.post(
         "/api/v1/consents/school-confirmations",
         json={
-            "student_id": str(student_id),
-            "consent_types": ["data_processing"],
-            "confirmed_via": "written",
+            "studentId": str(student_id),
+            "consentTypes": ["data_processing"],
+            "confirmedVia": "written",
         },
     )
 
     assert response.status_code == 200
-    assert response.json()[0]["student_id"] == str(student_id)
-    assert response.json()[0]["confirmation_source"] == "school"
+    assert response.json()[0]["studentId"] == str(student_id)
+    assert response.json()[0]["confirmationSource"] == "school"
 
 
 def test_non_senco_cannot_manage_consent() -> None:
@@ -96,9 +96,9 @@ def test_non_senco_cannot_manage_consent() -> None:
     response = client.post(
         "/api/v1/consents/school-confirmations",
         json={
-            "student_id": str(uuid4()),
-            "consent_types": ["data_processing"],
-            "confirmed_via": "written",
+            "studentId": str(uuid4()),
+            "consentTypes": ["data_processing"],
+            "confirmedVia": "written",
         },
     )
 
@@ -115,15 +115,15 @@ def test_parent_request_is_queued_without_exposing_token() -> None:
     response = client.post(
         f"/api/v1/students/{uuid4()}/parent-consent-requests",
         json={
-            "parent_name": "Ada Parent",
-            "parent_contact": "ada@example.com",
-            "contact_method": "email",
-            "consent_types": ["data_processing"],
+            "parentName": "Ada Parent",
+            "parentContact": "ada@example.com",
+            "contactMethod": "email",
+            "consentTypes": ["data_processing"],
         },
     )
 
     assert response.status_code == 202
-    assert response.json()["delivery_status"] == "queued"
+    assert response.json()["deliveryStatus"] == "queued"
     assert "token" not in response.json()
     assert "consent_url" not in response.json()
 
@@ -137,9 +137,9 @@ def test_public_parent_completion_consumes_invitation() -> None:
     client.post(
         f"/api/v1/students/{student_id}/parent-consent-requests",
         json={
-            "parent_name": "Ada Parent",
-            "parent_contact": "ada@example.com",
-            "contact_method": "email",
+            "parentName": "Ada Parent",
+            "parentContact": "ada@example.com",
+            "contactMethod": "email",
         },
     )
 
@@ -153,7 +153,7 @@ def test_public_parent_completion_consumes_invitation() -> None:
     )
 
     assert first.status_code == 200
-    assert first.json()["student_id"] == str(student_id)
+    assert first.json()["studentId"] == str(student_id)
     assert second.status_code == 400
     assert second.json()["detail"]["code"] == "invalid_consent_invitation"
 

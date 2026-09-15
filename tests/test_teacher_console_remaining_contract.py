@@ -39,7 +39,7 @@ def test_existing_contracts_carry_the_new_fields() -> None:
     assert "slug" in schemas["SchoolCodeResponse"]["properties"]
     assert "note" in schemas["AssignmentCreate"]["properties"]
     assert "note" in schemas["LessonAssignmentRequest"]["properties"]
-    assert "note" in schemas["nevo__api__response_models__AssignmentResponse"]["properties"]
+    assert "note" in schemas["AssignmentResponse"]["properties"]
     assert "failedPages" in schemas["UploadStatusResponse"]["properties"]
     assert "profileImageUrl" in schemas["ProfilePatch"]["properties"]
     assert "/api/v1/users/me/profile-photo" in paths

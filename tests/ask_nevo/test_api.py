@@ -77,8 +77,8 @@ def test_student_ask_nevo_returns_answer() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["question_category"] == "lesson_help"
-    assert body["interaction_id"] == str(INTERACTION_ID)
+    assert body["questionCategory"] == "lesson_help"
+    assert body["interactionId"] == str(INTERACTION_ID)
     assert service.requests[0][1].current_page == "lesson_player"
 
 

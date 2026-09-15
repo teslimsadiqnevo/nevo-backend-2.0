@@ -15,6 +15,7 @@ from nevo.ai_gateway.errors import (
 )
 from nevo.ai_gateway.service import AiGatewayService
 from nevo.api.auth import PrincipalDependency
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor, require_student_access
 from nevo.domain.ai_gateway.vocabulary import AiProviderName, AiService
@@ -23,6 +24,8 @@ router = APIRouter(prefix="/api/v1/ai", tags=["ai-gateway"])
 
 
 class GenerateRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
     service: AiService
     prompt_name: str = Field(min_length=2, max_length=120)
     variables: dict[str, str] = Field(min_length=1)
@@ -41,6 +44,8 @@ class GenerateRequest(BaseModel):
 
 
 class GenerateResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     text: str
     provider: AiProviderName
     model: str

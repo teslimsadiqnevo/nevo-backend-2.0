@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.permissions import RequireScope
 from nevo.domain.partner_inquiries.vocabulary import (
     PartnerInquiryContactMethod,
@@ -29,6 +30,8 @@ tosse_router = APIRouter(prefix="/api/tosse", tags=["partner inquiries"])
 
 
 class PartnerInquiryRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
     full_name: str = Field(min_length=2, max_length=255)
     school_name: str = Field(min_length=2, max_length=255)
     role: PartnerInquiryRole
@@ -37,6 +40,8 @@ class PartnerInquiryRequest(BaseModel):
 
 
 class PartnerInquiryResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     id: UUID
     full_name: str
     school_name: str
@@ -67,9 +72,7 @@ def get_partner_inquiry_service(request: Request) -> PartnerInquiryService:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "service_unavailable",
-                "message": (
-                    "Partner inquiry services are temporarily unavailable."
-                ),
+                "message": ("Partner inquiry services are temporarily unavailable."),
             },
         )
     return service

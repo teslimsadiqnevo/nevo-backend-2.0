@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.permissions import RequireScope
 from nevo.api.response_models import CamelResponse
 from nevo.domain.accounts.vocabulary import (
@@ -37,6 +38,8 @@ router = APIRouter(prefix="/api/v1", tags=["sso"])
 
 
 class SsoStartResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     authorization_url: str
     school_entry_url: str
 
@@ -56,8 +59,10 @@ class SsoStartRequest(BaseModel):
 
 
 class SsoCallbackResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     access_token: str
-    token_type: Literal['bearer']
+    token_type: Literal["bearer"]
     expires_at: str
     user_id: str
     role: UserRole
@@ -77,7 +82,7 @@ class SsoCallbackResponse(BaseModel):
         )
 
 
-class RosterSyncResponse(CamelResponse):
+class SsoRosterSyncResponse(CamelResponse):
     status: RosterSyncStatus
     imported_students: int
     imported_teachers: int
@@ -85,7 +90,7 @@ class RosterSyncResponse(CamelResponse):
     issue_ids: list[str]
 
     @classmethod
-    def from_result(cls, result: RosterSyncResult) -> "RosterSyncResponse":
+    def from_result(cls, result: RosterSyncResult) -> "SsoRosterSyncResponse":
         return cls(
             status=result.status,
             imported_students=result.imported_students,
@@ -125,6 +130,8 @@ class SsoDataFlowCategoryResponse(BaseModel):
 
 
 class SsoConnectionHealthResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     provider: SsoProvider
     status: SsoConnectionStatus
     school_url_slug: str
@@ -229,6 +236,8 @@ class RosterSyncHistoryResponse(CamelResponse):
 
 
 class SsoReauthorisationResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     provider: SsoProvider
     authorization_url: str
     school_entry_url: str
@@ -257,6 +266,8 @@ class SsoDisconnectRequest(BaseModel):
 
 
 class SsoDisconnectionResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     provider: SsoProvider
     disconnected_at: datetime
     retained_user_count: int
@@ -355,16 +366,16 @@ async def sso_callback_alias(
 
 @router.post(
     "/schools/{school_slug}/sso/{provider}/roster-sync",
-    response_model=RosterSyncResponse,
+    response_model=SsoRosterSyncResponse,
 )
 async def sync_roster(
     school_slug: str,
     provider: SsoProvider,
     actor: ItSsoDependency,
     service: SsoDependency,
-) -> RosterSyncResponse:
+) -> SsoRosterSyncResponse:
     try:
-        return RosterSyncResponse.from_result(
+        return SsoRosterSyncResponse.from_result(
             await service.sync_roster(
                 school_slug=school_slug,
                 provider=provider,

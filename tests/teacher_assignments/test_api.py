@@ -90,14 +90,14 @@ def test_roster_admin_can_create_assignment() -> None:
     response = client.post(
         "/api/v1/teacher-class-assignments",
         json={
-            "teacher_id": str(teacher_id),
-            "class_id": str(class_id),
+            "teacherId": str(teacher_id),
+            "classId": str(class_id),
             "role": "primary",
         },
     )
 
     assert response.status_code == 201
-    assert response.json()["teacher_id"] == str(teacher_id)
+    assert response.json()["teacherId"] == str(teacher_id)
     assert response.json()["role"] == "primary"
 
 
@@ -107,8 +107,8 @@ def test_assignment_creation_requires_roster_scope() -> None:
     response = client.post(
         "/api/v1/teacher-class-assignments",
         json={
-            "teacher_id": str(uuid4()),
-            "class_id": str(uuid4()),
+            "teacherId": str(uuid4()),
+            "classId": str(uuid4()),
             "role": "co_teacher",
         },
     )
@@ -139,7 +139,7 @@ def test_teacher_can_query_own_classes_from_implicit_scope() -> None:
     response = client.get("/api/v1/teachers/me/classes")
 
     assert response.status_code == 200
-    assert response.json()[0]["class_name"] == "JSS 3"
+    assert response.json()[0]["className"] == "JSS 3"
 
 
 def test_roster_sync_returns_explicit_fallback() -> None:
@@ -169,8 +169,8 @@ def test_invalid_assignment_role_is_rejected() -> None:
     response = client.post(
         "/api/v1/teacher-class-assignments",
         json={
-            "teacher_id": str(uuid4()),
-            "class_id": str(uuid4()),
+            "teacherId": str(uuid4()),
+            "classId": str(uuid4()),
             "role": "assistant",
         },
     )

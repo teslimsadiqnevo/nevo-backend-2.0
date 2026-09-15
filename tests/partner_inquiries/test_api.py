@@ -33,9 +33,9 @@ def test_submit_partner_inquiry_stores_and_returns_record() -> None:
 
     assert response.status_code == 201
     body = response.json()
-    assert body["full_name"] == "Ada Lovelace"
+    assert body["fullName"] == "Ada Lovelace"
     assert body["role"] == "head_teacher"
-    assert body["contact_method"] == "email"
+    assert body["contactMethod"] == "email"
     assert len(repository.created) == 1
 
 
@@ -54,7 +54,7 @@ def test_submit_partner_inquiry_allows_optional_message() -> None:
 
     assert response.status_code == 201
     assert response.json()["message"] is None
-    assert response.json()["contact_method"] == "phone"
+    assert response.json()["contactMethod"] == "phone"
 
 
 def test_submit_partner_inquiry_rejects_invalid_contact() -> None:

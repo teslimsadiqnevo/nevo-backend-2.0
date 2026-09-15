@@ -36,15 +36,15 @@ def test_password_login_and_session_lookup() -> None:
     assert login.status_code == 200
     payload = login.json()
     assert payload["role"] == "teacher"
-    assert payload["token_type"] == "bearer"
+    assert payload["tokenType"] == "bearer"
     assert login.headers["Cache-Control"] == "no-store"
 
     session = client.get(
         "/api/v1/auth/session",
-        headers={"Authorization": f"Bearer {payload['access_token']}"},
+        headers={"Authorization": f"Bearer {payload['accessToken']}"},
     )
     assert session.status_code == 200
-    assert session.json()["user_id"] == str(user.id)
+    assert session.json()["userId"] == str(user.id)
 
 
 def test_invalid_credentials_return_stable_generic_error() -> None:
@@ -77,17 +77,17 @@ def test_missing_bearer_token_returns_invalid_session() -> None:
 def test_replaced_student_session_returns_required_message() -> None:
     client, _ = client_for(auth_user())
     request = {
-        "school_code": "NVS",
-        "login_identifier": "UZ59R",
+        "schoolCode": "NVS",
+        "loginIdentifier": "UZ59R",
         "pin": "244300",
     }
     first = client.post("/api/v1/auth/login/pin", json=request).json()
     second = client.post("/api/v1/auth/login/pin", json=request).json()
-    assert second["replaced_session"] is True
+    assert second["replacedSession"] is True
 
     response = client.get(
         "/api/v1/auth/session",
-        headers={"Authorization": f"Bearer {first['access_token']}"},
+        headers={"Authorization": f"Bearer {first['accessToken']}"},
     )
 
     assert response.status_code == 401
@@ -103,8 +103,8 @@ def test_pin_payload_is_validated() -> None:
     response = client.post(
         "/api/v1/auth/login/pin",
         json={
-            "school_code": "NVS",
-            "login_identifier": "UZ59R",
+            "schoolCode": "NVS",
+            "loginIdentifier": "UZ59R",
             "pin": "not-a-pin",
         },
     )
@@ -117,12 +117,12 @@ def test_logout_revokes_current_token() -> None:
     login = client.post(
         "/api/v1/auth/login/pin",
         json={
-            "school_code": "NVS",
-            "login_identifier": "UZ59R",
+            "schoolCode": "NVS",
+            "loginIdentifier": "UZ59R",
             "pin": "244300",
         },
     ).json()
-    headers = {"Authorization": f"Bearer {login['access_token']}"}
+    headers = {"Authorization": f"Bearer {login['accessToken']}"}
 
     assert client.post("/api/v1/auth/logout", headers=headers).status_code == 204
     assert client.get("/api/v1/auth/session", headers=headers).status_code == 401
@@ -135,8 +135,8 @@ def test_rate_limit_error_maps_to_http_429() -> None:
     response = client.post(
         "/api/v1/auth/login/pin",
         json={
-            "school_code": "NVS",
-            "login_identifier": "UZ59R",
+            "schoolCode": "NVS",
+            "loginIdentifier": "UZ59R",
             "pin": "244300",
         },
     )

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.permissions import RequireScope
 from nevo.consent.entities import (
     ConsentActor,
@@ -46,12 +47,16 @@ router = APIRouter(prefix="/api/v1", tags=["consent"])
 
 
 class SchoolConfirmationRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
     student_id: UUID
     consent_types: set[ConsentType] = Field(min_length=1)
     confirmed_via: ConsentMethod
 
 
 class ConsentRecordResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     id: UUID
     student_id: UUID
     consent_type: ConsentType
@@ -66,6 +71,8 @@ class ConsentRecordResponse(BaseModel):
 
 
 class ParentConsentRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
     parent_name: str = Field(min_length=2, max_length=255)
     parent_contact: str = Field(min_length=3, max_length=255)
     contact_method: ParentContactMethod
@@ -76,6 +83,8 @@ class ParentConsentRequest(BaseModel):
 
 
 class QueuedParentConsentResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     invitation_id: UUID
     parent_link_id: UUID
     student_id: UUID
@@ -106,6 +115,8 @@ class CompleteParentConsentRequest(BaseModel):
 
 
 class ParentConsentCompletionResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     invitation_id: UUID
     parent_link_id: UUID
     parent_id: UUID
@@ -134,6 +145,8 @@ class ParentConsentCompletionResponse(BaseModel):
 
 
 class ParentLinkResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     id: UUID
     school_id: UUID
     student_id: UUID
@@ -189,6 +202,8 @@ class ParentConsentInvitationResponse(BaseModel):
 
 
 class ConsentGateResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     student_id: UUID
     granted: bool
     blocked: bool

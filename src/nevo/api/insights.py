@@ -176,9 +176,7 @@ async def lesson_class_progress(
         ).all()
     )
     events = (
-        await session.scalars(
-            select(SignalEvent).where(SignalEvent.session_id.in_(session_ids))
-        )
+        await session.scalars(select(SignalEvent).where(SignalEvent.session_id.in_(session_ids)))
     ).all()
     rows = _segment_progress_rows(segments, events, len(student_ids))
     timed_rows = [item for item in rows if item["averageTimeSeconds"] is not None]
@@ -285,9 +283,7 @@ async def class_insights_narrative(
     events = (
         await session.scalars(select(SignalEvent).where(SignalEvent.session_id.in_(session_ids)))
     ).all()
-    completed = sum(
-        item.completion_status is LessonCompletionStatus.COMPLETED for item in sessions
-    )
+    completed = sum(item.completion_status is LessonCompletionStatus.COMPLETED for item in sessions)
     if not sessions:
         summary = f"{school_class.name} has no recorded lesson sessions in the past seven days."
         ahead = (
@@ -644,7 +640,8 @@ async def _progress_payload(session, student_id, subject):
 
 
 def _progress_narrative(
-    *, mastery_average: float | None,
+    *,
+    mastery_average: float | None,
     concept_count: int,
     practice_count: int,
     lesson_count: int,
@@ -665,9 +662,7 @@ def _progress_narrative(
     highlights = [f"Worked with {concept_count} concept{'s' if concept_count != 1 else ''}."]
     if practice_count:
         practice_suffix = "s" if practice_count != 1 else ""
-        highlights.append(
-            f"Completed {practice_count} recorded practice attempt{practice_suffix}."
-        )
+        highlights.append(f"Completed {practice_count} recorded practice attempt{practice_suffix}.")
     if lesson_count:
         lesson_suffix = "s" if lesson_count != 1 else ""
         highlights.append(f"Made progress in {lesson_count} lesson{lesson_suffix}.")
@@ -726,15 +721,11 @@ def _class_pulse(
         )
         is not None
     ]
-    completed = sum(
-        item.completion_status.value == "completed" for item in class_sessions
-    )
+    completed = sum(item.completion_status.value == "completed" for item in class_sessions)
     fallback_engagement = (
         round(completed / len(class_sessions) * 100, 1) if class_sessions else None
     )
-    exit_attempts = sum(
-        item.event_type is SignalEventType.EXIT_ATTEMPT for item in class_events
-    )
+    exit_attempts = sum(item.event_type is SignalEventType.EXIT_ATTEMPT for item in class_events)
     replay_count = sum(item.event_type is SignalEventType.REPLAY for item in class_events)
     focus = None
     if class_sessions:
@@ -846,9 +837,7 @@ async def _teacher_recent_activity(
             await session.execute(
                 select(
                     func.count(LessonAssignment.id),
-                    func.count(LessonAssignment.id).filter(
-                        LessonAssignment.status == "completed"
-                    ),
+                    func.count(LessonAssignment.id).filter(LessonAssignment.status == "completed"),
                 ).where(
                     LessonAssignment.class_id == assignment.class_id,
                     LessonAssignment.lesson_id == lesson.id,
@@ -908,9 +897,7 @@ def _segment_progress_rows(
         ]
         average = round(sum(times) / len(times), 1) if times else None
         slowdown_count = (
-            sum(value > max(90.0, average * 1.25) for value in times)
-            if average is not None
-            else 0
+            sum(value > max(90.0, average * 1.25) for value in times) if average is not None else 0
         )
         completion_rate = (
             round(len(completed_students) / assigned_student_count, 4)

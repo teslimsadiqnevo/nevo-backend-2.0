@@ -209,7 +209,7 @@ def test_sso_start_endpoint() -> None:
     response = client.get("/api/v1/schools/nevo-school/sso/google/start")
 
     assert response.status_code == 200
-    assert response.json()["school_entry_url"] == "https://nevo.app/nevo-school"
+    assert response.json()["schoolEntryUrl"] == "https://nevo.app/nevo-school"
 
 
 def test_sso_callback_endpoint_validates_state() -> None:
@@ -243,10 +243,10 @@ def test_admin_status_reports_health_and_data_flow() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "needs_attention"
-    assert body["last_connection_error"] == "Directory permission was withdrawn."
-    assert body["last_successful_sync_at"] is not None
-    assert body["next_scheduled_sync_at"] is not None
-    assert [item["key"] for item in body["data_flow"]] == [
+    assert body["lastConnectionError"] == "Directory permission was withdrawn."
+    assert body["lastSuccessfulSyncAt"] is not None
+    assert body["nextScheduledSyncAt"] is not None
+    assert [item["key"] for item in body["dataFlow"]] == [
         category.key for category in SSO_DATA_FLOW
     ]
 
@@ -337,7 +337,7 @@ def test_admin_reauthorise_returns_a_fresh_provider_url() -> None:
     response = client.post("/api/v1/admin/sso/reauthorise")
 
     assert response.status_code == 200
-    assert response.json()["authorization_url"].startswith("https://provider.example")
+    assert response.json()["authorizationUrl"].startswith("https://provider.example")
 
 
 def test_admin_disconnect_requires_confirmation() -> None:
@@ -362,7 +362,7 @@ def test_admin_disconnect_keeps_accounts_and_reports_the_count() -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["retained_user_count"] == 42
+    assert response.json()["retainedUserCount"] == 42
     assert service.disconnected_by == USER_ID
 
 

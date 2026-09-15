@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.domain.intelligence.vocabulary import (
     AccommodationType,
     AdaptationMode,
@@ -160,6 +161,8 @@ class AdaptRequest(BaseModel):
 
 
 class BreakSuggestionResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     triggered_thresholds: list[str]
     severity: str
     break_type: BreakType | None
@@ -176,6 +179,8 @@ class BreakSuggestionResponse(BaseModel):
 
 
 class SegmentAdaptationResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     segment_id: str
     modality: ContentModality
     density: DensityLevel
@@ -197,6 +202,8 @@ class SegmentAdaptationResponse(BaseModel):
 
 
 class ProactiveAdjustmentResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     action: str
     reason: str
     confidence: float
@@ -212,8 +219,7 @@ class ProactiveAdjustmentResponse(BaseModel):
             reason=adjustment.reason,
             confidence=adjustment.confidence,
             trigger_signals=[
-                TriggerSignalResponse.from_signal(signal)
-                for signal in adjustment.trigger_signals
+                TriggerSignalResponse.from_signal(signal) for signal in adjustment.trigger_signals
             ],
         )
 
@@ -233,6 +239,8 @@ class TriggerSignalResponse(BaseModel):
 
 
 class ModalitySuggestionResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     suggested: ContentModality
     trigger_reason: str
     confidence: ConfidenceLevel
@@ -250,13 +258,14 @@ class ModalitySuggestionResponse(BaseModel):
             confidence=suggestion.confidence,
             adaptation_confidence=suggestion.adaptation_confidence,
             trigger_signals=[
-                TriggerSignalResponse.from_signal(signal)
-                for signal in suggestion.trigger_signals
+                TriggerSignalResponse.from_signal(signal) for signal in suggestion.trigger_signals
             ],
         )
 
 
 class AdaptResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     lesson_id: UUID
     source: str
     segments: list[SegmentAdaptationResponse]
@@ -269,17 +278,10 @@ class AdaptResponse(BaseModel):
         return cls(
             lesson_id=plan.lesson_id,
             source=plan.source,
-            segments=[
-                SegmentAdaptationResponse.from_segment(segment)
-                for segment in plan.segments
-            ],
-            break_suggestion=BreakSuggestionResponse.from_result(
-                plan.break_suggestion
-            ),
+            segments=[SegmentAdaptationResponse.from_segment(segment) for segment in plan.segments],
+            break_suggestion=BreakSuggestionResponse.from_result(plan.break_suggestion),
             proactive_adjustment=(
-                ProactiveAdjustmentResponse.from_adjustment(
-                    plan.proactive_adjustment
-                )
+                ProactiveAdjustmentResponse.from_adjustment(plan.proactive_adjustment)
                 if plan.proactive_adjustment is not None
                 else None
             ),
@@ -326,14 +328,9 @@ class AccommodationAnalysisResponse(BaseModel):
     ) -> "AccommodationAnalysisResponse":
         return cls(
             student_id=analysis.student_id,
-            active_accommodations=[
-                signal.accommodation for signal in analysis.active
-            ],
+            active_accommodations=[signal.accommodation for signal in analysis.active],
             frontend_signals=[signal.frontend_signal for signal in analysis.active],
-            signals=[
-                AccommodationSignalResponse.from_signal(signal)
-                for signal in analysis.active
-            ],
+            signals=[AccommodationSignalResponse.from_signal(signal) for signal in analysis.active],
             source=analysis.source,
             persisted_as_label=False,
         )
@@ -346,9 +343,7 @@ class ScaffoldStateResponse(BaseModel):
     concept_id: UUID = Field(alias="conceptId")
     current_intensity: ScaffoldIntensity = Field(alias="currentIntensity")
     consecutive_correct: int = Field(alias="consecutiveCorrect")
-    response_time_improvement_streak: int = Field(
-        alias="responseTimeImprovementStreak"
-    )
+    response_time_improvement_streak: int = Field(alias="responseTimeImprovementStreak")
     reduced_hint_streak: int = Field(alias="reducedHintStreak")
     last_response_time_ms: int | None = Field(alias="lastResponseTimeMs")
     last_hint_count: int | None = Field(alias="lastHintCount")
@@ -647,9 +642,7 @@ def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:
         continuous_minutes=signals.continuous_minutes,
         engagement_score=signals.engagement_score,
         engagement_baseline=signals.engagement_baseline,
-        engagement_below_baseline_seconds=(
-            signals.engagement_below_baseline_seconds
-        ),
+        engagement_below_baseline_seconds=(signals.engagement_below_baseline_seconds),
         comprehension_score=signals.comprehension_score,
         session_average_comprehension=signals.session_average_comprehension,
         consecutive_errors=signals.consecutive_errors,

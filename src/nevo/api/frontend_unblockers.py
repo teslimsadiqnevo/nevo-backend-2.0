@@ -20,12 +20,13 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from nevo.access import accessible_lessons
 from nevo.api.auth import PrincipalDependency
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent_summary import empty_consent_summary, student_consent_summaries
 from nevo.api.content import (
     ParseAcceptedResponse,
@@ -34,12 +35,7 @@ from nevo.api.content import (
 )
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.lesson_contracts import (
-    AudioVariant,
-    CalculationVariant,
     ComprehensionCheckpoint,
-    InteractiveVariant,
-    TextVariant,
-    VisualVariant,
     checkpoint_payloads,
 )
 from nevo.api.pagination import (
@@ -63,11 +59,13 @@ from nevo.api.product_common import (
 from nevo.api.response_models import (
     AttentionFlagResponse,
     InterventionResponse,
+    LessonDetailResponse,
+    LessonSegmentResponse,
+    LessonSummaryResponse,
     OutcomesResponse,
     ProfileAliasResponse,
     SchoolHealthResponse,
     StudentConsentSummaryResponse,
-    renderable_review_reasons,
 )
 from nevo.api.response_models import (
     LessonModuleResponse as SharedLessonModuleResponse,
@@ -98,11 +96,8 @@ from nevo.domain.accounts.vocabulary import (
     UserStatus,
 )
 from nevo.domain.intelligence.vocabulary import (
-    ContentParseStatus,
-    LessonContentType,
     LessonScope,
     LessonSourceType,
-    SegmentReviewReason,
 )
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.signal_events.vocabulary import (
@@ -137,6 +132,8 @@ class SchoolSummary(BaseModel):
 
 
 class CurrentUserResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
     user_id: UUID
     role: UserRole
     first_name: str | None
@@ -194,62 +191,11 @@ class ConceptResponse(BaseModel):
     lesson_id: UUID | None = Field(default=None, alias="lessonId")
 
 
-class LessonSegmentResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    id: UUID
-    segment_key: str = Field(alias="segmentKey")
-    content_type: LessonContentType = Field(alias="contentType")
-    sequence_order: int = Field(alias="sequenceOrder")
-    title: str | None
-    body: str
-    available_modalities: list[str] = Field(alias="availableModalities")
-    comprehension_checkpoints: list[ComprehensionCheckpoint] = Field(
-        alias="comprehensionCheckpoints"
-    )
-    text_variant: TextVariant | None = Field(default=None, alias="textVariant")
-    visual_variant: VisualVariant | None = Field(default=None, alias="visualVariant")
-    audio_variant: AudioVariant | None = Field(default=None, alias="audioVariant")
-    interactive_variant: InteractiveVariant | None = Field(default=None, alias="interactiveVariant")
-    calculation_variant: CalculationVariant | None = Field(default=None, alias="calculationVariant")
-    needs_review: bool = Field(alias="needsReview")
-    review_reasons: list[SegmentReviewReason] = Field(alias="reviewReasons")
-    estimated_minutes: int = Field(default=0, alias="estimatedMinutes")
-
-    _keep_renderable = field_validator("review_reasons", mode="before")(renderable_review_reasons)
-
-
-class LessonSummaryResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    id: UUID
-    title: str
-    source_type: LessonSourceType = Field(alias="sourceType")
-    status: ContentParseStatus
-    segment_count: int = Field(alias="segmentCount")
-    review_segment_count: int = Field(alias="reviewSegmentCount")
-    subject: str | None = None
-    assignment_count: int = Field(default=0, alias="assignmentCount")
-    estimated_minutes: int = Field(default=0, alias="estimatedMinutes")
-    #: Who wrote the lesson. Without it a client cannot tell its own teacher's
-    #: work from the rest of the school's, even after fetching the list.
-    created_by_id: UUID | None = Field(default=None, alias="createdById")
-    created_by_name: str | None = Field(default=None, alias="createdByName")
-    created_at: datetime = Field(alias="createdAt")
-
-
-class LessonDetailResponse(LessonSummaryResponse):
-    confirmation_summary: str | None = Field(alias="confirmationSummary")
-    #: Written for the child. confirmationSummary is the parser talking to a
-    #: teacher about its own confidence; this is what a learner reads when the
-    #: lesson ends.
-    recap: str | None = None
-    #: Questions to close on, in the same shape as a segment checkpoint so one
-    #: renderer serves both.
-    assessment: list[ComprehensionCheckpoint] = Field(default_factory=list)
-
-    segments: list[LessonSegmentResponse]
-    modules: list[SharedLessonModuleResponse]
+# LessonSegmentResponse, LessonSummaryResponse and LessonDetailResponse used
+# to be declared again here, field for field. Two identical models with one
+# name gave the schema nevo__api__frontend_unblockers__LessonDetailResponse
+# and nevo__api__response_models__LessonDetailResponse, which is what a
+# generated client had to call them. The shared ones are imported instead.
 
 
 class LessonAssignmentRequest(BaseModel):
@@ -1741,9 +1687,7 @@ async def _recent_picture(session, student_id: UUID) -> str:
             )
         )
     ).all()
-    completed = sum(
-        item.completion_status is LessonCompletionStatus.COMPLETED for item in sessions
-    )
+    completed = sum(item.completion_status is LessonCompletionStatus.COMPLETED for item in sessions)
     if not sessions:
         return "No lesson activity has been recorded in the past two weeks."
     if completed == len(sessions):
@@ -1855,7 +1799,6 @@ def _title_from_filename(filename: str | None) -> str:
 
 
 def _source_type(filename: str | None):
-    from nevo.domain.intelligence.vocabulary import LessonSourceType
 
     suffix = (filename or "").lower().rsplit(".", 1)[-1]
     return {

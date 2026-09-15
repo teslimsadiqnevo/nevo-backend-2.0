@@ -99,7 +99,7 @@ def test_adapt_endpoint_returns_adaptation_plan() -> None:
     assert response.status_code == 200
     assert response.json()["source"] == "rule_based"
     assert response.json()["segments"][0] == {
-        "segment_id": "intro",
+        "segmentId": "intro",
         "modality": "visual",
         "density": "low",
         "scaffolding": "strong",

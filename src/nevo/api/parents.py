@@ -1,4 +1,5 @@
 """What a signed-in parent can read: their own children, and how they learn."""
+
 from datetime import date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -81,8 +82,7 @@ class GrowthNarrativeResponse(BaseModel):
             headline=narrative.headline,
             summary=narrative.summary,
             statements=[
-                GrowthStatementResponse.from_statement(item)
-                for item in narrative.statements
+                GrowthStatementResponse.from_statement(item) for item in narrative.statements
             ],
             periodStart=narrative.period_start,
             periodEnd=narrative.period_end,
@@ -136,9 +136,7 @@ async def my_children(
     The parent equivalent of students/me: without it a signed-in parent has
     no way to find their own child, since the admin read runs the other way.
     """
-    return [
-        ParentChildResponse.from_view(view) for view in await service.children(parent_id)
-    ]
+    return [ParentChildResponse.from_view(view) for view in await service.children(parent_id)]
 
 
 @router.get(

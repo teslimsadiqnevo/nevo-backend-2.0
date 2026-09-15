@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.ask_nevo.entities import (
@@ -62,7 +63,7 @@ class AnswerBlockResponse(BaseModel):
 
 
 class AskResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = CAMEL_CONFIG
 
     #: The model's answer exactly as returned, unchanged. Kept so nothing that
     #: already reads it breaks, and so the raw output stays inspectable.

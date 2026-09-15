@@ -29,15 +29,12 @@ OPENAPI_TAGS = [
     },
     {
         "name": "admin",
-        "description": (
-            "School admin evaluation and operational reporting endpoints."
-        ),
+        "description": ("School admin evaluation and operational reporting endpoints."),
     },
     {
         "name": "billing",
         "description": (
-            "Admin billing, subscription, invoice, payment method, and "
-            "billing contact endpoints."
+            "Admin billing, subscription, invoice, payment method, and billing contact endpoints."
         ),
     },
     {
@@ -54,10 +51,7 @@ OPENAPI_TAGS = [
     },
     {
         "name": "content",
-        "description": (
-            "Lesson upload/import parsing into structured, modality-tagged "
-            "segments."
-        ),
+        "description": ("Lesson upload/import parsing into structured, modality-tagged segments."),
     },
     {
         "name": "ai-gateway",
@@ -70,8 +64,7 @@ OPENAPI_TAGS = [
     {
         "name": "exports",
         "description": (
-            "Progress document draft generation, SENCo review, and parent "
-            "sharing workflows."
+            "Progress document draft generation, SENCo review, and parent sharing workflows."
         ),
     },
     {
@@ -84,22 +77,18 @@ OPENAPI_TAGS = [
     {
         "name": "mastery",
         "description": (
-            "Hybrid AKT concept mastery updates and student, class, and school "
-            "mastery aggregates."
+            "Hybrid AKT concept mastery updates and student, class, and school mastery aggregates."
         ),
     },
     {
         "name": "scheduler",
         "description": (
-            "FSRS spaced repetition scheduling, due reviews, and review outcome "
-            "recording."
+            "FSRS spaced repetition scheduling, due reviews, and review outcome recording."
         ),
     },
     {
         "name": "partner inquiries",
-        "description": (
-            "Public landing page founding partner inquiry submissions."
-        ),
+        "description": ("Public landing page founding partner inquiry submissions."),
     },
     {
         "name": "notifications",

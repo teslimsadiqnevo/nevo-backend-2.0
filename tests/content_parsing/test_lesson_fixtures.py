@@ -121,3 +121,20 @@ class TestSimpleInterest:
 
     def test_it_closes_on_a_summary_the_recap_can_lean_on(self, source: str) -> None:
         assert _section(source, "Summary").strip().endswith("division by 100.")
+
+
+@pytest.mark.parametrize("lesson", LESSONS, ids=lambda path: path.stem)
+def test_a_lesson_does_not_trip_the_compliance_policy(lesson: Path) -> None:
+    """A source the gateway will refuse can never be parsed.
+
+    Zero-Tag inspects what the model writes, and the model writes from the
+    source. linear-equations-jss3 said two sides of an equation "get the same
+    treatment", which is ordinary English and a prohibited term, so the lesson
+    was rejected twice and fell back to the deterministic splitter with only
+    a JSON decode error to show for it.
+    """
+
+    from nevo.ai_gateway.compliance import ZeroTagCompliancePolicy
+
+    result = ZeroTagCompliancePolicy().inspect(lesson.read_text(encoding="utf-8"))
+    assert result.allowed, f"{lesson.stem} uses {sorted(result.violations)}"

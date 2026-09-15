@@ -27,8 +27,8 @@ solving equations, and every step below is an application of it:
 
 **Whatever you do to one side, do to the other.**
 
-You may add, subtract, multiply or divide, as long as both pans get the same
-treatment.
+You may add, subtract, multiply or divide, as long as both pans are handled
+the same way.
 
 ## Worked example one
 

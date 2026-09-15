@@ -27,6 +27,11 @@ class LessonMediaService:
         expires_in = None if self._storage.public else self._storage.signed_url_ttl_seconds
         return url, expires_in
 
+    async def upload(self, storage_path: str, content: bytes, content_type: str) -> str:
+        path = self._validate(storage_path)
+        await self._storage.upload(path, content, content_type)
+        return await self._storage.url_for(path)
+
     @staticmethod
     def _validate(storage_path: str) -> str:
         path = storage_path.strip().lstrip("/")

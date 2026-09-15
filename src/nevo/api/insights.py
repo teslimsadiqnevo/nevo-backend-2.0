@@ -14,11 +14,13 @@ from nevo.api.product_common import (
 )
 from nevo.api.response_models import (
     AdaptationResponse,
+    ClassInsightsNarrativeResponse,
     ConversationEvidenceResponse,
     EngineConfigResponse,
     LessonClassProgressResponse,
     MisconceptionResponse,
     StudentProgressResponse,
+    StudentSessionDetailResponse,
     TeacherHomeResponse,
     TransformationMetricsResponse,
 )
@@ -32,7 +34,7 @@ from nevo.db.models.product import LessonProgress
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import UserRole
-from nevo.domain.signal_events.vocabulary import SignalEventType
+from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
 
@@ -188,6 +190,133 @@ async def lesson_class_progress(
         "segments": rows,
         "slowestSegmentId": slowest["segmentId"] if slowest else None,
         "slowdownNote": slowest["note"] if slowest else None,
+    }
+
+
+@router.get(
+    "/v1/students/{student_id}/sessions/{session_id}",
+    response_model=StudentSessionDetailResponse,
+)
+async def student_session_detail(
+    student_id: UUID,
+    session_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> dict[str, object]:
+    await require_student_access(session, principal, student_id)
+    lesson_session = await session.get(LessonSession, session_id)
+    if lesson_session is None or lesson_session.student_id != student_id:
+        raise HTTPException(status_code=404, detail="Lesson session not found")
+    lesson = (
+        await session.get(Lesson, lesson_session.lesson_id)
+        if lesson_session.lesson_id is not None
+        else None
+    )
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Lesson not found for this session")
+    segments = (
+        await session.scalars(
+            select(LessonSegment)
+            .where(LessonSegment.lesson_id == lesson.id)
+            .order_by(LessonSegment.sequence_order)
+        )
+    ).all()
+    events = (
+        await session.scalars(
+            select(SignalEvent)
+            .where(SignalEvent.session_id == lesson_session.id)
+            .order_by(SignalEvent.timestamp)
+        )
+    ).all()
+    sittings = int(
+        await session.scalar(
+            select(func.count(LessonSession.id)).where(
+                LessonSession.student_id == student_id,
+                LessonSession.lesson_id == lesson.id,
+                LessonSession.started_at <= lesson_session.started_at,
+            )
+        )
+        or 1
+    )
+    return {
+        "sessionId": str(lesson_session.id),
+        "lessonId": str(lesson.id),
+        "lessonTitle": lesson.title,
+        "occurredAt": lesson_session.started_at,
+        "sittings": sittings,
+        "narrative": _session_narrative(lesson_session, sittings),
+        "sections": _student_session_sections(segments, events, sittings),
+    }
+
+
+@router.get(
+    "/v1/classes/{class_id}/insights",
+    response_model=ClassInsightsNarrativeResponse,
+)
+async def class_insights_narrative(
+    class_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> dict[str, object]:
+    actor = await require_school_actor(session, principal)
+    await require_class_access(session, actor, class_id)
+    school_class = await session.get(Class, class_id)
+    if school_class is None:
+        raise HTTPException(status_code=404, detail="Class not found")
+    student_ids = set(
+        (
+            await session.scalars(
+                select(StudentClassEnrollment.student_id).where(
+                    StudentClassEnrollment.class_id == class_id
+                )
+            )
+        ).all()
+    )
+    since = datetime.now(UTC) - timedelta(days=7)
+    sessions = (
+        await session.scalars(
+            select(LessonSession).where(
+                LessonSession.student_id.in_(student_ids),
+                LessonSession.started_at >= since,
+            )
+        )
+    ).all()
+    session_ids = [item.id for item in sessions]
+    events = (
+        await session.scalars(select(SignalEvent).where(SignalEvent.session_id.in_(session_ids)))
+    ).all()
+    completed = sum(
+        item.completion_status is LessonCompletionStatus.COMPLETED for item in sessions
+    )
+    if not sessions:
+        summary = f"{school_class.name} has no recorded lesson sessions in the past seven days."
+        ahead = (
+            "Once the class begins its next lessons, this view will describe the shared pattern."
+        )
+    else:
+        summary = (
+            f"{school_class.name} recorded {len(sessions)} lesson sessions this week, "
+            f"with {completed} completed."
+        )
+        replays = sum(item.event_type is SignalEventType.REPLAY for item in events)
+        exits = sum(item.event_type is SignalEventType.EXIT_ATTEMPT for item in events)
+        if exits:
+            ahead = (
+                "Look first at lessons students left and returned to, then check where "
+                "support may help."
+            )
+        elif replays:
+            ahead = (
+                "Several parts were replayed; revisiting those explanations together may help next."
+            )
+        else:
+            ahead = "Keep the current lesson rhythm and review new evidence as the class continues."
+    return {
+        "classId": str(class_id),
+        "className": school_class.name,
+        "weeklySummary": summary,
+        "lookingAhead": ahead,
+        "generatedAt": datetime.now(UTC),
     }
 
 
@@ -690,6 +819,8 @@ async def _teacher_recent_activity(
                 "studentId": str(student.id),
                 "lessonId": str(lesson.id) if lesson else None,
                 "actionTarget": f"/teacher/students/{student.id}",
+                "completedCount": 1,
+                "totalCount": 1,
             }
         )
     for flag, student in flag_rows:
@@ -711,6 +842,20 @@ async def _teacher_recent_activity(
         if key in seen_assignments:
             continue
         seen_assignments.add(key)
+        completion_counts = (
+            await session.execute(
+                select(
+                    func.count(LessonAssignment.id),
+                    func.count(LessonAssignment.id).filter(
+                        LessonAssignment.status == "completed"
+                    ),
+                ).where(
+                    LessonAssignment.class_id == assignment.class_id,
+                    LessonAssignment.lesson_id == lesson.id,
+                    LessonAssignment.status != "cancelled",
+                )
+            )
+        ).one()
         activity.append(
             {
                 "id": f"assignment:{assignment.id}",
@@ -721,6 +866,8 @@ async def _teacher_recent_activity(
                 "classId": str(assignment.class_id) if assignment.class_id else None,
                 "lessonId": str(lesson.id),
                 "actionTarget": f"/teacher/lessons/{lesson.id}",
+                "completedCount": int(completion_counts[1] or 0),
+                "totalCount": int(completion_counts[0] or 0),
             }
         )
     return sorted(activity, key=lambda item: item["occurredAt"], reverse=True)[:20]
@@ -787,6 +934,62 @@ def _segment_progress_rows(
                 "averageTimeSeconds": average,
                 "slowdownCount": slowdown_count,
                 "note": note,
+            }
+        )
+    return rows
+
+
+def _session_narrative(lesson_session: LessonSession, sittings: int) -> str:
+    if lesson_session.completion_status is LessonCompletionStatus.COMPLETED:
+        if sittings > 1:
+            return f"Completed this lesson across {sittings} sittings, returning when ready."
+        return "Completed this lesson in one sitting."
+    if lesson_session.completion_status is LessonCompletionStatus.EXITED:
+        return "Paused this lesson before the end; the saved position is ready for a return."
+    return "This lesson sitting is still in progress."
+
+
+def _student_session_sections(
+    segments: list[LessonSegment],
+    events: list[SignalEvent],
+    sittings: int,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for segment in segments:
+        matching = [
+            event
+            for event in events
+            if str(event.event_data.get("segmentId") or event.event_data.get("segment_id") or "")
+            in {str(segment.id), segment.segment_key}
+        ]
+        times = [
+            seconds
+            for event in matching
+            if (
+                seconds := _time_seconds(
+                    event.event_data.get("timeOnSegment")
+                    or event.event_data.get("durationSeconds")
+                    or event.event_data.get("durationMs")
+                )
+            )
+            is not None
+        ]
+        elapsed = max(times, default=0.0)
+        expected = max(90.0, float(segment.estimated_minutes or 1) * 75.0)
+        took_time = elapsed >= expected
+        if not matching:
+            note = "No activity was recorded for this section in this sitting."
+        elif took_time and sittings > 1:
+            note = "Took time here during a lesson worked across more than one sitting."
+        elif took_time:
+            note = "Took time here before moving on."
+        else:
+            note = "Worked through this section and moved on."
+        rows.append(
+            {
+                "title": segment.title or f"Section {segment.sequence_order}",
+                "note": note,
+                "tookTime": took_time,
             }
         )
     return rows

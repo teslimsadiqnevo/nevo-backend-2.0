@@ -4,7 +4,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 from xml.sax.saxutils import unescape
 from zipfile import ZipFile
 
@@ -12,6 +12,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -29,6 +30,7 @@ from nevo.api.consent_summary import empty_consent_summary, student_consent_summ
 from nevo.api.content import (
     ParseAcceptedResponse,
     get_content_parsing_service,
+    get_lesson_media_service,
 )
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.lesson_contracts import (
@@ -73,7 +75,7 @@ from nevo.api.response_models import (
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
-from nevo.db.models.attention_flag import AttentionFlag, InterventionRecommendation
+from nevo.db.models.attention_flag import AttentionFlag, Escalation, InterventionRecommendation
 from nevo.db.models.consent import ParentLink
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import (
@@ -111,6 +113,7 @@ from nevo.domain.signal_events.vocabulary import (
 from nevo.intelligence.baseline import build_baseline_profile
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.permissions.entities import PermissionSnapshot
+from nevo.storage.media import LessonMediaService
 
 router = APIRouter()
 TeacherScope = Annotated[PermissionSnapshot, Depends(RequireScope(PermissionScope.TEACHER))]
@@ -142,6 +145,7 @@ class CurrentUserResponse(BaseModel):
     email: str | None
     school: SchoolSummary | None
     subjects: list[str] = Field(default_factory=list)
+    profile_image_url: str | None = Field(default=None, alias="profileImageUrl")
 
 
 def _camel(value: str) -> str:
@@ -258,6 +262,7 @@ class LessonAssignmentRequest(BaseModel):
     student_ids: list[UUID] = Field(default_factory=list, alias="studentIds", max_length=500)
     due_at: datetime | None = Field(default=None, alias="dueAt")
     available_from: datetime | None = Field(default=None, alias="availableFrom")
+    note: str | None = Field(default=None, max_length=2_000)
 
 
 class LessonAssignmentResponse(BaseModel):
@@ -279,6 +284,34 @@ class ProfilePatch(BaseModel):
     first_name: str | None = Field(default=None, alias="firstName", max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
     subjects: list[str] | None = Field(default=None, max_length=50)
+    profile_image_url: str | None = Field(default=None, alias="profileImageUrl", max_length=2_048)
+
+
+class ProfilePhotoResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    profile_image_url: str = Field(alias="profileImageUrl")
+
+
+class EscalationCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    student_id: UUID = Field(alias="studentId")
+    note: str = Field(min_length=1, max_length=5_000)
+    attention_flag_id: UUID | None = Field(default=None, alias="attentionFlagId")
+
+
+class EscalationResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID
+    student_id: UUID = Field(alias="studentId")
+    student_first_name: str | None = Field(alias="studentFirstName")
+    teacher_id: UUID = Field(alias="teacherId")
+    note: str
+    recent_picture: str = Field(alias="recentPicture")
+    generated_at: datetime = Field(alias="generatedAt")
+    acknowledged: bool
 
 
 class NotificationResponse(BaseModel):
@@ -429,6 +462,7 @@ async def current_user_profile(
             else None
         ),
         subjects=await _subjects_for_user(session, user),
+        profileImageUrl=user.preferences.get("profileImageUrl"),
     )
 
 
@@ -467,6 +501,11 @@ async def update_current_user_profile(
             )
         )
         user.preferences = {**user.preferences, "subjects": deduped}
+    if "profile_image_url" in changes:
+        value = (payload.profile_image_url or "").strip()
+        if value and not value.startswith("https://"):
+            raise HTTPException(status_code=422, detail="profileImageUrl must use HTTPS")
+        user.preferences = {**user.preferences, "profileImageUrl": value or None}
     await session.commit()
     school = await session.get(School, user.school_id) if user.school_id else None
     return CurrentUserResponse(
@@ -487,7 +526,43 @@ async def update_current_user_profile(
             else None
         ),
         subjects=await _subjects_for_user(session, user),
+        profileImageUrl=user.preferences.get("profileImageUrl"),
     )
+
+
+@router.post(
+    "/api/v1/users/me/profile-photo",
+    response_model=ProfilePhotoResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["authentication"],
+)
+async def upload_profile_photo(
+    file: UploadedLessonFile,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    media: Annotated[LessonMediaService, Depends(get_lesson_media_service)],
+) -> ProfilePhotoResponse:
+    content_type = (file.content_type or "").casefold()
+    extensions = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+    if content_type not in extensions:
+        raise HTTPException(status_code=422, detail="Upload a JPEG, PNG, or WebP image")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="Profile photo is empty")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Profile photo must not exceed 5 MB")
+    user = await session.get(User, principal.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    path = f"images/profiles/{user.id}/{uuid4()}.{extensions[content_type]}"
+    image_url = await media.upload(path, content, content_type)
+    user.preferences = {
+        **user.preferences,
+        "profileImagePath": path,
+        "profileImageUrl": image_url,
+    }
+    await session.commit()
+    return ProfilePhotoResponse(profileImageUrl=image_url)
 
 
 @router.get(
@@ -857,6 +932,7 @@ async def upload_content(
     session: DatabaseSession,
     service: ContentParsingDependency,
     file: UploadedLessonFile,
+    subject: Annotated[str | None, Form(max_length=120)] = None,
 ) -> ParseAcceptedResponse:
     """Take the file, then parse it behind the response.
 
@@ -886,6 +962,7 @@ async def upload_content(
                 "fileName": file.filename,
                 "contentType": file.content_type,
                 "byteLength": len(content),
+                **({"subject": subject.strip()} if subject and subject.strip() else {}),
             },
         ),
         requested_by_user_id=principal.user_id,
@@ -942,6 +1019,7 @@ async def create_lesson_assignments(
                             "assignment_type": "class" if payload.class_id else "student",
                             "due_at": payload.due_at,
                             "available_from": payload.available_from,
+                            "note": payload.note,
                         }
                         for student_id in unique_student_ids
                     ]
@@ -955,6 +1033,85 @@ async def create_lesson_assignments(
     )
     await session.commit()
     return LessonAssignmentResponse(assignmentIds=created, createdCount=len(created))
+
+
+@router.post(
+    "/api/v1/escalations",
+    response_model=EscalationResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["messaging"],
+)
+async def create_escalation(
+    payload: EscalationCreateRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> EscalationResponse:
+    teacher = await require_school_actor(session, principal, roles={UserRole.TEACHER})
+    await require_student_access(session, principal, payload.student_id)
+    student = await session.get(User, payload.student_id)
+    if payload.attention_flag_id is not None:
+        flag = await session.get(AttentionFlag, payload.attention_flag_id)
+        if flag is None or flag.student_id != payload.student_id:
+            raise HTTPException(status_code=404, detail="Attention flag not found")
+    record = Escalation(
+        attention_flag_id=payload.attention_flag_id,
+        student_id=payload.student_id,
+        teacher_id=teacher.id,
+        teacher_note=payload.note.strip(),
+    )
+    session.add(record)
+    await session.flush()
+    picture = await _recent_picture(session, payload.student_id)
+    await session.commit()
+    return EscalationResponse(
+        id=record.id,
+        studentId=record.student_id,
+        studentFirstName=student.first_name if student else None,
+        teacherId=record.teacher_id,
+        note=record.teacher_note,
+        recentPicture=picture,
+        generatedAt=record.generated_at,
+        acknowledged=False,
+    )
+
+
+@router.get(
+    "/api/v1/escalations",
+    response_model=list[EscalationResponse],
+    tags=["messaging"],
+)
+async def list_escalations(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> list[EscalationResponse]:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    query = (
+        select(Escalation, User)
+        .join(User, User.id == Escalation.student_id)
+        .where(User.school_id == actor.school_id)
+        .order_by(Escalation.generated_at.desc())
+        .limit(100)
+    )
+    if actor.role is UserRole.TEACHER:
+        query = query.where(Escalation.teacher_id == actor.id)
+    rows = (await session.execute(query)).all()
+    return [
+        EscalationResponse(
+            id=record.id,
+            studentId=record.student_id,
+            studentFirstName=student.first_name,
+            teacherId=record.teacher_id,
+            note=record.teacher_note,
+            recentPicture=await _recent_picture(session, record.student_id),
+            generatedAt=record.generated_at,
+            acknowledged=record.acknowledged_at is not None,
+        )
+        for record, student in rows
+    ]
 
 
 @router.get(
@@ -1574,6 +1731,29 @@ def _display_name(user: User) -> str:
     return name or user.email or user.login_identifier or "Nevo user"
 
 
+async def _recent_picture(session, student_id: UUID) -> str:
+    since = datetime.now(UTC) - timedelta(days=14)
+    sessions = (
+        await session.scalars(
+            select(LessonSession).where(
+                LessonSession.student_id == student_id,
+                LessonSession.started_at >= since,
+            )
+        )
+    ).all()
+    completed = sum(
+        item.completion_status is LessonCompletionStatus.COMPLETED for item in sessions
+    )
+    if not sessions:
+        return "No lesson activity has been recorded in the past two weeks."
+    if completed == len(sessions):
+        return f"Completed {completed} recent lesson{'s' if completed != 1 else ''}."
+    return (
+        f"Completed {completed} of {len(sessions)} recent lesson sessions; "
+        "the linked student record contains the current detail."
+    )
+
+
 async def _subjects_for_user(session, user: User) -> list[str]:
     subjects = {
         str(item).strip() for item in user.preferences.get("subjects", []) if str(item).strip()
@@ -1696,7 +1876,10 @@ def _extract_text(filename: str, content: bytes) -> str:
             from pypdf import PdfReader
 
             reader = PdfReader(BytesIO(content))
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
+            return "\n".join(
+                f"[Page {index}]\n{page.extract_text() or ''}"
+                for index, page in enumerate(reader.pages, start=1)
+            )
         except Exception as error:
             raise HTTPException(status_code=400, detail="Could not read PDF text") from error
     if suffix in {"docx", "pptx"}:

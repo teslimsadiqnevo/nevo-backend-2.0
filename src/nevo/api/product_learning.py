@@ -118,6 +118,7 @@ class AssignmentCreate(BaseModel):
     class_id: UUID | None = Field(default=None, alias="classId")
     due_at: datetime | None = Field(default=None, alias="dueAt")
     available_from: datetime | None = Field(default=None, alias="availableFrom")
+    note: str | None = Field(default=None, max_length=2_000)
 
 
 class ProgressWrite(BaseModel):
@@ -377,6 +378,7 @@ async def assignments(
             "status": item.status,
             "dueAt": item.due_at,
             "availableFrom": item.available_from,
+            "note": item.note,
             "assignedAt": item.assigned_at,
         }
         for item, lesson in rows
@@ -430,6 +432,7 @@ async def create_assignments(
             "assignment_type": "class" if payload.class_id else "student",
             "due_at": payload.due_at,
             "available_from": payload.available_from,
+            "note": payload.note,
         }
         for lesson_id in payload.lesson_ids
         for student_id in student_ids
@@ -1203,6 +1206,7 @@ async def upload_status(
             }
             for item in segments
         ],
+        "failedPages": _failed_pages(job.structure),
         "structure": job.structure,
         "error": job.error_message,
     }
@@ -1318,6 +1322,23 @@ def _upload_structure(parsed) -> dict[str, object]:
         "modules": modules,
         "reviewNotes": list(parsed.review_notes),
     }
+
+
+def _failed_pages(structure: dict[str, object]) -> list[int]:
+    direct = structure.get("failedPages")
+    if isinstance(direct, list):
+        return sorted({int(item) for item in direct if isinstance(item, int) and item > 0})
+    notes = structure.get("reviewNotes")
+    if not isinstance(notes, list):
+        return []
+    pages: set[int] = set()
+    for note in notes:
+        if not isinstance(note, dict) or note.get("code") != "ai_parse_fallback":
+            continue
+        values = note.get("pageNumbers")
+        if isinstance(values, list):
+            pages.update(item for item in values if isinstance(item, int) and item > 0)
+    return sorted(pages)
 
 
 def _extract_pdf_pages(content: bytes, page_numbers: list[int]) -> list[SourcePage]:

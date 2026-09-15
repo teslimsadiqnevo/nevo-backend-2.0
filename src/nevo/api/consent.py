@@ -289,6 +289,11 @@ async def complete_parent_consent(
 @router.get(
     "/consents/parent/{token}",
     response_model=ParentConsentInvitationResponse,
+    responses={
+        404: {
+            "description": "The consent link is unknown, revoked, or expired",
+        }
+    },
 )
 async def inspect_parent_consent(
     token: str,

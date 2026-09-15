@@ -222,6 +222,9 @@ class ContentParsingService:
                         "error": error.__class__.__name__,
                         "reason": str(error)[:300],
                         "looksTruncated": _looks_truncated(locals().get("result")),
+                        "pageNumbers": [
+                            int(value) for value in re.findall(r"\[Page (\d+)\]", chunk)
+                        ],
                     }
                 )
                 segments.extend(

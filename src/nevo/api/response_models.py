@@ -217,6 +217,7 @@ class OpsOverviewResponse(CamelResponse):
 class SchoolCodeResponse(CamelResponse):
     school_id: UUID
     school_name: str
+    slug: str
     auth_method: AuthMethod
     classes: list[ClassOptionResponse]
 
@@ -346,6 +347,7 @@ class AssignmentResponse(CamelResponse):
     status: AssignmentStatus
     due_at: datetime | None
     available_from: datetime | None
+    note: str | None = None
     assigned_at: datetime
 
 
@@ -433,11 +435,37 @@ class TeacherRecentActivityResponse(CamelResponse):
     student_id: UUID | None = None
     lesson_id: UUID | None = None
     action_target: str
+    completed_count: int | None = None
+    total_count: int | None = None
 
 
 class TeacherHomeResponse(CamelResponse):
     class_learning_pulse: list[ClassLearningPulseResponse]
     recent_activity: list[TeacherRecentActivityResponse]
+
+
+class ClassInsightsNarrativeResponse(CamelResponse):
+    class_id: UUID
+    class_name: str
+    weekly_summary: str
+    looking_ahead: str
+    generated_at: datetime
+
+
+class StudentSessionSectionResponse(CamelResponse):
+    title: str
+    note: str
+    took_time: bool
+
+
+class StudentSessionDetailResponse(CamelResponse):
+    session_id: UUID
+    lesson_id: UUID
+    lesson_title: str
+    occurred_at: datetime
+    sittings: int
+    narrative: str
+    sections: list[StudentSessionSectionResponse]
 
 
 class SegmentCompletionResponse(CamelResponse):
@@ -539,6 +567,7 @@ class UploadStatusResponse(CamelResponse):
     #: Every segment the parse produced, in order. Modules point at these by
     #: segmentKey.
     segments: list[UploadSegmentDocument] = Field(default_factory=list)
+    failed_pages: list[int] = Field(default_factory=list)
     structure: "UploadStructureDocument"
     error: str | None
 

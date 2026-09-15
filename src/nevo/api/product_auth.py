@@ -221,6 +221,7 @@ async def verify_school_code(
     return {
         "schoolId": str(school.id),
         "schoolName": school.name,
+        "slug": school.school_url_slug,
         "authMethod": school.auth_method.value,
         "classes": [
             {"id": str(item.id), "name": item.name, "yearGroup": item.year_group}

@@ -276,6 +276,7 @@ class LessonAssignment(Base):
     available_from: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     assigned_at: Mapped[datetime] = mapped_column(

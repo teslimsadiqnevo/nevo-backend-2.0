@@ -18,6 +18,7 @@ from nevo.api.product_common import (
     require_student_access,
 )
 from nevo.api.response_models import (
+    AcademicConfig,
     ClassSummaryResponse,
     IdCodeResponse,
     IdNameResponse,
@@ -68,7 +69,10 @@ class SchoolPatch(BaseModel):
 
     name: str | None = Field(default=None, min_length=2, max_length=255)
     profile: dict[str, object] | None = None
-    academic_config: dict[str, object] | None = Field(default=None, alias="academicConfig")
+    #: Validated rather than waved through: billing reads termStartDates, and
+    #: an unreadable date there used to be swallowed with a log line, which
+    #: meant a school was invoiced on dates it had not chosen.
+    academic_config: AcademicConfig | None = Field(default=None, alias="academicConfig")
     retention_policy: str | None = Field(
         default=None,
         alias="retentionPolicy",
@@ -203,8 +207,13 @@ async def update_school(
         school.name = changes["name"]
     if "profile" in changes:
         school.profile = changes["profile"]
-    if "academic_config" in changes:
-        school.academic_config = changes["academic_config"]
+    if "academic_config" in changes and payload.academic_config is not None:
+        # Dumped in JSON mode so the dates land as ISO strings, which is what
+        # billing parses them back out of.
+        school.academic_config = payload.academic_config.model_dump(
+            mode="json",
+            by_alias=False,
+        )
     if "retention_policy" in changes:
         school.retention_policy = changes["retention_policy"]
     await session.commit()

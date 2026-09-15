@@ -59,13 +59,39 @@ def renderable_review_reasons(value: object) -> object:
     return [reason for reason in value if reason in known]
 
 
+class AcademicConfig(CamelResponse):
+    """A school's own academic calendar.
+
+    Only the field the backend actually reads is named. Anything else a
+    school has stored is passed through untouched rather than dropped,
+    because typing this shape is meant to tell a client what Nevo uses, not
+    to decide what a school may keep.
+    """
+
+    model_config = ConfigDict(alias_generator=_camel, populate_by_name=True, extra="allow")
+
+    #: When each term begins, in the school's own calendar. Per-term billing
+    #: invoices from these dates; with none stored the contract year is split
+    #: into three equal spans instead, which is a guess at somebody's term.
+    term_start_dates: list[date] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "Term start dates as ISO dates, earliest first. Nigerian schools "
+            "run three terms, so send three; fewer means Nevo falls back to "
+            "splitting the contract year evenly."
+        ),
+        examples=[["2026-09-14", "2027-01-11", "2027-04-19"]],
+    )
+
+
 class SchoolResponse(CamelResponse):
     id: UUID
     name: str
     code: str | None
     slug: str | None
     profile: dict[str, object]
-    academic_config: dict[str, object]
+    academic_config: AcademicConfig
     retention_policy: str
     retention_days: int
 

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from nevo.api.auth import SessionResponse
 from nevo.api.lesson_contracts import (
     AudioVariant,
     CalculationVariant,
@@ -291,6 +292,12 @@ class JoinAcceptedResponse(CamelResponse):
     role: UserRole
     login_identifier: str | None
     consent_status: ConsentStatus | None = None
+    #: The account was just created by somebody holding a valid one-time
+    #: token, which is the same authorisation the class-code path signs a
+    #: child in on. Without it a child who arrived by invite link finishes
+    #: onboarding signed out, with no school code to sign back in with, and
+    #: whatever they did during onboarding has nowhere to be submitted.
+    session: SessionResponse | None = None
 
 
 class ParentRightResponse(CamelResponse):

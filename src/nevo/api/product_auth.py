@@ -802,6 +802,8 @@ async def accept_join(
     payload: JoinRequest,
     session: DatabaseSession,
     request: Request,
+    response: Response,
+    auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
     record = await _join_record(token, session)
     if record.role == "teacher" and not (payload.password and record.email):
@@ -867,11 +869,18 @@ async def accept_join(
                 except ConsentError:
                     record.consent_request_status = ConsentStatus.NOT_SENT.value
                     await session.commit()
+    # Sign them in. The class-code path already does this, and a child who
+    # arrived by invite link has less to fall back on, not more: no school
+    # code, so the sign-in screen cannot help them either. Sending them away
+    # signed out stranded the account they had just made.
+    issued = await auth_service.issue_for_provisioned_user(user.id)
+    response.headers["Cache-Control"] = "no-store"
     return {
         "userId": str(user.id),
         "role": user.role.value,
         "loginIdentifier": user.login_identifier,
         "consentStatus": consent_status,
+        "session": SessionResponse.from_issued(issued),
     }
 
 

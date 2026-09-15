@@ -286,6 +286,8 @@ async def request_timing(request: Request, call_next):  # type: ignore[no-untype
             duration_ms,
         )
     return response
+
+
 app.include_router(admin_router)
 app.include_router(ai_gateway_router)
 app.include_router(ask_nevo_router)
@@ -385,8 +387,43 @@ def custom_openapi() -> dict[str, object]:
             }
         },
     }
+    _document_session_failures(schema)
     app.openapi_schema = schema
     return schema
+
+
+#: What the session dependency can refuse a request with. These were reachable
+#: from day one and named nowhere, so a client had to treat the set as open and
+#: fall back to a generic message - and "paused" is the worst of the four to
+#: guess wrong at, because the child reads it as their own mistake.
+SESSION_FAILURE_CODES = (
+    "session_expired when the session has simply run out, "
+    "session_revoked when somebody signed this device out, "
+    "session_replaced when the same account signed in somewhere else, "
+    "account_paused when the account itself has been closed or suspended. "
+    "invalid_session covers a token that was never valid."
+)
+
+
+def _document_session_failures(schema: dict[str, object]) -> None:
+    """Say what a 401 means on every operation that can raise one.
+
+    The codes come from the dependency every authenticated operation shares,
+    so writing them inline would mean the same sentence on a hundred and
+    seventy handlers. An operation that documents its own 401 already - the
+    login endpoints, which fail for different reasons - is left alone.
+    """
+
+    paths = schema.get("paths", {})
+    assert isinstance(paths, dict)
+    for item in paths.values():
+        for operation in item.values():
+            if not isinstance(operation, dict) or not operation.get("security"):
+                continue
+            responses = operation.setdefault("responses", {})
+            if "401" in responses:
+                continue
+            responses["401"] = {"description": SESSION_FAILURE_CODES}
 
 
 app.openapi = custom_openapi  # type: ignore[method-assign]

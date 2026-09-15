@@ -110,6 +110,7 @@ async def test_parses_ai_segments_and_normalizes_calculation_variant() -> None:
                     "stepId": "s1",
                     "prompt": "What common denominator can we use?",
                     "expectedInput": "numeric",
+                    "answer": 4,
                     "hint": "Look for a shared multiple.",
                     "confirmationText": "Yes, fourths work.",
                     "visualUpdate": "Highlight denominators.",
@@ -119,6 +120,7 @@ async def test_parses_ai_segments_and_normalizes_calculation_variant() -> None:
                     "stepId": "s2",
                     "prompt": "What is one half in fourths?",
                     "expectedInput": "numeric",
+                    "answer": "2/4",
                     "hint": "Two fourths equal one half.",
                     "confirmationText": "Correct.",
                     "visualUpdate": "Show two shaded fourths.",
@@ -377,8 +379,8 @@ def test_a_calculation_without_an_answer_is_refused() -> None:
     from nevo.content_parsing.service import _validated_calculation_variant
 
     steps = [
-        {"prompt": "What is 3 x 4?", "expectedInput": "numeric"},
-        {"prompt": "Now add 5.", "expectedInput": "numeric"},
+        {"prompt": "What is 3 x 4?", "expectedInput": "numeric", "answer": 12},
+        {"prompt": "Now add 5.", "expectedInput": "numeric", "answer": 17},
     ]
 
     without, reason = _validated_calculation_variant(

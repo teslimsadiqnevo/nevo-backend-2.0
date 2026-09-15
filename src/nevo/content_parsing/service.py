@@ -67,6 +67,9 @@ gateway recorded provider_unavailable and fell back to splitting the source.
 MAX_CHUNK_CHARS = 24_000
 PROMPT_NAME = "content_parse.default"
 CALCULATION_INPUT_TYPES = {"selection", "numeric", "text", "drag"}
+#: The kinds that need something on screen to choose between. Numeric and text
+#: are typed, so an empty options list is correct for those and only those.
+CHOICE_INPUT_TYPES = {"selection", "drag"}
 AI_GENERATED_IMAGE_TYPE = "ai_generated_image"
 
 
@@ -704,6 +707,37 @@ def _has_audio_delivery(value: dict[str, object] | None) -> bool:
     return bool(isinstance(value, dict) and str(value.get("audioUrl") or "").strip())
 
 
+def _step_answer(value: object) -> str | int | float | bool | None:
+    """What this step is answered with, left in the type the model sent.
+
+    A numeric step answered "3000" and one answered 3000 are the same answer,
+    and coercing either way loses something: quote a number and a client has
+    to parse it back, stringify a fraction like "3/4" and it stops being one.
+    """
+
+    if isinstance(value, bool | int | float):
+        return value
+    text = str(value or "").strip()
+    return text or None
+
+
+def _step_options(value: object) -> list[dict[str, object]]:
+    """The choices a selection or drag step offers, in checkpoint shape."""
+
+    if not isinstance(value, list):
+        return []
+    options: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        option_value = _step_answer(item.get("value"))
+        label = str(item.get("label") or "").strip()
+        if option_value is None or not label:
+            continue
+        options.append({"value": option_value, "label": label})
+    return options
+
+
 def _validated_calculation_variant(
     variant: dict[str, object],
 ) -> tuple[dict[str, object] | None, str | None]:
@@ -720,6 +754,18 @@ def _validated_calculation_variant(
             return None, "calculation_variant_malformed"
         step_id = str(step.get("stepId") or f"step-{index}")
         hint = str(step.get("hint") or "").strip()
+        step_answer = _step_answer(step.get("answer"))
+        options = _step_options(step.get("options"))
+        if step_answer is None:
+            # A step that asks a child for something and does not say what the
+            # something is cannot be marked, and a client has nothing to check
+            # against. Better to reject the variant than ship a co-construction
+            # that silently accepts anything.
+            return None, "calculation_step_missing_answer"
+        if expected_input in CHOICE_INPUT_TYPES and len(options) < 2:
+            # Nothing to render. A selection step with no options is a prompt
+            # with no way to answer it.
+            return None, "calculation_step_missing_options"
         normalized_steps.append(
             {
                 "stepId": step_id,
@@ -727,6 +773,9 @@ def _validated_calculation_variant(
                 "prompt": prompt,
                 "expectedInput": expected_input,
                 "hint": hint,
+                "answer": step_answer,
+                "options": options,
+                "unit": str(step.get("unit") or "").strip() or None,
                 "confirmationText": str(step.get("confirmationText") or "").strip(),
                 "visualUpdate": str(step.get("visualUpdate") or "").strip(),
                 "equationState": str(step.get("equationState") or "").strip(),

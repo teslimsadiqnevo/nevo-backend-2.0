@@ -88,6 +88,18 @@ class CalculationStep(BaseModel):
     prompt: str
     expected_input: Literal["selection", "numeric", "text", "drag"] = Field(alias="expectedInput")
     hint: str
+    #: What this one step is answered with, in the units the step asks for.
+    #: The variant's own answer is the whole problem's total; a step inside a
+    #: fraction scaffold might want a numerator, so mapping the total onto the
+    #: last step would be wrong even when it looks right.
+    answer: ScalarAnswer | None = None
+    #: What a selection or drag step offers. Empty for numeric and text, where
+    #: the child types. Same shape as a checkpoint's options, so one renderer
+    #: serves both.
+    options: list[CheckpointOption] = Field(default_factory=list)
+    #: What the answer is counted in - "naira", "years", "%" - when saying so
+    #: makes the step answerable. Empty when the prompt already carries it.
+    unit: str | None = None
     confirmation_text: str = Field(alias="confirmationText")
     visual_update: str = Field(alias="visualUpdate")
     equation_state: str = Field(alias="equationState")

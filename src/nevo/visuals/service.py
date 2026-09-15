@@ -261,8 +261,14 @@ class EducationalImageService:
                 },
             )
         if response.is_error:
+            # Say what the provider said. Without this the note read "Image
+            # review failed with status 400" and every picture in three
+            # lessons was lost to a reason nobody could look up - the same
+            # blindness that made a spent credit balance look like a timeout.
+            detail = _provider_detail(response)
             raise VisualGenerationError(
                 f"Image review failed with status {response.status_code}"
+                + (f": {detail}" if detail else "")
             )
         return self._parse_review(response.json())
 

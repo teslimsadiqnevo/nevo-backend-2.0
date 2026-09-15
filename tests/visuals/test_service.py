@@ -217,3 +217,39 @@ async def test_malformed_review_output_is_surfaced(monkeypatch: pytest.MonkeyPat
         await EducationalImageService(_settings()).generate(
             title="T", lesson_text="body", requested_prompt=None
         )
+
+
+async def test_a_refused_review_says_what_the_provider_said(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A status code on its own is not a reason anybody can act on.
+
+    Every picture in three lessons was lost to "Image review failed with
+    status 400" - a note that named the code and nothing else, so there was
+    no way to tell a rejected prompt from a retired model from a malformed
+    request without redeploying to find out.
+    """
+
+    fake = _Fake(
+        [
+            httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "model: claude-opus-4-8 is not available",
+                    },
+                },
+            )
+        ]
+    )
+    _install(monkeypatch, fake)
+
+    with pytest.raises(VisualGenerationError) as raised:
+        await EducationalImageService(_settings()).generate(
+            title="T", lesson_text="body", requested_prompt=None
+        )
+
+    assert "400" in str(raised.value)
+    assert "not available" in str(raised.value)

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.content import Lesson
 from nevo.db.models.signal_event import LessonSession, SignalEvent
+from nevo.domain.signal_events.vocabulary import SignalEventType
 from nevo.intelligence.adaptation_log import (
     ADAPTATION_EVENT_TYPES,
     adaptation_plain_language,
@@ -26,6 +27,7 @@ class SqlAlchemyAdaptationEventLogRepository:
         class_id: UUID | None,
         student_id: UUID | None,
         lesson_id: UUID | None,
+        event_types: frozenset[SignalEventType] | None,
         date_from: datetime | None,
         date_to: datetime | None,
         limit: int,
@@ -37,6 +39,7 @@ class SqlAlchemyAdaptationEventLogRepository:
                 class_id=class_id,
                 student_id=student_id,
                 lesson_id=lesson_id,
+                event_types=event_types,
                 date_from=date_from,
                 date_to=date_to,
             )
@@ -55,17 +58,23 @@ class SqlAlchemyAdaptationEventLogRepository:
         class_id: UUID | None,
         student_id: UUID | None,
         lesson_id: UUID | None,
+        event_types: frozenset[SignalEventType] | None,
         date_from: datetime | None,
         date_to: datetime | None,
     ) -> int:
-        statement = _base_query(
-            school_id=school_id,
-            class_id=class_id,
-            student_id=student_id,
-            lesson_id=lesson_id,
-            date_from=date_from,
-            date_to=date_to,
-        ).with_only_columns(func.count(SignalEvent.id)).order_by(None)
+        statement = (
+            _base_query(
+                school_id=school_id,
+                class_id=class_id,
+                student_id=student_id,
+                lesson_id=lesson_id,
+                event_types=event_types,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            .with_only_columns(func.count(SignalEvent.id))
+            .order_by(None)
+        )
         async with self._sessions() as session:
             return int(await session.scalar(statement) or 0)
 
@@ -76,6 +85,7 @@ def _base_query(
     class_id: UUID | None,
     student_id: UUID | None,
     lesson_id: UUID | None,
+    event_types: frozenset[SignalEventType] | None,
     date_from: datetime | None,
     date_to: datetime | None,
 ) -> Select[tuple[SignalEvent, User, Lesson]]:
@@ -86,7 +96,12 @@ def _base_query(
         .join(Lesson, Lesson.id == LessonSession.lesson_id)
         .where(
             User.school_id == school_id,
-            SignalEvent.event_type.in_(ADAPTATION_EVENT_TYPES),
+            # Never widen past the adaptation set, whatever is asked for: a
+            # filter is a narrowing of this log, not a way into every signal
+            # the product records about a child.
+            SignalEvent.event_type.in_(
+                ADAPTATION_EVENT_TYPES & event_types if event_types else ADAPTATION_EVENT_TYPES
+            ),
         )
     )
     if class_id is not None:

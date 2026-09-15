@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.access import accessible_lessons
 from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
+from nevo.api.consent import StudentLearningConsent
 from nevo.api.content import get_content_parsing_service
 from nevo.api.dependencies import DatabaseSession, SessionFactory
 from nevo.api.frontend_unblockers import _extract_text, _source_type, _title_from_filename
@@ -521,7 +522,9 @@ async def start_lesson_session(
     lesson_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> dict[str, object]:
+    del consent
     actor, _ = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
@@ -555,7 +558,9 @@ async def save_lesson_progress(
     principal: PrincipalDependency,
     session: DatabaseSession,
     request: Request,
+    consent: StudentLearningConsent = None,
 ) -> dict[str, object]:
+    del consent
     actor, _ = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
@@ -782,7 +787,9 @@ async def create_offline_download(
     lesson_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> dict[str, object]:
+    del consent
     actor, _ = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
@@ -1069,9 +1076,7 @@ async def import_cloud_file(
     if not isinstance(sso, SsoService):
         raise HTTPException(status_code=503, detail="Cloud import is unavailable")
     provider = (
-        SsoProvider.GOOGLE
-        if payload.source_type == "google_drive"
-        else SsoProvider.MICROSOFT
+        SsoProvider.GOOGLE if payload.source_type == "google_drive" else SsoProvider.MICROSOFT
     )
     try:
         cloud_file = await sso.download_file(

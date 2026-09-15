@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.ask_nevo.entities import (
     AskNevoContextIds,
@@ -143,7 +144,9 @@ async def ask_nevo(
     payload: AskRequest,
     principal: PrincipalDependency,
     service: AskNevoDependency,
+    consent: StudentLearningConsent = None,
 ) -> AskResponse:
+    del consent
     # The asking role decides both the voice and the tools, so it cannot be
     # whatever the client sends. A learner claiming to be a teacher would
     # otherwise be offered the roster.

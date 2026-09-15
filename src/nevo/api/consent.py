@@ -367,6 +367,43 @@ LearningConsentDependency = Annotated[
 ]
 
 
+async def require_learning_consent_if_student(
+    request: Request,
+    principal: PrincipalDependency,
+) -> ConsentGate | None:
+    """Stop a withdrawn learner, and nobody else.
+
+    A parent who withdraws is told it suspends their child's access
+    immediately, so something has to act on that, and until now nothing did:
+    the gate was readable and never enforced. It goes on the endpoints that
+    do the processing - starting a lesson, recording progress, taking a
+    lesson offline, asking Nevo a question - and not on reads, so the client
+    can still load the screen that explains why learning has stopped.
+
+    Only an explicit withdrawal blocks. A learner whose consent nobody has
+    recorded yet carries on, which is the standing ruling: that gap belongs
+    to the school, not to the child.
+    """
+
+    if principal.role != "student":
+        # Teachers and admins share several of these endpoints and have their
+        # own authorisation. A pupil's consent has nothing to say about them,
+        # and their access should not depend on the consent service being up,
+        # which is why it is only reached for a learner.
+        return None
+    service = get_consent_service(request)
+    try:
+        return await service.require_student_consent(principal)
+    except ConsentError as error:
+        raise public_consent_error(error) from error
+
+
+StudentLearningConsent = Annotated[
+    ConsentGate | None,
+    Depends(require_learning_consent_if_student),
+]
+
+
 def consent_actor(snapshot: PermissionSnapshot) -> ConsentActor:
     if snapshot.school_id is None:
         raise HTTPException(

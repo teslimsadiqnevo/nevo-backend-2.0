@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from nevo.api.ask_nevo import router
 from nevo.api.auth import authenticated_principal
+from nevo.api.consent import require_learning_consent_if_student
 from nevo.api.dependencies import database_session
 from nevo.ask_nevo.entities import AskNevoResponse
 from nevo.ask_nevo.service import AskNevoService
@@ -49,6 +50,10 @@ def client_for(role: str = "student") -> tuple[TestClient, FakeAskNevoService, A
     app.state.ask_nevo_service = service
     app.dependency_overrides[authenticated_principal] = lambda: principal
     app.dependency_overrides[database_session] = lambda: FakeSession(principal)
+    # Asking is gated on the learner not having been withdrawn. These tests
+    # are about the answer, so the gate stands open; that it is attached at
+    # all is held by tests/consent/test_withdrawal_is_enforced.py.
+    app.dependency_overrides[require_learning_consent_if_student] = lambda: None
     app.include_router(router)
     return TestClient(app), service, principal
 

@@ -310,9 +310,7 @@ class BillingLedger(Base):
 
 class BillingContact(Base):
     __tablename__ = "billing_contacts"
-    __table_args__ = (
-        UniqueConstraint("school_id", name="uq_billing_contacts_school_id"),
-    )
+    __table_args__ = (UniqueConstraint("school_id", name="uq_billing_contacts_school_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -453,6 +451,9 @@ class Invoice(Base):
     per_student_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     total_before_vat: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     vat_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # The percentage, not the fraction: 7.5% is stored as 7.50. Kept per
+    # invoice because the rate is set by government, not by us.
+    vat_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     period_label: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

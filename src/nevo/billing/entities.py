@@ -98,6 +98,8 @@ class InvoiceRecord:
     per_student_rate: Decimal | None = None
     total_before_vat: Decimal | None = None
     vat_amount: Decimal | None = None
+    #: The percentage charged, not a fraction: 7.5% is 7.50.
+    vat_rate: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

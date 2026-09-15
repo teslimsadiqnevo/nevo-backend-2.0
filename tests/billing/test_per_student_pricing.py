@@ -127,6 +127,7 @@ def test_the_invoice_pdf_shows_the_working_not_just_the_total() -> None:
             per_student_rate=D("55000.00"),
             total_before_vat=D("11000000.00"),
             vat_amount=D("825000.00"),
+            vat_rate=D("7.50"),
         )
     )
 

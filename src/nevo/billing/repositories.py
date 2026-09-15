@@ -67,9 +67,7 @@ class SqlAlchemyBillingRepository:
                 plan=school.pricing_plan,
                 student_count=active_student_count,
                 rate_type=(
-                    RateType.FOUNDING_PARTNER
-                    if school.is_founding_partner
-                    else RateType.STANDARD
+                    RateType.FOUNDING_PARTNER if school.is_founding_partner else RateType.STANDARD
                 ),
                 per_student_rate=school.per_student_rate,
                 rate_locked_until=school.price_lock_expiry,
@@ -288,6 +286,7 @@ def _invoice_record(record: Invoice) -> InvoiceRecord:
         per_student_rate=record.per_student_rate,
         total_before_vat=record.total_before_vat,
         vat_amount=record.vat_amount,
+        vat_rate=record.vat_rate,
     )
 
 

@@ -130,8 +130,17 @@ class PricingResponse(BaseModel):
     rate_type: RateType = Field(alias="rateType")
     rate_locked_until: datetime | None = Field(alias="rateLockedUntil")
     total_before_vat: Decimal = Field(alias="totalBeforeVat")
-    vat_rate: Decimal = Field(alias="vatRate")
-    vat_amount: Decimal = Field(alias="vatAmount")
+    vat_rate: Decimal = Field(
+        alias="vatRate",
+        description=(
+            "VAT as a percentage, not a fraction: Nigeria's 7.5% is sent as "
+            '"7.50". Render it with a per-cent sign and do not multiply by '
+            "100. vatAmount is totalBeforeVat multiplied by this and divided "
+            "by 100, already rounded, so a client never has to compute it."
+        ),
+        examples=[Decimal("7.50")],
+    )
+    vat_amount: Decimal = Field(alias="vatAmount", examples=[Decimal("112500.00")])
     total_with_vat: Decimal = Field(alias="totalWithVat")
     currency: PricingCurrency
 
@@ -226,6 +235,17 @@ class InvoiceResponse(BaseModel):
     per_student_rate: Decimal | None = Field(alias="perStudentRate")
     total_before_vat: Decimal | None = Field(alias="totalBeforeVat")
     vat_amount: Decimal | None = Field(alias="vatAmount")
+    vat_rate: Decimal | None = Field(
+        alias="vatRate",
+        default=None,
+        description=(
+            "The percentage this invoice's VAT was charged at, not a "
+            'fraction: 7.5% is "7.50". Null on invoices issued before the '
+            "rate was recorded, where the VAT line should show the amount "
+            "alone rather than assume a rate."
+        ),
+        examples=[Decimal("7.50")],
+    )
 
     @classmethod
     def from_record(cls, record: InvoiceRecord) -> "InvoiceResponse":
@@ -244,6 +264,7 @@ class InvoiceResponse(BaseModel):
             per_student_rate=record.per_student_rate,
             total_before_vat=record.total_before_vat,
             vat_amount=record.vat_amount,
+            vat_rate=record.vat_rate,
         )
 
 
@@ -361,17 +382,31 @@ async def invoice_pdf(
     )
 
 
+def _percent(rate: Decimal) -> str:
+    """7.50 reads as 7.5 and 10.00 as 10, the way a rate is written.
+
+    Decimal.normalize turns 10.00 into 1E+1, which is correct and unreadable
+    on an invoice.
+    """
+
+    return str(rate).rstrip("0").rstrip(".") if "." in str(rate) else str(rate)
+
+
 def _invoice_working(invoice: Invoice) -> list[str]:
     """The lines that let a bursar check the total rather than trust it."""
     if invoice.student_count is None or invoice.per_student_rate is None:
         return []
     currency = invoice.currency.value
+    # The rate the invoice was charged at, not today's. A PDF is a record of
+    # what a school was billed, and a hardcoded 7.5% would silently rewrite
+    # every historical invoice the day the rate changes.
+    vat_line = "VAT" if invoice.vat_rate is None else f"VAT ({_percent(invoice.vat_rate)}%)"
     return [
         f"Period: {invoice.period_label or 'Contract period'}",
         f"Students: {invoice.student_count}",
         f"Rate per student: {currency} {invoice.per_student_rate}",
         f"Subtotal: {currency} {invoice.total_before_vat}",
-        f"VAT (7.5%): {currency} {invoice.vat_amount}",
+        f"{vat_line}: {currency} {invoice.vat_amount}",
     ]
 
 

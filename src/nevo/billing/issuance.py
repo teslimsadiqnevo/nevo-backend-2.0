@@ -124,12 +124,11 @@ class InvoiceIssuanceService:
                                 per_student_rate=quote.per_student_rate,
                                 total_before_vat=quote.total_before_vat,
                                 vat_amount=quote.vat_amount,
+                                vat_rate=quote.vat_rate,
                                 period_label=period.label,
                                 status=InvoiceStatus.PENDING,
                                 due_at=issue_date + timedelta(days=PAYMENT_TERM_DAYS),
-                                pdf_url=(
-                                    f"/api/billing/invoices/{school.id}/{period.number}.pdf"
-                                ),
+                                pdf_url=(f"/api/billing/invoices/{school.id}/{period.number}.pdf"),
                             )
                         )
                         issued += 1
@@ -217,9 +216,7 @@ class InvoiceIssuanceService:
                 len(term_start_dates),
             )
         span = DAYS_PER_CONTRACT_YEAR // TERMS_PER_YEAR
-        return tuple(
-            year_start + timedelta(days=span * index) for index in range(TERMS_PER_YEAR)
-        )
+        return tuple(year_start + timedelta(days=span * index) for index in range(TERMS_PER_YEAR))
 
     @staticmethod
     def _configured_terms(school: School) -> tuple[date, ...]:

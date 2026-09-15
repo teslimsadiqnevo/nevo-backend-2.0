@@ -711,7 +711,6 @@ async def enroll_student(
     session.add(
         EnrollmentHistory(
             student_id=student.id,
-            school_id=actor.school_id,
             to_class_id=payload.class_id,
             action="enrolled",
             actor_user_id=actor.id,
@@ -779,7 +778,6 @@ async def move_student(
     session.add(
         EnrollmentHistory(
             student_id=student_id,
-            school_id=actor.school_id,
             from_class_id=old_class_id,
             to_class_id=payload.class_id,
             action="moved",

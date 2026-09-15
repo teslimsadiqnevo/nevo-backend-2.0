@@ -17,14 +17,17 @@ The .docx is generated from the .md. After editing the source, rebuild it:
 `tests/content_parsing/test_lesson_fixtures.py` fails if you forget, and also
 if an edit strips out something a modality depends on.
 
-## simple-interest-jss3
+## The library
 
-Written to force all five modalities out of the parser. Calculation is the one
-that matters: it only appears when the source carries arithmetic the model can
-decompose into co-construction steps, and no lesson in the live library has
-ever produced one. The two worked examples with their numbered steps are there
-for that, the rectangle-in-bands passage is there to earn a diagram, and the
-practice questions are there for the interactive variant.
+| lesson | subject | what it is for |
+|---|---|---|
+| `simple-interest-jss3` | JSS 3 Maths | The only one written to force a calculation variant. Two worked examples of five numbered steps each, so the model has something it can decompose into co-construction; a rectangle-in-bands passage to earn a diagram. |
+| `linear-equations-jss3` | JSS 3 Maths | Algebra rather than arithmetic, and a second calculation source with a different shape - three worked examples including one with the unknown on both sides, and a word problem turned into an equation. |
+| `photosynthesis-jss2` | JSS 2 Basic Science | Not maths at all. A labelled cross-section described in prose for the visual, a five-step practical for procedure, and a word equation rather than a numeric one. |
+| `paragraph-writing-jss1` | JSS 1 English | Prose about prose, with a good and a bad worked example side by side. The hardest for a parser: no numbers anywhere and the diagram is a shape, not an object. |
+
+Between them they cover three subjects, three year groups, and the four
+content types the parser can emit.
 
 ## Running one through
 

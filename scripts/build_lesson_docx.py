@@ -152,6 +152,10 @@ def main() -> None:
     parser.add_argument("sources", nargs="+", type=Path, help="Markdown lesson sources")
     arguments = parser.parse_args()
     for source in arguments.sources:
+        if source.stem.upper() == "README":
+            # A glob of *.md catches the directory's own README, which is not
+            # a lesson and should not become one.
+            continue
         target = source.with_suffix(".docx")
         target.write_bytes(render(source.read_text(encoding="utf-8")))
         print(f"{source} -> {target} ({target.stat().st_size} bytes)")

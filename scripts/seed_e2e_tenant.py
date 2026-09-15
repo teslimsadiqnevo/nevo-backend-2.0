@@ -42,7 +42,14 @@ from nevo.db.models.billing import (
     Contract,
     Invoice,
 )
+from nevo.db.models.consent import (
+    ConsentInvitation,
+    ConsentNotificationOutbox,
+    ParentLink,
+)
 from nevo.db.models.content import Lesson
+from nevo.db.models.permission import Admin, AdminScopeAssignment
+from nevo.db.models.product import ParentDataRequest
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.sso import RosterSyncIssue, RosterSyncRun, SchoolSsoConfiguration
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
@@ -65,8 +72,13 @@ from nevo.domain.billing.vocabulary import (
     PaymentSource,
     PricingCurrency,
 )
-from nevo.domain.consent.vocabulary import ConsentConfirmationSource
+from nevo.domain.consent.vocabulary import (
+    ConsentConfirmationSource,
+    ParentContactMethod,
+    ParentRightType,
+)
 from nevo.domain.intelligence.vocabulary import LessonSourceType
+from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
     SignalEventType,
@@ -78,6 +90,9 @@ NOW = datetime.now(UTC)
 #: in a test school - there is nothing here worth protecting, and one password
 #: everybody knows beats five nobody can find.
 PASSWORD = "NevoE2E#2026!"
+#: Not a .test or .example domain: the API validates emails properly and
+#: rejects reserved TLDs, so accounts seeded under one cannot sign in.
+EMAIL_DOMAIN = "e2e.nevolearning.com"
 STUDENT_PIN = "246810"
 
 # Yinka's thresholds, named so a reader can see which ask each one answers.
@@ -172,6 +187,17 @@ class Seeder:
                 setattr(existing, field, value)
         return existing
 
+    async def insert_if_missing(self, model, item_id: UUID, **values) -> None:
+        """For rows the database refuses to let anyone update.
+
+        signal_events is append-only and enforces it with a rule, so the
+        ordinary upsert fails on a second run. A signal that already exists is
+        already right - it was derived from the same seed.
+        """
+
+        if await self.session.get(model, item_id) is None:
+            self.session.add(model(id=item_id, **values))
+
     def note(self, what: str, count: int) -> None:
         self.summary[what] = count
 
@@ -215,7 +241,7 @@ class Seeder:
                     auth_method=AuthMethod.EMAIL_PASSWORD,
                     first_name=first,
                     last_name=last,
-                    email=f"teacher.{slug}@{self.school_code.lower()}.test",
+                    email=f"teacher.{slug}@{EMAIL_DOMAIN}",
                     status=status,
                     # Invited teachers have no credential yet - that is what
                     # makes them the "invited but not joined" state.
@@ -246,11 +272,34 @@ class Seeder:
             auth_method=AuthMethod.EMAIL_PASSWORD,
             first_name="Ify",
             last_name="Okonkwo",
-            email=f"admin@{self.school_code.lower()}.test",
+            email=f"admin@{EMAIL_DOMAIN}",
             status=UserStatus.ACTIVE,
             password_hash=self.hasher.hash_password(PASSWORD),
         )
         await self.session.flush()
+
+        # A senco_admin row is not enough on its own. Every admin screen sits
+        # behind a scope, so without these the tenant renders 403 everywhere
+        # and none of the seeded data is reachable.
+        record = await self.upsert(
+            Admin,
+            self.id_for("admin-record"),
+            user_id=person.id,
+            school_id=school.id,
+            created_by_user_id=person.id,
+        )
+        await self.session.flush()
+        for scope in PermissionScope:
+            await self.upsert(
+                AdminScopeAssignment,
+                self.id_for(f"admin-scope:{scope.value}"),
+                admin_id=record.id,
+                scope=scope,
+                granted_by_user_id=person.id,
+                revoked_at=None,
+            )
+        await self.session.flush()
+        self.note("admin scopes granted", len(list(PermissionScope)))
         return person
 
     async def parent_for(self, school: School, index: int) -> User:
@@ -264,7 +313,7 @@ class Seeder:
             auth_method=AuthMethod.EMAIL_PASSWORD,
             first_name="Parent",
             last_name=f"Of{index}",
-            email=f"parent{index}@{self.school_code.lower()}.test",
+            email=f"parent{index}@{EMAIL_DOMAIN}",
             status=UserStatus.ACTIVE,
         )
         await self.session.flush()
@@ -370,6 +419,12 @@ class Seeder:
                 # Deliberately no row: the student the compliance screen sees
                 # as having no consent record at all.
                 continue
+            if status is ConsentStatus.PENDING:
+                # "Pending" means we asked and are waiting. The API refuses to
+                # report it without an invitation that was actually sent,
+                # which is right - a child nobody wrote to is not pending - so
+                # the seed has to create the request, not just the record.
+                await self.consent_request(school, student, index, admin)
             # A confirmed or withdrawn record has to say who decided it and
             # how. Only pending and not_sent leave those empty.
             decided = status in {ConsentStatus.CONFIRMED, ConsentStatus.WITHDRAWN}
@@ -404,6 +459,82 @@ class Seeder:
         self.note("students", len(made))
         return made
 
+    async def consent_request(
+        self,
+        school: School,
+        student: User,
+        index: int,
+        admin: User,
+    ) -> None:
+        """The parent link, the invitation and the message that was sent."""
+
+        link = await self.upsert(
+            ParentLink,
+            self.id_for(f"parent-link:{index}"),
+            school_id=school.id,
+            student_id=student.id,
+            parent_name=f"Parent of {student.first_name}",
+            parent_contact=f"parent{index}@{EMAIL_DOMAIN}",
+            contact_method=ParentContactMethod.EMAIL,
+        )
+        await self.session.flush()
+        invitation = await self.upsert(
+            ConsentInvitation,
+            self.id_for(f"consent-invitation:{index}"),
+            parent_link_id=link.id,
+            school_id=school.id,
+            student_id=student.id,
+            token_digest=f"seed-digest-{self.id_for(f'consent-invitation:{index}')}",
+            requested_by_user_id=admin.id,
+            created_at=NOW - timedelta(days=6),
+            expires_at=NOW + timedelta(days=8),
+        )
+        await self.session.flush()
+        await self.upsert(
+            ConsentNotificationOutbox,
+            self.id_for(f"consent-outbox:{index}"),
+            invitation_id=invitation.id,
+            contact_method=ParentContactMethod.EMAIL,
+            destination=f"parent{index}@{EMAIL_DOMAIN}",
+            consent_url=f"https://app.nevolearning.com/consent/seed-{index}",
+            status="sent",
+            sent_at=NOW - timedelta(days=6),
+        )
+
+    async def rights_requests(self, students: list[User], school: School) -> None:
+        """A few rights actually exercised, so the log is not an empty state.
+
+        D22b renders this screen. With no rows it only ever shows the empty
+        case, which is the one case that was already covered.
+        """
+
+        withdrawn = [s for s in students if s.status is UserStatus.DEACTIVATED]
+        kinds = [
+            ParentRightType.WITHDRAW_CONSENT,
+            ParentRightType.OBJECT,
+            ParentRightType.REQUEST_DATA,
+        ]
+        made = 0
+        for index, student in enumerate(withdrawn):
+            parent = await self.parent_for(school, index)
+            for kind_index, kind in enumerate(kinds[: index + 1]):
+                await self.upsert(
+                    ParentDataRequest,
+                    self.id_for(f"right:{index}:{kind.value}"),
+                    student_id=student.id,
+                    parent_id=parent.id,
+                    request_type=kind.value,
+                    # Half carry a reason, so reasonRecorded is not uniform.
+                    reason=(
+                        "We are moving school at the end of term." if kind_index % 2 == 0 else None
+                    ),
+                    status="open" if kind_index else "resolved",
+                    resolved_at=None if kind_index else NOW - timedelta(days=1),
+                )
+                made += 1
+        await self.session.flush()
+        self.note("parent rights exercised", made)
+
     # ----------------------------------------------------------------- flags
 
     async def flags(self, students: list[User]) -> None:
@@ -429,7 +560,10 @@ class Seeder:
                     else AttentionFlagType.SUDDEN_CHANGE
                 ),
                 description="Shorter sessions than usual over the past fortnight.",
-                evidence_series=[{"day": i, "minutes": 20 - i} for i in range(5)],
+                # The response model types this as a list of numbers. JSONB will
+                # take anything; the read refuses it, so a wrong shape here is a
+                # 500 on a screen rather than an error at write time.
+                evidence_series=[float(20 - i) for i in range(5)],
                 action_targets=["check in", "offer another format"],
                 generated_at=NOW - timedelta(days=index),
                 acknowledged_at=NOW - timedelta(hours=6) if acknowledged else None,
@@ -497,7 +631,7 @@ class Seeder:
                 days=index % ADAPTATION_WINDOW_DAYS,
                 minutes=self.random.randint(0, 600),
             )
-            await self.upsert(
+            await self.insert_if_missing(
                 SignalEvent,
                 self.id_for(f"adaptation:{index}"),
                 student_id=student.id,
@@ -510,7 +644,7 @@ class Seeder:
         # count is null - the case where absent must not render as zero.
         for index in range(4):
             student, session = sessions[0]
-            await self.upsert(
+            await self.insert_if_missing(
                 SignalEvent,
                 self.id_for(f"replay:{index}"),
                 student_id=student.id,
@@ -692,6 +826,7 @@ async def seed(
             admin = await seeder.admin(school)
             students = await seeder.students(school, classes, admin)
             await seeder.flags(students)
+            await seeder.rights_requests(students, school)
             await seeder.adaptations(school, students, teachers[0])
             await seeder.sso(school, teachers)
             await seeder.billing(school, admin)

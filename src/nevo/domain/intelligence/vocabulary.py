@@ -104,6 +104,9 @@ class SegmentReviewReason(StrEnum):
     VISUAL_VARIANT_IMAGE_GENERATION_FAILED = "visual_variant_image_generation_failed"
     CALCULATION_VARIANT_MALFORMED = "calculation_variant_malformed"
     CALCULATION_VARIANT_MISSING_ANSWER = "calculation_variant_missing_answer"
+    CALCULATION_VARIANT_TOO_FEW_STEPS = "calculation_variant_too_few_steps"
+    CALCULATION_STEP_MISSING_PROMPT = "calculation_step_missing_prompt"
+    CALCULATION_STEP_UNKNOWN_INPUT_TYPE = "calculation_step_unknown_input_type"
     CALCULATION_STEP_MISSING_ANSWER = "calculation_step_missing_answer"
     CALCULATION_STEP_MISSING_OPTIONS = "calculation_step_missing_options"
     CALCULATION_SEGMENT_HAS_NO_INTERACTIVE_DELIVERY = (

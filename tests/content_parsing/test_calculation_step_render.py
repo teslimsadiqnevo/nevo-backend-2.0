@@ -131,3 +131,34 @@ def test_the_contract_accepts_what_the_parse_produces() -> None:
     assert step.answer == 420000
     assert [option.value for option in step.options] == [420000, 42000]
     assert step.unit == "naira"
+
+
+def test_each_way_of_being_malformed_says_which() -> None:
+    """One blanket reason meant a live rejection named a category, not a cause.
+
+    Two co-constructions were refused in a parsed lesson and all anyone could
+    read was "calculation_variant_malformed" - which of four checks had fired
+    was unknowable without guessing.
+    """
+
+    cases = {
+        "calculation_variant_too_few_steps": {
+            "steps": [{"prompt": "x", "expectedInput": "numeric"}]
+        },
+        "calculation_step_missing_prompt": {"steps": [
+            {"prompt": "", "expectedInput": "numeric", "answer": 1},
+            {"prompt": "b", "expectedInput": "numeric", "answer": 2},
+        ]},
+        "calculation_step_unknown_input_type": {"steps": [
+            {"prompt": "a", "expectedInput": "handwriting", "answer": 1},
+            {"prompt": "b", "expectedInput": "numeric", "answer": 2},
+        ]},
+        "calculation_step_missing_answer": {"steps": [
+            {"prompt": "a", "expectedInput": "numeric"},
+            {"prompt": "b", "expectedInput": "numeric", "answer": 2},
+        ]},
+    }
+    for expected, payload in cases.items():
+        variant, review = _validated_calculation_variant({"answer": "5", **payload})
+        assert variant is None, expected
+        assert review == expected, f"expected {expected}, got {review}"

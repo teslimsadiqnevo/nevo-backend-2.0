@@ -100,3 +100,14 @@ def test_every_content_type_ends_up_with_a_modality() -> None:
             )
         )
         assert segment.available_modalities, content_type
+
+
+def test_a_picture_of_a_sum_is_not_a_lesson_on_its_own() -> None:
+    # The live case: the co-construction was rejected, the image survived, and
+    # the segment went out offering nothing but a diagram. One modality, no
+    # words, flagged for review that nobody had yet read.
+    segment = _normalize_segment(_calculation(calculation_variant=None, visual_variant=IMAGE))
+
+    assert ContentModality.TEXT in segment.available_modalities
+    assert ContentModality.VISUAL in segment.available_modalities
+    assert segment.needs_review

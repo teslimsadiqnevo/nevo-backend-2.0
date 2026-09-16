@@ -652,14 +652,13 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
             if (modality is ContentModality.INTERACTIVE and segment.calculation_variant is not None)
             or (modality is ContentModality.VISUAL and _has_visual_delivery(segment))
         )
-        if not modalities:
-            # The co-construction was rejected and no picture survived, which
-            # leaves a segment offering nothing at all. The database refuses
-            # that row and takes the whole lesson down with it, so fall back
-            # to what is always there: the text, and the narration if it was
-            # made. A teacher sees the segment flagged rather than losing
-            # every other segment in the lesson to one bad one.
-            modalities = (ContentModality.TEXT,)
+        if segment.calculation_variant is None:
+            # Without the co-construction this is not a calculation any more,
+            # whatever else survived. It used to fall back only when nothing
+            # at all was left, so a rejected variant that still had a picture
+            # went out as a lone image: a child got a diagram of a sum and no
+            # words. The text is always there, so give it back.
+            modalities = (ContentModality.TEXT, *modalities)
             if _has_audio_delivery(audio_variant):
                 modalities = (*modalities, ContentModality.AUDIO)
             needs_review = True
@@ -741,17 +740,24 @@ def _step_options(value: object) -> list[dict[str, object]]:
 def _validated_calculation_variant(
     variant: dict[str, object],
 ) -> tuple[dict[str, object] | None, str | None]:
+    # Say which check refused it. "malformed" named a category and no cause,
+    # so two rejected co-constructions in a live lesson told nobody which of
+    # four things had gone wrong, and the only way to find out was to guess.
     steps = variant.get("steps")
     if not isinstance(steps, list) or len(steps) < 2:
-        return None, "calculation_variant_malformed"
+        return None, "calculation_variant_too_few_steps"
     normalized_steps: list[dict[str, object]] = []
     for index, step in enumerate(steps, start=1):
         if not isinstance(step, dict):
             return None, "calculation_variant_malformed"
         prompt = str(step.get("prompt") or "").strip()
         expected_input = str(step.get("expectedInput") or "").strip()
-        if not prompt or expected_input not in CALCULATION_INPUT_TYPES:
-            return None, "calculation_variant_malformed"
+        if not prompt:
+            return None, "calculation_step_missing_prompt"
+        if expected_input not in CALCULATION_INPUT_TYPES:
+            # The single commonest way for this to fail: the model names a
+            # gesture we do not have a renderer for.
+            return None, "calculation_step_unknown_input_type"
         step_id = str(step.get("stepId") or f"step-{index}")
         hint = str(step.get("hint") or "").strip()
         step_answer = _step_answer(step.get("answer"))

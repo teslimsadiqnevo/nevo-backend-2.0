@@ -29,7 +29,12 @@ from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.consent import StudentLearningConsent
 from nevo.api.content import get_content_parsing_service
 from nevo.api.dependencies import DatabaseSession, SessionFactory
-from nevo.api.frontend_unblockers import _extract_text, _source_type, _title_from_filename
+from nevo.api.frontend_unblockers import (
+    MAX_LESSON_UPLOAD_BYTES,
+    _extract_text,
+    _source_type,
+    _title_from_filename,
+)
 from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.api.product_common import (
     actor_user,
@@ -90,7 +95,9 @@ ParsingService = Annotated[ContentParsingService, Depends(get_content_parsing_se
 LessonUpload = Annotated[UploadFile, File()]
 BatchLessonUpload = Annotated[list[UploadFile], File()]
 UploadScope = Annotated[str, Form(pattern="^(lesson|unit|term)$")]
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+#: Imported rather than restated, so the two upload routes cannot drift
+#: apart on what a teacher is allowed to send.
+MAX_UPLOAD_BYTES = MAX_LESSON_UPLOAD_BYTES
 MAX_BATCH_UPLOAD_FILES = 20
 UploadSubject = Annotated[str | None, Form(max_length=120)]
 StudentFilter = Annotated[UUID | None, Query(alias="studentId")]

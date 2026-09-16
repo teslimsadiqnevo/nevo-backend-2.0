@@ -118,6 +118,11 @@ ContentParsingDependency = Annotated[
     Depends(get_content_parsing_service),
 ]
 UploadedLessonFile = Annotated[UploadFile, File()]
+#: The one size limit for a lesson document, shared by every route that takes
+#: one. /api/content/upload had none at all and read whatever arrived straight
+#: into memory, while the staged route capped the same kind of file at 50 MB -
+#: two doors to the same pipeline disagreeing about what fits through.
+MAX_LESSON_UPLOAD_BYTES = 50 * 1024 * 1024
 SchoolIdQuery = Annotated[UUID | None, Query(alias="schoolId")]
 StudentIdQuery = Annotated[UUID | None, Query(alias="studentId")]
 ClassIdQuery = Annotated[UUID | None, Query(alias="classId")]
@@ -892,6 +897,11 @@ async def upload_content(
     if service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     content = await file.read()
+    if len(content) > MAX_LESSON_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(f"Lesson file exceeds {MAX_LESSON_UPLOAD_BYTES // (1024 * 1024)} MB"),
+        )
     source_text = _extract_text(file.filename or "lesson.txt", content)
     if not source_text.strip():
         raise HTTPException(

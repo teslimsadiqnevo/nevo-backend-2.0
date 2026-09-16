@@ -48,6 +48,7 @@ from nevo.db.models.consent import (
     ParentLink,
 )
 from nevo.db.models.content import Lesson
+from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.product import ParentDataRequest
 from nevo.db.models.signal_event import LessonSession, SignalEvent
@@ -78,6 +79,11 @@ from nevo.domain.consent.vocabulary import (
     ParentRightType,
 )
 from nevo.domain.intelligence.vocabulary import LessonSourceType
+from nevo.domain.learner_profiles.vocabulary import (
+    ChannelPreferenceStrength,
+    ConfidenceLevel,
+    ProcessingChannelPreference,
+)
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
@@ -535,6 +541,103 @@ class Seeder:
         await self.session.flush()
         self.note("parent rights exercised", made)
 
+    async def learner_profiles(self, students: list[User]) -> None:
+        """Give the tenant children who learn in different ways.
+
+        Every learner looked identical to the adaptation engine: forty
+        students and one profile, with every preference null. Nothing that
+        reads a preference had anything to show, so the modality surfaces were
+        only ever seen in their empty state - a screen saying "works better
+        with audio" cannot be wrong if no learner ever prefers audio.
+
+        Real profiles are inferred from observed signals over weeks. These are
+        written directly, which is what a test tenant is for, and the
+        undetermined ones matter as much as the decided ones: a child nobody
+        has enough evidence about is the ordinary case at the start of term.
+        """
+
+        # (how many, channel, the dimension that carries it, confidence)
+        shapes: list[tuple[int, ProcessingChannelPreference, str, ConfidenceLevel]] = [
+            (8, ProcessingChannelPreference.AUDITORY, "auditory", ConfidenceLevel.HIGH),
+            (8, ProcessingChannelPreference.VISUAL, "visual_spatial", ConfidenceLevel.HIGH),
+            (4, ProcessingChannelPreference.AUDITORY, "auditory", ConfidenceLevel.LOW),
+            (4, ProcessingChannelPreference.VISUAL, "visual_spatial", ConfidenceLevel.LOW),
+            (
+                4,
+                ProcessingChannelPreference.INTERACTIVE,
+                "interactive_kinesthetic",
+                ConfidenceLevel.MEDIUM,
+            ),
+            (3, ProcessingChannelPreference.TEXTUAL, "reading_writing", ConfidenceLevel.MEDIUM),
+            (3, ProcessingChannelPreference.MULTIMODAL, "visual_spatial", ConfidenceLevel.MEDIUM),
+        ]
+        plan: list[tuple[ProcessingChannelPreference, str, ConfidenceLevel] | None] = []
+        for count, channel, dimension, confidence in shapes:
+            plan.extend([(channel, dimension, confidence)] * count)
+
+        learners = [item for item in students if item.status is UserStatus.ACTIVE]
+        made = 0
+        for index, learner in enumerate(learners):
+            shape = plan[index] if index < len(plan) else None
+            if shape is None:
+                # Nobody has watched this child long enough to say anything.
+                continue
+            channel, dimension, confidence = shape
+            # Every dimension is weak unless it is the one this learner leans on.
+            values: dict[str, object] = {}
+            for name in (
+                "visual_spatial",
+                "auditory",
+                "reading_writing",
+                "interactive_kinesthetic",
+            ):
+                leaning = name == dimension
+                values[f"{name}_preference"] = (
+                    ChannelPreferenceStrength.STRONG
+                    if leaning and confidence is ConfidenceLevel.HIGH
+                    else ChannelPreferenceStrength.MODERATE
+                    if leaning
+                    else ChannelPreferenceStrength.LOW
+                )
+                values[f"{name}_preference_confidence"] = (
+                    confidence if leaning else ConfidenceLevel.LOW
+                )
+            # Keyed on the learner, not on our own id: a child who has taken a
+            # lesson already has a profile the engine made, and learner_id is
+            # unique, so writing a second one fails.
+            existing = await self.session.scalar(
+                select(LearnerProfile).where(LearnerProfile.learner_id == learner.id)
+            )
+            await self.upsert(
+                LearnerProfile,
+                existing.id if existing else self.id_for(f"profile:{index}"),
+                learner_id=learner.id,
+                version=1,
+                observed_event_count=40 + index * 3,
+                last_evaluated_at=NOW - timedelta(days=index % 5),
+                processing_channel_preference=channel,
+                processing_channel_preference_confidence=confidence,
+                # 1 to 5 scales, kept plausible rather than uniform.
+                cognitive_load_threshold=3 + (index % 3) - 1,
+                cognitive_load_threshold_confidence=ConfidenceLevel.MEDIUM,
+                processing_speed=2 + (index % 4),
+                processing_speed_confidence=ConfidenceLevel.MEDIUM,
+                working_memory_capacity=2 + (index % 3),
+                working_memory_capacity_confidence=ConfidenceLevel.LOW,
+                attention_span=12 + (index % 6) * 4,
+                attention_span_confidence=ConfidenceLevel.MEDIUM,
+                performance_sensitivity=2 + (index % 4),
+                performance_sensitivity_confidence=ConfidenceLevel.LOW,
+                **values,
+            )
+            made += 1
+        await self.session.flush()
+        self.note("learner profiles", made)
+        self.note("  clearly auditory", 8)
+        self.note("  clearly visual", 8)
+        self.note("  leaning, low confidence", 8)
+        self.note("  no profile at all", max(len(learners) - made, 0))
+
     # ----------------------------------------------------------------- flags
 
     async def flags(self, students: list[User]) -> None:
@@ -825,6 +928,7 @@ async def seed(
             classes = await seeder.classes(school, teachers)
             admin = await seeder.admin(school)
             students = await seeder.students(school, classes, admin)
+            await seeder.learner_profiles(students)
             await seeder.flags(students)
             await seeder.rights_requests(students, school)
             await seeder.adaptations(school, students, teachers[0])

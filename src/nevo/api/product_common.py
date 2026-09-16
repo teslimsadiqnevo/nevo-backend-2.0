@@ -107,3 +107,52 @@ async def require_class_access(
         if assignment is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
     return school_class
+
+
+async def require_approved_lessons(
+    session: AsyncSession,
+    lesson_ids: Iterable[UUID],
+) -> None:
+    """Refuse to put a lesson in front of children before a teacher clears it.
+
+    SCRUM-37: approval is manual and deliberate, and the teacher stays in
+    control of what reaches students. Assignment is the moment that control is
+    exercised or lost, and there are two routes to it - one lesson at a time
+    and several at once - so the check lives here rather than in either of
+    them. A gate on one door is not a gate.
+    """
+
+    from sqlalchemy import func
+
+    from nevo.db.models.content import Lesson, LessonSegment
+
+    wanted = list(dict.fromkeys(lesson_ids))
+    if not wanted:
+        return
+    rows = (
+        await session.execute(
+            select(Lesson.id, Lesson.title, func.count(LessonSegment.id))
+            .join(LessonSegment, LessonSegment.lesson_id == Lesson.id)
+            .where(
+                Lesson.id.in_(wanted),
+                LessonSegment.approved_at.is_(None),
+            )
+            .group_by(Lesson.id, Lesson.title)
+        )
+    ).all()
+    if not rows:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "lesson_not_approved",
+            "message": (
+                "Approve every segment before assigning: "
+                + ", ".join(f"{title} ({count} left)" for _, title, count in rows)
+            ),
+            "lessons": [
+                {"lessonId": str(lesson_id), "unapprovedSegmentCount": int(count)}
+                for lesson_id, _, count in rows
+            ],
+        },
+    )

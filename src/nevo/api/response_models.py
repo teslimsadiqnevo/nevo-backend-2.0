@@ -342,6 +342,10 @@ class LessonSegmentResponse(CamelResponse):
     calculation_variant: CalculationVariant | None = None
     needs_review: bool = False
     review_reasons: list[SegmentReviewReason] = Field(default_factory=list)
+    #: Whether a teacher has cleared these variants for children to see.
+    #: A lesson with any segment unapproved cannot be assigned.
+    approved: bool = True
+    approved_at: datetime | None = None
     #: Estimated time to work through this segment, for the review screen's
     #: per-segment and total minute figures.
     estimated_minutes: int = 0
@@ -499,6 +503,27 @@ class StudentSessionDetailResponse(CamelResponse):
     sittings: int
     narrative: str
     sections: list[StudentSessionSectionResponse]
+
+
+class SegmentApprovalResponse(CamelResponse):
+    """What approving one segment leaves the teacher looking at.
+
+    The screen walks a lesson a segment at a time and needs to know when it
+    has reached the end, so the counts come back with the approval rather than
+    requiring a second read to find out whether the lesson is now assignable.
+    """
+
+    lesson_id: UUID
+    segment_id: UUID
+    approved_at: datetime | None
+    #: Null on segments approved before the gate existed - nobody did approve
+    #: those, and naming a teacher who had not would be a false record.
+    approved_by: UUID | None
+    approved_segment_count: int
+    segment_count: int
+    #: True once every segment is approved, which is when the lesson can be
+    #: assigned to a class.
+    lesson_approved: bool
 
 
 class StudentSessionSummaryResponse(CamelResponse):

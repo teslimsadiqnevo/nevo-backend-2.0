@@ -52,6 +52,7 @@ from nevo.api.product_admin import merge_preferences
 from nevo.api.product_common import (
     actor_user,
     can_access_student,
+    require_approved_lessons,
     require_class_access,
     require_school_actor,
     require_student_access,
@@ -65,6 +66,7 @@ from nevo.api.response_models import (
     OutcomesResponse,
     ProfileAliasResponse,
     SchoolHealthResponse,
+    SegmentApprovalResponse,
     StudentConsentSummaryResponse,
 )
 from nevo.api.response_models import (
@@ -862,6 +864,8 @@ async def lesson_detail(
                 calculationVariant=item.calculation_variant,
                 needsReview=item.needs_review,
                 reviewReasons=list(item.review_reasons),
+                approved=item.approved_at is not None,
+                approvedAt=item.approved_at,
                 estimatedMinutes=item.estimated_minutes,
             )
             for item in segments
@@ -957,6 +961,7 @@ async def create_lesson_assignments(
     lesson = await session.get(Lesson, payload.lesson_id)
     if lesson is None or lesson.school_id != user.school_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
+    await require_approved_lessons(session, [lesson.id])
     student_ids = list(payload.student_ids)
     if payload.class_id is not None:
         await require_class_access(session, user, payload.class_id)
@@ -1131,6 +1136,79 @@ async def acknowledge_escalation(
         acknowledgedAt=record.acknowledged_at,
         acknowledgedBy=record.acknowledged_by,
     )
+
+
+@router.post(
+    "/api/v1/lessons/{lesson_id}/segments/{segment_id}/approve",
+    response_model=SegmentApprovalResponse,
+    tags=["learning product"],
+    responses={404: {"description": "No such segment in this school's lesson"}},
+)
+async def approve_segment(
+    lesson_id: UUID,
+    segment_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> SegmentApprovalResponse:
+    """Approve one segment's variants for children to see.
+
+    Per segment, because that is how the screen works: a teacher walks the
+    lesson one segment at a time and approves each. Per lesson rather than per
+    class - approving once is approving, and a teacher who has read a segment
+    has read it whichever class they hand it to next.
+
+    Approving twice is not an error. The first approval stands, so a teacher
+    revisiting a lesson does not overwrite the record of who cleared it.
+    """
+    user = await require_school_actor(
+        session,
+        principal,
+        roles={"teacher", "senco_admin", "other_admin"},
+    )
+    lesson = await session.get(Lesson, lesson_id)
+    segment = await session.get(LessonSegment, segment_id)
+    if (
+        lesson is None
+        or segment is None
+        or lesson.school_id != user.school_id
+        or segment.lesson_id != lesson.id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found")
+    if segment.approved_at is None:
+        segment.approved_at = datetime.now(UTC)
+        segment.approved_by = user.id
+    await session.flush()
+    total, approved = await _approval_counts(session, lesson.id)
+    await session.commit()
+    return SegmentApprovalResponse(
+        lessonId=lesson.id,
+        segmentId=segment.id,
+        approvedAt=segment.approved_at,
+        approvedBy=segment.approved_by,
+        approvedSegmentCount=approved,
+        segmentCount=total,
+        lessonApproved=approved == total,
+    )
+
+
+async def _approval_counts(session, lesson_id: UUID) -> tuple[int, int]:
+    """How many segments there are, and how many are approved."""
+    total = int(
+        await session.scalar(
+            select(func.count(LessonSegment.id)).where(LessonSegment.lesson_id == lesson_id)
+        )
+        or 0
+    )
+    approved = int(
+        await session.scalar(
+            select(func.count(LessonSegment.id)).where(
+                LessonSegment.lesson_id == lesson_id,
+                LessonSegment.approved_at.is_not(None),
+            )
+        )
+        or 0
+    )
+    return total, approved
 
 
 @router.get(

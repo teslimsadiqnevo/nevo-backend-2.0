@@ -312,6 +312,15 @@ class LessonSegment(Base):
         default=False,
         server_default=text("false"),
     )
+    #: When a teacher approved this segment's variants for children to see,
+    #: and who did. Null means nobody has, and the lesson cannot be assigned.
+    #: Segments that predate the gate carry a timestamp and no approver,
+    #: because nobody did approve them and saying a teacher had would be a
+    #: false record on a screen that shows the name.
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     review_reasons: Mapped[list[str]] = mapped_column(
         JSONB,
         nullable=False,

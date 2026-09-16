@@ -38,6 +38,7 @@ from nevo.api.frontend_unblockers import (
 from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.api.product_common import (
     actor_user,
+    require_approved_lessons,
     require_class_access,
     require_school_actor,
     require_student_access,
@@ -333,6 +334,8 @@ async def lesson_detail(
                 "calculationVariant": item.calculation_variant,
                 "needsReview": item.needs_review,
                 "reviewReasons": item.review_reasons,
+                "approved": item.approved_at is not None,
+                "approvedAt": item.approved_at,
                 "estimatedMinutes": item.estimated_minutes,
             }
             for item in segments
@@ -431,6 +434,7 @@ async def create_assignments(
         item.school_id != actor.school_id for item in lessons_by_id.values()
     ):
         raise HTTPException(status_code=404, detail="Lesson not found")
+    await require_approved_lessons(session, lessons_by_id.keys())
     rows = [
         {
             "lesson_id": lesson_id,

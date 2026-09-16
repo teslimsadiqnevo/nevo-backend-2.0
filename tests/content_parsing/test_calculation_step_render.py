@@ -145,18 +145,24 @@ def test_each_way_of_being_malformed_says_which() -> None:
         "calculation_variant_too_few_steps": {
             "steps": [{"prompt": "x", "expectedInput": "numeric"}]
         },
-        "calculation_step_missing_prompt": {"steps": [
-            {"prompt": "", "expectedInput": "numeric", "answer": 1},
-            {"prompt": "b", "expectedInput": "numeric", "answer": 2},
-        ]},
-        "calculation_step_unknown_input_type": {"steps": [
-            {"prompt": "a", "expectedInput": "handwriting", "answer": 1},
-            {"prompt": "b", "expectedInput": "numeric", "answer": 2},
-        ]},
-        "calculation_step_missing_answer": {"steps": [
-            {"prompt": "a", "expectedInput": "numeric"},
-            {"prompt": "b", "expectedInput": "numeric", "answer": 2},
-        ]},
+        "calculation_step_missing_prompt": {
+            "steps": [
+                {"prompt": "", "expectedInput": "numeric", "answer": 1},
+                {"prompt": "b", "expectedInput": "numeric", "answer": 2},
+            ]
+        },
+        "calculation_step_unknown_input_type": {
+            "steps": [
+                {"prompt": "a", "expectedInput": "handwriting", "answer": 1},
+                {"prompt": "b", "expectedInput": "numeric", "answer": 2},
+            ]
+        },
+        "calculation_step_missing_answer": {
+            "steps": [
+                {"prompt": "a", "expectedInput": "numeric"},
+                {"prompt": "b", "expectedInput": "numeric", "answer": 2},
+            ]
+        },
     }
     for expected, payload in cases.items():
         variant, review = _validated_calculation_variant({"answer": "5", **payload})

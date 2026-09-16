@@ -1,16 +1,29 @@
 import asyncio
 import base64
 import hashlib
+import io
 import json
 import time
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from PIL import Image
 
 from nevo.ai_gateway.privacy import AiPrivacyGuard
 from nevo.storage import StorageError, SupabaseStorage
 from nevo.visuals.config import VisualGenerationSettings
+
+#: The provider hands back a PNG of about 1.4 MB. These are posters with
+#: small text in them, so the resolution is the content and must not be
+#: reduced - but PNG is the wrong container for flat colour. WebP at this
+#: quality is roughly fourteen times smaller with no visible change to the
+#: letterforms, which matters on a Nigerian phone paying for the megabyte.
+DISPLAY_QUALITY = 82
+#: A card or a list does not need a readable diagram, only a recognisable
+#: one, and this loads before the full image on a slow connection.
+PREVIEW_MAX_WIDTH = 640
+PREVIEW_QUALITY = 75
 
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 """Statuses that mean "later", not "no"."""
@@ -82,26 +95,32 @@ class EducationalImageService:
         requested_prompt: str | None,
     ) -> dict[str, object]:
         if not self.configured:
-            raise VisualGenerationError(
-                "Image generation, review, or storage is not configured"
-            )
+            raise VisualGenerationError("Image generation, review, or storage is not configured")
         safe_text = self._privacy.sanitize_text(lesson_text, pseudonym="the learner")[:4_000]
         prompt = self._prompt(title, safe_text, requested_prompt)
-        digest = hashlib.sha256(
-            f"{self._settings.image_model}\0{prompt}".encode()
-        ).hexdigest()
-        object_path = f"images/lessons/{digest}.png"
+        digest = hashlib.sha256(f"{self._settings.image_model}\0{prompt}".encode()).hexdigest()
+        object_path = f"images/lessons/{digest}.webp"
+        preview_path = f"images/lessons/{digest}-preview.webp"
         attempts = 0
+        width = height = byte_size = 0
         try:
             if not await self._storage.exists(object_path):
                 accepted, attempts = await self._draw_until_approved(prompt, safe_text)
-                await self._storage.upload(object_path, accepted, content_type="image/png")
+                display, preview, width, height = _encode(accepted)
+                byte_size = len(display)
+                await self._storage.upload(object_path, display, content_type="image/webp")
+                await self._storage.upload(preview_path, preview, content_type="image/webp")
             image_url = await self._storage.url_for(object_path)
+            preview_url = await self._storage.url_for(preview_path)
         except StorageError as error:
             raise VisualGenerationError(str(error)) from error
         return {
             "type": "ai_generated_image",
             "imageUrl": image_url,
+            "previewUrl": preview_url,
+            "width": width,
+            "height": height,
+            "byteSize": byte_size,
             "storagePath": object_path,
             "prompt": prompt,
             "provider": self._settings.image_model,
@@ -140,14 +159,10 @@ class EducationalImageService:
                 # A lesson with an unreviewable image is still a lesson. The
                 # segment loses its picture and is flagged for review, which
                 # is better than the whole parse never finishing.
-                raise VisualGenerationError(
-                    "Image generation exceeded its time budget"
-                ) from error
+                raise VisualGenerationError("Image generation exceeded its time budget") from error
             if approved:
                 return image, attempt
-        raise VisualGenerationError(
-            f"Generated image failed educational review: {issues[:300]}"
-        )
+        raise VisualGenerationError(f"Generated image failed educational review: {issues[:300]}")
 
     def _prompt(self, title: str | None, text: str, requested: str | None) -> str:
         return (
@@ -255,9 +270,7 @@ class EducationalImageService:
                             ],
                         }
                     ],
-                    "output_config": {
-                        "format": {"type": "json_schema", "schema": REVIEW_SCHEMA}
-                    },
+                    "output_config": {"format": {"type": "json_schema", "schema": REVIEW_SCHEMA}},
                 },
             )
         if response.is_error:
@@ -314,6 +327,43 @@ def _retry_pause(response: httpx.Response, attempt: int) -> float:
             pass
     backoff: float = BASE_RETRY_PAUSE * float(2**attempt)
     return min(60.0, backoff)
+
+
+def _encode(png: bytes) -> tuple[bytes, bytes, int, int]:
+    """Turn the provider's PNG into what a phone should actually download.
+
+    Two files, both WebP: the display image at the resolution it was drawn
+    at, because the text inside these pictures is the teaching and shrinking
+    it would cost a child the diagram; and a preview small enough to paint a
+    card before the real one arrives.
+
+    Returns (display, preview, width, height).
+    """
+
+    try:
+        source = Image.open(io.BytesIO(png))
+    except Exception as error:
+        # A provider that returns something undecodable should cost this one
+        # picture, not the parse it sits in. Without this the exception
+        # escapes as itself and takes the whole lesson down.
+        raise VisualGenerationError("Image provider returned no readable PNG") from error
+    with source:
+        image = source.convert("RGB")
+        width, height = image.size
+
+        display = io.BytesIO()
+        image.save(display, format="WEBP", quality=DISPLAY_QUALITY, method=6)
+
+        scale = min(PREVIEW_MAX_WIDTH / width, 1.0)
+        thumbnail = (
+            image
+            if scale == 1.0
+            else image.resize((round(width * scale), round(height * scale)), Image.Resampling.LANCZOS)
+        )
+        preview = io.BytesIO()
+        thumbnail.save(preview, format="WEBP", quality=PREVIEW_QUALITY, method=6)
+
+    return display.getvalue(), preview.getvalue(), width, height
 
 
 def _provider_code(response: httpx.Response) -> str:

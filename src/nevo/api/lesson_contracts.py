@@ -40,7 +40,21 @@ class VisualVariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     type: Literal["ai_generated_image"] = "ai_generated_image"
+    #: The image to render. WebP at the resolution it was drawn at, because
+    #: these pictures carry small text and shrinking them costs a child the
+    #: diagram.
     image_url: str = Field(alias="imageUrl")
+    #: A much smaller copy of the same picture, for a card or a list, or to
+    #: paint something before the full one arrives on a slow connection.
+    #: Absent on images stored before this existed.
+    preview_url: str | None = Field(default=None, alias="previewUrl")
+    #: The display image's own dimensions, so a client can hold the space
+    #: before the bytes land rather than reflowing the lesson around it.
+    width: int = 0
+    height: int = 0
+    #: Bytes of the display image. Zero on anything stored before this
+    #: existed, and on a cache hit where nothing was re-encoded.
+    byte_size: int = Field(default=0, alias="byteSize")
     storage_path: str = Field(alias="storagePath")
     prompt: str
     provider: str

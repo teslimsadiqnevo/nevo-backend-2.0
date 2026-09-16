@@ -1,14 +1,25 @@
 """Educational image generation and review tests."""
+
 import base64
+import io
 import json
 
 import httpx
 import pytest
+from PIL import Image
 from pydantic import SecretStr
 
 from nevo.visuals import EducationalImageService, VisualGenerationError, VisualGenerationSettings
 
-PNG = b"generated-png-bytes"
+
+def _png(width: int = 1536, height: int = 1024) -> bytes:
+    """A real PNG: the service decodes what the provider sends now."""
+    raw = io.BytesIO()
+    Image.new("RGB", (width, height), (12, 42, 110)).save(raw, format="PNG")
+    return raw.getvalue()
+
+
+PNG = _png()
 ENCODED_PNG = base64.b64encode(PNG).decode()
 
 
@@ -107,7 +118,9 @@ async def test_approved_image_is_uploaded_and_returned(
     assert str(result["imageUrl"]).startswith(
         "https://project.supabase.co/storage/v1/object/public/lesson-media/images/lessons/"
     )
-    assert fake.uploads == [PNG]
+    # Two objects: the display image and its preview, both WebP.
+    assert len(fake.uploads) == 2
+    assert all(item[:4] == b"RIFF" for item in fake.uploads)
     assert fake.review_images == [ENCODED_PNG]
     assert "Show a fraction bar" in fake.image_prompts[0]
 
@@ -127,7 +140,7 @@ async def test_rejected_image_is_regenerated_with_the_correction(
     assert result["reviewAttempts"] == 2
     assert len(fake.image_prompts) == 2
     assert "The denominator is wrong" in fake.image_prompts[1]
-    assert fake.uploads == [PNG]
+    assert len(fake.uploads) == 2
 
 
 async def test_persistently_rejected_image_is_never_uploaded(
@@ -169,9 +182,9 @@ async def test_private_bucket_returns_a_signed_url(monkeypatch: pytest.MonkeyPat
 
     _install(monkeypatch, handler)
 
-    result = await EducationalImageService(
-        _settings(SUPABASE_STORAGE_PUBLIC=False)
-    ).generate(title="Fractions", lesson_text="Half.", requested_prompt=None)
+    result = await EducationalImageService(_settings(SUPABASE_STORAGE_PUBLIC=False)).generate(
+        title="Fractions", lesson_text="Half.", requested_prompt=None
+    )
 
     assert result["imageUrl"] == "https://project.supabase.co/storage/v1/object/sign/x?token=t"
     assert result["urlExpiresInSeconds"] == 604_800

@@ -55,9 +55,7 @@ class ClaudeRestProvider:
         self._base_url = base_url.rstrip("/")
         self._anthropic_version = anthropic_version
         self._prompt_caching_enabled = prompt_caching_enabled
-        self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout_seconds)
-        )
+        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
         self._owns_client = client is None
 
     @property
@@ -121,9 +119,7 @@ class ClaudeRestProvider:
         ) as error:
             raise ProviderUnavailableError from error
 
-        text = "".join(
-            block.text or "" for block in parsed.content if block.type == "text"
-        ).strip()
+        text = "".join(block.text or "" for block in parsed.content if block.type == "text").strip()
         tool_calls = tuple(
             ToolCall(id=block.id or "", name=block.name or "", arguments=block.input or {})
             for block in parsed.content
@@ -136,11 +132,10 @@ class ClaudeRestProvider:
         return ProviderResponse(
             text=text,
             tool_calls=tool_calls,
-            raw_content=tuple(
-                block.model_dump(exclude_none=True) for block in parsed.content
-            ),
+            raw_content=tuple(block.model_dump(exclude_none=True) for block in parsed.content),
             provider=AiProviderName.CLAUDE,
             model=parsed.model or request.model or self._model,
+            stop_reason=parsed.stop_reason,
             input_tokens=parsed.usage.input_tokens,
             output_tokens=parsed.usage.output_tokens,
             cache_creation_input_tokens=parsed.usage.cache_creation_input_tokens,

@@ -206,6 +206,8 @@ class AiGatewayService:
             fallback_used=fallback_used,
             compliance_retries=compliance_retries,
             call_id=call_id,
+            stop_reason=accepted.stop_reason,
+            output_tokens=accepted.output_tokens,
         )
 
     async def close(self) -> None:

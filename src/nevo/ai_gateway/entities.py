@@ -106,6 +106,10 @@ class ProviderResponse:
     tool_calls: tuple[ToolCall, ...] = ()
     #: The assistant turn exactly as returned, to be replayed as history.
     raw_content: tuple[dict[str, Any], ...] = ()
+    #: Why the model stopped. "max_tokens" means it was cut off mid-answer,
+    #: which is the one cause of unparseable output that guessing from the
+    #: text cannot reliably tell apart from the model writing something odd.
+    stop_reason: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     thought_tokens: int = 0
@@ -142,6 +146,13 @@ class AiGenerationResult:
     fallback_used: bool
     compliance_retries: int
     call_id: UUID
+    #: Why the model stopped, straight from the provider. "max_tokens" says
+    #: the answer was cut off; anything else says it finished and the problem
+    #: is what it wrote.
+    stop_reason: str | None = None
+    #: How much it wrote, so a truncated answer can be recognised by the
+    #: numbers rather than by counting brackets in the text.
+    output_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)

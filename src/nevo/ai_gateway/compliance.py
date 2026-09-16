@@ -21,11 +21,7 @@ class ZeroTagCompliancePolicy:
     def __init__(self) -> None:
         self._patterns = {
             term: re.compile(
-                rf"(?<!\w){
-                    r'[\s_-]+'.join(
-                        re.escape(part) for part in term.split('_')
-                    )
-                }(?!\w)",
+                rf"(?<!\w){r'[\s_-]+'.join(re.escape(part) for part in term.split('_'))}(?!\w)",
                 re.IGNORECASE,
             )
             for term in PROHIBITED_RESPONSE_TERMS
@@ -33,9 +29,7 @@ class ZeroTagCompliancePolicy:
 
     def inspect(self, text: str) -> ComplianceResult:
         violations = frozenset(
-            term
-            for term, pattern in self._patterns.items()
-            if pattern.search(text)
+            term for term, pattern in self._patterns.items() if pattern.search(text)
         )
         return ComplianceResult(
             allowed=not violations,

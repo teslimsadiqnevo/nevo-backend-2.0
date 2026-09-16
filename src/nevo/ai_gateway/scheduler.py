@@ -27,9 +27,7 @@ class PriorityRateLimitedScheduler:
     ) -> None:
         self._max_concurrency = max_concurrency
         self._requests_per_minute = requests_per_minute
-        self._queue: asyncio.PriorityQueue[_ScheduledRequest] = (
-            asyncio.PriorityQueue()
-        )
+        self._queue: asyncio.PriorityQueue[_ScheduledRequest] = asyncio.PriorityQueue()
         self._sequence = count()
         self._workers: list[asyncio.Task[None]] = []
         self._start_lock = asyncio.Lock()
@@ -105,15 +103,10 @@ class PriorityRateLimitedScheduler:
         while True:
             async with self._rate_lock:
                 now = time.monotonic()
-                while (
-                    self._request_times
-                    and now - self._request_times[0] >= window_seconds
-                ):
+                while self._request_times and now - self._request_times[0] >= window_seconds:
                     self._request_times.popleft()
                 if len(self._request_times) < self._requests_per_minute:
                     self._request_times.append(now)
                     return
-                wait_seconds = window_seconds - (
-                    now - self._request_times[0]
-                )
+                wait_seconds = window_seconds - (now - self._request_times[0])
             await asyncio.sleep(max(wait_seconds, 0.001))

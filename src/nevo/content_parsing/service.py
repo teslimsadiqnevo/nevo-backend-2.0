@@ -224,7 +224,7 @@ class ContentParsingService:
                         ),
                         "error": error.__class__.__name__,
                         "reason": str(error)[:300],
-                        "looksTruncated": _looks_truncated(locals().get("result")),
+                        **_response_forensics(locals().get("result")),
                         "pageNumbers": [
                             int(value) for value in re.findall(r"\[Page (\d+)\]", chunk)
                         ],
@@ -483,17 +483,35 @@ def _duration_ms(value: object) -> int | None:
     return measured or None
 
 
-def _looks_truncated(result: object) -> bool:
-    """Whether the model ran out of room rather than returned something odd.
+def _response_forensics(result: object) -> dict[str, object]:
+    """Enough about the answer to tell a cut-off one from a badly written one.
 
-    Truncation and malformed output need different fixes - more tokens versus
-    a better prompt - and they are indistinguishable from the exception alone.
+    These need opposite fixes - more room versus a better prompt - and the
+    exception alone cannot tell them apart. This used to be guessed by counting
+    braces across the whole response, which was wrong twice over: the parser
+    reads a slice from the first brace to the LAST one, so an answer cut off
+    mid-object gets trimmed to something balanced, and the guess then described
+    text the parser had never seen. It reported "not truncated" on a response
+    that ended at character 24,537 of its own output.
+
+    So stop guessing. The provider says why it stopped; "max_tokens" is the
+    answer being cut off and nothing else is.
     """
+
     text = getattr(result, "text", None)
-    if not isinstance(text, str) or not text.strip():
-        return False
-    stripped = text.strip()
-    return stripped.count("{") > stripped.count("}")
+    text = text if isinstance(text, str) else ""
+    stop_reason = getattr(result, "stop_reason", None)
+    forensics: dict[str, object] = {
+        "stopReason": stop_reason,
+        "truncated": stop_reason == "max_tokens",
+        "responseChars": len(text),
+        "outputTokens": getattr(result, "output_tokens", 0),
+    }
+    if text:
+        # The last of what the parser actually tried to read. A cut-off answer
+        # ends mid-key or mid-number and says so at a glance.
+        forensics["responseTail"] = text.strip()[-180:]
+    return forensics
 
 
 def _json_payload(text: str) -> dict[str, object]:

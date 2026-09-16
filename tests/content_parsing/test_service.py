@@ -1,3 +1,4 @@
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -258,19 +259,43 @@ async def test_visual_modality_is_removed_when_generated_image_is_missing() -> N
     assert "visual_variant_image_generation_failed" in segment.review_reasons
 
 
-def test_truncated_json_is_reported_as_truncated_not_just_invalid() -> None:
-    """More tokens and a better prompt are different fixes; the exception
-    class alone cannot tell them apart."""
-    from nevo.content_parsing.service import _looks_truncated
+def test_a_cut_off_answer_is_told_apart_from_a_badly_written_one() -> None:
+    """More room and a better prompt are different fixes.
+
+    This was guessed by counting braces across the whole response, and got it
+    wrong on the live case: the parser reads a slice from the first brace to
+    the LAST one, so an answer cut off mid-object is trimmed to something
+    balanced and the guess described text the parser never saw. It reported
+    "not truncated" on a response that ended at character 24,537.
+    """
+    from nevo.content_parsing.service import _response_forensics
 
     class Result:
-        def __init__(self, text: str) -> None:
+        def __init__(self, text: str, stop_reason: str | None, tokens: int = 0) -> None:
             self.text = text
+            self.stop_reason = stop_reason
+            self.output_tokens = tokens
 
-    assert _looks_truncated(Result('{"segments": [{"title": "A"'))
-    assert not _looks_truncated(Result('{"segments": []}'))
-    assert not _looks_truncated(Result("not json at all"))
-    assert not _looks_truncated(None)
+    cut_off = _response_forensics(Result('{"segments": [{"title": "A"', "max_tokens", 9004))
+    assert cut_off["truncated"] is True
+    assert cut_off["stopReason"] == "max_tokens"
+    assert cut_off["outputTokens"] == 9004
+
+    # The shape that defeated brace-counting: balanced text, still cut off.
+    balanced = _response_forensics(Result('{"segments": [{"title": "A"}', "max_tokens"))
+    assert balanced["truncated"] is True
+
+    finished = _response_forensics(Result('{"segments": []}', "end_turn"))
+    assert finished["truncated"] is False
+    assert finished["responseChars"] == len('{"segments": []}')
+
+    # The tail is what the parser actually tried to read, so a cut-off answer
+    # shows where it stopped rather than being described second-hand.
+    assert finished["responseTail"].endswith("]}")
+
+    blank = _response_forensics(None)
+    assert blank["truncated"] is False
+    assert "responseTail" not in blank
 
 
 def test_the_parse_asks_for_enough_room_to_answer() -> None:
@@ -316,7 +341,7 @@ async def test_media_generation_runs_a_few_at_a_time_not_all_at_once() -> None:
 
 
 async def test_a_lost_picture_says_why_in_the_run_notes() -> None:
-    """"visual_generation_failed" on its own told nobody anything, which is
+    """ "visual_generation_failed" on its own told nobody anything, which is
     how every image in a lesson went missing for two days."""
     from nevo.visuals import VisualGenerationError
 
@@ -415,3 +440,42 @@ def test_every_review_reason_the_parser_emits_is_one_the_console_knows() -> None
 
     assert emitted
     assert emitted <= {item.value for item in SegmentReviewReason}
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_note_carries_what_the_provider_said() -> None:
+    """The note is the only record of why a lesson degraded.
+
+    Three parses failed three different ways in three days and the notes could
+    not tell them apart, because the one diagnostic on them was a guess made by
+    counting brackets. What the provider says about its own answer goes on the
+    note now.
+    """
+
+    class CutOffGateway(FakeGateway):
+        async def generate(self, request):
+            result = await super().generate(request)
+            return replace(result, stop_reason="max_tokens", output_tokens=9004)
+
+    repository = FakeRepository()
+    service = ContentParsingService(
+        repository=repository,
+        ai_gateway=CutOffGateway('{"segments": [{"title": "Simple Interest"'),
+    )
+
+    result = await service.parse(
+        request=ContentParseRequest(
+            title="Simple Interest",
+            source_type=LessonSourceType.WORD,
+            source_text="Interest is what a bank pays you.\n\nSummary: it adds up.",
+        ),
+        requested_by_user_id=uuid4(),
+    )
+
+    note = result.review_notes[0]
+    assert note["code"] == "ai_parse_fallback"
+    assert note["stopReason"] == "max_tokens"
+    assert note["truncated"] is True
+    assert note["outputTokens"] == 9004
+    assert note["responseChars"] == len('{"segments": [{"title": "Simple Interest"')
+    assert note["responseTail"].endswith('"Simple Interest"')

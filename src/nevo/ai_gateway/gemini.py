@@ -60,9 +60,7 @@ class GeminiRestProvider:
         self._api_key = api_key
         self._model = model
         self._base_url = base_url.rstrip("/")
-        self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout_seconds)
-        )
+        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
         self._owns_client = client is None
 
     @property
@@ -73,14 +71,9 @@ class GeminiRestProvider:
     async def generate(self, request: ProviderRequest) -> ProviderResponse:
         if not self._api_key:
             raise ProviderNotConfiguredError
-        endpoint = (
-            f"{self._base_url}/models/"
-            f"{quote(self._model, safe='-._')}:generateContent"
-        )
+        endpoint = f"{self._base_url}/models/{quote(self._model, safe='-._')}:generateContent"
         payload: dict[str, Any] = {
-            "systemInstruction": {
-                "parts": [{"text": request.system_instruction}]
-            },
+            "systemInstruction": {"parts": [{"text": request.system_instruction}]},
             "contents": [
                 {
                     "role": "user",

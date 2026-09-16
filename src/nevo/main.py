@@ -39,6 +39,7 @@ from nevo.api.product_learning import router as product_learning_router
 from nevo.api.scheduler import router as scheduler_router
 from nevo.api.signals import router as signals_router
 from nevo.api.sso import router as sso_router
+from nevo.api.support import router as support_router
 from nevo.api.teacher_assignments import router as teacher_assignment_router
 from nevo.ask_nevo.wiring import build_ask_nevo_service
 from nevo.attention_flags.wiring import build_attention_flag_detection_service
@@ -309,6 +310,7 @@ app.include_router(product_auth_router)
 app.include_router(product_learning_router)
 app.include_router(scheduler_router)
 app.include_router(signals_router)
+app.include_router(support_router)
 app.include_router(sso_router)
 app.include_router(teacher_assignment_router)
 

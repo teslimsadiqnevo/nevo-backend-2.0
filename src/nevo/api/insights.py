@@ -230,8 +230,9 @@ async def student_sessions(
         )
     ).all()
 
-    signal_counts = dict(
-        (
+    signal_counts: dict[UUID, int] = {
+        session_id: int(count)
+        for session_id, count in (
             await session.execute(
                 select(SignalEvent.session_id, func.count(SignalEvent.id))
                 .where(
@@ -240,7 +241,7 @@ async def student_sessions(
                 .group_by(SignalEvent.session_id)
             )
         ).all()
-    )
+    }
 
     sessions = []
     for lesson_session, lesson in rows:

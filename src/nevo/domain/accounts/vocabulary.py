@@ -170,10 +170,12 @@ class NotificationType(StrEnum):
 #: preference had seven switches and no notification could be matched to any of
 #: them. Derived from the type rather than stored beside it, so the two cannot
 #: disagree and no existing row needs correcting.
-NOTIFICATION_CATEGORY_BY_TYPE: dict["NotificationType", "NotificationCategory"] = {}
+NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {}
 
 
-def notification_category(notification_type: "NotificationType | str | None"):
+def notification_category(
+    notification_type: NotificationType | str | None,
+) -> NotificationCategory | None:
     """The category a notification belongs to, or None if it belongs to none.
 
     None is a real answer, not a failure: a notification of a kind this mapping

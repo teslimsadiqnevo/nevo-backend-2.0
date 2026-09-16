@@ -21,6 +21,7 @@ from nevo.api.response_models import (
     MisconceptionResponse,
     StudentProgressResponse,
     StudentSessionDetailResponse,
+    StudentSessionListResponse,
     TeacherHomeResponse,
     TransformationMetricsResponse,
 )
@@ -188,6 +189,91 @@ async def lesson_class_progress(
         "segments": rows,
         "slowestSegmentId": slowest["segmentId"] if slowest else None,
         "slowdownNote": slowest["note"] if slowest else None,
+    }
+
+
+@router.get(
+    "/v1/students/{student_id}/sessions",
+    response_model=StudentSessionListResponse,
+)
+async def student_sessions(
+    student_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> dict[str, object]:
+    """A child's sittings, newest first.
+
+    The detail read below has always been correct and was unreachable: its
+    session id appeared on nothing a teacher could already hold, so a panel
+    that opens from a list had no list to open from.
+    """
+    await require_student_access(session, principal, student_id)
+    bounded_limit = min(max(limit, 1), 100)
+    bounded_offset = max(offset, 0)
+
+    total = int(
+        await session.scalar(
+            select(func.count(LessonSession.id)).where(LessonSession.student_id == student_id)
+        )
+        or 0
+    )
+    rows = (
+        await session.execute(
+            select(LessonSession, Lesson)
+            .join(Lesson, Lesson.id == LessonSession.lesson_id)
+            .where(LessonSession.student_id == student_id)
+            .order_by(LessonSession.started_at.desc(), LessonSession.id.desc())
+            .limit(bounded_limit)
+            .offset(bounded_offset)
+        )
+    ).all()
+
+    signal_counts = dict(
+        (
+            await session.execute(
+                select(SignalEvent.session_id, func.count(SignalEvent.id))
+                .where(
+                    SignalEvent.session_id.in_([lesson_session.id for lesson_session, _ in rows])
+                )
+                .group_by(SignalEvent.session_id)
+            )
+        ).all()
+    )
+
+    sessions = []
+    for lesson_session, lesson in rows:
+        sitting = int(
+            await session.scalar(
+                select(func.count(LessonSession.id)).where(
+                    LessonSession.student_id == student_id,
+                    LessonSession.lesson_id == lesson.id,
+                    LessonSession.started_at <= lesson_session.started_at,
+                )
+            )
+            or 1
+        )
+        sessions.append(
+            {
+                "sessionId": str(lesson_session.id),
+                "lessonId": str(lesson.id),
+                "lessonTitle": lesson.title,
+                "occurredAt": lesson_session.started_at,
+                "endedAt": lesson_session.ended_at,
+                "completionStatus": lesson_session.completion_status,
+                "exitPosition": lesson_session.exit_position,
+                "sitting": sitting,
+                "signalCount": int(signal_counts.get(lesson_session.id, 0)),
+            }
+        )
+
+    return {
+        "studentId": str(student_id),
+        "sessions": sessions,
+        "total": total,
+        "limit": bounded_limit,
+        "offset": bounded_offset,
     }
 
 

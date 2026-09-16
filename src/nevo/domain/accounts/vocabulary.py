@@ -163,6 +163,33 @@ class NotificationType(StrEnum):
     SSO_NEEDS_ATTENTION = "sso_needs_attention"
 
 
+#: Which preference switch governs each kind of notification.
+#:
+#: A teacher could mute a category and still receive everything in it, because
+#: nothing on a notification said which category it belonged to - the
+#: preference had seven switches and no notification could be matched to any of
+#: them. Derived from the type rather than stored beside it, so the two cannot
+#: disagree and no existing row needs correcting.
+NOTIFICATION_CATEGORY_BY_TYPE: dict["NotificationType", "NotificationCategory"] = {}
+
+
+def notification_category(notification_type: "NotificationType | str | None"):
+    """The category a notification belongs to, or None if it belongs to none.
+
+    None is a real answer, not a failure: a notification of a kind this mapping
+    does not know cannot be muted by any switch the settings screen offers, and
+    saying so is more useful than picking a category it does not belong to.
+    """
+
+    if notification_type is None:
+        return None
+    try:
+        key = NotificationType(notification_type)
+    except ValueError:
+        return None
+    return NOTIFICATION_CATEGORY_BY_TYPE.get(key)
+
+
 class MessageRecipientType(StrEnum):
     """Whether a thread addresses one student or a whole class."""
 
@@ -188,3 +215,18 @@ class InvitationDeliveryStatus(StrEnum):
     NOT_REQUESTED = "not_requested"
     SENT = "sent"
     EMAIL_NOT_CONFIGURED = "email_not_configured"
+
+
+NOTIFICATION_CATEGORY_BY_TYPE.update(
+    {
+        NotificationType.ATTENTION_SUMMARY: NotificationCategory.ATTENTION,
+        NotificationType.MODALITY_SHIFT: NotificationCategory.ATTENTION,
+        NotificationType.PIN_RESET_REQUESTED: NotificationCategory.ACCOUNT,
+        NotificationType.ADMIN_WELCOME: NotificationCategory.ACCOUNT,
+        NotificationType.CONSENT_ACTION_REQUIRED: NotificationCategory.CONSENT,
+        NotificationType.ROSTER_SYNC_COMPLETED: NotificationCategory.REPORTS,
+        NotificationType.ROSTER_SYNC_NEEDS_ATTENTION: NotificationCategory.REPORTS,
+        NotificationType.SSO_NEEDS_ATTENTION: NotificationCategory.ACCOUNT,
+        NotificationType.INVOICE_ISSUED: NotificationCategory.BILLING,
+    }
+)

@@ -91,9 +91,11 @@ from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import (
     MessageRecipientType,
+    NotificationCategory,
     NotificationType,
     UserRole,
     UserStatus,
+    notification_category,
 )
 from nevo.domain.intelligence.vocabulary import (
     LessonScope,
@@ -263,6 +265,11 @@ class EscalationResponse(BaseModel):
     recent_picture: str = Field(alias="recentPicture")
     generated_at: datetime = Field(alias="generatedAt")
     acknowledged: bool
+    #: When somebody marked it seen, and who. A teacher asking "has anyone
+    #: looked at this" is better answered by a name and a time than by a
+    #: boolean that cannot say either.
+    acknowledged_at: datetime | None = Field(default=None, alias="acknowledgedAt")
+    acknowledged_by: UUID | None = Field(default=None, alias="acknowledgedBy")
 
 
 class NotificationResponse(BaseModel):
@@ -272,6 +279,11 @@ class NotificationResponse(BaseModel):
     recipient_id: UUID = Field(alias="recipientId")
     recipient_role: UserRole = Field(alias="recipientRole")
     type: NotificationType
+    #: Which switch on the notification-preferences screen governs this one.
+    #: Derived from the type rather than stored beside it, so the two cannot
+    #: disagree. Null means no switch governs it, which is a real answer: a
+    #: client should not offer to mute something no preference can silence.
+    category: NotificationCategory | None = None
     title: str
     description: str
     read: bool
@@ -1065,9 +1077,60 @@ async def list_escalations(
             recentPicture=await _recent_picture(session, record.student_id),
             generatedAt=record.generated_at,
             acknowledged=record.acknowledged_at is not None,
+            acknowledgedAt=record.acknowledged_at,
+            acknowledgedBy=record.acknowledged_by,
         )
         for record, student in rows
     ]
+
+
+@router.post(
+    "/api/v1/escalations/{escalation_id}/acknowledge",
+    response_model=EscalationResponse,
+    tags=["messaging"],
+    responses={404: {"description": "No such escalation in this school"}},
+)
+async def acknowledge_escalation(
+    escalation_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> EscalationResponse:
+    """Mark a raised concern as seen, and say who saw it.
+
+    The read has always carried `acknowledged` and nothing could set it, so a
+    SENCo could read a teacher's concern about a child and had no way to close
+    it - and the teacher who raised it was never told anybody had looked.
+
+    Acknowledging twice is not an error. The first acknowledgement stands,
+    because the question a teacher is asking is "has somebody seen this", and
+    the answer does not change when a second person opens it.
+    """
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    record = await session.get(Escalation, escalation_id)
+    student = await session.get(User, record.student_id) if record else None
+    if record is None or student is None or student.school_id != actor.school_id:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    if record.acknowledged_at is None:
+        record.acknowledged_at = datetime.now(UTC)
+        record.acknowledged_by = actor.id
+    picture = await _recent_picture(session, record.student_id)
+    await session.commit()
+    return EscalationResponse(
+        id=record.id,
+        studentId=record.student_id,
+        studentFirstName=student.first_name,
+        teacherId=record.teacher_id,
+        note=record.teacher_note,
+        recentPicture=picture,
+        generatedAt=record.generated_at,
+        acknowledged=True,
+        acknowledgedAt=record.acknowledged_at,
+        acknowledgedBy=record.acknowledged_by,
+    )
 
 
 @router.get(
@@ -1773,6 +1836,7 @@ def _notification(item: Notification) -> NotificationResponse:
         recipientId=item.recipient_id,
         recipientRole=item.recipient_role,
         type=item.type,
+        category=notification_category(item.type),
         title=item.title,
         description=item.description,
         read=item.read,

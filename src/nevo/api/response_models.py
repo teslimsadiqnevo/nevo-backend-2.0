@@ -501,6 +501,39 @@ class StudentSessionDetailResponse(CamelResponse):
     sections: list[StudentSessionSectionResponse]
 
 
+class StudentSessionSummaryResponse(CamelResponse):
+    """One sitting, enough to list it and open it.
+
+    The detail read has always been right, and unreachable: its id appeared
+    on nothing a teacher could already have, so the panel that opens from a
+    list had no list to open from.
+    """
+
+    session_id: UUID
+    lesson_id: UUID
+    lesson_title: str
+    occurred_at: datetime
+    #: Null while the child is still in the lesson.
+    ended_at: datetime | None = None
+    completion_status: LessonCompletionStatus
+    #: How far through they were when the sitting ended, in the segment keys
+    #: the lesson itself uses.
+    exit_position: str | None = None
+    #: Which sitting of this lesson this was for this child - a second visit
+    #: to the same lesson means something different from a first.
+    sitting: int
+    #: What the child did, counted rather than interpreted.
+    signal_count: int
+
+
+class StudentSessionListResponse(CamelResponse):
+    student_id: UUID
+    sessions: list[StudentSessionSummaryResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class SegmentCompletionResponse(CamelResponse):
     segment_id: UUID
     segment_key: str

@@ -355,11 +355,11 @@ def _encode(png: bytes) -> tuple[bytes, bytes, int, int]:
         image.save(display, format="WEBP", quality=DISPLAY_QUALITY, method=6)
 
         scale = min(PREVIEW_MAX_WIDTH / width, 1.0)
-        thumbnail = (
-            image
-            if scale == 1.0
-            else image.resize((round(width * scale), round(height * scale)), Image.Resampling.LANCZOS)
-        )
+        if scale == 1.0:
+            thumbnail = image
+        else:
+            size = (round(width * scale), round(height * scale))
+            thumbnail = image.resize(size, Image.Resampling.LANCZOS)
         preview = io.BytesIO()
         thumbnail.save(preview, format="WEBP", quality=PREVIEW_QUALITY, method=6)
 

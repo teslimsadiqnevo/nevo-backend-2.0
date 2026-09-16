@@ -64,7 +64,24 @@ was still writing when the shared twenty-second ceiling cut it off, and the
 gateway recorded provider_unavailable and fell back to splitting the source.
 """
 
-MAX_CHUNK_CHARS = 24_000
+#: How much the parse writes per character of source, measured on a real run:
+#: 4,612 characters of Simple Interest came back as 9,004 output tokens. Every
+#: character of a lesson becomes roughly two tokens of structured answer, since
+#: the source is rewritten into segments, variants, checkpoints and a narration
+#: script rather than summarised.
+OUTPUT_TOKENS_PER_SOURCE_CHAR = 2.0
+
+#: Headroom, because the ratio is an average over four documents and a verbose
+#: run on a dense one should still fit.
+CHUNK_HEADROOM = 0.8
+
+#: Derived, never set by hand. These two numbers were independent constants and
+#: drifted into contradiction: a chunk was allowed to be 24,000 characters while
+#: the answer to it was capped at 16,384 tokens, which is about a third of what
+#: 24,000 characters needs. Any document long enough to fill a chunk could not
+#: be answered inside the budget, so it was cut off mid-object and the whole
+#: lesson fell back to the deterministic splitter.
+MAX_CHUNK_CHARS = int(PARSE_OUTPUT_TOKENS / OUTPUT_TOKENS_PER_SOURCE_CHAR * CHUNK_HEADROOM)
 PROMPT_NAME = "content_parse.default"
 CALCULATION_INPUT_TYPES = {"selection", "numeric", "text", "drag"}
 #: The kinds that need something on screen to choose between. Numeric and text

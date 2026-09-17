@@ -36,6 +36,7 @@ from nevo.domain.accounts.vocabulary import (
     ConsentMethod,
     ConsentStatus,
     ConsentType,
+    NotificationType,
     UserRole,
     UserStatus,
 )
@@ -47,6 +48,7 @@ from nevo.domain.consent.vocabulary import (
     ParentContactMethod,
     ParentRightType,
 )
+from nevo.notifications.dispatch import notify_each
 
 
 class SqlAlchemyConsentRepository:
@@ -174,6 +176,16 @@ class SqlAlchemyConsentRepository:
                         destination=draft.parent_contact,
                         consent_url=draft.consent_url,
                     )
+                )
+                # The parent is emailed by the delivery worker. This is the
+                # school's side of the same fact: somebody has to chase a
+                # parent who does not reply, and until now nothing told them
+                # there was anybody to chase.
+                await _notify_school_of_pending_consent(
+                    session,
+                    school_id=draft.school_id,
+                    student_id=draft.student_id,
+                    parent_name=draft.parent_name,
                 )
                 await session.flush()
                 return QueuedParentConsentRequest(
@@ -899,3 +911,36 @@ def _rights_log_entry(
 def _display_name(user: User) -> str:
     parts = [user.first_name, user.last_name]
     return " ".join(part for part in parts if part) or "Unknown"
+
+
+async def _notify_school_of_pending_consent(
+    session: AsyncSession,
+    *,
+    school_id: UUID,
+    student_id: UUID,
+    parent_name: str,
+) -> None:
+    """Tell the school a consent request is out and waiting on a parent."""
+
+    student = await session.get(User, student_id)
+    admins = (
+        await session.scalars(
+            select(User).where(
+                User.school_id == school_id,
+                User.role.in_({UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}),
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+    ).all()
+    child = (student.first_name if student else None) or "A learner"
+    await notify_each(
+        session,
+        recipients=[(admin.id, admin.role) for admin in admins],
+        notification_type=NotificationType.CONSENT_ACTION_REQUIRED,
+        title=f"Consent requested for {child}",
+        description=(
+            f"{parent_name} has been asked to give consent. Until they reply, "
+            f"{child} keeps learning - only a withdrawal stops a child."
+        ),
+        navigates_to="/admin/consent",
+    )

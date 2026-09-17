@@ -523,6 +523,34 @@ class SqlAlchemySsoRepository:
                 if missing_mappings
                 else RosterSyncStatus.COMPLETED
             )
+            # Both outcomes are told, and they are different messages: one is
+            # a receipt, the other is work somebody has to do. A sync that
+            # half-worked and says nothing is the worst of the three.
+            if missing_mappings:
+                await _notify_it_admins(
+                    session,
+                    school_id=school_id,
+                    notification_type=NotificationType.ROSTER_SYNC_NEEDS_ATTENTION,
+                    title="Roster sync needs a look",
+                    description=(
+                        f"{missing_mappings} class(es) from "
+                        f"{provider.value.title()} could not be matched to a "
+                        "Nevo class. Those teachers have no roster until they "
+                        "are mapped."
+                    ),
+                )
+            else:
+                await _notify_it_admins(
+                    session,
+                    school_id=school_id,
+                    notification_type=NotificationType.ROSTER_SYNC_COMPLETED,
+                    title="Roster sync finished",
+                    description=(
+                        f"{imported_students} learner(s) and "
+                        f"{imported_teachers} teacher(s) are up to date from "
+                        f"{provider.value.title()}."
+                    ),
+                )
             # A sync that reached the provider proves the credentials work, so
             # a previous "needs attention" clears itself without the admin
             # having to dismiss anything. A deliberate disconnect stands.

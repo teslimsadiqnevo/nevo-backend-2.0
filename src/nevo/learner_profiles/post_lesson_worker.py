@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nevo.attention_flags.service import AttentionFlagDetectionService
 from nevo.db.models.product import PostLessonProcessing
 from nevo.learner_profiles.profile_updates import PostLessonProfileUpdateService
+from nevo.notifications.digests import notify_modality_shifts
 
 MAX_ATTEMPTS = 5
 
@@ -84,6 +85,12 @@ class PostLessonProcessingWorker:
                     requested_by_user_id=student_id,
                 )
                 await self._mark_stage(session_id, flags_evaluated=True)
+            async with self._sessions.begin() as session:
+                await notify_modality_shifts(
+                    session,
+                    lesson_session_id=session_id,
+                    student_id=student_id,
+                )
             await self._complete(session_id)
         except Exception as error:
             await self._retry(session_id, error)
@@ -146,9 +153,7 @@ class PostLessonProcessingWorker:
             if record is None:
                 return
             record.status = (
-                "permanently_failed"
-                if record.attempt_count >= MAX_ATTEMPTS
-                else "failed"
+                "permanently_failed" if record.attempt_count >= MAX_ATTEMPTS else "failed"
             )
             delay_minutes = min(60, 2 ** max(0, record.attempt_count - 1))
             record.next_attempt_at = datetime.now(UTC) + timedelta(minutes=delay_minutes)

@@ -22,19 +22,17 @@ TRIGGERED: dict[NotificationType, str] = {
     NotificationType.PIN_RESET_REQUESTED: "a student asks for a PIN reset",
     NotificationType.INVOICE_ISSUED: "an invoice is issued",
     NotificationType.SSO_NEEDS_ATTENTION: "a roster sync is refused by the provider",
+    NotificationType.ROSTER_SYNC_COMPLETED: "a roster sync finishes cleanly",
+    NotificationType.ROSTER_SYNC_NEEDS_ATTENTION: "a sync leaves classes unmapped",
+    NotificationType.CONSENT_ACTION_REQUIRED: "a consent request goes out to a parent",
+    NotificationType.ATTENTION_SUMMARY: "the weekly digest job runs",
+    NotificationType.MODALITY_SHIFT: "a lesson finishes in which delivery changed",
 }
 
-#: Named, categorised, and raised by nothing. Each needs a decision about when
-#: it should fire before it can be built - how often an attention summary
-#: digests, whether a modality shift is worth interrupting a teacher for -
-#: which is a teaching question rather than an engineering one.
-AWAITING_A_TRIGGER: set[NotificationType] = {
-    NotificationType.ATTENTION_SUMMARY,
-    NotificationType.MODALITY_SHIFT,
-    NotificationType.CONSENT_ACTION_REQUIRED,
-    NotificationType.ROSTER_SYNC_COMPLETED,
-    NotificationType.ROSTER_SYNC_NEEDS_ATTENTION,
-}
+#: Nothing left. Every kind is raised by something, which is the state this
+#: file exists to keep: a kind nobody raises is a preference switch that
+#: silences nothing and a teacher waiting for a message never coming.
+AWAITING_A_TRIGGER: set[NotificationType] = set()
 
 
 def test_every_kind_is_accounted_for() -> None:

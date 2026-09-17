@@ -11,6 +11,7 @@ from nevo.db.models.billing import Invoice
 from nevo.db.models.sso import SchoolSsoConfiguration
 from nevo.domain.accounts.vocabulary import SsoConnectionStatus
 from nevo.domain.billing.vocabulary import InvoiceStatus
+from nevo.notifications.digests import send_attention_digests
 from nevo.ops.jobs import ScheduledJob
 from nevo.payments.errors import PaymentError
 from nevo.payments.service import PaymentService
@@ -21,6 +22,7 @@ from nevo.sso.service import SsoService
 logger = logging.getLogger(__name__)
 
 DAILY = timedelta(hours=24)
+WEEKLY = timedelta(days=7)
 HOURLY = timedelta(hours=1)
 
 
@@ -38,6 +40,9 @@ def build_scheduled_jobs(
 
     async def issue_invoices() -> str:
         return (await issuance_service.issue_due_invoices()).summary()
+
+    async def attention_digests() -> str:
+        return await send_attention_digests(sessions)
 
     async def retention_sweep() -> str:
         return (await retention_service.sweep()).summary()
@@ -111,6 +116,13 @@ def build_scheduled_jobs(
         return f"collected {collected} invoices, {skipped} not collected"
 
     return (
+        # Weekly by ruling: a flag is a pattern noticed over days, and a
+        # message for each one teaches a teacher to ignore the lot.
+        ScheduledJob(
+            name="attention.weekly_digest",
+            interval=WEEKLY,
+            run=attention_digests,
+        ),
         ScheduledJob(name="retention.anonymise", interval=DAILY, run=retention_sweep),
         ScheduledJob(name="scheduler.refresh_due_dates", interval=DAILY, run=refresh_due_dates),
         ScheduledJob(name="sso.roster_sync", interval=DAILY, run=roster_sync),
@@ -143,8 +155,7 @@ async def _connected_sso_schools(
         rows = await session.scalars(
             select(SchoolSsoConfiguration.school_id).where(
                 SchoolSsoConfiguration.enabled.is_(True),
-                SchoolSsoConfiguration.connection_status
-                != SsoConnectionStatus.DISCONNECTED,
+                SchoolSsoConfiguration.connection_status != SsoConnectionStatus.DISCONNECTED,
             )
         )
     return list(dict.fromkeys(rows.all()))

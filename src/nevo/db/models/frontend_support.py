@@ -1,10 +1,23 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, Uuid, func, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    event,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nevo.db.base import Base
+from nevo.domain.accounts.vocabulary import notification_category
 
 
 class Concept(Base):
@@ -273,9 +286,7 @@ class LessonAssignment(Base):
         server_default="assigned",
     )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    available_from: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    available_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -319,3 +330,25 @@ class PasswordResetToken(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+@event.listens_for(Notification, "before_insert")
+@event.listens_for(Notification, "before_update")
+def _category_follows_type(mapper: object, connection: object, target: Notification) -> None:
+    """Keep the stored category in step with the notification's type.
+
+    The email worker decides what to suppress by joining a user's preferences
+    on this column, so a wrong value here is a mute that silences nothing. One
+    kind was being stored as the column default, "general", which is not one of
+    the seven categories a preference can be set for - it matched no preference
+    row, and the worker's rule is to send when no preference matches. A teacher
+    who muted attention kept receiving attention emails.
+
+    Set here rather than at each call site because the call sites are the thing
+    that got it wrong, and a new one would get it wrong the same way.
+    """
+
+    del mapper, connection
+    derived = notification_category(target.type)
+    if derived is not None:
+        target.category = derived.value

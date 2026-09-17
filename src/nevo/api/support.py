@@ -34,13 +34,16 @@ class SupportSettings(BaseSettings):
         default="+234 906 467 8114",
         validation_alias="SUPPORT_WHATSAPP",
     )
-    #: How long Nevo takes to answer. Deliberately unset: the two response
-    #: times that exist in the product are a sales promise on the landing page
-    #: and a 48-hour NDPA data-rights obligation, and neither is a support
-    #: commitment. Publishing either as one would invent a promise to schools
-    #: that nobody has made, so the field stays null until somebody decides.
+    #: How long Nevo takes to answer, decided on 17 September rather than
+    #: borrowed. The two response times already in the product are a sales
+    #: promise on the landing page and a 48-hour NDPA data-rights obligation,
+    #: and neither is a support commitment - publishing either as one would
+    #: have made a promise to schools that nobody had agreed.
+    #:
+    #: The days are part of the promise. A message sent on Friday evening and
+    #: answered on Monday keeps this one and breaks a bare "within 24 hours".
     support_response_time: str | None = Field(
-        default=None,
+        default="Mon\u2013Fri, we reply within 24 hours",
         validation_alias="SUPPORT_RESPONSE_TIME",
     )
 

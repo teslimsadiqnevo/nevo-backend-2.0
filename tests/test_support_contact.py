@@ -49,16 +49,24 @@ def test_the_link_is_digits_only(number: str, expected: str) -> None:
     assert whatsapp_link(number) == expected
 
 
-def test_the_response_time_is_absent_until_somebody_commits_to_one(
-    client: TestClient,
-) -> None:
-    """The two response times in the product are a landing-page sales promise
-    and a 48-hour NDPA data-rights obligation. Neither is a support
-    commitment, and publishing one as though it were would make a promise to
-    schools that nobody has made."""
+def test_it_states_the_turnaround_nevo_agreed_to(client: TestClient) -> None:
+    """Decided on 17 September, not borrowed.
+
+    The two response times already in the product are a landing-page sales
+    promise and a 48-hour NDPA data-rights obligation. Neither is a support
+    commitment, and either would have promised schools something nobody agreed.
+    """
     body = client.get("/api/v1/support-contact").json()
 
-    assert body["responseTime"] is None
+    assert body["responseTime"] == "Mon\u2013Fri, we reply within 24 hours"
+
+
+def test_the_promise_names_the_days_not_only_the_hours(client: TestClient) -> None:
+    # A message sent on Friday evening and answered on Monday keeps this
+    # promise and breaks a bare "within 24 hours".
+    response_time = client.get("/api/v1/support-contact").json()["responseTime"]
+
+    assert "Mon" in response_time and "Fri" in response_time
 
 
 def test_it_can_be_set_without_a_release(client: TestClient) -> None:

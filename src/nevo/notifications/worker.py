@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nevo.db.models.account import User
 from nevo.db.models.frontend_support import Notification, NotificationEmailDelivery
 from nevo.db.models.product import NotificationPreference
+from nevo.notifications.branding import render_email
 from nevo.notifications.email import ResendEmailDelivery
 
 MAX_ATTEMPTS = 6
@@ -43,9 +44,31 @@ class NotificationEmailWorker:
         claimed = await self._claim()
         if claimed is None:
             return False
-        delivery_id, recipient, title, description = claimed
+        delivery_id, recipient, title, description, navigates_to = claimed
+        # Every in-app notification also goes out as email, so this is the one
+        # sender that has to work for messages nobody wrote by hand.
+        cta = None
+        if navigates_to:
+            destination = navigates_to
+            if not destination.startswith(("http://", "https://")):
+                destination = f"{self._delivery.frontend_base_url}/{destination.lstrip('/')}"
+            cta = ("Open in Nevo", destination)
         try:
-            await self._delivery.send(to=recipient, subject=title, text=description)
+            await self._delivery.send(
+                to=recipient,
+                subject=title,
+                text=description,
+                html=render_email(
+                    heading=title,
+                    preheader=description[:140],
+                    paragraphs=[description],
+                    cta=cta,
+                    footnote=(
+                        "You are receiving this because of your notification "
+                        "settings in Nevo. You can change them in Settings."
+                    ),
+                ),
+            )
         except Exception as error:
             await self._mark_failed(delivery_id, error)
         else:
@@ -58,7 +81,7 @@ class NotificationEmailWorker:
             if not worked:
                 await asyncio.sleep(self._poll_seconds)
 
-    async def _claim(self) -> tuple[UUID, str, str, str] | None:
+    async def _claim(self) -> tuple[UUID, str, str, str, str | None] | None:
         now = datetime.now(UTC)
         async with self._sessions.begin() as session:
             row = (
@@ -107,7 +130,13 @@ class NotificationEmailWorker:
             delivery.attempt_count += 1
             delivery.next_attempt_at = now + timedelta(minutes=10)
             delivery.last_error = None
-            return delivery.id, str(user.email), notification.title, notification.description
+            return (
+                delivery.id,
+                str(user.email),
+                notification.title,
+                notification.description,
+                notification.navigates_to,
+            )
 
     async def _mark_delivered(self, delivery_id: UUID) -> None:
         async with self._sessions.begin() as session:

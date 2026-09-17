@@ -110,6 +110,7 @@ from nevo.domain.signal_events.vocabulary import (
     SignalEventType,
 )
 from nevo.intelligence.baseline import build_baseline_profile
+from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.permissions.entities import PermissionSnapshot
 from nevo.storage.media import LessonMediaService
@@ -1762,14 +1763,27 @@ async def request_password_reset(
         )
         await session.commit()
         try:
+            reset_url = f"{mailer.frontend_base_url}/reset-password?token={token}"
             await mailer.send(
                 to=str(user.email),
                 subject="Reset your Nevo password",
                 text=(
                     "A password reset was requested for your Nevo account.\n\n"
-                    f"Reset it here: {mailer.frontend_base_url}/reset-password?token={token}\n\n"
+                    f"Reset it here: {reset_url}\n\n"
                     "This link expires in one hour. If you did not request it, "
                     "you can ignore this email."
+                ),
+                html=render_email(
+                    heading="Reset your password",
+                    preheader="The link expires in one hour.",
+                    paragraphs=[
+                        "A password reset was requested for your Nevo account.",
+                    ],
+                    cta=("Reset my password", reset_url),
+                    footnote=(
+                        "This link expires in one hour. If you did not request "
+                        "it, you can ignore this email and nothing will change."
+                    ),
                 ),
             )
         except EmailDeliveryUnavailableError as error:

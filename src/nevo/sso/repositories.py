@@ -16,15 +16,18 @@ from nevo.db.models.sso import (
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
+    NotificationType,
     RosterSyncStatus,
     SsoConnectionStatus,
     SsoProvider,
+    UserRole,
     UserStatus,
 )
 from nevo.domain.teacher_assignments.vocabulary import (
     TeacherAssignmentRole,
     TeacherAssignmentSource,
 )
+from nevo.notifications.dispatch import notify_each
 from nevo.sso.entities import (
     RosterAccount,
     RosterSyncBatch,
@@ -140,31 +143,18 @@ class SqlAlchemySsoRepository:
             if runs:
                 issues = await session.scalars(
                     select(RosterSyncIssue)
-                    .where(
-                        RosterSyncIssue.roster_sync_run_id.in_(
-                            [run.id for run in runs]
-                        )
-                    )
+                    .where(RosterSyncIssue.roster_sync_run_id.in_([run.id for run in runs]))
                     .order_by(RosterSyncIssue.created_at)
                 )
                 for issue in issues:
-                    issues_by_run.setdefault(
-                        issue.roster_sync_run_id, []
-                    ).append(issue)
+                    issues_by_run.setdefault(issue.roster_sync_run_id, []).append(issue)
 
         return RosterSyncHistory(
             school_id=school_id,
             window_days=window_days,
-            successful_runs=sum(
-                1 for run in runs if run.status is not RosterSyncStatus.FAILED
-            ),
-            failed_runs=sum(
-                1 for run in runs if run.status is RosterSyncStatus.FAILED
-            ),
-            runs=tuple(
-                _roster_sync_run_view(run, issues_by_run.get(run.id, ()))
-                for run in runs
-            ),
+            successful_runs=sum(1 for run in runs if run.status is not RosterSyncStatus.FAILED),
+            failed_runs=sum(1 for run in runs if run.status is RosterSyncStatus.FAILED),
+            runs=tuple(_roster_sync_run_view(run, issues_by_run.get(run.id, ())) for run in runs),
         )
 
     async def mark_reauthorisation_started(
@@ -249,6 +239,15 @@ class SqlAlchemySsoRepository:
                     completed_at=failed_at,
                 )
             )
+            # A failed sync is the one a school has to act on, and until now
+            # the only way to find out was to open the SSO screen and look.
+            await _notify_it_admins(
+                session,
+                school_id=school_id,
+                notification_type=NotificationType.SSO_NEEDS_ATTENTION,
+                title="Roster sync could not run",
+                description=(f"{provider.value.title()} refused the last sync: {failure_reason}"),
+            )
             # A provider refusal is the signal that credentials lapsed, so the
             # health card starts telling the truth immediately.
             await session.execute(
@@ -256,8 +255,7 @@ class SqlAlchemySsoRepository:
                 .where(
                     SchoolSsoConfiguration.school_id == school_id,
                     SchoolSsoConfiguration.provider == provider,
-                    SchoolSsoConfiguration.connection_status
-                    != SsoConnectionStatus.DISCONNECTED,
+                    SchoolSsoConfiguration.connection_status != SsoConnectionStatus.DISCONNECTED,
                 )
                 .values(
                     connection_status=SsoConnectionStatus.NEEDS_ATTENTION,
@@ -440,9 +438,7 @@ class SqlAlchemySsoRepository:
                 return None
             issues = list(
                 await session.scalars(
-                    select(RosterSyncIssue).where(
-                        RosterSyncIssue.roster_sync_run_id == run.id
-                    )
+                    select(RosterSyncIssue).where(RosterSyncIssue.roster_sync_run_id == run.id)
                 )
             )
             return _roster_sync_run_view(run, issues)
@@ -478,9 +474,7 @@ class SqlAlchemySsoRepository:
             await session.flush()
 
             for student in batch.students:
-                student_user = await _upsert_roster_user(
-                    session, school_id, provider, student
-                )
+                student_user = await _upsert_roster_user(session, school_id, provider, student)
                 await _sync_student_classes(
                     session,
                     school_id=school_id,
@@ -490,9 +484,7 @@ class SqlAlchemySsoRepository:
                 imported_students += 1
             issue_ids: list[UUID] = []
             for teacher in batch.teachers:
-                teacher_user = await _upsert_roster_user(
-                    session, school_id, provider, teacher
-                )
+                teacher_user = await _upsert_roster_user(session, school_id, provider, teacher)
                 imported_teachers += 1
                 for class_external_id in teacher.class_external_ids:
                     school_class = await _class_for_external_id(
@@ -539,8 +531,7 @@ class SqlAlchemySsoRepository:
                 .where(
                     SchoolSsoConfiguration.school_id == school_id,
                     SchoolSsoConfiguration.provider == provider,
-                    SchoolSsoConfiguration.connection_status
-                    == SsoConnectionStatus.NEEDS_ATTENTION,
+                    SchoolSsoConfiguration.connection_status == SsoConnectionStatus.NEEDS_ATTENTION,
                 )
                 .values(
                     connection_status=SsoConnectionStatus.CONNECTED,
@@ -737,4 +728,33 @@ def _roster_sync_run_view(
             )
             for issue in issues
         ),
+    )
+
+
+async def _notify_it_admins(
+    session: AsyncSession,
+    *,
+    school_id: UUID,
+    notification_type: NotificationType,
+    title: str,
+    description: str,
+) -> None:
+    """Tell the people who can actually fix a connection."""
+
+    admins = (
+        await session.scalars(
+            select(User).where(
+                User.school_id == school_id,
+                User.role.in_({UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}),
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+    ).all()
+    await notify_each(
+        session,
+        recipients=[(admin.id, admin.role) for admin in admins],
+        notification_type=notification_type,
+        title=title,
+        description=description,
+        navigates_to="/admin/sso",
     )

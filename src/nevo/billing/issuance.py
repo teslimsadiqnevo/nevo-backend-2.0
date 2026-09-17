@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nevo.billing.service import quote_per_student
 from nevo.db.models.account import School, User
 from nevo.db.models.billing import Contract, Invoice
-from nevo.domain.accounts.vocabulary import UserRole, UserStatus
+from nevo.domain.accounts.vocabulary import NotificationType, UserRole, UserStatus
 from nevo.domain.billing.vocabulary import (
     ContractStatus,
     InvoiceStatus,
@@ -16,6 +17,7 @@ from nevo.domain.billing.vocabulary import (
     PricingPlan,
     RateType,
 )
+from nevo.notifications.dispatch import notify_each
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +132,18 @@ class InvoiceIssuanceService:
                                 due_at=issue_date + timedelta(days=PAYMENT_TERM_DAYS),
                                 pdf_url=(f"/api/billing/invoices/{school.id}/{period.number}.pdf"),
                             )
+                        )
+                        # An invoice nobody is told about is an invoice nobody
+                        # pays. invoice_issued had a category and a preference
+                        # switch and was never once raised.
+                        await _notify_billing_contacts(
+                            session,
+                            school=school,
+                            number=period.number,
+                            label=period.label,
+                            amount=quote.total_with_vat,
+                            currency=quote.currency,
+                            due_on=issue_date + timedelta(days=PAYMENT_TERM_DAYS),
                         )
                         issued += 1
                     if outstanding or not self._advance_contract_year(contract, issue_date):
@@ -247,3 +261,37 @@ class InvoiceIssuanceService:
         if term is None:
             return f"NEVO-{slug}-Y{year_index}"
         return f"NEVO-{slug}-Y{year_index}T{term}"
+
+
+async def _notify_billing_contacts(
+    session: AsyncSession,
+    *,
+    school: School,
+    number: str,
+    label: str,
+    amount: Decimal,
+    currency: PricingCurrency,
+    due_on: date,
+) -> None:
+    """Tell whoever handles this school's money that a bill exists."""
+
+    admins = (
+        await session.scalars(
+            select(User).where(
+                User.school_id == school.id,
+                User.role.in_({UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}),
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+    ).all()
+    if not admins:
+        logger.warning("Invoice %s raised for %s with no active admin to tell", number, school.id)
+        return
+    await notify_each(
+        session,
+        recipients=[(admin.id, admin.role) for admin in admins],
+        notification_type=NotificationType.INVOICE_ISSUED,
+        title=f"Invoice {number} is ready",
+        description=(f"{label}: {currency.value} {amount:,.2f}, due {due_on.isoformat()}."),
+        navigates_to="/admin/billing",
+    )

@@ -62,9 +62,7 @@ class ResendEmailDelivery:
             response = await client.post(
                 RESEND_API_URL,
                 headers={
-                    "Authorization": (
-                        f"Bearer {self._settings.resend_api_key.get_secret_value()}"
-                    ),
+                    "Authorization": (f"Bearer {self._settings.resend_api_key.get_secret_value()}"),
                     "Content-Type": "application/json",
                 },
                 json={

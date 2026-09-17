@@ -13,6 +13,7 @@ from nevo.domain.consent.vocabulary import (
     ConsentNotificationKind,
     ParentContactMethod,
 )
+from nevo.notifications.branding import render_email
 from nevo.notifications.email import ResendEmailDelivery
 
 MAX_ATTEMPTS = 6
@@ -25,6 +26,43 @@ def consent_message(consent_url: str) -> str:
         "Nevo needs your confirmation before your child's learning data is used. "
         f"Review and respond here: {consent_url}\n\n"
         "This link expires in 7 days. If you did not expect this, ignore this message."
+    )
+
+
+def consent_html(consent_url: str) -> str:
+    """The same words as the plain-text version, in Nevo's shell.
+
+    This is the message most likely to be mistaken for a phishing attempt: it
+    arrives unexpectedly, mentions somebody's child, and asks them to click.
+    Looking like Nevo is part of it being trustworthy.
+    """
+
+    return render_email(
+        heading="A decision about your child's learning",
+        preheader="Nevo needs your confirmation. The link expires in 7 days.",
+        paragraphs=[
+            "Nevo needs your confirmation before your child's learning data is used.",
+        ],
+        cta=("Review and respond", consent_url),
+        footnote=(
+            "This link expires in 7 days. If you did not expect this, you can "
+            "ignore this message, and nothing about your child changes."
+        ),
+    )
+
+
+def receipt_html() -> str:
+    """Carries no link, for the same reason the text version does not."""
+
+    return render_email(
+        heading="Your consent has been recorded",
+        preheader="This message is your copy.",
+        paragraphs=[
+            "You gave consent for your child to use Nevo. This message is your copy.",
+            "You can withdraw that consent at any time, or ask what data we "
+            "hold, from the link your school sent you.",
+        ],
+        footnote="If this was not you, contact your school straight away.",
     )
 
 
@@ -83,6 +121,7 @@ class ConsentDeliveryWorker:
                     to=destination,
                     subject=RECEIPT_SUBJECT if is_receipt else EMAIL_SUBJECT,
                     text=message,
+                    html=(receipt_html() if is_receipt else consent_html(consent_url)),
                 )
             else:
                 await self._sms.send(to=destination, text=message)

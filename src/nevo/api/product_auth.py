@@ -67,6 +67,7 @@ from nevo.domain.accounts.vocabulary import (
 )
 from nevo.domain.consent.vocabulary import ParentContactMethod, ParentRightType
 from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.ops.background import spawn
 
@@ -750,6 +751,13 @@ async def _send_invitation(
             f"Open this secure link to finish setting up your account:\n{link}\n\n"
             "The link expires in 14 days."
         ),
+        html=render_email(
+            heading="You have been invited to Nevo",
+            preheader="Finish setting up your account. The link expires in 14 days.",
+            paragraphs=["Your school has invited you to join them on Nevo."],
+            cta=("Set up my account", link),
+            footnote="This link expires in 14 days and can only be used once.",
+        ),
     )
 
 
@@ -991,6 +999,19 @@ async def _deliver_parent_code(
                 to=account.contact,
                 subject="Your Nevo sign-in code",
                 text=text,
+                html=render_email(
+                    heading="Your sign-in code",
+                    preheader="Use this code to sign in. It expires in 10 minutes.",
+                    paragraphs=[
+                        "Enter this code to sign in to Nevo:",
+                        code,
+                        "It expires in 10 minutes and can be used once.",
+                    ],
+                    footnote=(
+                        "If you did not ask to sign in, you can ignore this "
+                        "email. Nobody can use the code without your inbox."
+                    ),
+                ),
             )
         except EmailDeliveryUnavailableError:
             logger.warning("Parent sign-in code not sent: email is not configured")

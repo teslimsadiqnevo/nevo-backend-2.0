@@ -11,7 +11,14 @@ from sqlalchemy import select
 from nevo.auth.config import AuthSettings
 from nevo.auth.wiring import build_credential_hasher
 from nevo.core.config import get_settings
-from nevo.db.models.account import Class, School, StudentClassEnrollment, User
+from nevo.db.models.account import (
+    Class,
+    ConsentRecord,
+    School,
+    StudentClassEnrollment,
+    User,
+)
+from nevo.db.models.consent import ParentLink
 from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
 from nevo.db.models.frontend_support import (
     Concept,
@@ -30,8 +37,19 @@ from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.db.session import create_engine, create_session_factory
-from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
+from nevo.domain.accounts.vocabulary import (
+    AuthMethod,
+    ConsentMethod,
+    ConsentStatus,
+    ConsentType,
+    UserRole,
+    UserStatus,
+)
 from nevo.domain.billing.vocabulary import SubscriptionTier
+from nevo.domain.consent.vocabulary import (
+    ConsentConfirmationSource,
+    ParentContactMethod,
+)
 from nevo.domain.intelligence.vocabulary import (
     ContentModality,
     ContentParseStatus,
@@ -51,6 +69,8 @@ from nevo.domain.teacher_assignments.vocabulary import (
 TEACHER_EMAIL = "teacher.demo@nevolearning.com"
 ADMIN_EMAIL = "admin.demo@nevolearning.com"
 STUDENT_EMAIL = "student.demo@nevolearning.com"
+PARENT_EMAIL = "parent.demo@nevolearning.com"
+PARENT_NAME = "Ngozi Okafor"
 SCHOOL_CODE = "NEVO-DEMO"
 
 
@@ -217,6 +237,56 @@ async def main() -> None:
                     student_id=student.id,
                     class_id=school_class.id,
                 )
+
+            # Amara's parent. A parent has no password by design: the contact
+            # Nevo holds for them is the credential, and signing in means
+            # receiving a code at it. So the address has to be one somebody
+            # can actually open, which is why it is on the school's own
+            # domain rather than a .test one the mail server would refuse.
+            parent = await _get_or_create(
+                session,
+                User,
+                stable_id("parent:amara"),
+                school_id=school.id,
+                role=UserRole.PARENT_GUARDIAN,
+                auth_method=AuthMethod.EMAIL_PASSWORD,
+                first_name="Ngozi",
+                last_name="Okafor",
+                email=PARENT_EMAIL,
+                status=UserStatus.ACTIVE,
+            )
+            await session.flush()
+            await _get_or_create(
+                session,
+                ParentLink,
+                stable_id("parent-link:amara"),
+                school_id=school.id,
+                student_id=students[0].id,
+                parent_id=parent.id,
+                parent_name=PARENT_NAME,
+                parent_contact=PARENT_EMAIL,
+                contact_method=ParentContactMethod.EMAIL,
+                # ck_parent_links_account_created_matches_parent: the flag and
+                # the id have to move together.
+                account_created=True,
+            )
+            # Consent confirmed, so the child is not sitting behind the gate
+            # while somebody tries the parent account.
+            await _get_or_create(
+                session,
+                ConsentRecord,
+                stable_id("consent:amara"),
+                subject_user_id=students[0].id,
+                consent_type=ConsentType.DATA_PROCESSING,
+                status=ConsentStatus.CONFIRMED,
+                confirmation_source=ConsentConfirmationSource.PARENT,
+                confirmed_via=ConsentMethod.DIGITAL,
+                confirmed_at=datetime.now(UTC) - timedelta(days=30),
+                confirmed_by_parent_id=parent.id,
+                last_actor_user_id=parent.id,
+                last_changed_at=datetime.now(UTC) - timedelta(days=30),
+                last_channel="parent_portal",
+            )
 
             lesson = await _get_or_create(
                 session,

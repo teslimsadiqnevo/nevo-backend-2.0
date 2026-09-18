@@ -12,6 +12,18 @@ class SignalEventType(StrEnum):
     EXIT_ATTEMPT = "exit_attempt"
     BREAK_SUGGESTED = "break_suggested"
     BREAK_TAKEN = "break_taken"
+    #: A break actually started and ended. break_suggested and break_taken say
+    #: Nevo offered one and the child accepted; these two say how long it
+    #: lasted, which is the part that tells you whether it helped.
+    BREAK_START = "break_start"
+    BREAK_END = "break_end"
+    #: What the child said when the consolidation break asked how they were
+    #: getting on. It was being asked and the answer discarded, because there
+    #: was no event type to carry it.
+    FEELING_CHECKIN = "feeling_checkin"
+    #: The learner reached the end of a module. A natural place to pause, and
+    #: the boundary the break logic wants to reason about.
+    MODULE_BOUNDARY_REACHED = "module_boundary_reached"
     ENGAGEMENT_SIGNAL = "engagement_signal"
     MODALITY_SUGGESTION_SHOWN = "modality_suggestion_shown"
     MODALITY_SUGGESTION_ACCEPTED = "modality_suggestion_accepted"

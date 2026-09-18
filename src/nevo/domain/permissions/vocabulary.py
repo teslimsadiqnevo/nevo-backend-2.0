@@ -65,9 +65,5 @@ def effective_scopes(
 
 
 def navigation_for(scopes: frozenset[PermissionScope]) -> tuple[str, ...]:
-    allowed = {
-        destination
-        for scope in scopes
-        for destination in NAVIGATION_BY_SCOPE[scope]
-    }
+    allowed = {destination for scope in scopes for destination in NAVIGATION_BY_SCOPE[scope]}
     return tuple(item for item in NAVIGATION_ORDER if item in allowed)

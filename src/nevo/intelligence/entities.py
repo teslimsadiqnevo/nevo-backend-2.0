@@ -101,6 +101,11 @@ class ProactiveAdjustment:
     reason: str
     confidence: float = 0
     trigger_signals: tuple[TriggerSignal, ...] = ()
+    #: Present only on the actions that need them. offer_hint without hint
+    #: text, or a socratic panel without questions, is an instruction a client
+    #: cannot carry out.
+    hint: str | None = None
+    guided_questions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

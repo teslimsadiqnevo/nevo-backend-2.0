@@ -1,8 +1,8 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
@@ -13,6 +13,7 @@ from nevo.domain.intelligence.vocabulary import (
     ContentModality,
     ContentSegmentType,
     DensityLevel,
+    ProactiveAction,
     ScaffoldingLevel,
     ScaffoldIntensity,
     ScaffoldOutcome,
@@ -204,10 +205,35 @@ class SegmentAdaptationResponse(BaseModel):
 class ProactiveAdjustmentResponse(BaseModel):
     model_config = CAMEL_CONFIG
 
-    action: str
+    action: ProactiveAction
+    #: Why the engine decided this. The reasoning frame, for a teacher or an
+    #: audit - not copy to put in front of a child.
     reason: str
     confidence: float
     trigger_signals: list["TriggerSignalResponse"]
+    #: The hint itself, when the action is offer_hint. Sent because reason
+    #: cannot stand in for it: reason explains the decision, and showing a
+    #: learner why the system thinks they are struggling is the thing the
+    #: no-labels position exists to prevent.
+    hint: str | None = None
+    #: What the socratic panel walks through, in order, when the action is
+    #: show_socratic_panel. Questions that lead a learner to the answer rather
+    #: than giving it.
+    guided_questions: list[str] = Field(default_factory=list, alias="guidedQuestions")
+
+    @model_validator(mode="after")
+    def _carry_what_the_action_needs(self) -> "ProactiveAdjustmentResponse":
+        """An action whose payload is missing cannot be rendered.
+
+        Better to refuse it here than to send a client an instruction to show
+        a hint and nothing to show.
+        """
+
+        if self.action is ProactiveAction.OFFER_HINT and not (self.hint or "").strip():
+            raise ValueError("offer_hint carries no hint text")
+        if self.action is ProactiveAction.SHOW_SOCRATIC_PANEL and not self.guided_questions:
+            raise ValueError("show_socratic_panel carries no questions")
+        return self
 
     @classmethod
     def from_adjustment(
@@ -215,8 +241,10 @@ class ProactiveAdjustmentResponse(BaseModel):
         adjustment: ProactiveAdjustment,
     ) -> "ProactiveAdjustmentResponse":
         return cls(
-            action=adjustment.action,
+            action=ProactiveAction(adjustment.action),
             reason=adjustment.reason,
+            hint=adjustment.hint,
+            guidedQuestions=list(adjustment.guided_questions),
             confidence=adjustment.confidence,
             trigger_signals=[
                 TriggerSignalResponse.from_signal(signal) for signal in adjustment.trigger_signals
@@ -319,7 +347,22 @@ class AccommodationAnalysisResponse(BaseModel):
     frontend_signals: list[str] = Field(alias="frontendSignals")
     signals: list[AccommodationSignalResponse]
     source: str
-    persisted_as_label: bool = Field(alias="persistedAsLabel")
+    #: Always false, and that is the point: it is an attestation, not a
+    #: computed value. Nevo works out what support a learner needs from what
+    #: they did, and writes none of it down as a label about the child - so
+    #: this field says, on every response, that nothing here became one.
+    #: Counsel asks whether an analysis like this is ever persisted as a
+    #: characteristic; the answer is on the wire rather than in a document.
+    persisted_as_label: Literal[False] = Field(
+        default=False,
+        alias="persistedAsLabel",
+        description=(
+            "Always false. Nevo derives accommodations from observed behaviour "
+            "and never stores the result as a label attached to the learner. "
+            "Sent on every response so the guarantee is visible to a client "
+            "and an auditor rather than asserted elsewhere."
+        ),
+    )
 
     @classmethod
     def from_analysis(
@@ -332,7 +375,6 @@ class AccommodationAnalysisResponse(BaseModel):
             frontend_signals=[signal.frontend_signal for signal in analysis.active],
             signals=[AccommodationSignalResponse.from_signal(signal) for signal in analysis.active],
             source=analysis.source,
-            persisted_as_label=False,
         )
 
 

@@ -26,6 +26,7 @@ from nevo.domain.attention_flags.vocabulary import AttentionFlagType
 from nevo.domain.consent.vocabulary import ParentRightType
 from nevo.domain.intelligence.vocabulary import (
     AssignmentStatus,
+    ClassInsightState,
     ContentParseStatus,
     LessonContentType,
     LessonSourceType,
@@ -482,6 +483,11 @@ class TeacherHomeResponse(CamelResponse):
 
 
 class ClassInsightsNarrativeResponse(CamelResponse):
+    #: Which of three things this is saying. Both strings below are always
+    #: sent: a quiet week is the engine having looked and found nothing, which
+    #: is worth telling a teacher, and a null would have read as a gap in the
+    #: data instead.
+    state: ClassInsightState = ClassInsightState.SUMMARY
     class_id: UUID
     class_name: str
     weekly_summary: str

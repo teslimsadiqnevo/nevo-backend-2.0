@@ -122,32 +122,30 @@ GAMING_THRESHOLD_RULES: tuple[GamingThresholdRule, ...] = (
     ABANDONED_ATTEMPTS_SPIKE,
 )
 
-GAMING_THRESHOLD_RULES_BY_KEY: Mapping[str, GamingThresholdRule] = (
-    MappingProxyType({rule.key: rule for rule in GAMING_THRESHOLD_RULES})
+GAMING_THRESHOLD_RULES_BY_KEY: Mapping[str, GamingThresholdRule] = MappingProxyType(
+    {rule.key: rule for rule in GAMING_THRESHOLD_RULES}
 )
 
 # A learner must never be told the system is watching for this, and a teacher
 # must never be handed an accusation. The notification proposes a change to
 # the material, which is the useful action whether the learner was steering
 # the system or genuinely finding the work too easy.
-TEACHER_NOTIFICATION_TEMPLATES: Mapping[GamingSuspicionLevel, str] = (
-    MappingProxyType(
-        {
-            GamingSuspicionLevel.LOW: (
-                "{student_name}'s recent work looks different from their "
-                "usual pattern. Worth a look when you have a moment."
-            ),
-            GamingSuspicionLevel.MODERATE: (
-                "{student_name} may be finding this content too easy. "
-                "Consider assigning more challenging material."
-            ),
-            GamingSuspicionLevel.HIGH: (
-                "{student_name} may be ready to move on from this material. "
-                "Consider stepping the difficulty up, or having a quick chat "
-                "about how they are finding it."
-            ),
-        }
-    )
+TEACHER_NOTIFICATION_TEMPLATES: Mapping[GamingSuspicionLevel, str] = MappingProxyType(
+    {
+        GamingSuspicionLevel.LOW: (
+            "{student_name}'s recent work looks different from their "
+            "usual pattern. Worth a look when you have a moment."
+        ),
+        GamingSuspicionLevel.MODERATE: (
+            "{student_name} may be finding this content too easy. "
+            "Consider assigning more challenging material."
+        ),
+        GamingSuspicionLevel.HIGH: (
+            "{student_name} may be ready to move on from this material. "
+            "Consider stepping the difficulty up, or having a quick chat "
+            "about how they are finding it."
+        ),
+    }
 )
 
 # Nothing surfaces at NONE, and NONE has no template by design.

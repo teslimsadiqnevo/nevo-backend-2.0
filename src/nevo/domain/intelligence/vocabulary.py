@@ -109,6 +109,7 @@ class SegmentReviewReason(StrEnum):
     CALCULATION_STEP_UNKNOWN_INPUT_TYPE = "calculation_step_unknown_input_type"
     CALCULATION_STEP_MISSING_ANSWER = "calculation_step_missing_answer"
     CALCULATION_STEP_MISSING_OPTIONS = "calculation_step_missing_options"
+    CALCULATION_VARIANT_MISSING_MANIPULATIVE = "calculation_variant_missing_manipulative"
     CALCULATION_SEGMENT_HAS_NO_INTERACTIVE_DELIVERY = (
         "calculation_segment_has_no_interactive_delivery"
     )
@@ -160,3 +161,58 @@ class LessonScope(StrEnum):
 
     MINE = "mine"
     SCHOOL = "school"
+
+
+class ClassInsightState(StrEnum):
+    """Which of three things the weekly class view is saying.
+
+    The console was deciding this itself from the length of three arrays,
+    which put a threshold in the client and could not tell a settled week from
+    a new class - so a class having a good week was told insights were still
+    being gathered. The engine owns the threshold and the copy; the client
+    renders what it is given.
+    """
+
+    #: There is a pattern worth pointing at.
+    SUMMARY = "summary"
+    #: The engine looked at a full week and found nothing needing attention.
+    #: A finding, not an absence of one.
+    SETTLED = "settled"
+    #: Not enough has happened yet to say either way.
+    GATHERING = "gathering"
+
+
+class ProactiveAction(StrEnum):
+    """What the engine can ask a lesson to do next.
+
+    Typed because a bare string put the vocabulary in a document instead of
+    the contract, and a client had no way to know which values it must handle.
+
+    The first three are the only ones the engine produces today. The last two
+    are declared because the shapes that carry them exist and a client renders
+    them; nothing emits them yet, and a value that is never sent is honest in
+    a way an undocumented string was not.
+    """
+
+    SIMPLIFY = "simplify"
+    SLOWER = "slower"
+    EXPAND = "expand"
+    #: Carries hint text. A hint with nothing to say is not a hint.
+    OFFER_HINT = "offer_hint"
+    #: Carries the questions the panel walks through.
+    SHOW_SOCRATIC_PANEL = "show_socratic_panel"
+
+
+class ManipulativeKind(StrEnum):
+    """What a learner drags, when a calculation step asks them to.
+
+    A drag step had no structure to render, so drag was refused on generated
+    content and the one place modalities layer rather than switch could not
+    happen.
+    """
+
+    FRACTION_BAR = "fraction_bar"
+    NUMBER_LINE = "number_line"
+    ARRAY = "array"
+    PLACE_VALUE = "place_value"
+    COUNTERS = "counters"

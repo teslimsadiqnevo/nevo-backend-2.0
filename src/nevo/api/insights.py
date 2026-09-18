@@ -35,7 +35,15 @@ from nevo.db.models.product import LessonProgress
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import UserRole
+from nevo.domain.intelligence.vocabulary import ClassInsightState
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
+
+#: What the engine needs before it will call a week settled rather than
+#: unexamined. One learner's quiet week says nothing about a class, and a
+#: single session says nothing about anybody - so below either of these the
+#: honest answer is that it does not know yet.
+SESSIONS_FOR_A_PATTERN = 3
+LEARNERS_FOR_A_PATTERN = 2
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
 
@@ -371,32 +379,62 @@ async def class_insights_narrative(
         await session.scalars(select(SignalEvent).where(SignalEvent.session_id.in_(session_ids)))
     ).all()
     completed = sum(item.completion_status is LessonCompletionStatus.COMPLETED for item in sessions)
-    if not sessions:
-        summary = f"{school_class.name} has no recorded lesson sessions in the past seven days."
-        ahead = (
-            "Once the class begins its next lessons, this view will describe the shared pattern."
+    replays = sum(item.event_type is SignalEventType.REPLAY for item in events)
+    exits = sum(item.event_type is SignalEventType.EXIT_ATTEMPT for item in events)
+    learners = len({item.student_id for item in sessions})
+
+    if len(sessions) < SESSIONS_FOR_A_PATTERN or learners < LEARNERS_FOR_A_PATTERN:
+        # Not enough to say anything either way. Distinct from a quiet week,
+        # which is a finding.
+        state = ClassInsightState.GATHERING
+        summary = (
+            f"{school_class.name} has no recorded lesson sessions in the past seven days."
+            if not sessions
+            else (
+                f"{school_class.name} recorded {len(sessions)} lesson "
+                f"session{'s' if len(sessions) != 1 else ''} this week, across "
+                f"{learners} learner{'s' if learners != 1 else ''} - not yet enough "
+                "to describe a shared pattern."
+            )
         )
-    else:
+        ahead = (
+            "Once more of the class has worked through lessons, this view will "
+            "describe what they have in common."
+        )
+    elif exits:
+        state = ClassInsightState.SUMMARY
         summary = (
             f"{school_class.name} recorded {len(sessions)} lesson sessions this week, "
             f"with {completed} completed."
         )
-        replays = sum(item.event_type is SignalEventType.REPLAY for item in events)
-        exits = sum(item.event_type is SignalEventType.EXIT_ATTEMPT for item in events)
-        if exits:
-            ahead = (
-                "Look first at lessons students left and returned to, then check where "
-                "support may help."
-            )
-        elif replays:
-            ahead = (
-                "Several parts were replayed; revisiting those explanations together may help next."
-            )
-        else:
-            ahead = "Keep the current lesson rhythm and review new evidence as the class continues."
+        ahead = (
+            "Look first at lessons students left and returned to, then check where "
+            "support may help."
+        )
+    elif replays:
+        state = ClassInsightState.SUMMARY
+        summary = (
+            f"{school_class.name} recorded {len(sessions)} lesson sessions this week, "
+            f"with {completed} completed."
+        )
+        ahead = "Several parts were replayed; revisiting those explanations together may help next."
+    else:
+        # The engine looked and found nothing needing attention. That is a
+        # finding, and it must not read like an absence of one.
+        state = ClassInsightState.SETTLED
+        summary = (
+            f"{school_class.name} recorded {len(sessions)} lesson sessions this week, "
+            f"with {completed} completed, and nothing stood out as needing attention."
+        )
+        ahead = (
+            "No one part of the week is asking for a change. Keep the current rhythm "
+            "and this view will say so again, or tell you when that alters."
+        )
+
     return {
         "classId": str(class_id),
         "className": school_class.name,
+        "state": state,
         "weeklySummary": summary,
         "lookingAhead": ahead,
         "generatedAt": datetime.now(UTC),

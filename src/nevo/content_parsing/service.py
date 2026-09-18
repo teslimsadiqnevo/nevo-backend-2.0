@@ -28,6 +28,7 @@ from nevo.domain.intelligence.vocabulary import (
     ContentModality,
     LessonContentType,
     LessonSourceType,
+    ManipulativeKind,
     SegmentReviewReason,
 )
 from nevo.visuals import EducationalImageService, VisualGenerationError
@@ -755,6 +756,35 @@ def _step_answer(value: object) -> str | int | float | bool | None:
     return text or None
 
 
+def _manipulative(value: object) -> dict[str, object] | None:
+    """What a drag step gives a learner to move, if the model described one.
+
+    Refused rather than half-accepted: a fraction bar cut into no pieces, or
+    into a shape we have no renderer for, is worse on screen than a step that
+    asks the child to type.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    kinds = {kind.value for kind in ManipulativeKind}
+    kind = str(value.get("kind") or "").strip()
+    if kind not in kinds:
+        return None
+    try:
+        parts = int(value.get("parts") or 0)
+        rows = int(value.get("rows") or 1)
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= parts <= 100 or not 1 <= rows <= 20:
+        return None
+    return {
+        "kind": kind,
+        "parts": parts,
+        "rows": rows,
+        "labels": [str(item).strip() for item in _string_list(value.get("labels"))][:100],
+    }
+
+
 def _step_options(value: object) -> list[dict[str, object]]:
     """The choices a selection or drag step offers, in checkpoint shape."""
 
@@ -827,6 +857,11 @@ def _validated_calculation_variant(
                 ),
             }
         )
+    manipulative = _manipulative(variant.get("manipulative"))
+    if any(step["expectedInput"] == "drag" for step in normalized_steps) and manipulative is None:
+        # A drag step with nothing to drag cannot be rendered, which is why
+        # drag was being refused on generated content altogether.
+        return None, "calculation_variant_missing_manipulative"
     answer = str(variant.get("answer") or "").strip()
     if not answer:
         # The contract carries an answer so a client never has to infer one
@@ -837,6 +872,7 @@ def _validated_calculation_variant(
     return {
         "type": "co_construction",
         "fullEquation": str(variant.get("fullEquation") or "").strip(),
+        "manipulative": manipulative,
         "answer": answer,
         "steps": normalized_steps,
         "scaffoldImage": _dict_or_none(variant.get("scaffoldImage")),

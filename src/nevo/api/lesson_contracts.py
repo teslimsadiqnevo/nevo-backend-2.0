@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nevo.domain.intelligence.vocabulary import ManipulativeKind
+
 ScalarAnswer = str | int | float | bool
 
 
@@ -129,6 +131,30 @@ class ScaffoldImage(BaseModel):
     caption: str | None = None
 
 
+class Manipulative(BaseModel):
+    """What a learner drags, and what it is made of.
+
+    A step could already declare expectedInput "drag" and carried nothing to
+    drag, so drag was refused on generated content - which is why the one
+    place modalities layer rather than switch could not happen. The shape is
+    deliberately small: a kind the client has a renderer for, how many pieces
+    the whole is cut into, and how those pieces are laid out.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: ManipulativeKind
+    #: How many equal pieces the whole is divided into - the denominator of a
+    #: fraction bar, the columns of an array, the ticks on a number line.
+    parts: int = Field(ge=1, le=100)
+    #: How many rows those pieces are arranged in. One for a bar or a line;
+    #: an array of twelve as 3x4 is three.
+    rows: int = Field(default=1, ge=1, le=20)
+    #: What each piece is called when a child reads it aloud, if naming them
+    #: helps. Empty when the pieces need no label.
+    labels: list[str] = Field(default_factory=list, max_length=100)
+
+
 class CalculationVariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -140,6 +166,9 @@ class CalculationVariant(BaseModel):
     answer: str = ""
     steps: list[CalculationStep]
     scaffold_image: ScaffoldImage | None = Field(default=None, alias="scaffoldImage")
+    #: Present when the steps are meant to be dragged rather than typed. Null
+    #: when this calculation is worked through in numbers alone.
+    manipulative: Manipulative | None = None
     completion_statement: str = Field(alias="completionStatement")
 
 

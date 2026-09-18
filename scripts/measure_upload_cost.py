@@ -57,6 +57,13 @@ VARIANT_SYSTEM = (
     'Return only JSON: {"simplified": "...", "expanded": "..."}'
 )
 
+VARIANT_SCHEMA = {
+    "type": "object",
+    "properties": {"simplified": {"type": "string"}, "expanded": {"type": "string"}},
+    "required": ["simplified", "expanded"],
+    "additionalProperties": False,
+}
+
 REVIEW_SYSTEM = (
     "You review images used to teach children. Approve an image only if it is "
     "factually correct, numerically exact, clearly readable, relevant to the "
@@ -78,14 +85,24 @@ async def variants(http: httpx.AsyncClient, body: str) -> tuple[dict, dict]:
             "model": HAIKU[0],
             "max_tokens": 4096,
             "system": VARIANT_SYSTEM,
-            "messages": [{"role": "user", "content": body}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"Rewrite this segment.\n\n<segment>\n{body}\n</segment>",
+                }
+            ],
         },
     )
     data = response.json()
     if "usage" not in data:
         sys.exit(f"Anthropic error: {data}")
-    text = data["content"][0]["text"]
-    return data["usage"], json.loads(text[text.find("{") : text.rfind("}") + 1])
+    try:
+        text = data["content"][0]["text"]
+        return data["usage"], json.JSONDecoder().raw_decode(text[text.index("{") :])[0]
+    except (ValueError, IndexError, KeyError):
+        # Still billed, so still counted; the lengths just can't be read.
+        print(f"  unreadable reply: {data['content'][0].get('text', '')[:120]!r}")
+        return data["usage"], {"simplified": "", "expanded": ""}
 
 
 async def review(http: httpx.AsyncClient, image_url: str, lesson_text: str) -> dict:

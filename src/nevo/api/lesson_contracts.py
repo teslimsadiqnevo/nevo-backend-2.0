@@ -32,10 +32,35 @@ class ComprehensionCheckpoint(BaseModel):
 
 
 class TextVariant(BaseModel):
+    """The text modality of a segment.
+
+    ``body`` is the same string as the segment's own ``body`` - always, and
+    enforced at parse time. They were independently settable, which meant the
+    teacher's review screen and the student player could have shown different
+    words and the approval gate would have been guarding the wrong one. There
+    is one text; this is a view onto it for clients that read the variant
+    rather than the segment.
+    """
+
     model_config = ConfigDict(populate_by_name=True)
 
-    body: str = ""
-    key_points: list[str] = Field(default_factory=list, alias="keyPoints")
+    body: str = Field(
+        default="",
+        description=(
+            "Identical to the segment's body. One text, sent in both places so "
+            "a client can read whichever shape suits it."
+        ),
+    )
+    key_points: list[str] = Field(
+        default_factory=list,
+        alias="keyPoints",
+        max_length=6,
+        description=(
+            "Highlights that sit beside the body, not a shorter retelling of "
+            "it. A point that restates the whole body is dropped at parse "
+            "time rather than shown twice."
+        ),
+    )
 
 
 class VisualVariant(BaseModel):

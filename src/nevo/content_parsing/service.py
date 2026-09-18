@@ -943,12 +943,34 @@ def _audio_variant(value: object, body: str) -> dict[str, object] | None:
 
 
 def _text_variant(value: object, body: str) -> dict[str, object]:
+    """The text modality. Its body is the segment's body, always.
+
+    These were two independently settable strings. The model could return a
+    text_variant.body of its own and it would win, and then the teacher's
+    review screen - which reads text_variant.body - and the student player -
+    which reads segment.body - would be showing different words. A teacher
+    would have approved text no child ever saw, and the approval gate would
+    have been guarding the wrong string.
+
+    It has never happened, because nothing asks the model for a separate one,
+    so every segment in the library has the two identical. That is luck rather
+    than a guarantee, and one prompt change away from not being true. So the
+    override is refused here: there is one text, and text_variant.body is a
+    view onto it for clients that read the variant.
+
+    keyPoints are highlights that sit beside the body, not a shorter retelling
+    of it - so a point that simply restates the whole body is dropped rather
+    than shown twice.
+    """
+
     source = value if isinstance(value, dict) else {}
-    key_points = source.get("keyPoints")
-    return {
-        "body": str(source.get("body") or body),
-        "keyPoints": list(_string_list(key_points)),
-    }
+    body = body.strip()
+    points = []
+    for point in _string_list(source.get("keyPoints")):
+        stripped = point.strip()
+        if stripped and stripped.casefold() != body.casefold():
+            points.append(stripped)
+    return {"body": body, "keyPoints": points[:6]}
 
 
 def _interactive_variant(value: object, body: str) -> dict[str, object] | None:

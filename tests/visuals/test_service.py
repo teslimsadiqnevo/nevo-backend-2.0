@@ -222,6 +222,24 @@ async def test_image_provider_failure_is_surfaced(monkeypatch: pytest.MonkeyPatc
         )
 
 
+async def test_a_dropped_connection_costs_the_picture_not_the_lesson(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raw network error must arrive as the error the parse already catches."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(404)
+        raise httpx.ReadTimeout("slow", request=request)
+
+    _install(monkeypatch, handler)
+
+    with pytest.raises(VisualGenerationError, match="ReadTimeout"):
+        await EducationalImageService(_settings()).generate(
+            title="T", lesson_text="body", requested_prompt=None
+        )
+
+
 async def test_malformed_review_output_is_surfaced(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _Fake([httpx.Response(200, json={"content": [{"type": "text", "text": "not json"}]})])
     _install(monkeypatch, fake)

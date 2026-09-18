@@ -114,6 +114,13 @@ class EducationalImageService:
             preview_url = await self._storage.url_for(preview_path)
         except StorageError as error:
             raise VisualGenerationError(str(error)) from error
+        except httpx.HTTPError as error:
+            # A dropped connection costs this segment its picture, not the
+            # lesson every segment it has. The same gap in audio failed a
+            # whole parse on one read timeout.
+            raise VisualGenerationError(
+                f"Image request failed: {error.__class__.__name__}"
+            ) from error
         return {
             "type": "ai_generated_image",
             "imageUrl": image_url,

@@ -5,6 +5,13 @@ import httpx
 from nevo.audio.config import AudioSettings
 from nevo.storage import StorageError, SupabaseStorage
 
+#: Two thousand characters of speech takes YarnGPT longer than a minute on a
+#: busy day. At sixty seconds one slow segment timed out mid-upload.
+YARNGPT_TIMEOUT_SECONDS = 120.0
+
+#: A dropped connection or a slow reply is usually gone on the next try.
+YARNGPT_ATTEMPTS = 2
+
 
 class AudioGenerationError(RuntimeError):
     pass
@@ -43,6 +50,13 @@ class AudioGenerationService:
             audio_url = await self._storage.url_for(object_path)
         except StorageError as error:
             raise AudioGenerationError(str(error)) from error
+        except httpx.HTTPError as error:
+            # A network failure is this segment's audio failing, not the
+            # lesson's. Uncaught, a single read timeout here failed the whole
+            # parse and the teacher lost every segment that had worked.
+            raise AudioGenerationError(
+                f"Audio request failed: {error.__class__.__name__}"
+            ) from error
         return {
             "script": normalized,
             "audioUrl": audio_url,
@@ -61,16 +75,22 @@ class AudioGenerationService:
         api_key = self._settings.yarngpt_api_key
         if api_key is None:
             raise AudioGenerationError("YarnGPT is not configured")
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                str(self._settings.yarngpt_api_url),
-                headers={"Authorization": f"Bearer {api_key.get_secret_value()}"},
-                json={
-                    "text": text,
-                    "voice": self._settings.yarngpt_voice,
-                    "response_format": "mp3",
-                },
-            )
+        for attempt in range(1, YARNGPT_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient(timeout=YARNGPT_TIMEOUT_SECONDS) as client:
+                    response = await client.post(
+                        str(self._settings.yarngpt_api_url),
+                        headers={"Authorization": f"Bearer {api_key.get_secret_value()}"},
+                        json={
+                            "text": text,
+                            "voice": self._settings.yarngpt_voice,
+                            "response_format": "mp3",
+                        },
+                    )
+                break
+            except httpx.TransportError:
+                if attempt == YARNGPT_ATTEMPTS:
+                    raise
         if response.is_error or not response.content:
             raise AudioGenerationError(
                 f"YarnGPT generation failed with status {response.status_code}"

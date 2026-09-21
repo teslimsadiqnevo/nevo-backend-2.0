@@ -290,7 +290,7 @@ async def _tell_the_parent(session: DatabaseSession, student: User) -> bool:
                 "You can see what Nevo holds, and withdraw your consent, from "
                 "your parent dashboard."
             ),
-            navigates_to="/parent/consent",
+            navigates_to="/parent",
             category=NotificationCategory.CONSENT.value,
         )
     )

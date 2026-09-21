@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -40,6 +40,10 @@ class ConsentRepository(Protocol):
         *,
         token_digest: str,
         completed_at: datetime,
+        granted_types: frozenset[ConsentType],
+        child_date_of_birth: date | None = None,
+        parent_relationship: str | None = None,
+        notice_version: str | None = None,
     ) -> ParentConsentCompletion | None: ...
 
     async def activate_parent_account(

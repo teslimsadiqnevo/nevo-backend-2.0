@@ -204,3 +204,48 @@ class ParentLoginCode(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class EmailConfirmation(Base):
+    """An outstanding request to prove an address belongs to its owner.
+
+    Rows are kept after they are used or replaced, rather than deleted: a
+    person following a link from an old email has to be told their link was
+    replaced, and a row that is gone cannot tell them anything.
+    """
+
+    __tablename__ = "email_confirmations"
+    __table_args__ = (
+        Index("ix_email_confirmations_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: The address this link confirms, kept beside the user's own so a change
+    #: of address cannot rewrite what an already-sent link was for.
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_digest: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    #: Set when a newer link replaced this one, which is how a corrected
+    #: address invalidates the email sent to the wrong one.
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )

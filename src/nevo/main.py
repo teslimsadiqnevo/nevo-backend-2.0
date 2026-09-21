@@ -24,6 +24,7 @@ from nevo.api.docs import (
     SWAGGER_UI_PARAMETERS,
     stable_operation_id,
 )
+from nevo.api.email_confirmation import router as email_confirmation_router
 from nevo.api.exports import router as exports_router
 from nevo.api.frontend_unblockers import router as frontend_unblockers_router
 from nevo.api.insights import router as insights_router
@@ -37,6 +38,7 @@ from nevo.api.permissions import router as permission_router
 from nevo.api.product_admin import router as product_admin_router
 from nevo.api.product_auth import router as product_auth_router
 from nevo.api.product_learning import router as product_learning_router
+from nevo.api.request_context import set_request
 from nevo.api.scheduler import router as scheduler_router
 from nevo.api.signals import router as signals_router
 from nevo.api.sso import router as sso_router
@@ -274,6 +276,9 @@ async def validation_exception_handler(
 
 @app.middleware("http")
 async def request_timing(request: Request, call_next):  # type: ignore[no-untyped-def]
+    # What is being asked for, for the rules that need to know a read from a
+    # write and cannot be handed the request themselves.
+    set_request(request.method, request.url.path)
     started_at = perf_counter()
     response = await call_next(request)
     duration_ms = (perf_counter() - started_at) * 1000
@@ -311,6 +316,7 @@ app.include_router(product_auth_router)
 app.include_router(product_learning_router)
 app.include_router(scheduler_router)
 app.include_router(signals_router)
+app.include_router(email_confirmation_router)
 app.include_router(lesson_review_router)
 app.include_router(support_router)
 app.include_router(sso_router)

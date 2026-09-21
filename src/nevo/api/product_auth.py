@@ -486,6 +486,7 @@ class SchoolRegistrationResponse(BaseModel):
 )
 async def register_school(
     payload: SchoolRegistrationRequest,
+    request: Request,
     session: DatabaseSession,
 ) -> SchoolRegistrationResponse:
     existing_id = await session.scalar(
@@ -563,10 +564,40 @@ async def register_school(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already belongs to an account",
         ) from error
+    # The first email Nevo ever sends anyone. The account is the highest
+    # permission in its tenant, and until this is answered it can read the
+    # console and write nothing to it.
+    confirmation_token = await _start_email_confirmation(session, user)
+    await _send_email_confirmation(request, user, confirmation_token)
     return SchoolRegistrationResponse(
         schoolId=school_id,
         adminId=user_id,
         schoolCode=school.school_code,
+    )
+
+
+async def _start_email_confirmation(session: DatabaseSession, user: User) -> str:
+    from nevo.api.email_confirmation import issue_confirmation
+
+    _, token = await issue_confirmation(session, user)
+    await session.commit()
+    return token
+
+
+async def _send_email_confirmation(request: Request, user: User, token: str) -> None:
+    from nevo.api.email_confirmation import send_confirmation
+
+    try:
+        mailer = _mailer(request)
+    except HTTPException:
+        # No mail provider configured is not a failed registration: the school
+        # exists, and the console offers a resend.
+        return
+    await send_confirmation(
+        mailer,
+        to=str(user.email),
+        token=token,
+        admin_name=user.first_name,
     )
 
 

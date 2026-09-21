@@ -5,16 +5,62 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nevo.api.request_context import current_request
 from nevo.auth.entities import AuthPrincipal
 from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
+
+#: What an administrator may reach before confirming their address. Reading
+#: the console is deliberate - a school owner who registers at night and
+#: cannot find the email abandons entirely if the door is shut - and so is the
+#: confirmation flow itself, which is the way out of this state.
+UNCONFIRMED_WRITE_ALLOWLIST = (
+    "/api/v1/admin/email-confirmation",
+    "/api/v1/admin/email",
+    "/api/v1/auth",
+)
+
+ADMIN_ROLES = {"senco_admin", "other_admin"}
 
 
 async def actor_user(session: AsyncSession, principal: AuthPrincipal) -> User:
     user = await session.get(User, principal.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account unavailable")
+    _refuse_unconfirmed_write(user)
     return user
+
+
+def _refuse_unconfirmed_write(user: User) -> None:
+    """An administrator who has not proved their address writes nothing.
+
+    Here rather than on each handler because the rule covers every write in
+    the product - imports, class creation, invitations, consent requests - and
+    a rule enforced per handler is a rule the next handler forgets. The
+    request's method reaches this function through a context variable, since
+    this is a funnel for a principal and a session rather than a request.
+    """
+
+    if user.email_confirmed_at is not None or user.role.value not in ADMIN_ROLES:
+        return
+    request = current_request()
+    if request is None or not request.writes:
+        return
+    if request.path.startswith(UNCONFIRMED_WRITE_ALLOWLIST):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "email_not_confirmed",
+            "message": (
+                "Confirm your email address before making changes. We sent a "
+                "link to "
+                f"{user.email}; you can send it again from the banner at the "
+                "top of the console."
+            ),
+            "email": user.email,
+        },
+    )
 
 
 async def require_school_actor(

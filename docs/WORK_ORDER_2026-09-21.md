@@ -34,6 +34,17 @@ Status column is updated as each lands.
 | 11 | SCRUM-162 | Parent contact is email only: drop the phone column, drop SMS, drop Termii | done |
 | 12 | SCRUM-161 | Slow lesson processing. Largely answered by commit ded5548. | answered |
 
+## The school agreement's four consent obligations
+
+Not in Jira, and nobody owned them. All four are built.
+
+| Item | What landed | Status |
+|------|-------------|--------|
+| Thirty-day consent expiry | Link lasts 30 days; a daily sweep records an unanswered request and removes the roster entry 30 days later, keeping a minimal refusal so the school does not ask again | done |
+| Two-point age check | The parent confirms the child's date of birth; it is compared with the school's, a disagreement blocks entry and waits for a person | done |
+| Cross-border transfer consent | Its own consent type, asked alongside the first, granted on its own, nothing pre-selected | done |
+| Withdrawal and objection in the platform | A parent withdraws, objects or asks for data from their own account, with no token and no expiry | done |
+
 ## Carried, not in Jira
 
 - Date of birth on the roster. SCRUM-168 derives age from it and the school

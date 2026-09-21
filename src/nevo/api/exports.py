@@ -252,6 +252,40 @@ async def share_iep_export(
     return IepExportShareResponse.from_record(record)
 
 
+@router.get("/iep/{export_id}/shares", response_model=list[IepExportShareResponse])
+async def list_iep_export_shares(
+    export_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> list[IepExportShareResponse]:
+    """Who this document has been shared with, and when.
+
+    A school has to be able to answer "who has seen my child's record" - the
+    parent asks it, and so does a regulator. Sharing was written down from
+    the first day and there was no way to read it back, so the only record of
+    a disclosure was the row nobody could see.
+    """
+
+    await _require_export_access(session, principal, export_id, staff_only=True)
+    shares = await session.scalars(
+        select(IepExportShare)
+        .where(IepExportShare.export_id == export_id)
+        .order_by(IepExportShare.shared_at.desc())
+    )
+    return [
+        IepExportShareResponse(
+            id=share.id,
+            exportId=share.export_id,
+            studentId=share.student_id,
+            parentId=share.parent_id,
+            sharedByUserId=share.shared_by_user_id,
+            status=share.status,
+            sharedAt=share.shared_at,
+        )
+        for share in shares
+    ]
+
+
 async def _require_export_access(
     session: DatabaseSession,
     principal: PrincipalDependency,

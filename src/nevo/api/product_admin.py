@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.auth import PrincipalDependency
@@ -883,6 +884,26 @@ async def enroll_student(
         session, principal, roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
     )
     await require_class_access(session, actor, payload.class_id)
+    # An address is unique across every account in the product, and a child
+    # usually has none. An empty string is not an address: sent for two
+    # children it collided on the second, and the unique violation came back
+    # as a 500 - the same fault for a genuine duplicate. Both are now the
+    # school being told which address is already taken.
+    email = (payload.email or "").strip().casefold() or None
+    if email is not None:
+        taken = await session.scalar(select(User.id).where(func.lower(User.email) == email))
+        if taken is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "email_already_in_use",
+                    "message": (
+                        f"{email} already belongs to a Nevo account. Leave the "
+                        "email blank - a learner signs in with their identifier "
+                        "and PIN, not an address."
+                    ),
+                },
+            )
     identifier = f"NV-{secrets.token_hex(3).upper()}"
     student = User(
         school_id=actor.school_id,
@@ -890,7 +911,7 @@ async def enroll_student(
         auth_method=AuthMethod.PIN,
         first_name=payload.first_name,
         last_name=payload.last_name,
-        email=payload.email,
+        email=email,
         login_identifier=identifier,
         age_band=payload.age_band,
         status=UserStatus.ACTIVE,
@@ -906,7 +927,19 @@ async def enroll_student(
             actor_user_id=actor.id,
         )
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as error:
+        # Two enrolments for the same address can both pass the check above
+        # before either commits. The loser is a duplicate, not a fault.
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "email_already_in_use",
+                "message": "That email address already belongs to a Nevo account.",
+            },
+        ) from error
     return {"id": str(student.id), "loginIdentifier": identifier}
 
 

@@ -77,6 +77,11 @@ class AcademicConfig(CamelResponse):
     #: into three equal spans instead, which is a guess at somebody's term.
     term_start_dates: list[date] = Field(
         default_factory=list,
+        # Three, and deliberately. Billing issues one invoice per term start,
+        # so a fourth date is a fourth invoice: raising this cap would bill a
+        # school four times a year, quietly. If a school's calendar really
+        # has four terms that is a pricing decision before it is a validation
+        # one, so it stays refused rather than silently charged.
         max_length=3,
         description=(
             "Term start dates as ISO dates, earliest first. Nigerian schools "
@@ -493,11 +498,16 @@ class TeacherHomeResponse(CamelResponse):
 
 
 class ClassInsightsNarrativeResponse(CamelResponse):
-    #: Which of three things this is saying. Both strings below are always
-    #: sent: a quiet week is the engine having looked and found nothing, which
-    #: is worth telling a teacher, and a null would have read as a gap in the
-    #: data instead.
-    state: ClassInsightState = ClassInsightState.SUMMARY
+    #: Which of three things this is saying. Required, with no default: a
+    #: default makes it optional in the schema, so a client could not rely on
+    #: it being there and would be back to inferring the state from the
+    #: length of some array - which is the thing this field exists to stop.
+    #:
+    #: Both strings below are always sent and neither is nullable. A quiet
+    #: week is the engine having looked and found nothing, which is a finding
+    #: worth telling a teacher in words; a null would read as a gap in the
+    #: data. Branch on `state`, not on absence.
+    state: ClassInsightState
     class_id: UUID
     class_name: str
     weekly_summary: str

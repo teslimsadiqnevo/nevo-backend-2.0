@@ -108,6 +108,10 @@ class SsoConnectionHealth:
     last_successful_sync_at: datetime | None
     next_scheduled_sync_at: datetime | None
     disconnected_at: datetime | None
+    #: When the school's OAuth credential expires. Null where the school
+    #: never told us, which is itself worth showing: an unknown expiry is a
+    #: sign-in that stops working one morning with no warning at all.
+    credential_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

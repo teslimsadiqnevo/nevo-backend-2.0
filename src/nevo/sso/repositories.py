@@ -115,6 +115,7 @@ class SqlAlchemySsoRepository:
             data_flow=(),
             last_connection_error=record.last_connection_error,
             connection_checked_at=record.connection_checked_at,
+            credential_expires_at=record.credential_expires_at,
             reauthorised_at=record.reauthorised_at,
             last_successful_sync_at=last_successful_sync_at,
             next_scheduled_sync_at=record.next_scheduled_sync_at,

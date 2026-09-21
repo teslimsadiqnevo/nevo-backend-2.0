@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -129,6 +129,24 @@ class SsoDataFlowCategoryResponse(BaseModel):
     purpose: str
 
 
+#: How much warning a school gets. Long enough to raise a ticket with their
+#: own IT department and have it done, which is the constraint that matters:
+#: renewing a client secret is their job, not ours.
+CREDENTIAL_WARNING = timedelta(days=45)
+
+
+def _days_until(moment: datetime | None) -> int | None:
+    if moment is None:
+        return None
+    return (moment - datetime.now(UTC)).days
+
+
+def _expiring_soon(moment: datetime | None) -> bool:
+    if moment is None:
+        return False
+    return moment - datetime.now(UTC) <= CREDENTIAL_WARNING
+
+
 class SsoConnectionHealthResponse(BaseModel):
     model_config = CAMEL_CONFIG
 
@@ -138,6 +156,16 @@ class SsoConnectionHealthResponse(BaseModel):
     school_entry_url: str
     last_connection_error: str | None
     connection_checked_at: datetime | None
+    #: When the school's OAuth credential stops working. Microsoft expires
+    #: client secrets, and the first anyone knows is every teacher failing to
+    #: sign in on a Monday morning.
+    credential_expires_at: datetime | None = None
+    #: Days until that happens, negative once it has. Computed here so every
+    #: console shows the same number rather than three different roundings.
+    credential_expires_in_days: int | None = None
+    #: True inside the warning window, so a console has a condition to render
+    #: rather than a date to interpret.
+    credential_expiring_soon: bool = False
     reauthorised_at: datetime | None
     last_successful_sync_at: datetime | None
     next_scheduled_sync_at: datetime | None
@@ -156,6 +184,9 @@ class SsoConnectionHealthResponse(BaseModel):
             school_entry_url=health.school_entry_url,
             last_connection_error=health.last_connection_error,
             connection_checked_at=health.connection_checked_at,
+            credential_expires_at=health.credential_expires_at,
+            credential_expires_in_days=_days_until(health.credential_expires_at),
+            credential_expiring_soon=_expiring_soon(health.credential_expires_at),
             reauthorised_at=health.reauthorised_at,
             last_successful_sync_at=health.last_successful_sync_at,
             next_scheduled_sync_at=health.next_scheduled_sync_at,

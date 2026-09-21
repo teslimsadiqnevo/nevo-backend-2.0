@@ -107,6 +107,14 @@ class SchoolSsoConfiguration(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    #: When the school's OAuth client secret expires. Microsoft expires these
+    #: - two years by default - and the first anyone knows is every teacher
+    #: failing to sign in on a Monday. We cannot read it from the provider, so
+    #: it is entered when the connection is set up and warned about here.
+    credential_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     reauthorised_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

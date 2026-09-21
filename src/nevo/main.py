@@ -2,6 +2,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from time import perf_counter
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -275,6 +276,41 @@ async def validation_exception_handler(
                 "code": "validation_error",
                 "message": "Request validation failed.",
                 "errors": errors,
+            }
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unexpected_error_handler(request: Request, error: Exception) -> JSONResponse:
+    """Give a fault a name both sides can say out loud.
+
+    An unhandled error returned a bare 500 with no body, so "we saw two
+    unexplained 500s" was the most anybody could report and the only way to
+    match it to a log line was the clock. Each one now carries an id that is
+    also in the log, alongside the method and path.
+
+    The id is all that goes out. The message and the traceback stay in the
+    log, because the person reading a 500 in a browser is a teacher.
+    """
+
+    incident = uuid4().hex[:12]
+    logger.exception(
+        "Unhandled error %s on %s %s",
+        incident,
+        request.method,
+        request.url.path,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "unexpected_error",
+                "message": (
+                    "Something went wrong at our end. Nothing you did caused "
+                    "it. Quote this reference if you tell us: " + incident
+                ),
+                "incidentId": incident,
             }
         },
     )

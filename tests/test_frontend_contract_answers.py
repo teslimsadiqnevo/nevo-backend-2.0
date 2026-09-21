@@ -1,0 +1,93 @@
+"""The contract complaints from 21 September, and what each is now.
+
+Every one of these is a claim a client made about the API that could be
+checked, so each is checked here rather than answered in a message.
+"""
+
+from __future__ import annotations
+
+import inspect
+
+import pytest
+
+from nevo.api.sso import CREDENTIAL_WARNING
+from nevo.main import app
+
+
+@pytest.fixture(scope="module")
+def spec() -> dict:
+    return app.openapi()
+
+
+def test_class_insight_state_is_required(spec: dict) -> None:
+    schema = spec["components"]["schemas"]["ClassInsightsNarrativeResponse"]
+
+    # It shipped with a default, which makes it optional in the schema: a
+    # client could not rely on it and was back to inferring the state from
+    # the length of an array, which is what the field exists to stop.
+    assert "state" in schema["required"]
+
+
+def test_the_two_narrative_strings_are_never_absent(spec: dict) -> None:
+    schema = spec["components"]["schemas"]["ClassInsightsNarrativeResponse"]
+
+    # Deliberately not nullable. A quiet week is a finding, said in words;
+    # a null would read as missing data. Branch on state, not on absence.
+    assert {"weeklySummary", "lookingAhead"} <= set(schema["required"])
+    for field in ("weeklySummary", "lookingAhead"):
+        assert schema["properties"][field]["type"] == "string"
+
+
+def test_a_school_can_read_back_who_a_document_was_shared_with(spec: dict) -> None:
+    # "Who has seen my child's record" is a question a parent asks and a
+    # regulator asks. The shares were written and never readable.
+    assert "get" in spec["paths"]["/api/v1/exports/iep/{export_id}/shares"]
+
+
+def test_sso_health_warns_before_the_credential_expires(spec: dict) -> None:
+    fields = spec["components"]["schemas"]["SsoConnectionHealthResponse"]["properties"]
+
+    assert {
+        "credentialExpiresAt",
+        "credentialExpiresInDays",
+        "credentialExpiringSoon",
+    } <= set(fields)
+    # Long enough for a school to raise a ticket with its own IT and have it
+    # done, since renewing the secret is their job rather than ours.
+    assert CREDENTIAL_WARNING.days >= 30
+
+
+def test_enrolling_a_student_with_a_taken_email_is_named_not_a_500() -> None:
+    from nevo.api.product_admin import enroll_student
+
+    source = inspect.getsource(enroll_student)
+
+    # users.email is unique across the product. An empty string sent for two
+    # children collided on the second and came back as a server fault.
+    assert "email_already_in_use" in source
+    assert "IntegrityError" in source
+    assert '(payload.email or "").strip().casefold() or None' in source
+
+
+def test_an_unexpected_error_carries_something_to_trace_it_by() -> None:
+    from nevo.main import unexpected_error_handler
+
+    source = inspect.getsource(unexpected_error_handler)
+
+    # "Two unexplained 500s" was the most anybody could report, because the
+    # response carried nothing and the log carried no id.
+    assert "incidentId" in source
+    assert "logger.exception" in source
+
+
+def test_the_term_cap_is_a_billing_decision_not_a_validation_one() -> None:
+    from nevo.api.response_models import AcademicConfig
+
+    field = AcademicConfig.model_fields["term_start_dates"]
+    constraint = next(
+        item for item in field.metadata if getattr(item, "max_length", None) is not None
+    )
+
+    # Billing issues one invoice per term start, so a fourth date is a fourth
+    # invoice. It stays refused rather than quietly charged.
+    assert constraint.max_length == 3

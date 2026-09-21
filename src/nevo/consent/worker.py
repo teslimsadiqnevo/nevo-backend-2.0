@@ -6,7 +6,6 @@ from uuid import UUID
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from nevo.consent.delivery import TermiiSmsDelivery
 from nevo.db.models.consent import ConsentNotificationOutbox
 from nevo.domain.consent.vocabulary import (
     ConsentDeliveryStatus,
@@ -87,12 +86,10 @@ class ConsentDeliveryWorker:
         *,
         sessions: async_sessionmaker[AsyncSession],
         email: ResendEmailDelivery,
-        sms: TermiiSmsDelivery,
         poll_seconds: float = 5,
     ) -> None:
         self._sessions = sessions
         self._email = email
-        self._sms = sms
         self._poll_seconds = poll_seconds
         self._task: asyncio.Task[None] | None = None
 
@@ -112,19 +109,16 @@ class ConsentDeliveryWorker:
         claimed = await self._claim()
         if claimed is None:
             return False
-        outbox_id, method, destination, consent_url, kind = claimed
+        outbox_id, _method, destination, consent_url, kind = claimed
         is_receipt = kind is ConsentNotificationKind.RECEIPT
         message = receipt_message() if is_receipt else consent_message(consent_url)
         try:
-            if method is ParentContactMethod.EMAIL:
-                await self._email.send(
-                    to=destination,
-                    subject=RECEIPT_SUBJECT if is_receipt else EMAIL_SUBJECT,
-                    text=message,
-                    html=(receipt_html() if is_receipt else consent_html(consent_url)),
-                )
-            else:
-                await self._sms.send(to=destination, text=message)
+            await self._email.send(
+                to=destination,
+                subject=RECEIPT_SUBJECT if is_receipt else EMAIL_SUBJECT,
+                text=message,
+                html=(receipt_html() if is_receipt else consent_html(consent_url)),
+            )
         except Exception as error:
             await self._failed(outbox_id, error)
         else:

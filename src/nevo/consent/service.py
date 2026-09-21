@@ -39,7 +39,6 @@ from nevo.notifications.links import parent_consent_url
 
 PARENT_CONSENT_LIFETIME = timedelta(days=7)
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,14}$")
 
 
 class ConsentService:
@@ -258,16 +257,10 @@ class ConsentService:
         contact: str,
         method: ParentContactMethod,
     ) -> str:
-        normalized = contact.strip()
-        if method is ParentContactMethod.EMAIL:
-            normalized = normalized.casefold()
-            if not EMAIL_PATTERN.fullmatch(normalized):
-                raise InvalidParentContactError
-            return normalized
-
-        normalized = re.sub(r"[\s()-]", "", normalized)
-        if normalized.startswith("00"):
-            normalized = f"+{normalized[2:]}"
-        if not PHONE_PATTERN.fullmatch(normalized):
+        # One method, since the 20 September ruling. The parameter stays so
+        # the record can still say how a parent was reached.
+        del method
+        normalized = contact.strip().casefold()
+        if not EMAIL_PATTERN.fullmatch(normalized):
             raise InvalidParentContactError
         return normalized

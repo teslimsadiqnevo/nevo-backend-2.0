@@ -891,11 +891,7 @@ async def accept_join(
         if record.parent_contact:
             service = getattr(request.app.state, "consent_service", None)
             if isinstance(service, ConsentService):
-                method = (
-                    ParentContactMethod.EMAIL
-                    if "@" in record.parent_contact
-                    else ParentContactMethod.SMS
-                )
+                method = ParentContactMethod.EMAIL
                 try:
                     await service.request_parent_consent(
                         ConsentActor(
@@ -1053,11 +1049,7 @@ async def _deliver_parent_code(
         except EmailDeliveryUnavailableError:
             logger.warning("Parent sign-in code not sent: email is not configured")
         return
-    sms = getattr(request.app.state, "sms_delivery", None)
-    if sms is None:
-        logger.warning("Parent sign-in code not sent: no SMS delivery configured")
-        return
-    await sms.send(to=account.contact, text=text)
+    logger.warning("Parent sign-in code not sent: the contact is not an email address")
 
 
 @router.post(

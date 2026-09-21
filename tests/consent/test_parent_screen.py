@@ -317,29 +317,7 @@ def test_a_new_parent_account_can_find_its_own_child() -> None:
     assert [child.student_id for child in children] == [account.student_id]
 
 
-def test_a_parent_reached_by_sms_also_gets_an_account() -> None:
-    """The school chose the channel, not the parent."""
-    import anyio
+def test_email_is_the_only_way_a_parent_is_reached() -> None:
+    """Ruled on 20 September: no phone number, no SMS."""
 
-    _, service, _repository = build()
-
-    async def sms_invite() -> None:
-        await service.request_parent_consent(
-            ConsentActor(user_id=uuid4(), school_id=uuid4()),
-            student_id=uuid4(),
-            parent_name="Ngozi Okafor",
-            parent_contact="+2348012345678",
-            contact_method=ParentContactMethod.SMS,
-            consent_types=frozenset({ConsentType.DATA_PROCESSING}),
-        )
-
-    anyio.run(sms_invite)
-    account = anyio.run(
-        lambda: service.activate_parent_account(
-            token=TOKEN, password_hash="argon2:whatever"
-        )
-    )
-
-    assert account is not None
-    assert account.contact == "+2348012345678"
-    assert account.contact_method is ParentContactMethod.SMS
+    assert [method.value for method in ParentContactMethod] == ["email"]

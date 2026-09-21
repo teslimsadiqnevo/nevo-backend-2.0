@@ -56,7 +56,9 @@ def test_parent_link_contract_is_school_and_user_scoped() -> None:
 
 
 def test_parent_contact_and_delivery_enums_are_exact() -> None:
-    assert enum_values("parent_links", "contact_method") == ["email", "sms"]
+    # Email only, since the 20 September ruling: a phone number nothing
+    # sends to is personal data with no lawful purpose.
+    assert enum_values("parent_links", "contact_method") == ["email"]
     assert enum_values("consent_notification_outbox", "status") == [
         "queued",
         "processing",

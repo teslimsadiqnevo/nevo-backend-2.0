@@ -92,21 +92,24 @@ async def test_parent_request_normalizes_email_and_queues_link() -> None:
     assert queued.invitation_id == draft.invitation_id
 
 
-async def test_parent_request_normalizes_international_phone() -> None:
-    consent_service, repository = service()
+async def test_a_phone_number_is_no_longer_a_parent_contact() -> None:
+    """The 20 September ruling: email only, so a number is not a contact.
 
-    await consent_service.request_parent_consent(
-        ConsentActor(user_id=uuid4(), school_id=uuid4()),
-        student_id=uuid4(),
-        parent_name="Ada Parent",
-        parent_contact="00 234 (801) 234-5678",
-        contact_method=ParentContactMethod.SMS,
-        consent_types=frozenset(),
-    )
+    Collected phone numbers nothing ever sends to are personal data with no
+    lawful purpose, and the paper consent route answers deliverability better.
+    """
 
-    draft = repository.requests[FixedConsentTokenService.digest_value]
-    assert draft.parent_contact == "+2348012345678"
-    assert draft.consent_types == {ConsentType.DATA_PROCESSING}
+    consent_service, _ = service()
+
+    with pytest.raises(InvalidParentContactError):
+        await consent_service.request_parent_consent(
+            ConsentActor(user_id=uuid4(), school_id=uuid4()),
+            student_id=uuid4(),
+            parent_name="Ada Parent",
+            parent_contact="00 234 (801) 234-5678",
+            contact_method=ParentContactMethod.EMAIL,
+            consent_types=frozenset(),
+        )
 
 
 async def test_invalid_parent_contact_is_rejected() -> None:

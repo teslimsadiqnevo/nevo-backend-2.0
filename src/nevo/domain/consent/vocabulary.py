@@ -4,8 +4,25 @@ from nevo.domain.accounts.vocabulary import ConsentType
 
 
 class ParentContactMethod(StrEnum):
+    """How Nevo reaches a parent. Email, and nothing else.
+
+    SMS was removed on 20 September by ruling. You cannot collect personal
+    data you have no use for: four hundred parents' phone numbers that nothing
+    ever sends to are four hundred pieces of personal data with no lawful
+    purpose, sitting in a database that has to be protected, purged and
+    accounted for in the Data Sharing Agreement. "We might need it later" is
+    not a purpose.
+
+    Deliverability was the argument for keeping it. The written consent route
+    answers that better: a parent who does not answer email gets a paper form
+    in their child's bag.
+
+    The enum keeps one member rather than being deleted, because a contact
+    method is still a fact a consent record states, and a record that states
+    nothing cannot say how a parent was reached.
+    """
+
     EMAIL = "email"
-    SMS = "sms"
 
 
 class ConsentConfirmationSource(StrEnum):

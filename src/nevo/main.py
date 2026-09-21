@@ -57,7 +57,6 @@ from nevo.auth.wiring import build_auth_service, build_credential_hasher
 from nevo.billing.issuance import InvoiceIssuanceService
 from nevo.billing.wiring import build_billing_service
 from nevo.consent.config import ConsentSettings
-from nevo.consent.delivery import SmsSettings, TermiiSmsDelivery
 from nevo.consent.wiring import build_consent_service
 from nevo.consent.worker import ConsentDeliveryWorker
 from nevo.content_parsing.wiring import build_content_parsing_service
@@ -138,11 +137,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         pepper=auth_settings.auth_session_pepper.get_secret_value(),
     )
-    app.state.sms_delivery = TermiiSmsDelivery(SmsSettings())
     app.state.consent_delivery_worker = ConsentDeliveryWorker(
         sessions=sessions,
         email=app.state.email_delivery,
-        sms=app.state.sms_delivery,
     )
     app.state.consent_delivery_worker.start()
     app.state.ai_gateway = build_ai_gateway(

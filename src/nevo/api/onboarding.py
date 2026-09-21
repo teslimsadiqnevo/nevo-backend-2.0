@@ -52,7 +52,14 @@ MAX_UPLOAD_BYTES = 2_000_000
 
 #: What each template asks for. Parent details are mandatory on a student row,
 #: because a child whose parent cannot be reached cannot be consented for.
-STUDENT_COLUMNS = ("first_name", "last_name", "class", "parent_name", "parent_email")
+STUDENT_COLUMNS = (
+    "first_name",
+    "last_name",
+    "class",
+    "date_of_birth",
+    "parent_name",
+    "parent_email",
+)
 TEACHER_COLUMNS = ("first_name", "last_name", "email", "class")
 
 #: Teachers are free; students are what a school pays for. Adding a teacher
@@ -310,12 +317,35 @@ def _reject_incomplete(
             "Add it to the file, or take the row out before uploading."
         )
         return
+    born = values.get("date_of_birth", "")
+    if born and _parse_date(born) is None:
+        row.rejected = True
+        row.rejection_field = "date_of_birth"
+        row.rejection_value = born
+        # Never resolved by asking the child afterwards, which is the whole
+        # point of taking it from the roster.
+        row.rejection_reason = (
+            f"{born} is not a date Nevo can read. Write it as 2015-04-23, and "
+            "take it from the school's own record rather than asking the child."
+        )
+        return
     email = values.get("parent_email") or values.get("email") or ""
     if email and "@" not in email:
         row.rejected = True
         row.rejection_field = "parent_email" if "parent_email" in values else "email"
         row.rejection_value = email
         row.rejection_reason = f"{email} is not an email address."
+
+
+def _parse_date(value: str) -> date | None:
+    """Read a date a school wrote, in the orders a school writes them."""
+
+    for pattern in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(value.strip(), pattern).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _column(name: str) -> str:
@@ -584,6 +614,7 @@ async def _create_person(
     user = User(
         school_id=school.id,
         role=UserRole.STUDENT if is_student else UserRole.TEACHER,
+        date_of_birth=_parse_date(values.get("date_of_birth", "")) if is_student else None,
         auth_method=AuthMethod.EMAIL_PASSWORD,
         first_name=first_name,
         last_name=last_name,

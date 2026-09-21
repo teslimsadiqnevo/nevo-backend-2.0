@@ -100,6 +100,14 @@ class StudentOnboardingGrant(Base):
     class_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False
     )
+    #: Which child this link is for. The link used to name only a class, so
+    #: the child had to type their own name and age into it; with the roster
+    #: as the source, the link resolves to a person instead.
+    student_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

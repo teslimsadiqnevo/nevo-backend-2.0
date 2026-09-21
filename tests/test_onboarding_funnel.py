@@ -24,11 +24,11 @@ from nevo.domain.onboarding.vocabulary import OnboardingRowKind, OnboardingStage
 from nevo.main import app
 
 STUDENTS = (
-    b"first_name,last_name,class,parent_name,parent_email\n"
-    b"Amara,Okafor,JSS 1A,Ngozi Okafor,ngozi@example.com\n"
-    b"Tunde,Bello,jss 1a ,Bisi Bello,bisi@example.com\n"
-    b"Chidi,Eze,JSS  2B,Uche Eze,uche@example.com\n"
-    b"Sade,Adeyemi,,Kemi Adeyemi,kemi@example.com\n"
+    b"first_name,last_name,class,date_of_birth,parent_name,parent_email\n"
+    b"Amara,Okafor,JSS 1A,2015-04-23,Ngozi Okafor,ngozi@example.com\n"
+    b"Tunde,Bello,jss 1a ,2015-06-02,Bisi Bello,bisi@example.com\n"
+    b"Chidi,Eze,JSS  2B,2014-11-30,Uche Eze,uche@example.com\n"
+    b"Sade,Adeyemi,,2015-01-09,Kemi Adeyemi,kemi@example.com\n"
 )
 
 

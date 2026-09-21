@@ -43,6 +43,7 @@ from nevo.api.request_context import set_request
 from nevo.api.scheduler import router as scheduler_router
 from nevo.api.signals import router as signals_router
 from nevo.api.sso import router as sso_router
+from nevo.api.student_entry import router as student_entry_router
 from nevo.api.support import router as support_router
 from nevo.api.teacher_assignments import router as teacher_assignment_router
 from nevo.api.written_consent import router as written_consent_router
@@ -321,6 +322,7 @@ app.include_router(signals_router)
 app.include_router(email_confirmation_router)
 app.include_router(lesson_review_router)
 app.include_router(onboarding_router)
+app.include_router(student_entry_router)
 app.include_router(written_consent_router)
 app.include_router(support_router)
 app.include_router(sso_router)

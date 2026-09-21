@@ -287,6 +287,10 @@ class User(TimestampMixin, Base):
         server_default=text("'{}'::jsonb"),
     )
     age_band: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: From the school's roster. Age is derived from it wherever a screen
+    #: needs one, so a child is never asked for what the school already told
+    #: us - and the two-point age check has something to check against.
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_first_use: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

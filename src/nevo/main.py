@@ -47,6 +47,7 @@ from nevo.api.sso import router as sso_router
 from nevo.api.student_entry import router as student_entry_router
 from nevo.api.support import router as support_router
 from nevo.api.teacher_assignments import router as teacher_assignment_router
+from nevo.api.transformation_metrics import router as transformation_metrics_router
 from nevo.api.written_consent import router as written_consent_router
 from nevo.ask_nevo.wiring import build_ask_nevo_service
 from nevo.attention_flags.wiring import build_attention_flag_detection_service
@@ -325,6 +326,7 @@ app.include_router(lesson_review_router)
 app.include_router(onboarding_router)
 app.include_router(learning_support_router)
 app.include_router(student_entry_router)
+app.include_router(transformation_metrics_router)
 app.include_router(written_consent_router)
 app.include_router(support_router)
 app.include_router(sso_router)

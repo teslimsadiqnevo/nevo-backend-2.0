@@ -30,7 +30,7 @@ Status column is updated as each lands.
 
 | # | Ticket | What it is | Status |
 |---|--------|------------|--------|
-| 10 | SCRUM-163 | Transformation metrics for a class and a school. The per-student endpoint must not be built. | todo |
+| 10 | SCRUM-163 | Transformation metrics for a class and a school. The per-student endpoint must not be built. | done |
 | 11 | SCRUM-162 | Parent contact is email only: drop the phone column, drop SMS, drop Termii | todo |
 | 12 | SCRUM-161 | Slow lesson processing. Largely answered by commit ded5548. | answered |
 

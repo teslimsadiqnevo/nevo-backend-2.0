@@ -6,8 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
-from nevo.api.dependencies import DatabaseSession
-from nevo.api.learning_support_records import record_accommodation_changes
 from nevo.domain.intelligence.vocabulary import (
     AccommodationType,
     AdaptationMode,
@@ -578,7 +576,6 @@ async def analyse_accommodations(
     student_id: UUID,
     principal: PrincipalDependency,
     service: AccommodationInferenceDependency,
-    session: DatabaseSession,
 ) -> AccommodationAnalysisResponse:
     if principal.role == "student" and student_id != principal.user_id:
         raise HTTPException(
@@ -589,20 +586,9 @@ async def analyse_accommodations(
             },
         )
     analysis = await service.analyse_student(student_id=student_id)
-    # Write down what changed, here rather than on a screen opening: the log
-    # is meant to be a record of Nevo's decisions, and a decision nobody
-    # happened to look at is still a decision that was applied to a child.
-    await record_accommodation_changes(
-        session,
-        student_id=student_id,
-        active={signal.accommodation for signal in analysis.active},
-        prompted_by={signal.accommodation: signal.frontend_signal for signal in analysis.active},
-        observed_over_lessons=max(
-            (signal.lesson_count for signal in analysis.active),
-            default=None,
-        ),
-    )
-    await session.commit()
+    # A read stays a read. The dated log is written after a lesson, where an
+    # accommodation is actually applied, rather than when somebody opens a
+    # screen - otherwise the log is a log of page loads.
     return AccommodationAnalysisResponse.from_analysis(analysis)
 
 

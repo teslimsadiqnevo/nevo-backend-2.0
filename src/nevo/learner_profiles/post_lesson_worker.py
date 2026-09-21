@@ -7,8 +7,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.api.learning_support_records import record_accommodation_changes
 from nevo.attention_flags.service import AttentionFlagDetectionService
 from nevo.db.models.product import PostLessonProcessing
+from nevo.intelligence.accommodation_service import AccommodationInferenceService
 from nevo.learner_profiles.profile_updates import PostLessonProfileUpdateService
 from nevo.notifications.digests import notify_modality_shifts
 
@@ -22,11 +24,13 @@ class PostLessonProcessingWorker:
         sessions: async_sessionmaker[AsyncSession],
         profile_service: PostLessonProfileUpdateService,
         flag_service: AttentionFlagDetectionService,
+        accommodation_service: AccommodationInferenceService | None = None,
         poll_seconds: float = 3,
     ) -> None:
         self._sessions = sessions
         self._profile_service = profile_service
         self._flag_service = flag_service
+        self._accommodation_service = accommodation_service
         self._poll_seconds = poll_seconds
         self._task: asyncio.Task[None] | None = None
 
@@ -85,6 +89,7 @@ class PostLessonProcessingWorker:
                     requested_by_user_id=student_id,
                 )
                 await self._mark_stage(session_id, flags_evaluated=True)
+            await self._record_accommodation_changes(student_id)
             async with self._sessions.begin() as session:
                 await notify_modality_shifts(
                     session,
@@ -95,6 +100,31 @@ class PostLessonProcessingWorker:
         except Exception as error:
             await self._retry(session_id, error)
         return True
+
+    async def _record_accommodation_changes(self, student_id: UUID) -> None:
+        """Write down any accommodation that started or stopped this lesson.
+
+        Here rather than on the screen that reads them: an accommodation
+        Nevo applied is applied whether or not anybody opens the surface, and
+        a log written on a page load is a log of page loads.
+        """
+
+        if self._accommodation_service is None:
+            return
+        analysis = await self._accommodation_service.analyse_student(student_id=student_id)
+        async with self._sessions.begin() as session:
+            await record_accommodation_changes(
+                session,
+                student_id=student_id,
+                active={signal.accommodation for signal in analysis.active},
+                prompted_by={
+                    signal.accommodation: signal.frontend_signal for signal in analysis.active
+                },
+                observed_over_lessons=max(
+                    (signal.lesson_count for signal in analysis.active),
+                    default=None,
+                ),
+            )
 
     async def _run(self) -> None:
         while True:

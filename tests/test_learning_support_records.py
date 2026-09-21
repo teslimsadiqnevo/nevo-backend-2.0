@@ -81,12 +81,15 @@ def test_the_log_is_its_own_source_of_truth() -> None:
     assert "row_number" in source
 
 
-def test_the_change_is_recorded_where_it_is_decided() -> None:
+def test_the_change_is_recorded_after_a_lesson_not_on_a_page_load() -> None:
     from nevo.api.intelligence import analyse_accommodations
+    from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 
-    source = inspect.getsource(analyse_accommodations)
-
-    assert "record_accommodation_changes" in source
+    # Written where an accommodation is applied - after a lesson - so the log
+    # is a log of Nevo's decisions rather than of somebody opening a screen.
+    worker = inspect.getsource(PostLessonProcessingWorker._record_accommodation_changes)
+    assert "record_accommodation_changes" in worker
+    assert "record_accommodation_changes" not in inspect.getsource(analyse_accommodations)
 
 
 def test_weekly_counts_are_raw(spec: dict) -> None:

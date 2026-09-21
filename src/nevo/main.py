@@ -173,17 +173,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.ai_gateway,
     )
+    app.state.accommodation_inference_service = build_accommodation_inference_service(sessions)
     app.state.post_lesson_worker = PostLessonProcessingWorker(
         sessions=sessions,
         profile_service=app.state.post_lesson_profile_update_service,
         flag_service=app.state.attention_flag_detection_service,
+        accommodation_service=app.state.accommodation_inference_service,
     )
     app.state.post_lesson_worker.start()
     app.state.adaptation_engine_service = build_adaptation_engine_service(
         sessions,
         app.state.ai_gateway,
     )
-    app.state.accommodation_inference_service = build_accommodation_inference_service(sessions)
     app.state.scaffold_fading_service = build_scaffold_fading_service(sessions)
     app.state.adaptation_event_log_service = build_adaptation_event_log_service(sessions)
     app.state.ndpa_compliance_audit_service = build_ndpa_compliance_audit_service(sessions)

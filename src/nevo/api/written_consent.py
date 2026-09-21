@@ -19,8 +19,16 @@ from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
-from pydantic import Field
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
@@ -69,7 +77,7 @@ class WrittenConsentResponse(CamelResponse):
 async def download_consent_form(
     principal: PrincipalDependency,
     session: DatabaseSession,
-    student_id: Annotated[UUID | None, Field(default=None)] = None,
+    student_id: Annotated[UUID | None, Query(alias="studentId")] = None,
 ) -> Response:
     """The form Nevo supplies, printable at any time.
 
@@ -107,11 +115,17 @@ async def record_written_consent(
     student_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
-    parent_name: Annotated[str, Form(min_length=2, max_length=255)],
-    parent_relationship: Annotated[str, Form(min_length=2, max_length=80)],
-    signed_on: Annotated[date, Form()],
-    consent_types: Annotated[list[ConsentType], Form()],
-    notice_version: Annotated[str, Form(max_length=40)] = NOTICE_VERSION,
+    parent_name: Annotated[str, Form(alias="parentName", min_length=2, max_length=255)],
+    parent_relationship: Annotated[
+        str,
+        Form(alias="parentRelationship", min_length=2, max_length=80),
+    ],
+    signed_on: Annotated[date, Form(alias="signedOn")],
+    consent_types: Annotated[list[ConsentType], Form(alias="consentTypes")],
+    notice_version: Annotated[
+        str,
+        Form(alias="noticeVersion", max_length=40),
+    ] = NOTICE_VERSION,
     form: Annotated[UploadFile | None, File()] = None,
 ) -> WrittenConsentResponse:
     """Record a signed form, with the parent named as the person who consented.

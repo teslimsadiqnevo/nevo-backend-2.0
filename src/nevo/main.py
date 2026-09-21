@@ -30,6 +30,7 @@ from nevo.api.frontend_unblockers import router as frontend_unblockers_router
 from nevo.api.insights import router as insights_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.learning_support import router as learning_support_router
+from nevo.api.learning_support_records import router as learning_support_records_router
 from nevo.api.lesson_review import router as lesson_review_router
 from nevo.api.mastery import router as mastery_router
 from nevo.api.onboarding import router as onboarding_router
@@ -322,6 +323,7 @@ app.include_router(email_confirmation_router)
 app.include_router(lesson_review_router)
 app.include_router(onboarding_router)
 app.include_router(learning_support_router)
+app.include_router(learning_support_records_router)
 app.include_router(student_entry_router)
 app.include_router(transformation_metrics_router)
 app.include_router(written_consent_router)

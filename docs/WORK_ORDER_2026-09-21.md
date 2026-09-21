@@ -24,7 +24,7 @@ Status column is updated as each lands.
 | 6 | SCRUM-158 | Written consent route beside digital, and the correct consenting party on the record | SCRUM-159 | done |
 | 7 | SCRUM-165 | Learning support role: unheld by default, granted deliberately, refused by the API | SCRUM-166 | done |
 | 8 | SCRUM-168 | Student entry: the link resolves identity, age is derived from the roster, consent is enforced server-side | SCRUM-167, SCRUM-171, part of SCRUM-160 | done |
-| 9 | SCRUM-170 | Staff annotations against the export with an approval state, and dated accommodation history | SCRUM-164 SC-03 and SC-04 | todo |
+| 9 | SCRUM-170 | Staff annotations against the export with an approval state, and dated accommodation history | SCRUM-164 SC-03 and SC-04 | done |
 
 ## 3. Nobody is waiting
 

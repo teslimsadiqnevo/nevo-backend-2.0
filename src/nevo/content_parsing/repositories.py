@@ -13,13 +13,21 @@ from nevo.content_parsing.entities import (
     ParseRunState,
     StoredParsedLesson,
 )
+from nevo.content_parsing.key_points import confidence as key_point_confidence
 from nevo.db.models.account import User
-from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
+from nevo.db.models.content import (
+    ContentParseRun,
+    Lesson,
+    LessonKeyPoint,
+    LessonSegment,
+)
 from nevo.db.models.frontend_support import Concept
 from nevo.domain.accounts.vocabulary import UserStatus
 from nevo.domain.intelligence.vocabulary import (
     ContentModality,
     ContentParseStatus,
+    KeyPointConfidence,
+    KeyPointReviewState,
     LessonContentType,
 )
 
@@ -118,15 +126,12 @@ class SqlAlchemyContentParsingRepository:
         if not parsed.segments:
             raise ValueError("the parse produced no segments")
         if not all(
-            "deterministic_parse_used" in segment.review_reasons
-            for segment in parsed.segments
+            "deterministic_parse_used" in segment.review_reasons for segment in parsed.segments
         ):
             return
         existing = list(
             await session.scalars(
-                select(LessonSegment.review_reasons).where(
-                    LessonSegment.lesson_id == lesson_id
-                )
+                select(LessonSegment.review_reasons).where(LessonSegment.lesson_id == lesson_id)
             )
         )
         had_real_content = any(
@@ -195,9 +200,7 @@ class SqlAlchemyContentParsingRepository:
         async with self._sessions() as session:
             segments = list(
                 await session.scalars(
-                    select(LessonSegment.review_reasons).where(
-                        LessonSegment.parse_run_id == run.id
-                    )
+                    select(LessonSegment.review_reasons).where(LessonSegment.parse_run_id == run.id)
                 )
             )
         fallback_segments = sum(
@@ -358,29 +361,30 @@ class SqlAlchemyContentParsingRepository:
                         concept_id=concept.id,
                     )
                     checkpoints.extend(normalized)
-                session.add(
-                    LessonSegment(
-                        lesson_id=lesson_id,
-                        parse_run_id=parse_run_id,
-                        segment_key=segment.segment_key,
-                        content_type=segment.content_type,
-                        sequence_order=segment.sequence_order,
-                        title=segment.title,
-                        body=segment.body,
-                        available_modalities=[
-                            modality.value for modality in segment.available_modalities
-                        ],
-                        comprehension_checkpoints=checkpoints,
-                        text_variant=segment.text_variant,
-                        visual_variant=segment.visual_variant,
-                        audio_variant=segment.audio_variant,
-                        interactive_variant=segment.interactive_variant,
-                        calculation_variant=segment.calculation_variant,
-                        needs_review=segment.needs_review,
-                        review_reasons=list(segment.review_reasons),
-                        estimated_minutes=segment.estimated_minutes,
-                    )
+                row = LessonSegment(
+                    lesson_id=lesson_id,
+                    parse_run_id=parse_run_id,
+                    segment_key=segment.segment_key,
+                    content_type=segment.content_type,
+                    sequence_order=segment.sequence_order,
+                    title=segment.title,
+                    body=segment.body,
+                    available_modalities=[
+                        modality.value for modality in segment.available_modalities
+                    ],
+                    comprehension_checkpoints=checkpoints,
+                    text_variant=segment.text_variant,
+                    visual_variant=segment.visual_variant,
+                    audio_variant=segment.audio_variant,
+                    interactive_variant=segment.interactive_variant,
+                    calculation_variant=segment.calculation_variant,
+                    needs_review=segment.needs_review,
+                    review_reasons=list(segment.review_reasons),
+                    estimated_minutes=segment.estimated_minutes,
                 )
+                session.add(row)
+                await session.flush()
+                _add_key_points(session, row)
         return StoredParsedLesson(
             lesson_id=lesson_id,
             parse_run_id=parse_run_id,
@@ -411,3 +415,37 @@ def _count_tts_calls(segments: Sequence[ParsedLessonSegment]) -> int:
 
 def modalities_from_values(values: Sequence[str]) -> tuple[ContentModality, ...]:
     return tuple(ContentModality(value) for value in values)
+
+
+def _add_key_points(session: AsyncSession, segment: LessonSegment) -> None:
+    """Turn a segment's key points into rows a teacher can work through.
+
+    The state is decided here rather than by the teacher opening the lesson:
+    a point Nevo could ground in the segment it came from is settled and never
+    asks for attention, and only a low-confidence one waits for a person.
+    """
+
+    variant = segment.text_variant if isinstance(segment.text_variant, dict) else {}
+    points = variant.get("keyPoints")
+    if not isinstance(points, list):
+        return
+    for position, raw in enumerate(points):
+        text = str(raw).strip()
+        if not text:
+            continue
+        confidence = key_point_confidence(text, segment.body)
+        session.add(
+            LessonKeyPoint(
+                lesson_id=segment.lesson_id,
+                segment_id=segment.id,
+                position=position,
+                extracted_text=text,
+                source_text=segment.body,
+                confidence=confidence,
+                review_state=(
+                    KeyPointReviewState.UNSURE
+                    if confidence is KeyPointConfidence.LOW
+                    else KeyPointReviewState.SETTLED
+                ),
+            )
+        )

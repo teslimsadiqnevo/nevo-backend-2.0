@@ -120,10 +120,19 @@ async def require_approved_lessons(
     exercised or lost, and there are two routes to it - one lesson at a time
     and several at once - so the check lives here rather than in either of
     them. A gate on one door is not a gate.
+
+    SCRUM-153 narrowed what "cleared" means, and this is the reconciliation.
+    The gate used to demand approval of every segment, which made a teacher
+    click through a whole lesson Nevo had no doubts about - the tax on the
+    common case that ticket's ruling exists to prevent. Outstanding now means
+    a segment Nevo itself flagged and nobody approved, or a key point Nevo
+    could not ground in its own source. A lesson with neither was never in
+    doubt and assigns without ceremony.
     """
 
     from sqlalchemy import func
 
+    from nevo.api.lesson_review import outstanding_key_points
     from nevo.db.models.content import Lesson, LessonSegment
 
     wanted = list(dict.fromkeys(lesson_ids))
@@ -135,24 +144,55 @@ async def require_approved_lessons(
             .join(LessonSegment, LessonSegment.lesson_id == Lesson.id)
             .where(
                 Lesson.id.in_(wanted),
+                LessonSegment.needs_review.is_(True),
                 LessonSegment.approved_at.is_(None),
             )
             .group_by(Lesson.id, Lesson.title)
         )
     ).all()
-    if not rows:
+    unsettled = await outstanding_key_points(session, wanted)
+    titles = {lesson_id: title for lesson_id, title, _ in rows}
+    if unsettled:
+        missing = [key for key in unsettled if key not in titles]
+        if missing:
+            named = await session.execute(
+                select(Lesson.id, Lesson.title).where(Lesson.id.in_(missing))
+            )
+            titles.update({row[0]: row[1] for row in named.all()})
+    segments_left = {lesson_id: int(count) for lesson_id, _, count in rows}
+    outstanding = sorted(set(segments_left) | set(unsettled), key=lambda key: str(titles.get(key)))
+    if not outstanding:
         return
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={
             "code": "lesson_not_approved",
-            "message": (
-                "Approve every segment before assigning: "
-                + ", ".join(f"{title} ({count} left)" for _, title, count in rows)
+            # The refusal names what is outstanding, because a teacher who is
+            # told only "not ready" has nowhere to go: LR-07.
+            "message": "; ".join(
+                _outstanding_phrase(
+                    str(titles.get(lesson_id) or "This lesson"),
+                    segments=segments_left.get(lesson_id, 0),
+                    key_points=unsettled.get(lesson_id, 0),
+                )
+                for lesson_id in outstanding
             ),
             "lessons": [
-                {"lessonId": str(lesson_id), "unapprovedSegmentCount": int(count)}
-                for lesson_id, _, count in rows
+                {
+                    "lessonId": str(lesson_id),
+                    "unapprovedSegmentCount": segments_left.get(lesson_id, 0),
+                    "outstandingKeyPointCount": unsettled.get(lesson_id, 0),
+                }
+                for lesson_id in outstanding
             ],
         },
     )
+
+
+def _outstanding_phrase(title: str, *, segments: int, key_points: int) -> str:
+    parts = []
+    if key_points:
+        parts.append(f"{key_points} key point{'s' if key_points != 1 else ''} to check")
+    if segments:
+        parts.append(f"{segments} segment{'s' if segments != 1 else ''} to approve")
+    return f"{title}: {' and '.join(parts)}"

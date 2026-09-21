@@ -22,6 +22,8 @@ from nevo.db.base import Base
 from nevo.domain.intelligence.vocabulary import (
     ContentModality,
     ContentParseStatus,
+    KeyPointConfidence,
+    KeyPointReviewState,
     LessonContentType,
     LessonSourceType,
 )
@@ -34,6 +36,16 @@ lesson_source_type_enum = Enum(
 content_parse_status_enum = Enum(
     ContentParseStatus,
     name="content_parse_status",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+key_point_confidence_enum = Enum(
+    KeyPointConfidence,
+    name="key_point_confidence",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+key_point_review_state_enum = Enum(
+    KeyPointReviewState,
+    name="key_point_review_state",
     values_callable=lambda enum: [item.value for item in enum],
 )
 lesson_content_type_enum = Enum(
@@ -338,6 +350,102 @@ class LessonSegment(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class LessonKeyPoint(Base):
+    """One key point drawn from a segment, and where a teacher left it.
+
+    Key points also live inside a segment's ``text_variant`` for rendering.
+    They are rows as well because a review is per point: a teacher accepts,
+    rewrites or removes one at a time, and a row is the only place that
+    decision, its author and its time can live. The variant stays the thing a
+    child reads; this is the thing a teacher works through.
+    """
+
+    __tablename__ = "lesson_key_points"
+    __table_args__ = (
+        CheckConstraint("position >= 0", name="lesson_key_point_position_non_negative"),
+        CheckConstraint(
+            "(review_state IN ('settled', 'unsure')"
+            " AND resolved_at IS NULL AND resolved_by IS NULL)"
+            " OR (review_state IN ('accepted', 'amended', 'removed')"
+            " AND resolved_at IS NOT NULL)",
+            name="lesson_key_point_resolution_matches_state",
+        ),
+        Index(
+            "ix_lesson_key_points_lesson_position",
+            "lesson_id",
+            "segment_id",
+            "position",
+            unique=True,
+        ),
+        Index(
+            "ix_lesson_key_points_outstanding",
+            "lesson_id",
+            postgresql_where=text("review_state = 'unsure'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    lesson_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("lessons.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    segment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("lesson_segments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: Where it sits among that segment's key points.
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: What Nevo extracted, kept as extracted even after a teacher rewrites it,
+    #: so the screen can show what it read next to what the teacher made of it.
+    extracted_text: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The teacher's wording, once they have written one.
+    amended_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The segment text this was drawn from. Stored rather than looked up, so
+    #: a later edit to the segment cannot silently rewrite the evidence a
+    #: teacher was shown.
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[KeyPointConfidence] = mapped_column(
+        key_point_confidence_enum,
+        nullable=False,
+    )
+    review_state: Mapped[KeyPointReviewState] = mapped_column(
+        key_point_review_state_enum,
+        nullable=False,
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    @property
+    def text(self) -> str:
+        """What the lesson says now: the teacher's wording if they wrote one."""
+
+        return self.amended_text or self.extracted_text
 
 
 def modality_values(modalities: list[ContentModality]) -> list[str]:

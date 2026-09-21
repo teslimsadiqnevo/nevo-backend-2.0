@@ -216,3 +216,37 @@ class ManipulativeKind(StrEnum):
     ARRAY = "array"
     PLACE_VALUE = "place_value"
     COUNTERS = "counters"
+
+
+class KeyPointConfidence(StrEnum):
+    """How well a key point is grounded in the text it was drawn from.
+
+    Not the model's own estimate: it was never asked for one, and a number a
+    model volunteers about its own output is not evidence. This is measured -
+    how much of the key point can be found in the segment it came from - so a
+    teacher reviewing a LOW point is looking at something demonstrably absent
+    from the source rather than at a mood.
+    """
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class KeyPointReviewState(StrEnum):
+    """Where a key point stands in a teacher's review.
+
+    Only UNSURE blocks assignment. A teacher never has to click through points
+    Nevo could ground, or the review becomes a tax on the common case.
+    """
+
+    #: Grounded well enough to stand without a teacher reading it.
+    SETTLED = "settled"
+    #: Low confidence and nobody has looked yet. This is what blocks assigning.
+    UNSURE = "unsure"
+    #: A teacher read it and let it stand.
+    ACCEPTED = "accepted"
+    #: A teacher rewrote it.
+    AMENDED = "amended"
+    #: A teacher took it out of the lesson.
+    REMOVED = "removed"

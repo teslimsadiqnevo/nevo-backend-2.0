@@ -31,6 +31,7 @@ from nevo.api.insights import router as insights_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.lesson_review import router as lesson_review_router
 from nevo.api.mastery import router as mastery_router
+from nevo.api.onboarding import router as onboarding_router
 from nevo.api.parents import router as parent_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
 from nevo.api.partner_inquiries import tosse_router
@@ -318,6 +319,7 @@ app.include_router(scheduler_router)
 app.include_router(signals_router)
 app.include_router(email_confirmation_router)
 app.include_router(lesson_review_router)
+app.include_router(onboarding_router)
 app.include_router(support_router)
 app.include_router(sso_router)
 app.include_router(teacher_assignment_router)

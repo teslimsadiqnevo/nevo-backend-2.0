@@ -1,11 +1,13 @@
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from nevo.ai_gateway.compliance import ZeroTagCompliancePolicy
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.service import AiGatewayService
+from nevo.ask_nevo.allowance import Allowance, units_for
 from nevo.ask_nevo.entities import (
     AskNevoContext,
     AskNevoRequest,
@@ -13,6 +15,7 @@ from nevo.ask_nevo.entities import (
     ThreadSummary,
     ThreadTranscript,
 )
+from nevo.ask_nevo.errors import AskNevoDailyLimitError
 from nevo.ask_nevo.formatting import structure_answer
 from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
@@ -33,6 +36,23 @@ class AskNevoRepository(Protocol):
         actor_user_id: UUID,
         role: AskNevoRole,
     ) -> tuple[tuple[dict[str, object], ...], object, Any]: ...
+
+    async def allowance(
+        self,
+        *,
+        actor_user_id: UUID,
+        role: AskNevoRole,
+        now: datetime,
+    ) -> Allowance: ...
+
+    async def charge_allowance(
+        self,
+        *,
+        actor_user_id: UUID,
+        role: AskNevoRole,
+        units: int,
+        now: datetime,
+    ) -> None: ...
 
     async def log_interaction(
         self,
@@ -104,12 +124,36 @@ class AskNevoService:
         self._gateway = gateway
         self._compliance = compliance
 
+    async def allowance(
+        self,
+        *,
+        actor_user_id: UUID,
+        role: AskNevoRole,
+    ) -> Allowance:
+        """What is left of this person's day, for a screen that shows it."""
+
+        return await self._repository.allowance(
+            actor_user_id=actor_user_id,
+            role=role,
+            now=datetime.now(UTC),
+        )
+
     async def ask(
         self,
         *,
         actor_user_id: UUID,
         request: AskNevoRequest,
     ) -> AskNevoResponse:
+        now = datetime.now(UTC)
+        allowance = await self._repository.allowance(
+            actor_user_id=actor_user_id,
+            role=request.role,
+            now=now,
+        )
+        if allowance.exhausted:
+            # Checked before the context is built, so a person who has used
+            # their day does not wait on work whose answer is already no.
+            raise AskNevoDailyLimitError(allowance)
         category = classify_question(request.question)
         context = await self._repository.build_context(
             actor_user_id=actor_user_id,
@@ -153,6 +197,10 @@ class AskNevoService:
             )
         )
         answer = result.text
+        spent = units_for(
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
         if not self._compliance.inspect(answer).allowed:
             retry = await self._gateway.generate(
                 AiGenerationRequest(
@@ -177,12 +225,25 @@ class AskNevoService:
             )
             answer = retry.text
             result = retry
+            spent += units_for(
+                input_tokens=retry.input_tokens,
+                output_tokens=retry.output_tokens,
+            )
         if not self._compliance.inspect(answer).allowed:
             answer = self._compliance.sanitize(answer)
         # Names go back only here, on the way to the user. The model saw
         # pseudonyms throughout, including in every tool result.
         if directory is not None:
             answer = directory.rehydrate(answer)
+        # Charged on what the provider actually billed, both calls included:
+        # a compliance retry is a second answer we paid for, and leaving it
+        # off the ledger is a budget that quietly does not hold.
+        await self._repository.charge_allowance(
+            actor_user_id=actor_user_id,
+            role=request.role,
+            units=spent,
+            now=now,
+        )
         interaction_id = await self._repository.log_interaction(
             actor_user_id=actor_user_id,
             request=request,

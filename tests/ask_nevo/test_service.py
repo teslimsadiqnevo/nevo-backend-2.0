@@ -6,6 +6,7 @@ import pytest
 from nevo.ai_gateway.compliance import ZeroTagCompliancePolicy
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.fallback import RuleBasedFallbackGenerator
+from nevo.ask_nevo.allowance import Allowance, next_reset, school_day
 from nevo.ask_nevo.entities import (
     AskNevoContext,
     AskNevoContextIds,
@@ -30,7 +31,12 @@ class FakeGateway:
         self.requests.append(request)
         text = self.texts.pop(0)
         call_id = RETRY_CALL_ID if len(self.requests) > 1 else CALL_ID
-        return SimpleNamespace(text=text, call_id=call_id)
+        return SimpleNamespace(
+            text=text,
+            call_id=call_id,
+            input_tokens=1_700,
+            output_tokens=300,
+        )
 
 
 class FakeRepository:
@@ -38,10 +44,25 @@ class FakeRepository:
         """No tools in service tests: they cover prompt choice and compliance."""
         return (), None, None
 
-    def __init__(self) -> None:
+    def __init__(self, spent_units: int = 0) -> None:
         self.logged_question_text = None
         self.category = None
         self.helpful = None
+        self.spent_units = spent_units
+        self.charges: list[int] = []
+
+    async def allowance(self, *, actor_user_id, role, now):
+        return Allowance(
+            role=role,
+            day=school_day(now),
+            spent_units=self.spent_units,
+            exchanges=0,
+            resets_at=next_reset(now),
+        )
+
+    async def charge_allowance(self, *, actor_user_id, role, units, now):
+        self.charges.append(units)
+        self.spent_units += units
 
     async def build_context(self, *, actor_user_id, request):
         assert actor_user_id == ACTOR_ID

@@ -16,6 +16,7 @@ from nevo.ask_nevo.entities import (
     ThreadSummary,
     ThreadTranscript,
 )
+from nevo.ask_nevo.errors import AskNevoDailyLimitError
 from nevo.ask_nevo.formatting import AnswerBlockType, AnswerFormat, structure_answer
 from nevo.ask_nevo.service import AskNevoService
 from nevo.db.models.ask_nevo import AskNevoInteraction
@@ -169,22 +170,79 @@ async def ask_nevo(
                     "message": "Student Ask Nevo must use the current student.",
                 },
             )
-    result = await service.ask(
-        actor_user_id=principal.user_id,
-        request=AskNevoRequest(
-            role=payload.role,
-            current_page=payload.current_page,
-            context_ids=AskNevoContextIds(
-                student_id=payload.context_ids.student_id,
-                class_id=payload.context_ids.class_id,
-                lesson_id=payload.context_ids.lesson_id,
-                segment_id=payload.context_ids.segment_id,
-                thread_id=payload.context_ids.thread_id,
+    try:
+        result = await service.ask(
+            actor_user_id=principal.user_id,
+            request=AskNevoRequest(
+                role=payload.role,
+                current_page=payload.current_page,
+                context_ids=AskNevoContextIds(
+                    student_id=payload.context_ids.student_id,
+                    class_id=payload.context_ids.class_id,
+                    lesson_id=payload.context_ids.lesson_id,
+                    segment_id=payload.context_ids.segment_id,
+                    thread_id=payload.context_ids.thread_id,
+                ),
+                question=payload.question,
             ),
-            question=payload.question,
-        ),
-    )
+        )
+    except AskNevoDailyLimitError as limit:
+        # 429, not 403: nothing is forbidden, the day is simply used up. The
+        # message is written for the person reading it and can be rendered
+        # as it stands.
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": limit.code,
+                "message": limit.public_message,
+                "resetsAt": limit.allowance.resets_at.isoformat(),
+            },
+        ) from limit
     return AskResponse.from_result(result)
+
+
+class AskNevoAllowanceResponse(BaseModel):
+    """What is left of the asker's day.
+
+    Questions rather than tokens, because a number of tokens means nothing to
+    a child and very little to a teacher. Approximate, and says so.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    questions_left: int = Field(alias="questionsLeft")
+    #: True once there is not enough left to answer properly. The client can
+    #: put Ask Nevo away for the day rather than offering a box that refuses.
+    exhausted: bool
+    resets_at: datetime = Field(alias="resetsAt")
+    #: Ready to render when exhausted is true.
+    message: str
+
+
+@router.get("/allowance", response_model=AskNevoAllowanceResponse)
+async def read_allowance(
+    principal: PrincipalDependency,
+    service: AskNevoDependency,
+    role: AskNevoRole | None = None,
+) -> AskNevoAllowanceResponse:
+    """How much asking this person has left today."""
+
+    asking_as = role or next(iter(_ROLES_FOR_PRINCIPAL.get(principal.role, ())), None)
+    if asking_as is None or asking_as not in _ROLES_FOR_PRINCIPAL.get(principal.role, ()):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "ask_role_forbidden",
+                "message": "You cannot ask Nevo in that role.",
+            },
+        )
+    allowance = await service.allowance(actor_user_id=principal.user_id, role=asking_as)
+    return AskNevoAllowanceResponse(
+        questionsLeft=allowance.questions_left,
+        exhausted=allowance.exhausted,
+        resetsAt=allowance.resets_at,
+        message=allowance.message(),
+    )
 
 
 class ThreadSummaryResponse(BaseModel):

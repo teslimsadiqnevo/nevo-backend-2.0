@@ -2,8 +2,10 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.ask_nevo.allowance import Allowance, next_reset, school_day
 from nevo.ask_nevo.directory import PseudonymDirectory
 from nevo.ask_nevo.entities import (
     AskNevoContext,
@@ -15,6 +17,7 @@ from nevo.ask_nevo.entities import (
 from nevo.ask_nevo.tools import ToolContext, execute_tool, schemas_for
 from nevo.db.models.account import Class, User
 from nevo.db.models.ask_nevo import (
+    AskNevoDailyUsage,
     AskNevoInteraction,
     AskNevoMessage,
     AskNevoThread,
@@ -131,6 +134,66 @@ class SqlAlchemyAskNevoRepository:
                     "note": "Lesson body is supplied by frontend/parser when available.",
                 }
             return AskNevoContext(payload=payload, student_id_for_gateway=student_id)
+
+    async def allowance(
+        self,
+        *,
+        actor_user_id: UUID,
+        role: AskNevoRole,
+        now: datetime,
+    ) -> Allowance:
+        """What is left of this person's day."""
+
+        day = school_day(now)
+        async with self._sessions() as session:
+            row = await session.scalar(
+                select(AskNevoDailyUsage).where(
+                    AskNevoDailyUsage.actor_user_id == actor_user_id,
+                    AskNevoDailyUsage.usage_date == day,
+                )
+            )
+        return Allowance(
+            role=role,
+            day=day,
+            spent_units=row.units_spent if row else 0,
+            exchanges=row.exchanges if row else 0,
+            resets_at=next_reset(now),
+        )
+
+    async def charge_allowance(
+        self,
+        *,
+        actor_user_id: UUID,
+        role: AskNevoRole,
+        units: int,
+        now: datetime,
+    ) -> None:
+        """Charge what the answer actually cost.
+
+        After the answer rather than before it: an estimate charged up front
+        is wrong in both directions, and a person who was refused an answer
+        they never received would have paid for it.
+        """
+
+        day = school_day(now)
+        async with self._sessions.begin() as session:
+            await session.execute(
+                insert(AskNevoDailyUsage)
+                .values(
+                    actor_user_id=actor_user_id,
+                    usage_date=day,
+                    role=role,
+                    units_spent=units,
+                    exchanges=1,
+                )
+                .on_conflict_do_update(
+                    index_elements=["actor_user_id", "usage_date"],
+                    set_={
+                        "units_spent": AskNevoDailyUsage.units_spent + units,
+                        "exchanges": AskNevoDailyUsage.exchanges + 1,
+                    },
+                )
+            )
 
     async def log_interaction(
         self,

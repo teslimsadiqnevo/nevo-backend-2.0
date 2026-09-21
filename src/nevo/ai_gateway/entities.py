@@ -150,6 +150,10 @@ class AiGenerationResult:
     #: the answer was cut off; anything else says it finished and the problem
     #: is what it wrote.
     stop_reason: str | None = None
+    #: What the request cost to send. Returned so a caller holding a budget
+    #: can charge for what was actually used rather than estimating from the
+    #: text it got back.
+    input_tokens: int = 0
     #: How much it wrote, so a truncated answer can be recognised by the
     #: numbers rather than by counting brackets in the text.
     output_tokens: int = 0

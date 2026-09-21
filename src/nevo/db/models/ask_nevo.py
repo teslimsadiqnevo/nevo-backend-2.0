@@ -1,8 +1,10 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -188,4 +190,57 @@ class AskNevoMessage(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+
+
+class AskNevoDailyUsage(Base):
+    """What one person has spent on Ask Nevo today.
+
+    A row per person per school day. Ask Nevo is the only part of the product
+    that calls a model while somebody is waiting, so this is the ledger the
+    daily allowance is read from and written to - kept here rather than
+    derived from the gateway's call log, because the allowance has to be read
+    before every question and a scan of every call this person ever made is
+    not that read.
+    """
+
+    __tablename__ = "ask_nevo_daily_usage"
+    __table_args__ = (
+        Index("uq_ask_nevo_daily_usage_actor_day", "actor_user_id", "usage_date", unique=True),
+        CheckConstraint("units_spent >= 0 AND exchanges >= 0", name="ask_nevo_usage_non_negative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: The school day in Lagos, not a UTC date. A day that turns over at one
+    #: in the morning locally is nobody's idea of a new day.
+    usage_date: Mapped[date] = mapped_column(Date, nullable=False)
+    role: Mapped[AskNevoRole] = mapped_column(ask_nevo_role_enum, nullable=False)
+    #: Input tokens plus output tokens weighted by what output costs, so the
+    #: allowance tracks the bill rather than a token count.
+    units_spent: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    exchanges: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )

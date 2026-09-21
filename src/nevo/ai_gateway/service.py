@@ -207,6 +207,7 @@ class AiGatewayService:
             compliance_retries=compliance_retries,
             call_id=call_id,
             stop_reason=accepted.stop_reason,
+            input_tokens=input_tokens,
             output_tokens=accepted.output_tokens,
         )
 

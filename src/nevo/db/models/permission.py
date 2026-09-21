@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -167,4 +168,72 @@ class AdminInvitation(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+
+class LearningSupportGrant(Base):
+    """Who holds the deepest per-child view, who gave it to them, and when.
+
+    The learning support surface shows a named child's accommodations, their
+    adaptation history and their help-seeking. Nobody holds it by default: if
+    the registering administrator got it automatically, every school would
+    begin with its proprietor holding that view of every child.
+
+    Revocations are rows too. "Who can see this" is a question a school and
+    Nevo both have to be able to answer for a date in the past, and a deleted
+    row answers nothing.
+    """
+
+    __tablename__ = "learning_support_grants"
+    __table_args__ = (
+        Index(
+            "ix_learning_support_grants_school_holder",
+            "school_id",
+            "holder_user_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("schools.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    holder_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    granted_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    revoked_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    #: Set when this grant ended because the role was handed to somebody else,
+    #: which is different from a school taking it away.
+    handed_over: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
     )

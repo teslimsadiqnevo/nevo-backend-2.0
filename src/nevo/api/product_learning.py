@@ -35,6 +35,7 @@ from nevo.api.frontend_unblockers import (
     _source_type,
     _title_from_filename,
 )
+from nevo.api.learning_support import require_learning_support_if_admin
 from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.api.product_common import (
     actor_user,
@@ -667,7 +668,10 @@ async def student_profile(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
-    await require_student_access(session, principal, student_id)
+    actor = await require_student_access(session, principal, student_id)
+    # The deepest per-child view in the product. Held deliberately, by
+    # somebody, and refused here rather than by hiding a menu item.
+    await require_learning_support_if_admin(session, actor)
     student = await session.get(User, student_id)
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")

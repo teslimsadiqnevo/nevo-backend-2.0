@@ -551,7 +551,12 @@ async def register_school(
                 "scope": scope,
                 "granted_by_user_id": user_id,
             }
+            # Every scope except learning support. A school that begins with
+            # its proprietor holding the deepest view of every child holds it
+            # by accident of signing up, which is the thing to prevent: it is
+            # granted deliberately, to somebody, and recorded.
             for scope in PermissionScope
+            if scope is not PermissionScope.SENCO
         ],
     )
     try:

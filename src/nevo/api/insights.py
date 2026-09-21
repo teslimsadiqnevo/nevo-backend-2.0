@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
+from nevo.api.learning_support import require_learning_support_if_admin
 from nevo.api.product_common import (
     require_class_access,
     require_school_actor,
@@ -465,7 +466,8 @@ async def student_adaptations(
     session: DatabaseSession,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[dict[str, object]]:
-    await require_student_access(session, principal, student_id)
+    actor = await require_student_access(session, principal, student_id)
+    await require_learning_support_if_admin(session, actor)
     rows = (
         await session.execute(
             select(SignalEvent, LessonSession.lesson_id, Lesson.title)

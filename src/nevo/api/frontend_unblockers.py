@@ -112,6 +112,7 @@ from nevo.domain.signal_events.vocabulary import (
 from nevo.intelligence.baseline import build_baseline_profile
 from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
+from nevo.notifications.links import password_reset_url
 from nevo.permissions.entities import PermissionSnapshot
 from nevo.storage.media import LessonMediaService
 
@@ -1763,7 +1764,7 @@ async def request_password_reset(
         )
         await session.commit()
         try:
-            reset_url = f"{mailer.frontend_base_url}/reset-password?token={token}"
+            reset_url = password_reset_url(mailer.frontend_base_url, token=token)
             await mailer.send(
                 to=str(user.email),
                 subject="Reset your Nevo password",

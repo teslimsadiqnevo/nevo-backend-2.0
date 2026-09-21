@@ -69,6 +69,7 @@ from nevo.domain.consent.vocabulary import ParentContactMethod, ParentRightType
 from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
+from nevo.notifications.links import join_url
 from nevo.ops.background import spawn
 
 logger = logging.getLogger(__name__)
@@ -742,7 +743,7 @@ async def _send_invitation(
 ) -> None:
     if record.email is None:
         return
-    link = f"{mailer.frontend_base_url}/join/{token}"
+    link = join_url(mailer.frontend_base_url, token=token)
     await mailer.send(
         to=record.email,
         subject="Your Nevo invitation",

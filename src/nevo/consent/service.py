@@ -35,6 +35,7 @@ from nevo.domain.consent.vocabulary import (
     ParentContactMethod,
     ParentRightType,
 )
+from nevo.notifications.links import parent_consent_url
 
 PARENT_CONSENT_LIFETIME = timedelta(days=7)
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -103,7 +104,7 @@ class ConsentService:
             contact_method=contact_method,
             consent_types=self._required_types(consent_types),
             token_digest=token_digest,
-            consent_url=(f"{self._public_base_url}/consent/parent?token={token}"),
+            consent_url=parent_consent_url(self._public_base_url, token=token),
             requested_by_user_id=actor.user_id,
             created_at=now,
             expires_at=now + PARENT_CONSENT_LIFETIME,

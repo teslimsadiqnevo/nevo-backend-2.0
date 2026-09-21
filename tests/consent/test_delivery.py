@@ -56,9 +56,9 @@ async def test_sms_raises_when_the_provider_rejects(monkeypatch: pytest.MonkeyPa
 
 
 def test_consent_message_carries_the_link_and_expiry() -> None:
-    message = consent_message("https://app.nevo.test/consent/parent?token=abc")
+    message = consent_message("https://app.nevo.test/parent/consent?token=abc")
 
-    assert "https://app.nevo.test/consent/parent?token=abc" in message
+    assert "https://app.nevo.test/parent/consent?token=abc" in message
     assert "7 days" in message
     assert EMAIL_SUBJECT
 

@@ -11,7 +11,7 @@ Status column is updated as each lands.
 
 | # | Ticket | What it is | Blocks | Status |
 |---|--------|------------|--------|--------|
-| 1 | SCRUM-154 | Parent onboarding link 404s: the backend builds the wrong path for the consent email | nobody, but it is on the walkthrough path | todo |
+| 1 | SCRUM-154 | Parent onboarding link 404s: the backend builds the wrong path for the consent email | nobody, but it is on the walkthrough path | done |
 | 2 | SCRUM-153 (backend) | Lesson review: per key point, the source text, what was extracted and a confidence signal, plus accept and amend | SCRUM-153, Yinka's only in-progress ticket | todo |
 
 ## 2. Unblocks the frontend

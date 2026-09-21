@@ -21,7 +21,7 @@ Status column is updated as each lands.
 | 3 | SCRUM-148 | Class creation, bulk create, name normalisation, per-row import detail. Classes are derived from the uploads. | SCRUM-149 | done |
 | 4 | SCRUM-150 | Admin email confirmation: issue, verify, expiry, resend, change address. Expired, already-confirmed and invalid are distinct. | SCRUM-151 | done |
 | 5 | SCRUM-156 | Onboarding funnel: derive, stage, confirm, price, pay, then activate. Nothing reaches anyone before payment. | SCRUM-157 | done |
-| 6 | SCRUM-158 | Written consent route beside digital, and the correct consenting party on the record | SCRUM-159 | todo |
+| 6 | SCRUM-158 | Written consent route beside digital, and the correct consenting party on the record | SCRUM-159 | done |
 | 7 | SCRUM-165 | Learning support role: unheld by default, granted deliberately, refused by the API | SCRUM-166 | todo |
 | 8 | SCRUM-168 | Student entry: the link resolves identity, age is derived from the roster, consent is enforced server-side | SCRUM-167, SCRUM-171, part of SCRUM-160 | todo |
 | 9 | SCRUM-170 | Staff annotations against the export with an approval state, and dated accommodation history | SCRUM-164 SC-03 and SC-04 | todo |

@@ -1,10 +1,11 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     Uuid,
     event,
@@ -447,6 +449,13 @@ class ConsentRecord(TimestampMixin, Base):
             ")",
             name="confirmation_fields_match_status",
         ),
+        CheckConstraint(
+            "confirmed_via <> 'written'"
+            " OR (parent_name_on_form IS NOT NULL"
+            " AND signed_on IS NOT NULL"
+            " AND notice_version IS NOT NULL)",
+            name="written_consent_identifies_the_parent",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -502,6 +511,31 @@ class ConsentRecord(TimestampMixin, Base):
         nullable=True,
     )
     last_channel: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: Who actually consented, as written on the paper form. Where a school
+    #: confirms on a parent's behalf the record used to name the school
+    #: administrator, which means it did not identify the person who
+    #: consented at all.
+    parent_name_on_form: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Mother, father, guardian. Part of the definition of a consent record
+    #: and absent from every row until now.
+    parent_relationship: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    #: The date the parent wrote on the form, which is not the date the school
+    #: got round to uploading it.
+    signed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: The version of the privacy notice the parent was shown. "They
+    #: consented" says nothing without what they were reading when they did.
+    notice_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: The photograph or scan of the signed form, in Nevo's storage.
+    evidence_storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    uploaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 @event.listens_for(Class, "before_insert")

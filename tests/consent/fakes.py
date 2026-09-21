@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
 from nevo.consent.entities import (
@@ -21,6 +21,7 @@ from nevo.domain.accounts.vocabulary import (
 )
 from nevo.domain.consent.vocabulary import (
     REQUIRED_LEARNING_CONSENT,
+    AgeCheckState,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
     ParentRightType,
@@ -33,9 +34,7 @@ class MemoryConsentRepository:
         self.links: dict[UUID, ParentLinkView] = {}
         self.requests: dict[str, ParentConsentRequestDraft] = {}
         self.completed_tokens: set[str] = set()
-        self.pending_initializations: list[
-            tuple[UUID, frozenset[ConsentType]]
-        ] = []
+        self.pending_initializations: list[tuple[UUID, frozenset[ConsentType]]] = []
         self.rights: list[tuple[UUID, ParentRightType, str | None]] = []
         self.activated: set[str] = set()
         self.children: dict[UUID, list[ParentChildView]] = {}
@@ -112,6 +111,10 @@ class MemoryConsentRepository:
         *,
         token_digest: str,
         completed_at: datetime,
+        granted_types: frozenset[ConsentType] = frozenset(),
+        child_date_of_birth: date | None = None,
+        parent_relationship: str | None = None,
+        notice_version: str | None = None,
     ) -> ParentConsentCompletion | None:
         draft = self.requests.get(token_digest)
         if draft is None or token_digest in self.completed_tokens:
@@ -124,7 +127,9 @@ class MemoryConsentRepository:
             parent_id=parent_id,
             account_created=True,
         )
-        for consent_type in draft.consent_types:
+        granted = draft.consent_types & granted_types
+        declined = draft.consent_types - granted_types
+        for consent_type in granted:
             self.records[(draft.student_id, consent_type)] = ConsentRecordView(
                 id=uuid4(),
                 student_id=draft.student_id,
@@ -139,7 +144,13 @@ class MemoryConsentRepository:
             parent_link_id=draft.parent_link_id,
             parent_id=parent_id,
             student_id=draft.student_id,
-            confirmed_types=draft.consent_types,
+            confirmed_types=frozenset(granted),
+            declined_types=frozenset(declined),
+            age_check=(
+                AgeCheckState.AWAITING_PARENT
+                if child_date_of_birth is None
+                else AgeCheckState.MATCHED
+            ),
             completed_at=completed_at,
         )
 

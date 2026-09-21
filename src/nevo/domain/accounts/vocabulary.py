@@ -106,13 +106,20 @@ class ConsentStatus(StrEnum):
 class ConsentType(StrEnum):
     """What a consent record grants.
 
-    Assumption (not enumerated by the ticket): derived from the legacy
-    per-school consent flags (data protection, camera, offline access).
+    Each is asked and answered on its own. A parent agreeing to their child
+    using Nevo has not thereby agreed to anything else, which is the whole
+    point of the fourth one below.
     """
 
     DATA_PROCESSING = "data_processing"
     CAMERA = "camera"
     OFFLINE_STORAGE = "offline_storage"
+    #: Sending lesson text to Anthropic, OpenAI and YarnGPT, which are outside
+    #: Nigeria. Separate from DATA_PROCESSING by agreement: consenting to a
+    #: child using Nevo is not consenting to their material leaving the
+    #: country, and one tick covering both would be neither affirmative nor
+    #: specific.
+    CROSS_BORDER_TRANSFER = "cross_border_transfer"
 
 
 class ConsentMethod(StrEnum):

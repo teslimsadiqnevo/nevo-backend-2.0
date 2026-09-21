@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nevo.api.age_checks import age_check_blocks
 from nevo.api.auth import AuthServiceDependency, SessionResponse
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
@@ -52,6 +53,10 @@ class StudentEntryState(CamelResponse):
     age: int | None
     #: True once the child has a PIN and can sign in normally.
     account_ready: bool
+    #: True while the school and the parent disagree about the child's date
+    #: of birth. The child cannot start, and there is nothing for them to do
+    #: about it, so the screen says the school is checking something.
+    age_check_pending: bool = False
 
 
 class PinChoice(BaseModel):
@@ -130,6 +135,7 @@ async def _state(session: AsyncSession, grant: StudentOnboardingGrant) -> Studen
         first_name=student.first_name or "",
         class_name=await _class_name(session, grant),
         consent_state="given" if await _has_consent(session, student.id) else "pending",
+        age_check_pending=await age_check_blocks(session, student.id),
         age=age_on(student.date_of_birth),
         account_ready=student.pin_hash is not None,
     )
@@ -165,6 +171,20 @@ async def set_pin_and_start(
 
     grant = await _grant(session, token)
     student = await _student(session, grant)
+    if await age_check_blocks(session, student.id):
+        # Two sources disagree about how old this child is, so nobody is sure
+        # they should be offered the product. A person settles that with the
+        # school and the parent; it is never resolved by asking the child.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "age_check_pending",
+                "message": (
+                    "Nevo is checking something with your school. "
+                    "Open this link again in a day or two."
+                ),
+            },
+        )
     if not await _has_consent(session, student.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

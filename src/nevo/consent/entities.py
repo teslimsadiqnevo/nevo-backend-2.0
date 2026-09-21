@@ -9,6 +9,7 @@ from nevo.domain.accounts.vocabulary import (
     UserStatus,
 )
 from nevo.domain.consent.vocabulary import (
+    AgeCheckState,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
     ParentContactMethod,
@@ -103,6 +104,12 @@ class ParentConsentCompletion:
     student_id: UUID
     confirmed_types: frozenset[ConsentType]
     completed_at: datetime
+    #: Asked for and not granted. A parent who ticks one box and not another
+    #: has answered both, and the screen should be able to say so rather than
+    #: showing the second as still outstanding.
+    declined_types: frozenset[ConsentType] = frozenset()
+    #: What comparing the parent's date of birth with the school's produced.
+    age_check: AgeCheckState = AgeCheckState.AWAITING_PARENT
     #: Where the parent's copy was sent, so the page states a fact rather
     #: than a hope. None when we hold no contact to send one to.
     receipt_sent_to: ParentContactMethod | None = None

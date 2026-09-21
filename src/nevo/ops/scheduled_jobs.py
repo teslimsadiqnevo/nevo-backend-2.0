@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.billing.issuance import InvoiceIssuanceService
+from nevo.consent.expiry import ConsentExpiryService
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.billing import Invoice
 from nevo.db.models.sso import SchoolSsoConfiguration
@@ -46,6 +47,9 @@ def build_scheduled_jobs(
 
     async def retention_sweep() -> str:
         return (await retention_service.sweep()).summary()
+
+    async def consent_expiry_sweep() -> str:
+        return (await ConsentExpiryService(sessions).sweep()).summary()
 
     async def refresh_due_dates() -> str:
         refreshed = await scheduler_service.refresh_all_due_dates()
@@ -124,6 +128,7 @@ def build_scheduled_jobs(
             run=attention_digests,
         ),
         ScheduledJob(name="retention.anonymise", interval=DAILY, run=retention_sweep),
+        ScheduledJob(name="consent.expire_unanswered", interval=DAILY, run=consent_expiry_sweep),
         ScheduledJob(name="scheduler.refresh_due_dates", interval=DAILY, run=refresh_due_dates),
         ScheduledJob(name="sso.roster_sync", interval=DAILY, run=roster_sync),
         ScheduledJob(name="sso.health_probe", interval=HOURLY, run=sso_health_probe),

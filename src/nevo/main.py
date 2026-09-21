@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from nevo.ai_gateway.config import AiGatewaySettings
 from nevo.ai_gateway.wiring import build_ai_gateway
 from nevo.api.admin import router as admin_router
+from nevo.api.age_checks import router as age_check_router
 from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.ask_nevo import router as ask_nevo_router
 from nevo.api.auth import router as auth_router
@@ -34,6 +35,7 @@ from nevo.api.learning_support_records import router as learning_support_records
 from nevo.api.lesson_review import router as lesson_review_router
 from nevo.api.mastery import router as mastery_router
 from nevo.api.onboarding import router as onboarding_router
+from nevo.api.parent_rights import router as parent_rights_router
 from nevo.api.parents import router as parent_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
 from nevo.api.partner_inquiries import tosse_router
@@ -301,6 +303,7 @@ async def request_timing(request: Request, call_next):  # type: ignore[no-untype
 
 app.include_router(admin_router)
 app.include_router(ai_gateway_router)
+app.include_router(age_check_router)
 app.include_router(ask_nevo_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
@@ -312,6 +315,7 @@ app.include_router(intelligence_router)
 app.include_router(insights_router)
 app.include_router(mastery_router)
 app.include_router(parent_router)
+app.include_router(parent_rights_router)
 app.include_router(partner_inquiry_router)
 app.include_router(tosse_router)
 app.include_router(permission_router)

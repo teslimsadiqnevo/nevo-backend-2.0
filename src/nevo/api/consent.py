@@ -1,5 +1,5 @@
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -25,6 +25,7 @@ from nevo.consent.errors import (
     ConsentWithdrawnError,
     InvalidConsentInvitationError,
     ParentAccountConflictError,
+    ParentAlreadyRefusedError,
     StudentConsentAccessError,
     StudentNotFoundError,
 )
@@ -35,6 +36,7 @@ from nevo.domain.accounts.vocabulary import (
     ConsentType,
 )
 from nevo.domain.consent.vocabulary import (
+    AgeCheckState,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
     ParentContactMethod,
@@ -111,7 +113,27 @@ class QueuedParentConsentResponse(BaseModel):
 
 
 class CompleteParentConsentRequest(BaseModel):
+    """What a parent sends when they answer.
+
+    ``grantedTypes`` is required and is the list of boxes they actually
+    ticked. There is no default and nothing is pre-selected: an empty list is
+    a parent saying no to everything, which is a real answer, and a missing
+    list is a client bug rather than a parent agreeing to whatever was asked.
+    """
+
+    model_config = CAMEL_CONFIG
+
     token: str = Field(min_length=32, max_length=512)
+    granted_types: list[ConsentType] = Field(alias="grantedTypes")
+    #: The parent's own answer for their child's date of birth. Compared with
+    #: the school's rather than trusted, and never asked of the child.
+    child_date_of_birth: date | None = Field(default=None, alias="childDateOfBirth")
+    #: Mother, father, guardian. Part of the definition of a consent record.
+    parent_relationship: str | None = Field(
+        default=None,
+        alias="parentRelationship",
+        max_length=80,
+    )
 
 
 class ParentConsentCompletionResponse(BaseModel):
@@ -122,6 +144,13 @@ class ParentConsentCompletionResponse(BaseModel):
     parent_id: UUID
     student_id: UUID
     confirmed_types: list[ConsentType]
+    #: Asked for and not granted. The screen can confirm both answers rather
+    #: than leaving a refused one looking unanswered.
+    declined_types: list[ConsentType] = []
+    #: What comparing the parent's date of birth with the school's produced.
+    #: `mismatch` means the child cannot start until the school settles it
+    #: with the parent.
+    age_check: AgeCheckState = AgeCheckState.AWAITING_PARENT
     completed_at: datetime
     receipt_sent_to: ParentContactMethod | None = None
 
@@ -139,6 +168,11 @@ class ParentConsentCompletionResponse(BaseModel):
                 completion.confirmed_types,
                 key=lambda item: item.value,
             ),
+            declined_types=sorted(
+                completion.declined_types,
+                key=lambda item: item.value,
+            ),
+            age_check=completion.age_check,
             completed_at=completion.completed_at,
             receipt_sent_to=completion.receipt_sent_to,
         )
@@ -295,6 +329,9 @@ async def complete_parent_consent(
     try:
         completion = await service.complete_parent_consent(
             token=payload.token,
+            granted_types=frozenset(payload.granted_types),
+            child_date_of_birth=payload.child_date_of_birth,
+            parent_relationship=payload.parent_relationship,
         )
         if completion is None:
             raise InvalidConsentInvitationError
@@ -534,7 +571,7 @@ def public_consent_error(error: ConsentError) -> HTTPException:
         ),
     ):
         status_code = status.HTTP_403_FORBIDDEN
-    elif isinstance(error, ParentAccountConflictError):
+    elif isinstance(error, (ParentAccountConflictError, ParentAlreadyRefusedError)):
         status_code = status.HTTP_409_CONFLICT
     return HTTPException(
         status_code=status_code,

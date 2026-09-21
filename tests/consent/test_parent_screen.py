@@ -1,4 +1,5 @@
 """The parent-facing consent screen: what it may read, and what it may record."""
+
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -289,9 +290,7 @@ def test_a_parent_can_turn_the_consent_link_into_an_account() -> None:
     anyio.run(_invite, service, repository)
 
     account = anyio.run(
-        lambda: service.activate_parent_account(
-            token=TOKEN, password_hash="argon2:whatever"
-        )
+        lambda: service.activate_parent_account(token=TOKEN, password_hash="argon2:whatever")
     )
 
     assert account is not None
@@ -306,9 +305,7 @@ def test_a_new_parent_account_can_find_its_own_child() -> None:
     _, service, repository = build()
     anyio.run(_invite, service, repository)
     account = anyio.run(
-        lambda: service.activate_parent_account(
-            token=TOKEN, password_hash="argon2:whatever"
-        )
+        lambda: service.activate_parent_account(token=TOKEN, password_hash="argon2:whatever")
     )
     assert account is not None
 

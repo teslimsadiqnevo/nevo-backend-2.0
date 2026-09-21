@@ -46,3 +46,20 @@ class ConsentRequiredError(ConsentError):
 class ConsentWithdrawnError(ConsentError):
     code = "consent_withdrawn"
     public_message = "A parent or guardian has withdrawn consent for this learner."
+
+
+class ParentAlreadyRefusedError(ConsentError):
+    """This parent was asked about this child and did not consent.
+
+    The agreement's wording is that we keep a minimal record of the refusal
+    so we do not contact them again. Enforced where the contact would happen,
+    because a rule against contacting somebody is worth nothing if it lives
+    only in a screen.
+    """
+
+    code = "parent_already_refused"
+    public_message = (
+        "This parent was already asked about this learner and did not consent. "
+        "Nevo does not contact them again. Speak to them directly if something "
+        "has changed."
+    )

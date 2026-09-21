@@ -1,6 +1,6 @@
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
 from nevo.auth.entities import AuthPrincipal
@@ -25,6 +25,7 @@ from nevo.consent.errors import (
     StudentConsentAccessError,
 )
 from nevo.consent.ports import ConsentRepository, ConsentTokenService
+from nevo.consent.written import NOTICE_VERSION
 from nevo.domain.accounts.vocabulary import (
     ConsentMethod,
     ConsentStatus,
@@ -37,7 +38,15 @@ from nevo.domain.consent.vocabulary import (
 )
 from nevo.notifications.links import parent_consent_url
 
-PARENT_CONSENT_LIFETIME = timedelta(days=7)
+#: Thirty days, per the agreement. If nobody answers in that time the learner
+#: is not activated and their roster data goes thirty days later.
+PARENT_CONSENT_LIFETIME = timedelta(days=30)
+
+#: What a parent is asked for by default: the consent a learner cannot start
+#: without, and the transfer outside Nigeria as its own separate question.
+DEFAULT_REQUESTED_CONSENT = frozenset(
+    {ConsentType.DATA_PROCESSING, ConsentType.CROSS_BORDER_TRANSFER}
+)
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -114,10 +123,19 @@ class ConsentService:
         self,
         *,
         token: str,
+        granted_types: frozenset[ConsentType],
+        child_date_of_birth: date | None = None,
+        parent_relationship: str | None = None,
     ) -> ParentConsentCompletion | None:
+        """Record what the parent ticked, and only what they ticked."""
+
         return await self._repository.complete_parent_request(
             token_digest=self._token_service.digest(token),
             completed_at=self._now(),
+            granted_types=granted_types,
+            child_date_of_birth=child_date_of_birth,
+            parent_relationship=parent_relationship,
+            notice_version=NOTICE_VERSION,
         )
 
     async def parent_invitation(
@@ -250,7 +268,14 @@ class ConsentService:
     def _required_types(
         consent_types: frozenset[ConsentType],
     ) -> frozenset[ConsentType]:
-        return consent_types or frozenset({REQUIRED_LEARNING_CONSENT})
+        """What a parent is asked about when the school names nothing.
+
+        Both of these, always. The transfer outside Nigeria is asked as its
+        own question - the parent may grant one and refuse the other, and a
+        screen that never shows the second cannot be answered affirmatively.
+        """
+
+        return consent_types or DEFAULT_REQUESTED_CONSENT
 
     @staticmethod
     def _normalize_contact(

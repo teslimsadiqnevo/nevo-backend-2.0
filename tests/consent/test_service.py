@@ -52,10 +52,7 @@ async def test_school_confirmation_records_school_source() -> None:
 
     assert records[0].student_id == student_id
     assert records[0].status is ConsentStatus.CONFIRMED
-    assert (
-        records[0].confirmation_source
-        is ConsentConfirmationSource.SCHOOL
-    )
+    assert records[0].confirmation_source is ConsentConfirmationSource.SCHOOL
 
 
 async def test_school_confirmation_rejects_parent_digital_method() -> None:
@@ -86,8 +83,7 @@ async def test_parent_request_normalizes_email_and_queues_link() -> None:
     assert draft.parent_name == "Ada Parent"
     assert draft.parent_contact == "ada@example.com"
     assert draft.consent_url == (
-        "https://app.nevo.test/parent/consent?"
-        f"token={FixedConsentTokenService.token}"
+        f"https://app.nevo.test/parent/consent?token={FixedConsentTokenService.token}"
     )
     assert queued.invitation_id == draft.invitation_id
 
@@ -140,9 +136,11 @@ async def test_parent_completion_is_one_time_and_opens_gate() -> None:
 
     completion = await consent_service.complete_parent_consent(
         token=FixedConsentTokenService.token,
+        granted_types=frozenset({ConsentType.DATA_PROCESSING}),
     )
     repeated = await consent_service.complete_parent_consent(
         token=FixedConsentTokenService.token,
+        granted_types=frozenset({ConsentType.DATA_PROCESSING}),
     )
     gate = await consent_service.student_gate(
         AuthPrincipal(
@@ -195,7 +193,5 @@ async def test_roster_initialization_defaults_to_pending() -> None:
 
     await consent_service.initialize_roster_student(student_id)
 
-    record = repository.records[
-        (student_id, ConsentType.DATA_PROCESSING)
-    ]
+    record = repository.records[(student_id, ConsentType.DATA_PROCESSING)]
     assert record.status is ConsentStatus.PENDING

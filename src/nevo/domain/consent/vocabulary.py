@@ -59,3 +59,39 @@ class ParentRightType(StrEnum):
 
 REQUIRED_LEARNING_CONSENT = ConsentType.DATA_PROCESSING
 """The one consent a learner cannot start without."""
+
+
+class AgeCheckState(StrEnum):
+    """Where a child's date of birth stands between two sources.
+
+    The school gives one on the roster and the parent gives one when they
+    consent. They are compared rather than trusted, because a date of birth
+    decides whether a child is old enough for the product to be offered to
+    them at all, and a single unverified source is not a check.
+    """
+
+    #: Both sources agree. Nothing to do and nobody is told.
+    MATCHED = "matched"
+    #: They disagree. Access is blocked until a person settles it with both
+    #: the school and the parent.
+    MISMATCH = "mismatch"
+    #: A person settled it and recorded what was agreed.
+    RESOLVED = "resolved"
+    #: The parent has not confirmed one yet.
+    AWAITING_PARENT = "awaiting_parent"
+
+
+class ConsentRefusalReason(StrEnum):
+    """Why Nevo stopped asking a parent.
+
+    A refusal is kept after the learner's roster data goes, so the school
+    does not invite the same parent again. It is the minimum that can carry
+    that meaning: which child, a fingerprint of the address, and this.
+    """
+
+    #: Thirty days passed and nobody answered.
+    NO_RESPONSE = "no_response"
+    #: The parent said no.
+    DECLINED = "declined"
+    #: The parent consented and later withdrew.
+    WITHDRAWN = "withdrawn"

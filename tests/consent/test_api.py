@@ -143,14 +143,12 @@ def test_public_parent_completion_consumes_invitation() -> None:
         },
     )
 
-    first = client.post(
-        "/api/v1/consents/parent/complete",
-        json={"token": FixedConsentTokenService.token},
-    )
-    second = client.post(
-        "/api/v1/consents/parent/complete",
-        json={"token": FixedConsentTokenService.token},
-    )
+    answer = {
+        "token": FixedConsentTokenService.token,
+        "grantedTypes": ["data_processing"],
+    }
+    first = client.post("/api/v1/consents/parent/complete", json=answer)
+    second = client.post("/api/v1/consents/parent/complete", json=answer)
 
     assert first.status_code == 200
     assert first.json()["studentId"] == str(student_id)
@@ -165,9 +163,7 @@ def test_student_gate_reports_pending_and_confirmed() -> None:
     )
 
     pending = client.get("/api/v1/students/me/consent-gate")
-    repository.records[
-        (snapshot.user_id, ConsentType.DATA_PROCESSING)
-    ] = ConsentRecordView(
+    repository.records[(snapshot.user_id, ConsentType.DATA_PROCESSING)] = ConsentRecordView(
         id=uuid4(),
         student_id=snapshot.user_id,
         consent_type=ConsentType.DATA_PROCESSING,

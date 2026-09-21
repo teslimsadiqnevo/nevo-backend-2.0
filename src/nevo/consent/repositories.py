@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, or_, select, update
@@ -20,8 +20,10 @@ from nevo.consent.entities import (
 )
 from nevo.consent.errors import (
     ParentAccountConflictError,
+    ParentAlreadyRefusedError,
     StudentNotFoundError,
 )
+from nevo.consent.expiry import already_refused
 from nevo.db.models.account import ConsentRecord, School, User
 from nevo.db.models.billing import BillingContact
 from nevo.db.models.consent import (
@@ -30,6 +32,7 @@ from nevo.db.models.consent import (
     ConsentNotificationOutbox,
     ParentLink,
 )
+from nevo.db.models.consent_assurance import AgeCheck
 from nevo.db.models.product import ParentDataRequest
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
@@ -42,6 +45,7 @@ from nevo.domain.accounts.vocabulary import (
 )
 from nevo.domain.consent.vocabulary import (
     REQUIRED_LEARNING_CONSENT,
+    AgeCheckState,
     ConsentConfirmationSource,
     ConsentDeliveryStatus,
     ConsentNotificationKind,
@@ -110,6 +114,12 @@ class SqlAlchemyConsentRepository:
                     school_id=draft.school_id,
                     student_id=draft.student_id,
                 )
+                if await already_refused(
+                    session,
+                    student_id=draft.student_id,
+                    parent_contact=draft.parent_contact,
+                ):
+                    raise ParentAlreadyRefusedError
                 parent_link = await session.scalar(
                     select(ParentLink)
                     .where(
@@ -204,6 +214,10 @@ class SqlAlchemyConsentRepository:
         *,
         token_digest: str,
         completed_at: datetime,
+        granted_types: frozenset[ConsentType],
+        child_date_of_birth: date | None = None,
+        parent_relationship: str | None = None,
+        notice_version: str | None = None,
     ) -> ParentConsentCompletion | None:
         try:
             async with self._sessions.begin() as session:
@@ -239,7 +253,13 @@ class SqlAlchemyConsentRepository:
                         )
                     )
                 )
-                for consent_type in consent_types:
+                # Only what the parent actually ticked. Confirming everything
+                # the school asked for, because the parent pressed one button,
+                # is neither affirmative nor specific - and it is exactly how
+                # a cross-border transfer gets consented to by accident.
+                granted = consent_types & granted_types
+                declined = consent_types - granted_types
+                for consent_type in granted:
                     record = await self._consent_for_update(
                         session,
                         student_id=invitation.student_id,
@@ -262,6 +282,29 @@ class SqlAlchemyConsentRepository:
                         record.last_actor_user_id = parent.id
                         record.last_changed_at = completed_at
                         record.last_channel = ConsentMethod.DIGITAL.value
+                        # The definition of a consent record asks for these
+                        # two, and the digital route never carried either.
+                        record.parent_relationship = parent_relationship
+                        record.notice_version = notice_version
+                for consent_type in declined:
+                    # Asked and not granted is an answer. Left pending it
+                    # looks like a parent who never replied, and the school
+                    # chases somebody who already said no to this one.
+                    refused = await self._ensure_pending_record(
+                        session,
+                        student_id=invitation.student_id,
+                        consent_type=consent_type,
+                    )
+                    refused.last_actor_user_id = parent.id
+                    refused.last_changed_at = completed_at
+                    refused.last_channel = ConsentMethod.DIGITAL.value
+                age_check = await self._run_age_check(
+                    session,
+                    school_id=parent_link.school_id,
+                    student_id=invitation.student_id,
+                    parent_date_of_birth=child_date_of_birth,
+                    now=completed_at,
+                )
 
                 parent_link.parent_id = parent.id
                 parent_link.account_created = True
@@ -290,7 +333,9 @@ class SqlAlchemyConsentRepository:
                     parent_link_id=parent_link.id,
                     parent_id=parent.id,
                     student_id=invitation.student_id,
-                    confirmed_types=consent_types,
+                    confirmed_types=frozenset(granted),
+                    declined_types=frozenset(declined),
+                    age_check=age_check,
                     completed_at=completed_at,
                     receipt_sent_to=parent_link.contact_method,
                 )
@@ -754,6 +799,44 @@ class SqlAlchemyConsentRepository:
                 status=request.status,
                 reason_recorded=bool(reason),
             )
+
+    @staticmethod
+    async def _run_age_check(
+        session: AsyncSession,
+        *,
+        school_id: UUID,
+        student_id: UUID,
+        parent_date_of_birth: date | None,
+        now: datetime,
+    ) -> AgeCheckState:
+        """Compare the parent's date of birth with the school's.
+
+        Two sources rather than one, because a date of birth decides whether
+        a child should be offered the product at all, and the school's roster
+        alone is one person's typing. A disagreement is an exception for a
+        person to settle with both sides - never resolved by asking the child,
+        and never resolved silently by preferring one source.
+        """
+
+        student = await session.get(User, student_id)
+        school_date = student.date_of_birth if student else None
+        check = await session.scalar(select(AgeCheck).where(AgeCheck.student_id == student_id))
+        if check is None:
+            check = AgeCheck(school_id=school_id, student_id=student_id)
+            session.add(check)
+        check.school_date_of_birth = school_date
+        check.parent_date_of_birth = parent_date_of_birth
+        if parent_date_of_birth is None:
+            check.state = AgeCheckState.AWAITING_PARENT
+        elif school_date is None or school_date != parent_date_of_birth:
+            # A roster with no date of birth is not agreement, it is a second
+            # missing source. Both cases need a person.
+            check.state = AgeCheckState.MISMATCH
+        else:
+            check.state = AgeCheckState.MATCHED
+        check.updated_at = now
+        await session.flush()
+        return check.state
 
     @staticmethod
     async def _require_student(

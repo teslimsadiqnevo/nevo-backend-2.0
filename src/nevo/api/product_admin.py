@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.consent_summary import empty_consent_summary, student_consent_summaries
@@ -19,6 +20,7 @@ from nevo.api.product_common import (
 )
 from nevo.api.response_models import (
     AcademicConfig,
+    CamelResponse,
     ClassSummaryResponse,
     IdCodeResponse,
     IdNameResponse,
@@ -50,6 +52,11 @@ from nevo.db.models.product import (
 )
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
+from nevo.domain.accounts.classes import (
+    academic_session,
+    normalise_class_name,
+    parse_class_name,
+)
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     NotificationCategory,
@@ -84,7 +91,45 @@ class ClassWrite(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = Field(min_length=1, max_length=255)
+    #: Read from the name ("JSS 2A" is JSS 2, section A) when not sent, so the
+    #: console's one-field create still files a class under its year group.
     year_group: str | None = Field(default=None, alias="yearGroup", max_length=20)
+    section: str | None = Field(default=None, max_length=20)
+    #: Defaults to the school year the request falls in. A school creating
+    #: next year's classes early sends the session it means.
+    academic_session: str | None = Field(
+        default=None,
+        alias="academicSession",
+        max_length=20,
+    )
+    capacity: int | None = Field(default=None, gt=0, le=500)
+
+
+class BulkClassWrite(BaseModel):
+    """The year-group grid: a screen's worth of classes in one call."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    classes: list[ClassWrite] = Field(min_length=1, max_length=200)
+
+
+class ClassRejection(CamelResponse):
+    """Why one class in a bulk create was not made.
+
+    Per row, with the value that caused it, because a school creating thirty
+    classes will not notice a count of failures - and did not, when an import
+    of four hundred children reported only that some rows failed.
+    """
+
+    index: int
+    field: str
+    value: str
+    reason: str
+
+
+class BulkClassResponse(CamelResponse):
+    created: list[IdCodeResponse]
+    rejected: list[ClassRejection]
 
 
 class StudentEnroll(BaseModel):
@@ -418,6 +463,7 @@ async def list_classes(
     # the list every admin opens.
     class_ids = [item.id for item in classes]
     counts = await _student_counts(session, class_ids)
+    teachers = await _teacher_counts(session, class_ids)
     subjects_by_class = await _class_subjects_bulk(session, class_ids)
     result: list[dict[str, object]] = []
     for item in classes:
@@ -429,13 +475,69 @@ async def list_classes(
                 "name": item.name,
                 "code": item.class_code,
                 "yearGroup": item.year_group,
+                "section": item.section,
+                "academicSession": item.academic_session,
+                "capacity": item.capacity,
                 "source": item.source,
                 "subjects": subjects,
                 "studentCount": student_count or 0,
+                "teacherCount": teachers.get(item.id, 0),
                 "archivedAt": item.archived_at,
             }
         )
     return result
+
+
+def _class_row(payload: ClassWrite, *, school_id: UUID | None, source: str = "manual") -> Class:
+    """One class, with the parts of its name it did not have to be told.
+
+    "JSS 2A" carries its year group and its section, and a school typing one
+    field should not have to repeat them into three.
+    """
+
+    parsed = parse_class_name(payload.name)
+    return Class(
+        school_id=school_id,
+        name=parsed.name,
+        year_group=payload.year_group or parsed.year_group,
+        section=payload.section or parsed.section,
+        academic_session=payload.academic_session or academic_session(datetime.now(UTC).date()),
+        capacity=payload.capacity,
+        class_code=secrets.token_hex(3).upper(),
+        source=source,
+    )
+
+
+async def _existing_class_name(
+    session: AsyncSession,
+    *,
+    school_id: UUID | None,
+    row: Class,
+) -> Class | None:
+    """The live class this one would collide with, if there is one."""
+
+    existing: Class | None = await session.scalar(
+        select(Class).where(
+            Class.school_id == school_id,
+            Class.academic_session == row.academic_session,
+            Class.normalised_name == normalise_class_name(row.name),
+            Class.archived_at.is_(None),
+        )
+    )
+    return existing
+
+
+def _duplicate_class_detail(row: Class, existing: Class) -> dict[str, object]:
+    return {
+        "code": "class_already_exists",
+        "message": (
+            f"{existing.name} already exists for {existing.academic_session}."
+            " Rename this one, or open the existing class."
+        ),
+        "classId": str(existing.id),
+        "name": row.name,
+        "academicSession": row.academic_session,
+    }
 
 
 @router.post("/classes", response_model=IdCodeResponse, status_code=status.HTTP_201_CREATED)
@@ -447,16 +549,76 @@ async def create_class(
     user = await require_school_actor(
         session, principal, roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
     )
-    school_class = Class(
-        school_id=user.school_id,
-        name=payload.name,
-        year_group=payload.year_group,
-        class_code=secrets.token_hex(3).upper(),
-        source="manual",
-    )
+    school_class = _class_row(payload, school_id=user.school_id)
+    existing = await _existing_class_name(session, school_id=user.school_id, row=school_class)
+    if existing is not None:
+        # Named rather than reported as a status, because a school told only
+        # that something conflicted has nowhere to go.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_duplicate_class_detail(school_class, existing),
+        )
     session.add(school_class)
     await session.commit()
     return {"id": str(school_class.id), "code": school_class.class_code}
+
+
+@router.post(
+    "/classes/bulk",
+    response_model=BulkClassResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_classes(
+    payload: BulkClassWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> BulkClassResponse:
+    """The year-group grid: a screen's worth of classes at once.
+
+    A class already there is rejected by name rather than failing the call, so
+    an administrator who adds JSS 3C to a grid of classes that already exist
+    gets JSS 3C, not an error and nothing.
+    """
+
+    user = await require_school_actor(
+        session, principal, roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
+    )
+    created: list[IdCodeResponse] = []
+    rejected: list[ClassRejection] = []
+    seen: dict[tuple[str, str], int] = {}
+    for index, item in enumerate(payload.classes):
+        row = _class_row(item, school_id=user.school_id)
+        key = (row.academic_session, normalise_class_name(row.name))
+        if key in seen:
+            rejected.append(
+                ClassRejection(
+                    index=index,
+                    field="name",
+                    value=item.name,
+                    reason=(
+                        f"The same class is on this list twice, at row {seen[key] + 1}"
+                        f" and row {index + 1}."
+                    ),
+                )
+            )
+            continue
+        existing = await _existing_class_name(session, school_id=user.school_id, row=row)
+        if existing is not None:
+            rejected.append(
+                ClassRejection(
+                    index=index,
+                    field="name",
+                    value=item.name,
+                    reason=(f"{existing.name} already exists for {existing.academic_session}."),
+                )
+            )
+            continue
+        seen[key] = index
+        session.add(row)
+        await session.flush()
+        created.append(IdCodeResponse(id=row.id, code=row.class_code))
+    await session.commit()
+    return BulkClassResponse(created=created, rejected=rejected)
 
 
 @router.patch("/classes/{class_id}", response_model=IdNameResponse)
@@ -513,6 +675,25 @@ async def _student_counts(session, class_ids: list[UUID]) -> dict[UUID, int]:
         )
         .where(StudentClassEnrollment.class_id.in_(class_ids))
         .group_by(StudentClassEnrollment.class_id)
+    )
+    return {class_id: int(total) for class_id, total in rows}
+
+
+async def _teacher_counts(session: AsyncSession, class_ids: list[UUID]) -> dict[UUID, int]:
+    """Teacher counts for many classes in one query, like the enrolments."""
+
+    if not class_ids:
+        return {}
+    rows = await session.execute(
+        select(
+            TeacherClassAssignment.class_id,
+            func.count(func.distinct(TeacherClassAssignment.teacher_id)),
+        )
+        .where(
+            TeacherClassAssignment.class_id.in_(class_ids),
+            TeacherClassAssignment.removed_at.is_(None),
+        )
+        .group_by(TeacherClassAssignment.class_id)
     )
     return {class_id: int(total) for class_id, total in rows}
 

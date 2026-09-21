@@ -17,9 +17,9 @@ Create Date: 2026-09-21
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 from nevo.content_parsing.key_points import confidence as key_point_confidence
 from nevo.domain.intelligence.vocabulary import KeyPointConfidence
 
@@ -115,8 +115,14 @@ def _backfill(bind: sa.engine.Connection) -> None:
 
     Done in Python rather than SQL because the grounding measure is the
     pipeline's, and a second implementation in SQL would be a second answer.
+    That means it needs a live database: generating the migration as a script
+    (``--sql``) has nothing to read, so it writes the schema and leaves the
+    backfill to a real run.
     """
 
+    if op.get_context().as_sql:
+        op.execute("-- key point backfill runs against a live database, not in --sql mode")
+        return
     segments = bind.execute(
         sa.text(
             "SELECT id, lesson_id, body, text_variant FROM lesson_segments"

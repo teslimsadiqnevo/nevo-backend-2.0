@@ -18,7 +18,7 @@ Status column is updated as each lands.
 
 | # | Ticket | What it is | Blocks | Status |
 |---|--------|------------|--------|--------|
-| 3 | SCRUM-148 | Class creation, bulk create, name normalisation, per-row import detail. Classes are derived from the uploads. | SCRUM-149 | todo |
+| 3 | SCRUM-148 | Class creation, bulk create, name normalisation, per-row import detail. Classes are derived from the uploads. | SCRUM-149 | done |
 | 4 | SCRUM-150 | Admin email confirmation: issue, verify, expiry, resend, change address. Expired, already-confirmed and invalid are distinct. | SCRUM-151 | todo |
 | 5 | SCRUM-156 | Onboarding funnel: derive, stage, confirm, price, pay, then activate. Nothing reaches anyone before payment. | SCRUM-157 | todo |
 | 6 | SCRUM-158 | Written consent route beside digital, and the correct consenting party on the record | SCRUM-159 | todo |

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     Uuid,
+    event,
     func,
     text,
 )
@@ -21,6 +22,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from nevo.db.base import Base
+from nevo.domain.accounts.classes import (
+    WHITESPACE,
+    academic_session,
+    normalise_class_name,
+)
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     ConsentMethod,
@@ -318,7 +324,20 @@ Index(
 
 class Class(TimestampMixin, Base):
     __tablename__ = "classes"
-    __table_args__ = (UniqueConstraint("class_code", name="uq_classes_class_code"),)
+    __table_args__ = (
+        UniqueConstraint("class_code", name="uq_classes_class_code"),
+        # One JSS 1A per school per school year. Two of them is one class's
+        # children split between two rosters with nobody told.
+        Index(
+            "uq_classes_school_session_name",
+            "school_id",
+            "academic_session",
+            "normalised_name",
+            unique=True,
+            postgresql_where=text("archived_at IS NULL"),
+        ),
+        CheckConstraint("capacity IS NULL OR capacity > 0", name="class_capacity_positive"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -332,8 +351,18 @@ class Class(TimestampMixin, Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: The name with case and spacing taken out of the comparison. Written by
+    #: the listener below, never by a caller, because a caller that forgets is
+    #: how a school gets two JSS 1As.
+    normalised_name: Mapped[str] = mapped_column(String(255), nullable=False)
     class_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     year_group: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: "A" of "JSS 2A". Optional, because a school may name a class anything.
+    section: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: Which school year this class is. Not optional even though capacity is:
+    #: without it, next year's JSS 1A is this year's.
+    academic_session: Mapped[str] = mapped_column(String(20), nullable=False)
+    capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, default="manual", server_default="manual"
     )
@@ -466,3 +495,20 @@ class ConsentRecord(TimestampMixin, Base):
         nullable=True,
     )
     last_channel: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+@event.listens_for(Class, "before_insert")
+@event.listens_for(Class, "before_update")
+def _class_name_is_normalised(mapper: object, connection: object, target: Class) -> None:
+    """Keep the compared form of the name in step with the name itself.
+
+    Set here rather than at each call site because there are now several -
+    a manual create, the year-group grid, and classes derived from a school's
+    uploaded files - and a caller that forgets is how a school ends up with
+    two JSS 1As and a roster holding half a class.
+    """
+
+    target.name = WHITESPACE.sub(" ", target.name).strip()
+    target.normalised_name = normalise_class_name(target.name)
+    if not target.academic_session:
+        target.academic_session = academic_session(datetime.now(UTC).date())

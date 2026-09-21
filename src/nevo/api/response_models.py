@@ -133,9 +133,19 @@ class ClassSummaryResponse(CamelResponse):
     name: str
     code: str | None
     year_group: str | None
+    #: "A" of "JSS 2A", where the school's name carries one.
+    section: str | None = None
+    #: Which school year this class is. Two JSS 1As a year apart are two
+    #: classes, and the console has to be able to say which is which.
+    academic_session: str | None = None
+    capacity: int | None = None
     source: ClassSource | None = None
     subjects: list[str] = Field(default_factory=list)
     student_count: int
+    #: How many teachers hold the class. A class with none is the "No teacher
+    #: yet" state the console draws, and it was counting that from a separate
+    #: request per class.
+    teacher_count: int = 0
     archived_at: datetime | None
 
 

@@ -318,7 +318,7 @@ async def test_media_generation_runs_a_few_at_a_time_not_all_at_once() -> None:
     """Unbounded lost media to provider rate limits; sequential was slow."""
     import asyncio
 
-    from nevo.content_parsing.service import GENERATION_CONCURRENCY, _in_parallel
+    from nevo.content_parsing.service import VISUAL_CONCURRENCY, _in_parallel
 
     in_flight = 0
     peak = 0
@@ -333,11 +333,11 @@ async def test_media_generation_runs_a_few_at_a_time_not_all_at_once() -> None:
 
     segments = [object() for _ in range(8)]
 
-    result = await _in_parallel(step, segments)  # type: ignore[arg-type]
+    result = await _in_parallel(step, segments, limit=VISUAL_CONCURRENCY)  # type: ignore[arg-type]
 
     assert len(result) == 8
-    assert peak <= GENERATION_CONCURRENCY
-    assert GENERATION_CONCURRENCY > 1
+    assert peak <= VISUAL_CONCURRENCY
+    assert VISUAL_CONCURRENCY > 1
 
 
 async def test_a_lost_picture_says_why_in_the_run_notes() -> None:

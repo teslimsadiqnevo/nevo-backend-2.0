@@ -48,13 +48,24 @@ and every response failed to parse, so every lesson in the library was
 deterministic fallback while the call log said the provider had succeeded.
 """
 
-GENERATION_CONCURRENCY = 2
-"""How many segments have their media made at once.
+VISUAL_CONCURRENCY = 2
+"""How many pictures are made at once.
 
 Sequential cost a lesson the sum of every generation. Unbounded went the
 other way and lost media to provider rate limits - a four-segment lesson
-came back missing audio on two segments and a picture on a third. Two at a
-time keeps most of the speed without hammering the provider.
+came back missing audio on two segments and a picture on a third. Pictures
+are the tightly limited provider (OpenAI image generation plus a Claude
+review), so two at a time stays.
+"""
+
+AUDIO_CONCURRENCY = 4
+"""How many audio clips are made at once, counting calculation step narrations.
+
+Audio used to share the picture limit of two, and at 30 to 40 seconds a clip
+an 11-segment lesson spent over three minutes waiting on speech alone. Clips
+are short requests the speech provider handles in parallel, so they get their
+own, higher limit. The limit is on clips, not segments: a segment with six
+narrated steps does not get to fire all of them at once.
 """
 
 PARSE_TIMEOUT_SECONDS = 180.0
@@ -105,7 +116,6 @@ class ContentParsingService:
         self._audio_generation = audio_generation
         self._visual_generation = visual_generation
         self._running: set[asyncio.Task[None]] = set()
-        self._media_notes: list[dict[str, object]] = []
 
     async def start(
         self,
@@ -183,9 +193,6 @@ class ContentParsingService:
     ) -> StoredParsedLesson:
         source = _source_for_prompt(request)
         chunks = _chunks(source)
-        # Reset per parse: media notes belong to the lesson being built, not
-        # to whatever this service happened to build before it.
-        self._media_notes = []
         segments: list[ParsedLessonSegment] = []
         review_notes: list[dict[str, object]] = []
         ai_call_count = 0
@@ -255,24 +262,16 @@ class ContentParsingService:
                     )
                 )
 
-        # Segments are independent, so their media is made concurrently rather
-        # than one lesson-length queue at a time - but only a couple at once,
-        # because the providers rate limit and a dropped image is a segment
-        # the learner never sees.
-        prepared_segments = list(segments)
-        if self._visual_generation is not None and self._visual_generation.configured:
-            prepared_segments = await _in_parallel(
-                self._generate_segment_visual,
-                prepared_segments,
-            )
-        if self._audio_generation is not None and self._audio_generation.configured:
-            prepared_segments = await _in_parallel(
-                self._generate_segment_audio,
-                prepared_segments,
-            )
+        # Segments are independent, and so are pictures and audio: audio reads
+        # the script or the body, pictures only set the visual. So the two run
+        # side by side, each under its own limit, and their results are merged
+        # per segment. The providers rate limit, and a dropped image is a
+        # segment the learner never sees, which is why each has a cap.
+        media_notes: list[dict[str, object]] = []
+        prepared_segments = await self._generate_media(segments, media_notes)
         normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
 
-        review_notes.extend(self._media_notes)
+        review_notes.extend(_in_segment_order(media_notes, segments))
         parsed = ParsedLesson(
             title=title or request.title,
             segments=tuple(normalized_segments),
@@ -291,9 +290,53 @@ class ContentParsingService:
             parse_run_id=parse_run_id,
         )
 
+    async def _generate_media(
+        self,
+        segments: list[ParsedLessonSegment],
+        notes: list[dict[str, object]],
+    ) -> list[ParsedLessonSegment]:
+        """Pictures and audio at the same time, merged back per segment.
+
+        ``notes`` belongs to this parse, not to the service, so two lessons
+        parsing at once cannot see each other's notes. Every note names its
+        segment. Both passes run on one event loop, so appends never race.
+        """
+        visuals_on = self._visual_generation is not None and self._visual_generation.configured
+        audio_on = self._audio_generation is not None and self._audio_generation.configured
+        if not visuals_on and not audio_on:
+            return list(segments)
+
+        async def unchanged() -> list[ParsedLessonSegment]:
+            return list(segments)
+
+        audio_limit = asyncio.Semaphore(AUDIO_CONCURRENCY)
+        visual_pass = (
+            _in_parallel(
+                lambda segment: self._generate_segment_visual(segment, notes),
+                segments,
+                limit=VISUAL_CONCURRENCY,
+            )
+            if visuals_on
+            else unchanged()
+        )
+        audio_pass = (
+            asyncio.gather(
+                *(self._generate_segment_audio(segment, audio_limit, notes) for segment in segments)
+            )
+            if audio_on
+            else unchanged()
+        )
+        with_visuals, with_audio = await asyncio.gather(visual_pass, audio_pass)
+        return [
+            _merge_media(original, visual, audio)
+            for original, visual, audio in zip(segments, with_visuals, with_audio, strict=True)
+        ]
+
     async def _generate_segment_audio(
         self,
         segment: ParsedLessonSegment,
+        limit: asyncio.Semaphore,
+        notes: list[dict[str, object]],
     ) -> ParsedLessonSegment:
         generator = self._audio_generation
         if generator is None:
@@ -303,15 +346,22 @@ class ContentParsingService:
         audio_variant = segment.audio_variant
         calculation_variant = segment.calculation_variant
 
-        if audio_variant is not None:
+        async def clip(script: str) -> dict[str, object]:
+            # The limit is on clips, so a segment's own narrations queue behind
+            # it the same as another segment's audio does.
+            async with limit:
+                return await generator.generate(script)
+
+        async def segment_audio() -> None:
+            nonlocal audio_variant, needs_review
+            if audio_variant is None:
+                return
             try:
-                audio_variant = await generator.generate(
-                    str(audio_variant.get("script") or segment.body)
-                )
+                audio_variant = await clip(str(audio_variant.get("script") or segment.body))
             except AudioGenerationError as error:
                 needs_review = True
                 reasons.append("audio_generation_failed")
-                self._media_notes.append(
+                notes.append(
                     {
                         "code": "audio_generation_failed",
                         "segment": segment.segment_key,
@@ -319,26 +369,38 @@ class ContentParsingService:
                     }
                 )
 
+        async def step_audio(step: dict[str, object]) -> tuple[dict[str, object], bool]:
+            """The step with its narration made, and whether that failed."""
+            generated_step = dict(step)
+            narration = _dict_or_none(step.get("narrationAudio"))
+            if narration is None:
+                return generated_step, False
+            try:
+                generated_audio = await clip(
+                    str(narration.get("script") or step.get("prompt") or "")
+                )
+            except AudioGenerationError:
+                return generated_step, True
+            generated_step["narrationAudio"] = {
+                **generated_audio,
+                "stepId": str(step.get("stepId") or ""),
+            }
+            return generated_step, False
+
+        steps = (
+            _dict_list(calculation_variant.get("steps")) if calculation_variant is not None else []
+        )
+        _, step_results = await asyncio.gather(
+            segment_audio(),
+            asyncio.gather(*(step_audio(step) for step in steps)),
+        )
+
         if calculation_variant is not None:
             calculation_variant = dict(calculation_variant)
-            generated_steps: list[dict[str, object]] = []
-            for step in _dict_list(calculation_variant.get("steps")):
-                generated_step = dict(step)
-                narration = _dict_or_none(step.get("narrationAudio"))
-                if narration is not None:
-                    try:
-                        generated_audio = await generator.generate(
-                            str(narration.get("script") or step.get("prompt") or "")
-                        )
-                        generated_step["narrationAudio"] = {
-                            **generated_audio,
-                            "stepId": str(step.get("stepId") or ""),
-                        }
-                    except AudioGenerationError:
-                        needs_review = True
-                        reasons.append("calculation_audio_generation_failed")
-                generated_steps.append(generated_step)
-            calculation_variant["steps"] = generated_steps
+            calculation_variant["steps"] = [step for step, _ in step_results]
+            if any(failed for _, failed in step_results):
+                needs_review = True
+                reasons.append("calculation_audio_generation_failed")
 
         return replace(
             segment,
@@ -351,6 +413,7 @@ class ContentParsingService:
     async def _generate_segment_visual(
         self,
         segment: ParsedLessonSegment,
+        notes: list[dict[str, object]],
     ) -> ParsedLessonSegment:
         generator = self._visual_generation
         if generator is None or ContentModality.VISUAL not in segment.available_modalities:
@@ -370,7 +433,7 @@ class ContentParsingService:
             # on its own told nobody why, which is how every image in a lesson
             # went missing for two days without anyone being able to say what
             # had gone wrong.
-            self._media_notes.append(
+            notes.append(
                 {
                     "code": "visual_generation_failed",
                     "segment": segment.segment_key,
@@ -387,6 +450,51 @@ class ContentParsingService:
                 ),
             )
         return replace(segment, visual_variant=visual)
+
+
+def _merge_media(
+    original: ParsedLessonSegment,
+    with_visual: ParsedLessonSegment,
+    with_audio: ParsedLessonSegment,
+) -> ParsedLessonSegment:
+    """One segment from the two passes that each worked on a copy of it.
+
+    Each pass changes its own fields and nothing else, so the merge takes
+    every field from the pass that owns it: the picture from the visual pass,
+    the narration and the calculation steps from the audio pass. Review state
+    is the one thing both touch, so it is combined - a failure in either pass
+    stays flagged, and a reason both raised is not repeated.
+    """
+    reasons = dict.fromkeys(
+        (
+            *original.review_reasons,
+            *with_visual.review_reasons,
+            *with_audio.review_reasons,
+        )
+    )
+    return replace(
+        original,
+        visual_variant=with_visual.visual_variant,
+        audio_variant=with_audio.audio_variant,
+        calculation_variant=with_audio.calculation_variant,
+        needs_review=original.needs_review or with_visual.needs_review or with_audio.needs_review,
+        review_reasons=tuple(reasons),
+    )
+
+
+def _in_segment_order(
+    notes: list[dict[str, object]],
+    segments: list[ParsedLessonSegment],
+) -> list[dict[str, object]]:
+    """Notes arrive in whatever order the providers answered; read them in the
+    order of the lesson."""
+    position: dict[object, int] = {}
+    for index, segment in enumerate(segments):
+        position.setdefault(segment.segment_key, index)
+    return sorted(
+        notes,
+        key=lambda note: (position.get(note.get("segment"), len(position)), str(note["code"])),
+    )
 
 
 def _source_for_prompt(request: ContentParseRequest) -> str:
@@ -480,11 +588,13 @@ def _segments_from_ai(
 async def _in_parallel(
     step: Callable[[ParsedLessonSegment], Awaitable[ParsedLessonSegment]],
     segments: list[ParsedLessonSegment],
+    *,
+    limit: int,
 ) -> list[ParsedLessonSegment]:
-    limit = asyncio.Semaphore(GENERATION_CONCURRENCY)
+    gate = asyncio.Semaphore(limit)
 
     async def bounded(segment: ParsedLessonSegment) -> ParsedLessonSegment:
-        async with limit:
+        async with gate:
             return await step(segment)
 
     return list(await asyncio.gather(*(bounded(segment) for segment in segments)))

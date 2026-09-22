@@ -28,11 +28,11 @@ JOIN_PATH = "/join"
 
 #: Where an administrator confirms they own the address they registered with.
 #:
-#: Unverified: the deployed app redirects this to admin sign-in and makes no
-#: confirmation call, so the screen is not built yet (SCRUM-151). The path is
-#: what the backend sends today; if the screen lands somewhere else, this is
-#: the one line to change.
-ADMIN_EMAIL_CONFIRMATION_PATH = "/admin/confirm-email"
+#: The token is a path segment here too, the same shape as the parent link:
+#: /auth/admin/confirm/<token>. Confirmed by the frontend against the route it
+#: built, not guessed - the earlier ?token= spelling would have landed on a
+#: route that does not exist once the screen ships (SCRUM-151).
+ADMIN_EMAIL_CONFIRMATION_PATH = "/auth/admin/confirm"
 
 #: Where a password reset lands.
 #:
@@ -59,7 +59,9 @@ def join_url(base_url: str, *, token: str) -> str:
 
 
 def admin_email_confirmation_url(base_url: str, *, token: str) -> str:
-    return _url(base_url, ADMIN_EMAIL_CONFIRMATION_PATH, token=token)
+    """The token goes in the path, as the admin confirmation screen reads it."""
+
+    return _url(base_url, f"{ADMIN_EMAIL_CONFIRMATION_PATH}/{quote(token, safe='')}")
 
 
 def password_reset_url(base_url: str, *, token: str) -> str:

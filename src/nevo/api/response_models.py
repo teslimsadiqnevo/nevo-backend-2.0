@@ -61,6 +61,11 @@ def renderable_review_reasons(value: object) -> object:
     return [reason for reason in value if reason in known]
 
 
+#: Three, and deliberately. Billing issues one invoice per term start, so a
+#: fourth date is a fourth invoice a school never agreed to.
+MAX_TERM_START_DATES = 3
+
+
 class AcademicConfig(CamelResponse):
     """A school's own academic calendar.
 
@@ -82,7 +87,10 @@ class AcademicConfig(CamelResponse):
         # school four times a year, quietly. If a school's calendar really
         # has four terms that is a pricing decision before it is a validation
         # one, so it stays refused rather than silently charged.
-        max_length=3,
+        # Not max_length: that constraint fires first and reports "List should
+        # have at most 3 items", which tells a school nothing about invoices.
+        # The schema still says three; the validator below says why.
+        json_schema_extra={"maxItems": MAX_TERM_START_DATES},
         description=(
             "Term start dates as ISO dates, earliest first. Nigerian schools "
             "run three terms, so send three; fewer means Nevo falls back to "
@@ -90,6 +98,25 @@ class AcademicConfig(CamelResponse):
         ),
         examples=[["2026-09-14", "2027-01-11", "2027-04-19"]],
     )
+
+    @field_validator("term_start_dates")
+    @classmethod
+    def _three_terms_at_most(cls, value: list[date]) -> list[date]:
+        """Refuse a fourth date rather than quietly keeping the first three.
+
+        Dropping one would be the worst of the three options: the school sees
+        its calendar accepted, and then gets invoiced on a year it did not
+        configure. So it is refused, in words that say what to do about it.
+        """
+
+        if len(value) > MAX_TERM_START_DATES:
+            raise ValueError(
+                "A school year here runs three terms, and billing issues one "
+                f"invoice per term start, so at most {MAX_TERM_START_DATES} "
+                f"dates can be stored - {len(value)} were sent. Send the three "
+                "term starts; a four-term calendar is a pricing change first."
+            )
+        return value
 
 
 class SchoolResponse(CamelResponse):

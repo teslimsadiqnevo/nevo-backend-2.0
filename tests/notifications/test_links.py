@@ -26,10 +26,12 @@ def test_join_link_carries_the_token_in_the_path() -> None:
     assert join_url(BASE, token="abc123") == "https://www.nevolearning.com/join/abc123"
 
 
-def test_admin_confirmation_link() -> None:
+def test_admin_confirmation_link_carries_the_token_in_the_path() -> None:
+    # The route the frontend built is /auth/admin/confirm/[token], so the
+    # token is a path segment here as it is in the parent link.
     assert (
         admin_email_confirmation_url(BASE, token="abc123")
-        == "https://www.nevolearning.com/admin/confirm-email?token=abc123"
+        == "https://www.nevolearning.com/auth/admin/confirm/abc123"
     )
 
 
@@ -48,3 +50,7 @@ def test_a_token_needing_escaping_survives_both_forms() -> None:
     token = "a b/c+d"
     assert parent_consent_url(BASE, token=token) == f"{BASE}/parent/a%20b%2Fc%2Bd"
     assert join_url(BASE, token=token) == f"{BASE}/join/a%20b%2Fc%2Bd"
+    assert (
+        admin_email_confirmation_url(BASE, token=token)
+        == f"{BASE}/auth/admin/confirm/a%20b%2Fc%2Bd"
+    )

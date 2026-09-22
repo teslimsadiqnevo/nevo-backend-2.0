@@ -80,14 +80,25 @@ def test_an_unexpected_error_carries_something_to_trace_it_by() -> None:
     assert "logger.exception" in source
 
 
-def test_the_term_cap_is_a_billing_decision_not_a_validation_one() -> None:
-    from nevo.api.response_models import AcademicConfig
+def test_a_fourth_term_date_is_refused_rather_than_dropped() -> None:
+    import pydantic
 
-    field = AcademicConfig.model_fields["term_start_dates"]
-    constraint = next(
-        item for item in field.metadata if getattr(item, "max_length", None) is not None
-    )
+    from nevo.api.response_models import MAX_TERM_START_DATES, AcademicConfig
+
+    assert MAX_TERM_START_DATES == 3
+    assert AcademicConfig.model_json_schema()["properties"]["termStartDates"]["maxItems"] == 3
 
     # Billing issues one invoice per term start, so a fourth date is a fourth
-    # invoice. It stays refused rather than quietly charged.
-    assert constraint.max_length == 3
+    # invoice. Keeping the first three would bill a school on a calendar it
+    # never configured, so the whole request is refused - and the message says
+    # why, rather than "List should have at most 3 items".
+    four = ["2026-09-14", "2027-01-11", "2027-04-19", "2027-07-01"]
+    try:
+        AcademicConfig.model_validate({"termStartDates": four})
+    except pydantic.ValidationError as error:
+        assert "invoice" in error.errors()[0]["msg"]
+    else:  # pragma: no cover - the point of the test
+        raise AssertionError("a fourth term date was accepted")
+
+    three = AcademicConfig.model_validate({"termStartDates": four[:3]})
+    assert len(three.term_start_dates) == 3

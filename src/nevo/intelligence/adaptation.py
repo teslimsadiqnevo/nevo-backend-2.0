@@ -195,9 +195,9 @@ def rule_based_adaptation_plan(
         lesson_id=request.lesson_id,
         segments=segments,
         break_suggestion=break_suggestion,
-        proactive_adjustment=_proactive_adjustment(
-            signals=request.signals,
-            profile=profile,
+        proactive_adjustment=_servable_adjustment(
+            _proactive_adjustment(signals=request.signals, profile=profile),
+            request=request,
         ),
         modality_suggestion=_modality_suggestion(
             signals=request.signals,
@@ -531,6 +531,47 @@ def _segment_priority(
         if MODALITY_BY_CHANNEL[channel] in segment.available_modalities:
             priority += 10
     return priority
+
+
+#: The rewrites a segment can carry, and the action each one answers. Written
+#: at parse time; see ``nevo.content_parsing.depth``.
+DEPTH_BY_ACTION = {"simplify": "simplified", "expand": "expanded"}
+
+
+def _servable_adjustment(
+    adjustment: ProactiveAdjustment | None,
+    *,
+    request: AdaptationRequest,
+) -> ProactiveAdjustment | None:
+    """Withhold simplify or expand where the text for it was never written.
+
+    The engine decided from behaviour and the decision stands; what it cannot
+    do is hand a client an instruction there is no content behind. A client
+    that receives "simplify" and has nothing simpler either shows the same
+    words again, which reads as the adaptation having done nothing, or shows
+    an error, which reads as a fault. Saying nothing is the honest third
+    option, and the suppression is visible in the log.
+
+    Only applied where the client reported what it holds. A client that never
+    sends the field gets the behaviour it has always had.
+    """
+
+    if adjustment is None:
+        return None
+    depth = DEPTH_BY_ACTION.get(adjustment.action)
+    if depth is None:
+        return adjustment
+    current = _current_segment(request)
+    if current is None or current.available_depths is None:
+        return adjustment
+    return adjustment if depth in current.available_depths else None
+
+
+def _current_segment(request: AdaptationRequest) -> ContentSegment | None:
+    segment_id = request.signals.current_segment_id
+    if segment_id is None:
+        return None
+    return next((item for item in request.segments if item.id == segment_id), None)
 
 
 def _proactive_adjustment(

@@ -45,6 +45,19 @@ Not in Jira, and nobody owned them. All four are built.
 | Cross-border transfer consent | Its own consent type, asked alongside the first, granted on its own, nothing pre-selected | done |
 | Withdrawal and objection in the platform | A parent withdraws, objects or asks for data from their own account, with no token and no expiry | done |
 
+## Adaptation's missing content layer
+
+Not in Jira either. The engine returned `simplify` and `expand` and nothing
+stood behind either word.
+
+| Item | What landed | Status |
+|------|-------------|--------|
+| Simplify and expand variants | Both rewrites written at parse time beside the pictures and narration, refused if they invent a figure the teacher never wrote, served as `depthVariants`, and the engine now withholds an action the segment has no text for | done |
+
+See `docs/jira/LESSON_DEPTH_VARIANTS.md`. Measured at about $0.0225 a lesson,
+roughly one per cent of what a lesson already costs to parse - against the
+architecture doc's assumption that variants would roughly triple it.
+
 ## Carried, not in Jira
 
 - Date of birth on the roster. SCRUM-168 derives age from it and the school

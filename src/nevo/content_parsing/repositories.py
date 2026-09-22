@@ -378,6 +378,7 @@ class SqlAlchemyContentParsingRepository:
                     audio_variant=segment.audio_variant,
                     interactive_variant=segment.interactive_variant,
                     calculation_variant=segment.calculation_variant,
+                    depth_variants=segment.depth_variants,
                     needs_review=segment.needs_review,
                     review_reasons=list(segment.review_reasons),
                     estimated_minutes=segment.estimated_minutes,

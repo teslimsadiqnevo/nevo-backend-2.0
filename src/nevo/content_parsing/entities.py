@@ -39,6 +39,12 @@ class ParsedLessonSegment:
     audio_variant: dict[str, object] | None = None
     interactive_variant: dict[str, object] | None = None
     calculation_variant: dict[str, object] | None = None
+    #: The simpler and the longer version of ``body``, written at parse time
+    #: so the adaptation engine's "simplify" and "expand" have something to
+    #: serve. Absent where the segment was too short to be worth rewriting or
+    #: the rewrite could not be trusted; the body is always there to fall
+    #: back to.
+    depth_variants: dict[str, object] | None = None
     needs_review: bool = False
     review_reasons: tuple[str, ...] = ()
     estimated_minutes: int = 0

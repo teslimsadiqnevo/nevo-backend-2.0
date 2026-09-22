@@ -31,6 +31,32 @@ class ComprehensionCheckpoint(BaseModel):
     position: str = "after_segment"
 
 
+class DepthVariantBody(BaseModel):
+    """One rewrite of a segment's text."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    body: str = ""
+
+
+class DepthVariants(BaseModel):
+    """The simpler and the longer version of a segment, written at parse time.
+
+    Keyed by the adaptation engine's own action names, so a client that has a
+    plan saying ``action: "simplify"`` reads ``depthVariants.simplified``
+    without a lookup table. Either may be absent - the segment was too short
+    to be worth rewriting, or the rewrite failed a check against the source.
+    Absent means fall back to the segment's ``body``, which is always there.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    simplified: DepthVariantBody | None = None
+    expanded: DepthVariantBody | None = None
+    #: Which model wrote them, for the teacher review screen and the audit.
+    model: str | None = None
+
+
 class TextVariant(BaseModel):
     """The text modality of a segment.
 

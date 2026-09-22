@@ -44,6 +44,16 @@ class ContentSegment:
     estimated_minutes: float | None = None
     passive: bool = False
     title: str | None = None
+    #: Which of the parse-time rewrites this segment actually has:
+    #: ``("simplified", "expanded")``, either, or neither.
+    #:
+    #: ``None`` and ``()`` are different answers. ``None`` means the client
+    #: did not say, which is every client written before the rewrites
+    #: existed, and the engine then behaves exactly as it did before.
+    #: ``()`` means the client looked and there is nothing to serve, and the
+    #: engine will not return an action it knows would arrive as an
+    #: instruction the client cannot carry out.
+    available_depths: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

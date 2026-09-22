@@ -864,6 +864,7 @@ async def lesson_detail(
                 audioVariant=item.audio_variant,
                 interactiveVariant=item.interactive_variant,
                 calculationVariant=item.calculation_variant,
+                depthVariants=item.depth_variants,
                 needsReview=item.needs_review,
                 reviewReasons=list(item.review_reasons),
                 approved=item.approved_at is not None,

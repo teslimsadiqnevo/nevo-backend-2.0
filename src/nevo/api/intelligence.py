@@ -59,6 +59,14 @@ class ContentSegmentRequest(BaseModel):
         gt=0,
     )
     passive: bool = False
+    #: Which parse-time rewrites this segment carries, from the lesson's
+    #: ``depthVariants``. Omit it and the engine behaves as it always has;
+    #: send it and the engine will not propose a simplify or an expand that
+    #: this segment has no text for.
+    available_depths: list[Literal["simplified", "expanded"]] | None = Field(
+        default=None,
+        alias="availableDepths",
+    )
     title: str | None = Field(default=None, max_length=255)
 
 
@@ -665,6 +673,9 @@ def _segment_from_request(segment: ContentSegmentRequest) -> ContentSegment:
         estimated_minutes=segment.estimated_minutes,
         passive=segment.passive,
         title=segment.title,
+        available_depths=(
+            None if segment.available_depths is None else tuple(segment.available_depths)
+        ),
     )
 
 

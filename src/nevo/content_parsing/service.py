@@ -14,6 +14,11 @@ from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
 from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
+from nevo.content_parsing.depth import (
+    DEPTH_CONCURRENCY,
+    DepthVariantError,
+    DepthVariantService,
+)
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
@@ -110,11 +115,16 @@ class ContentParsingService:
         ai_gateway: AiGatewayService,
         audio_generation: AudioGenerationService | None = None,
         visual_generation: EducationalImageService | None = None,
+        depth_variants: DepthVariantService | None = None,
     ) -> None:
         self._repository = repository
         self._ai_gateway = ai_gateway
         self._audio_generation = audio_generation
         self._visual_generation = visual_generation
+        # Defaults on rather than off: the adaptation engine already returns
+        # "simplify" and "expand", and a deployment where those mean nothing
+        # is the bug this closes. It still needs a configured provider.
+        self._depth_variants = depth_variants or DepthVariantService(ai_gateway=ai_gateway)
         self._running: set[asyncio.Task[None]] = set()
 
     async def start(
@@ -268,7 +278,11 @@ class ContentParsingService:
         # per segment. The providers rate limit, and a dropped image is a
         # segment the learner never sees, which is why each has a cap.
         media_notes: list[dict[str, object]] = []
-        prepared_segments = await self._generate_media(segments, media_notes)
+        prepared_segments = await self._generate_media(
+            segments,
+            media_notes,
+            requested_by_user_id=requested_by_user_id,
+        )
         normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
 
         review_notes.extend(_in_segment_order(media_notes, segments))
@@ -294,8 +308,10 @@ class ContentParsingService:
         self,
         segments: list[ParsedLessonSegment],
         notes: list[dict[str, object]],
+        *,
+        requested_by_user_id: UUID,
     ) -> list[ParsedLessonSegment]:
-        """Pictures and audio at the same time, merged back per segment.
+        """Pictures, audio and the depth rewrites at once, merged per segment.
 
         ``notes`` belongs to this parse, not to the service, so two lessons
         parsing at once cannot see each other's notes. Every note names its
@@ -303,7 +319,8 @@ class ContentParsingService:
         """
         visuals_on = self._visual_generation is not None and self._visual_generation.configured
         audio_on = self._audio_generation is not None and self._audio_generation.configured
-        if not visuals_on and not audio_on:
+        depth_on = self._depth_variants.configured
+        if not visuals_on and not audio_on and not depth_on:
             return list(segments)
 
         async def unchanged() -> list[ParsedLessonSegment]:
@@ -326,11 +343,68 @@ class ContentParsingService:
             if audio_on
             else unchanged()
         )
-        with_visuals, with_audio = await asyncio.gather(visual_pass, audio_pass)
+        depth_pass = (
+            _in_parallel(
+                lambda segment: self._generate_segment_depth(
+                    segment, notes, requested_by_user_id=requested_by_user_id
+                ),
+                segments,
+                limit=DEPTH_CONCURRENCY,
+            )
+            if depth_on
+            else unchanged()
+        )
+        with_visuals, with_audio, with_depth = await asyncio.gather(
+            visual_pass, audio_pass, depth_pass
+        )
         return [
-            _merge_media(original, visual, audio)
-            for original, visual, audio in zip(segments, with_visuals, with_audio, strict=True)
+            _merge_media(original, visual, audio, depth)
+            for original, visual, audio, depth in zip(
+                segments, with_visuals, with_audio, with_depth, strict=True
+            )
         ]
+
+    async def _generate_segment_depth(
+        self,
+        segment: ParsedLessonSegment,
+        notes: list[dict[str, object]],
+        *,
+        requested_by_user_id: UUID,
+    ) -> ParsedLessonSegment:
+        """The simpler and the longer version of one segment's text.
+
+        A failure here is never a failure of the lesson. The segment keeps the
+        teacher's own body, which is what a learner sees today, and the note
+        says which segment went without so a teacher is not left guessing.
+        """
+
+        if not self._depth_variants.worth_rewriting(segment.body):
+            return segment
+        try:
+            variants, model = await self._depth_variants.generate(
+                title=segment.title,
+                body=segment.body,
+                requested_by_user_id=requested_by_user_id,
+            )
+        except DepthVariantError as error:
+            notes.append(
+                {
+                    "code": "depth_variants_failed",
+                    "segment": segment.segment_key,
+                    "reason": str(error)[:300],
+                }
+            )
+            return segment
+        if variants.empty:
+            notes.append(
+                {
+                    "code": "depth_variants_rejected",
+                    "segment": segment.segment_key,
+                    "reason": "Neither rewrite passed the checks against the source.",
+                }
+            )
+            return segment
+        return replace(segment, depth_variants=variants.payload(model=model))
 
     async def _generate_segment_audio(
         self,
@@ -456,20 +530,23 @@ def _merge_media(
     original: ParsedLessonSegment,
     with_visual: ParsedLessonSegment,
     with_audio: ParsedLessonSegment,
+    with_depth: ParsedLessonSegment,
 ) -> ParsedLessonSegment:
-    """One segment from the two passes that each worked on a copy of it.
+    """One segment from the passes that each worked on a copy of it.
 
     Each pass changes its own fields and nothing else, so the merge takes
     every field from the pass that owns it: the picture from the visual pass,
-    the narration and the calculation steps from the audio pass. Review state
-    is the one thing both touch, so it is combined - a failure in either pass
-    stays flagged, and a reason both raised is not repeated.
+    the narration and the calculation steps from the audio pass, the two
+    rewrites from the depth pass. Review state is the one thing they share, so
+    it is combined - a failure in any pass stays flagged, and a reason raised
+    twice is not repeated.
     """
     reasons = dict.fromkeys(
         (
             *original.review_reasons,
             *with_visual.review_reasons,
             *with_audio.review_reasons,
+            *with_depth.review_reasons,
         )
     )
     return replace(
@@ -477,6 +554,7 @@ def _merge_media(
         visual_variant=with_visual.visual_variant,
         audio_variant=with_audio.audio_variant,
         calculation_variant=with_audio.calculation_variant,
+        depth_variants=with_depth.depth_variants,
         needs_review=original.needs_review or with_visual.needs_review or with_audio.needs_review,
         review_reasons=tuple(reasons),
     )

@@ -9,6 +9,7 @@ from nevo.api.lesson_contracts import (
     AudioVariant,
     CalculationVariant,
     ComprehensionCheckpoint,
+    DepthVariants,
     InteractiveVariant,
     TextVariant,
     VisualVariant,
@@ -383,6 +384,10 @@ class LessonSegmentResponse(CamelResponse):
     audio_variant: AudioVariant | None = None
     interactive_variant: InteractiveVariant | None = None
     calculation_variant: CalculationVariant | None = None
+    #: The simpler and the longer version of ``body``. The adaptation plan's
+    #: ``simplify`` and ``expand`` actions read from here; null means fall
+    #: back to ``body``.
+    depth_variants: DepthVariants | None = None
     needs_review: bool = False
     review_reasons: list[SegmentReviewReason] = Field(default_factory=list)
     #: Whether a teacher has cleared these variants for children to see.

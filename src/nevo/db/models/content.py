@@ -312,6 +312,14 @@ class LessonSegment(Base):
         JSONB,
         nullable=True,
     )
+    #: ``{"simplified": {"body": ...}, "expanded": {"body": ...}}``, keyed by
+    #: the adaptation engine's own action names. Null where nothing was
+    #: written: the engine falls back to ``body``, which is the teacher's own
+    #: text and always present.
+    depth_variants: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
     estimated_minutes: Mapped[int] = mapped_column(
         Integer,
         nullable=False,

@@ -20,6 +20,8 @@ from nevo.visuals import VisualGenerationError
 
 from .test_service import FakeGateway, FakeRepository
 
+ACTOR = uuid4()
+
 
 class Tracker:
     """Records when each call starts and ends, and how many ran at once."""
@@ -129,7 +131,7 @@ async def test_audio_and_pictures_are_made_at_the_same_time() -> None:
     segments = [segment("a"), segment("b")]
 
     started = time.perf_counter()
-    await service._generate_media(segments, [])
+    await service._generate_media(segments, [], requested_by_user_id=ACTOR)
     elapsed = time.perf_counter() - started
 
     assert overlaps(audio.spans, visuals.spans)
@@ -147,7 +149,7 @@ async def test_a_segment_keeps_its_picture_its_audio_and_every_review_reason() -
     ]
     notes: list[dict[str, object]] = []
 
-    merged = await service._generate_media(segments, notes)
+    merged = await service._generate_media(segments, notes, requested_by_user_id=ACTOR)
 
     a, b, c = merged
     assert [m.segment_key for m in merged] == ["a", "b", "c"]
@@ -178,7 +180,7 @@ async def test_both_passes_failing_on_one_segment_keeps_both_reasons_once() -> N
     service = service_with(audio, visuals)
 
     [merged] = await service._generate_media(
-        [segment("a", reasons=("visual_generation_failed",))], []
+        [segment("a", reasons=("visual_generation_failed",))], [], requested_by_user_id=ACTOR
     )
 
     assert merged.review_reasons == ("visual_generation_failed", "audio_generation_failed")
@@ -188,9 +190,15 @@ async def test_both_passes_failing_on_one_segment_keeps_both_reasons_once() -> N
 async def test_only_one_provider_configured_leaves_the_other_fields_alone() -> None:
     original = segment("a", steps=1)
 
-    [only_audio] = await service_with(FakeAudio(), None)._generate_media([original], [])
-    [only_visual] = await service_with(None, FakeVisuals())._generate_media([original], [])
-    [neither] = await service_with(None, None)._generate_media([original], [])
+    [only_audio] = await service_with(FakeAudio(), None)._generate_media(
+        [original], [], requested_by_user_id=ACTOR
+    )
+    [only_visual] = await service_with(None, FakeVisuals())._generate_media(
+        [original], [], requested_by_user_id=ACTOR
+    )
+    [neither] = await service_with(None, None)._generate_media(
+        [original], [], requested_by_user_id=ACTOR
+    )
 
     assert only_audio.visual_variant is None and only_audio.audio_variant is not None
     assert only_visual.visual_variant is not None and only_visual.audio_variant == {
@@ -206,7 +214,7 @@ async def test_audio_never_runs_more_than_its_limit_and_pictures_more_than_their
     # Twelve segments and six narrated steps each: far more clips than the limit.
     segments = [segment(f"s{n}", steps=6) for n in range(12)]
 
-    await service._generate_media(segments, [])
+    await service._generate_media(segments, [], requested_by_user_id=ACTOR)
 
     assert AUDIO_CONCURRENCY == 4
     assert VISUAL_CONCURRENCY == 2
@@ -220,7 +228,7 @@ async def test_one_segments_calculation_narrations_are_made_together() -> None:
     audio = FakeAudio()
     service = service_with(audio, None)
 
-    await service._generate_media([segment("a", steps=3)], [])
+    await service._generate_media([segment("a", steps=3)], [], requested_by_user_id=ACTOR)
 
     # Its own audio and three narrations queue for four places, so all four
     # overlap. Sequential narration would peak at two.
@@ -232,7 +240,7 @@ async def test_a_failed_narration_flags_only_that_segment() -> None:
     service = service_with(audio, None)
     segments = [segment("a", steps=2), segment("b", steps=2)]
 
-    a, b = await service._generate_media(segments, [])
+    a, b = await service._generate_media(segments, [], requested_by_user_id=ACTOR)
 
     assert not a.needs_review
     assert b.review_reasons == ("calculation_audio_generation_failed",)
@@ -248,7 +256,7 @@ async def test_every_note_names_its_segment_and_its_kind() -> None:
     segments = [segment("a"), segment("b"), segment("c")]
     notes: list[dict[str, object]] = []
 
-    await service._generate_media(segments, notes)
+    await service._generate_media(segments, notes, requested_by_user_id=ACTOR)
 
     assert len(notes) == 6
     assert {(note["segment"], note["code"]) for note in notes} == {

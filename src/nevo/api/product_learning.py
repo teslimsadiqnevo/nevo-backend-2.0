@@ -333,6 +333,7 @@ async def lesson_detail(
                 "audioVariant": item.audio_variant,
                 "interactiveVariant": item.interactive_variant,
                 "calculationVariant": item.calculation_variant,
+                "depthVariants": item.depth_variants,
                 "needsReview": item.needs_review,
                 "reviewReasons": item.review_reasons,
                 "approved": item.approved_at is not None,
@@ -1301,6 +1302,10 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
                     "interactive": item.interactive_variant,
                     "calculation": item.calculation_variant,
                 },
+                # Offline too: the point of the offline package is a lesson
+                # that still adapts where there is no network, and an
+                # adaptation that cannot reach its text is not one.
+                "depthVariants": item.depth_variants,
                 "comprehensionCheckpoints": checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
                 ),

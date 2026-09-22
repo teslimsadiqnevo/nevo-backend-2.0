@@ -382,3 +382,65 @@ async def test_adaptation_engine_caps_modality_shifts_per_session() -> None:
     assert plan.modality_suggestion is None
     assert plan.suppressed_attempt is not None
     assert plan.suppressed_attempt.reason == "session_modality_shift_cap"
+
+
+def struggling_signals() -> RuntimeSignals:
+    """Enough aligned evidence across enough categories to fire a simplify."""
+
+    return RuntimeSignals(
+        current_segment_id="text-1",
+        current_modality=ContentModality.TEXT,
+        available_modalities=(ContentModality.TEXT,),
+        comprehension_score=0.3,
+        session_average_comprehension=0.8,
+        consecutive_errors=3,
+        accuracy_below_baseline=True,
+        engagement_score=0.2,
+        engagement_baseline=0.7,
+        engagement_below_baseline_seconds=200,
+        replay_count_on_segment=2,
+        current_segment_elapsed_seconds=200,
+    )
+
+
+def plan_for(available_depths: tuple[str, ...] | None):
+    return rule_based_adaptation_plan(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            mode=AdaptationMode.IN_LESSON,
+            segments=(
+                ContentSegment(
+                    id="text-1",
+                    segment_type=ContentSegmentType.EXPLANATION,
+                    available_modalities=(ContentModality.TEXT,),
+                    available_depths=available_depths,
+                ),
+            ),
+            signals=struggling_signals(),
+        ),
+        profile=balanced_profile(),
+    )
+
+
+def test_simplify_is_returned_when_the_segment_has_a_simpler_version() -> None:
+    plan = plan_for(("simplified", "expanded"))
+
+    assert plan.proactive_adjustment is not None
+    assert plan.proactive_adjustment.action == "simplify"
+
+
+def test_simplify_is_withheld_when_there_is_nothing_simpler_to_show() -> None:
+    # Handing a client "simplify" with no simpler text behind it makes it show
+    # the same words again, which reads as the adaptation having done nothing.
+    assert plan_for(()).proactive_adjustment is None
+    assert plan_for(("expanded",)).proactive_adjustment is None
+
+
+def test_a_client_that_never_reports_its_depths_is_unaffected() -> None:
+    # Every client written before the rewrites existed sends no field at all,
+    # and gets exactly the behaviour it had.
+    plan = plan_for(None)
+
+    assert plan.proactive_adjustment is not None
+    assert plan.proactive_adjustment.action == "simplify"

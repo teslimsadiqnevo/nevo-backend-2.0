@@ -748,14 +748,27 @@ class UploadLessonDocument(CamelResponse):
 
 
 class UploadStructureDocument(CamelResponse):
+    """What an upload has produced so far.
+
+    Every field is optional because a job is polled from the moment it is
+    created, and a job that is still parsing has produced nothing yet. These
+    were required, so the one route a client polls answered 500 for the whole
+    window it exists to report on: a freshly created job carries an empty
+    structure, and validating an empty object against required fields fails
+    on the way out rather than on the way in.
+    """
+
     #: The full set of lessons this upload produced. A `lesson` scope yields
-    #: one; a `unit` or `term` scope can yield several.
+    #: one; a `unit` or `term` scope can yield several. Empty while parsing.
     lessons: list[UploadLessonDocument] = Field(default_factory=list)
     #: First lesson's id. Retained so existing single-lesson clients keep
     #: working; prefer `lessons` for anything that can produce more than one.
-    lesson_id: UUID
+    #:
+    #: Null until the parse lands a lesson, which is the whole of `processing`.
+    #: A client polling for readiness should read `status`, not this.
+    lesson_id: UUID | None = None
     #: First lesson's modules, retained for the same reason.
-    modules: list[UploadModuleDocument]
+    modules: list[UploadModuleDocument] = Field(default_factory=list)
     review_notes: list[dict[str, object]] = Field(default_factory=list)
 
 

@@ -86,6 +86,7 @@ from nevo.domain.intelligence.vocabulary import (
     AssignmentStatus,
     LessonScope,
     LessonSourceType,
+    UploadStage,
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
@@ -960,9 +961,21 @@ def _parse_into_job(
 ) -> None:
     """Parse behind the response, then write the outcome onto the job."""
 
+    async def note_stage(stage: UploadStage) -> None:
+        """Move the job on so the processing screen can say where it is."""
+
+        async with sessions.begin() as session:
+            job = await session.get(UploadJob, job_id)
+            if job is not None:
+                job.stage = stage.value
+
     async def work() -> None:
         try:
-            parsed = await parser.parse(request=request, requested_by_user_id=actor_id)
+            parsed = await parser.parse(
+                request=request,
+                requested_by_user_id=actor_id,
+                on_stage=note_stage,
+            )
         except Exception as error:
             async with sessions.begin() as session:
                 job = await session.get(UploadJob, job_id)

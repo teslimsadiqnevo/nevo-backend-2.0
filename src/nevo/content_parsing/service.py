@@ -35,10 +35,26 @@ from nevo.domain.intelligence.vocabulary import (
     LessonSourceType,
     ManipulativeKind,
     SegmentReviewReason,
+    UploadStage,
 )
 from nevo.visuals import EducationalImageService, VisualGenerationError
 
 logger = logging.getLogger(__name__)
+
+#: Told when the parse reaches a stage a person is waiting through.
+StageCallback = Callable[[UploadStage], Awaitable[None]]
+
+
+async def _report(callback: "StageCallback | None", stage: UploadStage) -> None:
+    """Report progress, and never let reporting it cost the lesson."""
+
+    if callback is None:
+        return
+    try:
+        await callback(stage)
+    except Exception:
+        logger.exception("Could not record parse stage %s", stage.value)
+
 
 STALE_RUN_AFTER = timedelta(minutes=30)
 """Longer than any real parse, short enough that nobody polls a dead run for
@@ -200,7 +216,16 @@ class ContentParsingService:
         requested_by_user_id: UUID,
         existing_lesson_id: UUID | None = None,
         parse_run_id: UUID | None = None,
+        on_stage: StageCallback | None = None,
     ) -> StoredParsedLesson:
+        """Parse a source into a lesson.
+
+        ``on_stage`` is told when the work moves from reading the source to
+        making the media, because those are minutes apart and a screen with
+        no signal between them looks stopped. Its failure is never the
+        parse's: a progress report that cannot be written is not a reason to
+        lose a lesson.
+        """
         source = _source_for_prompt(request)
         chunks = _chunks(source)
         segments: list[ParsedLessonSegment] = []
@@ -278,6 +303,7 @@ class ContentParsingService:
         # per segment. The providers rate limit, and a dropped image is a
         # segment the learner never sees, which is why each has a cap.
         media_notes: list[dict[str, object]] = []
+        await _report(on_stage, UploadStage.ADAPTATIONS)
         prepared_segments = await self._generate_media(
             segments,
             media_notes,

@@ -107,3 +107,77 @@ def test_registration_sends_the_confirmation() -> None:
 
     assert "_start_email_confirmation" in source
     assert "_send_email_confirmation" in source
+
+
+def test_the_two_signed_out_screens_are_declared_signed_out(spec: dict) -> None:
+    """A person following a link from their inbox has no session.
+
+    /verify never took a principal, but the document inherited the global
+    bearer and said it did, so the one route a signed-out person must be able
+    to call read as closed to them. /resend now accepts either.
+    """
+
+    verify = spec["paths"]["/api/v1/admin/email-confirmation/verify"]["post"]
+    resend = spec["paths"]["/api/v1/admin/email-confirmation/resend"]["post"]
+
+    assert verify["security"] == []
+    # Either a bearer, or nothing: the console banner and the expired-link
+    # screen are the same button on two different sides of a sign-in.
+    assert {} in resend["security"]
+    assert {"HTTPBearer": []} in resend["security"]
+
+
+def test_the_resend_takes_a_token_for_the_signed_out_case(spec: dict) -> None:
+    resend = spec["paths"]["/api/v1/admin/email-confirmation/resend"]["post"]
+    body = spec["components"]["schemas"]["ResendRequest"]["properties"]["token"]
+
+    assert resend["requestBody"] is not None
+    # Optional: the console sends no body at all and still works.
+    assert not spec["components"]["schemas"]["ResendRequest"].get("required")
+    assert any(arm.get("type") == "string" for arm in body["anyOf"])
+
+
+def test_a_resend_with_neither_credential_is_refused(spec: dict) -> None:
+    resend = spec["paths"]["/api/v1/admin/email-confirmation/resend"]["post"]
+
+    assert "401" in resend["responses"]
+    assert "confirmation_credential_required" in resend["responses"]["401"]["description"]
+
+
+def test_the_rate_limit_is_declared_because_a_client_has_to_draw_it(spec: dict) -> None:
+    resend = spec["paths"]["/api/v1/admin/email-confirmation/resend"]["post"]
+
+    assert "429" in resend["responses"]
+    assert "retryAfterSeconds" in resend["responses"]["429"]["description"]
+
+
+def test_a_resend_never_sends_anywhere_but_the_account_address() -> None:
+    """The whole safety of token-authenticated resend rests on this.
+
+    Holding an old link must buy nothing except posting to its rightful
+    owner's inbox, so the destination comes from the user row and never from
+    anything the caller sent.
+    """
+
+    import inspect
+
+    from nevo.api.email_confirmation import resend_confirmation
+
+    source = inspect.getsource(resend_confirmation)
+
+    assert "to=str(user.email)" in source
+    assert "payload.email" not in source
+
+
+def test_changing_the_address_still_needs_a_session(spec: dict) -> None:
+    """Deliberately not relaxed alongside the resend.
+
+    A resend posts to the address already on file. A change of address moves
+    where the account can be recovered from, and an unconfirmed admin can
+    reset their password by email - so a leaked link that could also change
+    the address would be a route to the whole tenant.
+    """
+
+    change = spec["paths"]["/api/v1/admin/email"]["patch"]
+
+    assert change["security"] == [{"HTTPBearer": []}]

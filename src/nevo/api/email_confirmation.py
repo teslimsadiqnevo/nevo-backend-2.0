@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, select, update
 
-from nevo.api.auth import PrincipalDependency
+from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_auth import _mailer as mailer
@@ -65,6 +65,21 @@ class ConfirmationToken(BaseModel):
     model_config = CAMEL_CONFIG
 
     token: Annotated[str, Field(min_length=10, max_length=200)]
+
+
+class ResendRequest(BaseModel):
+    """Who is asking for another link, when there is no session to say.
+
+    The token is the credential. An expired link already identifies the
+    account - that is why it works on /verify - and the new link goes to the
+    address on the account, never to whoever presented the token. So holding
+    an old link buys nothing except sending mail to its rightful owner, which
+    is what the button is for.
+    """
+
+    model_config = CAMEL_CONFIG
+
+    token: Annotated[str, Field(min_length=10, max_length=200)] | None = None
 
 
 class EmailChange(BaseModel):
@@ -198,7 +213,14 @@ async def _outstanding(session: DatabaseSession, user: User) -> EmailConfirmatio
     return outstanding
 
 
-@router.post("/admin/email-confirmation/verify", response_model=EmailConfirmationState)
+@router.post(
+    "/admin/email-confirmation/verify",
+    response_model=EmailConfirmationState,
+    # The handler has never taken a principal, but the document inherited the
+    # global bearer and said it did, so the one route a signed-out person must
+    # be able to call read as closed to them.
+    openapi_extra={"security": []},
+)
 async def verify_email(
     payload: ConfirmationToken,
     session: DatabaseSession,
@@ -253,15 +275,81 @@ async def verify_email(
     )
 
 
-@router.post("/admin/email-confirmation/resend", response_model=EmailConfirmationState)
+async def _who_is_asking(
+    session: DatabaseSession,
+    principal: object | None,
+    payload: "ResendRequest | None",
+) -> User:
+    """The account this resend is for: the session's, or the token's.
+
+    The token is looked up whatever state it is in - expired, superseded,
+    already used - because every one of those is a person on the expired-link
+    screen with a reason to want another email.
+    """
+
+    if principal is not None:
+        return await actor_user(session, principal)  # type: ignore[arg-type]
+    token = (payload.token if payload else None) or ""
+    confirmation = (
+        await session.scalar(
+            select(EmailConfirmation).where(EmailConfirmation.token_digest == _digest(token))
+        )
+        if token
+        else None
+    )
+    user = await session.get(User, confirmation.user_id) if confirmation is not None else None
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "confirmation_credential_required",
+                "message": (
+                    "Sign in, or open this page from the most recent email we "
+                    "sent you, and we can send another link."
+                ),
+            },
+        )
+    return user
+
+
+@router.post(
+    "/admin/email-confirmation/resend",
+    response_model=EmailConfirmationState,
+    # Optional, not absent: the console calls this signed in, and the expired
+    # link screen is reached from an email on a device that has never signed
+    # in at all. Requiring a session there meant the one screen that exists to
+    # offer a new link could not offer one.
+    openapi_extra={"security": [{"HTTPBearer": []}, {}]},
+    responses={
+        401: {
+            "description": (
+                "confirmation_credential_required when neither a session nor a "
+                "recognised confirmation token was presented"
+            )
+        },
+        429: {
+            "description": (
+                "confirmation_recently_sent, with retryAfterSeconds. One email "
+                "every two minutes per account, however it was asked for."
+            )
+        },
+    },
+)
 async def resend_confirmation(
     request: Request,
-    principal: PrincipalDependency,
+    principal: OptionalPrincipalDependency,
     session: DatabaseSession,
+    payload: ResendRequest | None = None,
 ) -> EmailConfirmationState:
-    """Send the confirmation again, at most once every couple of minutes."""
+    """Send the confirmation again, at most once every couple of minutes.
 
-    user = await actor_user(session, principal)
+    Two ways in. Signed in, it is the banner in the console. Signed out, it is
+    the expired-link screen, and the expired token is the credential - the
+    same argument that makes it one on /verify, and safer here, because the
+    only thing this does is post to the address already on the account.
+    """
+
+    user = await _who_is_asking(session, principal, payload)
     if user.email_confirmed_at is not None:
         return EmailConfirmationState(
             status="already_confirmed",

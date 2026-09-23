@@ -14,16 +14,16 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, date, datetime
-from typing import Annotated, Literal
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.age_checks import age_check_blocks
-from nevo.api.auth import AuthServiceDependency, SessionResponse
+from nevo.api.auth import AuthServiceDependency, SessionResponse, StudentPin
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.response_models import CamelResponse
@@ -62,7 +62,9 @@ class StudentEntryState(CamelResponse):
 class PinChoice(BaseModel):
     model_config = CAMEL_CONFIG
 
-    pin: Annotated[str, Field(min_length=4, max_length=8, pattern=r"^\d+$")]
+    #: The same shape the sign-in doors check, shared rather than restated:
+    #: a PIN that can be chosen here and refused there is a lockout.
+    pin: StudentPin
 
 
 class StudentEntrySession(CamelResponse):

@@ -402,6 +402,18 @@ async def assignments(
     "/assignments",
     response_model=AssignmentCreatedResponse,
     status_code=status.HTTP_201_CREATED,
+    responses={
+        # Documented because it is rendered. A client that has written copy
+        # for lesson_not_approved is depending on this body, and an
+        # undocumented refusal can change shape without anything failing.
+        409: {
+            "description": (
+                "lesson_not_approved when a lesson still has segments a teacher "
+                "has not cleared. detail.code is lesson_not_approved and "
+                "detail.message names each lesson and what is outstanding on it."
+            )
+        },
+    },
 )
 async def create_assignments(
     payload: AssignmentCreate,
@@ -917,6 +929,11 @@ async def staged_file_upload(
     principal: PrincipalDependency,
     session: DatabaseSession,
     parser: ParsingService,
+    # The parse outlives the request, so it needs a factory to open its own
+    # session from. Declared here because FastAPI only resolves dependencies
+    # on a route handler; _ingest_one_file is a plain function and cannot ask
+    # for one itself.
+    sessions: SessionFactory,
     file: LessonUpload,
     scope: UploadScope = "lesson",
     subject: UploadSubject = None,
@@ -929,6 +946,7 @@ async def staged_file_upload(
         principal=principal,
         session=session,
         parser=parser,
+        sessions=sessions,
     )
 
 
@@ -1021,6 +1039,7 @@ async def staged_batch_upload(
     principal: PrincipalDependency,
     session: DatabaseSession,
     parser: ParsingService,
+    sessions: SessionFactory,
     files: BatchLessonUpload,
     scope: UploadScope = "lesson",
     subject: UploadSubject = None,
@@ -1051,6 +1070,7 @@ async def staged_batch_upload(
                 principal=principal,
                 session=session,
                 parser=parser,
+                sessions=sessions,
             )
         except HTTPException as error:
             results.append(

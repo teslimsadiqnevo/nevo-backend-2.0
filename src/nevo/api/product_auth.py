@@ -24,6 +24,7 @@ from nevo.api.auth import (
     OptionalPrincipalDependency,
     PrincipalDependency,
     SessionResponse,
+    StudentPin,
 )
 from nevo.api.consent import ConsentServiceDependency
 from nevo.api.dependencies import DatabaseSession
@@ -116,7 +117,15 @@ class SchoolCodeRequest(BaseModel):
 class PinUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    pin: str = Field(pattern=r"^\d{6}$")
+    pin: StudentPin
+    #: The PIN being replaced. Required when the account already has one, and
+    #: ignored when it does not - a child setting their first PIN has nothing
+    #: to prove, and a child who has forgotten theirs goes through an
+    #: administrator's reset.
+    #:
+    #: Without it, anyone who found a signed-in tablet could change the PIN on
+    #: it, which in a classroom is a shared device and a locked-out child.
+    current_pin: StudentPin | None = Field(default=None, alias="currentPin")
     onboarding_token: str | None = Field(default=None, alias="onboardingToken", min_length=32)
     first_name: str | None = Field(default=None, alias="firstName", min_length=1, max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
@@ -191,7 +200,7 @@ class InvitationRequest(BaseModel):
 class JoinRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     password: str | None = Field(default=None, min_length=8, max_length=1024)
-    pin: str | None = Field(default=None, pattern=r"^\d{6}$")
+    pin: StudentPin | None = None
     first_name: str | None = Field(default=None, alias="firstName", max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
 
@@ -251,7 +260,21 @@ async def set_pin(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="PIN is for student accounts",
             )
-        user.pin_hash = credential_hasher().hash_pin(payload.pin)
+        hasher = credential_hasher()
+        if user.pin_hash is not None and not hasher.verify_pin(
+            user.pin_hash, payload.current_pin or ""
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "current_pin_required",
+                    "message": (
+                        "Enter the PIN you use now before choosing a new one. "
+                        "If you cannot remember it, your teacher can reset it."
+                    ),
+                },
+            )
+        user.pin_hash = hasher.hash_pin(payload.pin)
         user.auth_method = AuthMethod.PIN
         await session.commit()
         return {

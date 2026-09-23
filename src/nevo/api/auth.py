@@ -26,12 +26,36 @@ class PasswordLoginRequest(BaseModel):
     password: str = Field(min_length=8, max_length=1_024)
 
 
+#: A child's PIN, one shape on every door into the product.
+#:
+#: Four to eight digits, as design settled on 21 September 2026. The doors
+#: where a PIN is *chosen* were relaxed to that and the doors where one is
+#: *checked* were left at exactly six, so a child given a four-digit PIN at
+#: entry was refused on every sign-in afterwards. Worse than a plain refusal:
+#: a 422 is classified as our fault, so the child was told we could not check
+#: it just now rather than that the PIN was wrong, and had no way to learn
+#: why. A creation door and an unlock door that disagree is a lockout, so
+#: they share this.
+#:
+#: Six stays valid, which is what an administrator's generated reset issues.
+STUDENT_PIN_MIN_DIGITS = 4
+STUDENT_PIN_MAX_DIGITS = 8
+StudentPin = Annotated[
+    str,
+    Field(
+        min_length=STUDENT_PIN_MIN_DIGITS,
+        max_length=STUDENT_PIN_MAX_DIGITS,
+        pattern=r"^\d+$",
+    ),
+]
+
+
 class PinLoginRequest(BaseModel):
     model_config = CAMEL_CONFIG
 
     school_code: str = Field(min_length=2, max_length=50)
     login_identifier: str = Field(min_length=1, max_length=50)
-    pin: str = Field(pattern=r"^\d{6}$")
+    pin: StudentPin
 
 
 class UnifiedLoginRequest(BaseModel):
@@ -44,7 +68,7 @@ class UnifiedLoginRequest(BaseModel):
         alias="loginIdentifier",
         max_length=50,
     )
-    pin: str | None = Field(default=None, pattern=r"^\d{6}$")
+    pin: StudentPin | None = None
 
 
 class SessionResponse(BaseModel):

@@ -10,12 +10,12 @@ def test_onboarding_routes_are_pre_auth_and_use_json_contracts() -> None:
     assert class_code["security"] == []
     assert "requestBody" in class_code
     assert pin["security"] == []
-    assert schema["components"]["schemas"]["PinUpdateRequest"]["properties"]["pin"][
-        "pattern"
-    ] == r"^\d{6}$"
-    assert schema["components"]["schemas"]["PinLoginRequest"]["properties"]["pin"][
-        "pattern"
-    ] == r"^\d{6}$"
+    # Digits only, still. The length is no longer pinned here: design settled
+    # on four to eight, and every door that sets or checks a PIN now shares
+    # one shape - see tests/test_pin_shape_contract.py, which holds all five
+    # together rather than two of them at a number.
+    for model in ("PinUpdateRequest", "PinLoginRequest"):
+        assert schema["components"]["schemas"][model]["properties"]["pin"]["pattern"] == r"^\d+$"
 
 
 def test_student_reply_and_non_lesson_signal_contracts_are_exposed() -> None:

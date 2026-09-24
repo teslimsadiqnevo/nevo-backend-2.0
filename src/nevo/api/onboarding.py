@@ -32,6 +32,7 @@ from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.billing.entities import PerStudentQuote
+from nevo.billing.issuance import TERM_DATES_KEY
 from nevo.billing.service import quote_per_student
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.billing import Invoice
@@ -147,11 +148,44 @@ class AdditionQuoteRequest(BaseModel):
 
 
 class AdditionQuote(CamelResponse):
+    """What adding people costs, broken out the way an invoice is.
+
+    It used to carry one ``amount`` with no description, so a client could not
+    tell whether VAT was in it - and a screen that shows a rate, a VAT line
+    and a total had to do the arithmetic itself, which is exactly what
+    PricingResponse exists to prevent. The same four fields are here now, from
+    the same pricing function, already rounded.
+    """
+
     students: int
     teachers: int
     per_student_rate: Decimal
-    amount: Decimal
+    amount: Decimal = Field(
+        description=(
+            "Equal to totalWithVat. Retained because it was the only total "
+            "here, and it said nothing about VAT - prefer the named fields."
+        )
+    )
+    total_before_vat: Decimal
+    vat_rate: Decimal = Field(
+        description=(
+            "VAT as a percentage, not a fraction: Nigeria's 7.5% is sent as "
+            '"7.50". Render it with a per-cent sign and do not multiply by 100.'
+        ),
+        examples=[Decimal("7.50")],
+    )
+    vat_amount: Decimal
+    total_with_vat: Decimal
     currency: str
+    #: Which term this price is for, written the way the rest of the product
+    #: writes a school year: "Term 2 · 2026/2027". The year is in full, the
+    #: same as a class's academicSession, so the two never disagree on screen.
+    #: Null where the school has not configured its term dates, in which case
+    #: there is no term to name and the screen should not invent one.
+    applies_to: str | None = None
+    #: What actually happens to this money, because nothing charges it yet.
+    #: See ``billed`` on the quote route.
+    billed: Literal["next_invoice"] = "next_invoice"
     #: Said plainly because a school asks: a teacher account is free.
     message: str
 
@@ -662,6 +696,35 @@ async def _create_person(
         session.add(StudentClassEnrollment(student_id=user.id, class_id=school_class.id))
 
 
+#: How a school writes the term a price belongs to.
+TERM_LABEL = "Term {term} \u00b7 {session}"
+
+
+def _current_term_label(school: School, today: date | None = None) -> str | None:
+    """Which term we are in, named the way a school names it.
+
+    From the school's own term start dates, which is the only place that
+    knowledge lives. A school that has not configured them has no term to
+    name, and returning None is better than guessing at somebody's calendar
+    and printing it on a price.
+    """
+
+    raw = school.academic_config.get(TERM_DATES_KEY)
+    if not isinstance(raw, list) or not raw:
+        return None
+    starts: list[date] = []
+    for item in raw:
+        try:
+            starts.append(date.fromisoformat(str(item)))
+        except ValueError:
+            return None
+    on = today or datetime.now(UTC).date()
+    starts.sort()
+    # The last term that has already begun. Before the first, it is the first.
+    term = sum(1 for start in starts if start <= on) or 1
+    return TERM_LABEL.format(term=term, session=academic_session(on))
+
+
 @router.post("/additions/quote", response_model=AdditionQuote)
 async def quote_addition(
     payload: AdditionQuoteRequest,
@@ -672,6 +735,17 @@ async def quote_addition(
 
     A school asks this before it asks for the people, and the answer for a
     teacher is nothing at all.
+
+    Advisory, and deliberately so. Nothing here charges anything and no other
+    route does either: enrolling a student has no billing side effect at all.
+    What happens is that the next scheduled invoice counts active students and
+    prices the term off that head count, so an addition reaches a school as a
+    bigger next invoice rather than as a charge of its own. ``billed`` says so
+    in the response, because a screen with a "charge now" button on this would
+    be promising something the backend never does.
+
+    The figure is also not prorated. It is the full per-student rate, so it is
+    what that student costs for a whole term, not the remainder of this one.
     """
 
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
@@ -683,14 +757,21 @@ async def quote_addition(
         if payload.teachers
         else "Teachers are free."
     )
+    term = _current_term_label(school)
     return AdditionQuote(
         students=payload.students,
         teachers=payload.teachers,
         per_student_rate=quote.per_student_rate,
         amount=quote.total_with_vat,
+        total_before_vat=quote.total_before_vat,
+        vat_rate=quote.vat_rate,
+        vat_amount=quote.vat_amount,
+        total_with_vat=quote.total_with_vat,
         currency=quote.currency.value,
+        applies_to=term,
         message=(
             f"{payload.students} students at {quote.per_student_rate} each, "
-            f"{quote.total_with_vat} including VAT. {teacher_note}"
+            f"{quote.total_with_vat} including VAT, on your next invoice. "
+            f"{teacher_note}"
         ),
     )

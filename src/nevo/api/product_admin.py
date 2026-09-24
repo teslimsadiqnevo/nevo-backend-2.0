@@ -1,11 +1,11 @@
 import hashlib
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,6 +148,21 @@ class StudentEnroll(BaseModel):
     class_id: UUID = Field(alias="classId")
     email: str | None = None
     age_band: str | None = Field(default=None, alias="ageBand", max_length=40)
+    #: The school's own record of when the child was born.
+    #:
+    #: Optional, because a school office mid-term may not have it to hand and
+    #: refusing the enrolment over it would keep a child out of lessons. But
+    #: it is the school's half of the two-point age check - the parent
+    #: confirms the other half - so a child enrolled without one cannot have
+    #: that check done until it is filled in.
+    date_of_birth: date | None = Field(default=None, alias="dateOfBirth")
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _not_in_the_future(cls, value: date | None) -> date | None:
+        if value is not None and value > datetime.now(UTC).date():
+            raise ValueError("A date of birth cannot be in the future.")
+        return value
 
 
 class StudentMove(BaseModel):
@@ -966,6 +981,7 @@ async def enroll_student(
         email=email,
         login_identifier=identifier,
         age_band=payload.age_band,
+        date_of_birth=payload.date_of_birth,
         status=UserStatus.ACTIVE,
     )
     session.add(student)

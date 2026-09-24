@@ -448,6 +448,14 @@ class AssignmentResponse(CamelResponse):
     due_at: datetime | None
     available_from: datetime | None
     note: str | None = None
+    #: The teacher who set this, by name. The note reaches the child
+    #: attributed to a person, and the only names available were the lesson's
+    #: author - a different teacher whenever somebody assigns a colleague's
+    #: lesson - and the class's teacher list, which does not say which of them
+    #: assigned it. Naming the wrong teacher is worse than naming none, so
+    #: without this the child's screen had to sign "Your teacher".
+    assigned_by_id: UUID | None = None
+    assigned_by_name: str | None = None
     assigned_at: datetime
 
 

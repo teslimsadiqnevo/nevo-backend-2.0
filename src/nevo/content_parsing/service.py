@@ -27,6 +27,7 @@ from nevo.content_parsing.entities import (
     SourcePage,
     StoredParsedLesson,
 )
+from nevo.content_parsing.failures import failure_reason, new_incident
 from nevo.content_parsing.repositories import SqlAlchemyContentParsingRepository
 from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.intelligence.vocabulary import (
@@ -197,10 +198,13 @@ class ContentParsingService:
             )
         except Exception as error:
             # Whatever went wrong, the run must stop saying "processing".
-            logger.exception("Content parse run %s failed", parse_run_id)
+            incident = new_incident()
+            logger.exception("Content parse run %s failed, incident %s", parse_run_id, incident)
             await self._repository.fail_run(
                 parse_run_id,
                 reason=f"{error.__class__.__name__}: {error}",
+                failure_reason=failure_reason(error),
+                incident_id=incident,
             )
 
     async def run_state(self, parse_run_id: UUID) -> ParseRunState | None:

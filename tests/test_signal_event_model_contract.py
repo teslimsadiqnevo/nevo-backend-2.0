@@ -58,6 +58,10 @@ def test_signal_event_type_enum_is_exact() -> None:
         "break_end",
         "feeling_checkin",
         "module_boundary_reached",
+        # What the child chose there: "continue" or "break". The client has
+        # been emitting it and dropping it at the door, because it filters
+        # every event against a copy of this list before posting.
+        "module_boundary_action",
         "engagement_signal",
         "modality_suggestion_shown",
         "modality_suggestion_accepted",

@@ -24,6 +24,16 @@ class SignalEventType(StrEnum):
     #: The learner reached the end of a module. A natural place to pause, and
     #: the boundary the break logic wants to reason about.
     MODULE_BOUNDARY_REACHED = "module_boundary_reached"
+    #: What they did there. ``{"moduleId": ..., "action": "continue"|"break"}``
+    #: - the two buttons the boundary offers.
+    #:
+    #: The sibling of the one above, and the only place in the product where a
+    #: child is offered a break and answers. Without it the offer is recorded
+    #: and the answer is not, which is the half that says whether offering
+    #: helped. The client has been collecting these and dropping them at the
+    #: door: it filters every event against a copy of this enum before posting,
+    #: because one unknown type refuses the whole batch.
+    MODULE_BOUNDARY_ACTION = "module_boundary_action"
     ENGAGEMENT_SIGNAL = "engagement_signal"
     MODALITY_SUGGESTION_SHOWN = "modality_suggestion_shown"
     MODALITY_SUGGESTION_ACCEPTED = "modality_suggestion_accepted"

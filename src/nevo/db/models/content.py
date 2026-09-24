@@ -224,7 +224,14 @@ class ContentParseRun(Base):
         default=list,
         server_default=text("'[]'::jsonb"),
     )
+    #: Raw, for us. Whatever the driver or the provider said; never prose and
+    #: never to be shown to a teacher.
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The sentence a teacher reads. ``failure_reason`` on the wire used to be
+    #: the column above, so a name promising prose delivered a stack trace.
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: What a teacher quotes, and what finds it in the log.
+    incident_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

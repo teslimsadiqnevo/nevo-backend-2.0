@@ -146,7 +146,13 @@ class ParseRunResponse(BaseModel):
     finished: bool
     started_at: datetime = Field(alias="startedAt")
     completed_at: datetime | None = Field(alias="completedAt")
+    #: Prose, for the screen. Null unless the run failed.
     failure_reason: str | None = Field(alias="failureReason")
+    #: Raw, for reporting. Whatever the driver or the provider said - this is
+    #: what "failureReason" used to carry, and it was never prose.
+    error: str | None = None
+    #: What a teacher quotes for a failed run, and what finds it in the log.
+    incident_id: str | None = Field(default=None, alias="incidentId")
     review_notes: list[dict[str, object]] = Field(alias="reviewNotes")
     segment_count: int = Field(alias="segmentCount")
     #: Segments the AI contributed nothing to. Equal to segmentCount means the
@@ -168,6 +174,8 @@ class ParseRunResponse(BaseModel):
             startedAt=state.started_at,
             completedAt=state.completed_at,
             failureReason=state.failure_reason,
+            error=state.error,
+            incidentId=state.incident_id,
             reviewNotes=list(state.review_notes),
             segmentCount=state.segment_count,
             fallbackSegmentCount=state.fallback_segment_count,

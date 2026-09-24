@@ -67,6 +67,7 @@ from nevo.api.response_models import (
     UploadStructureResponse,
 )
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
+from nevo.content_parsing.failures import failure_reason, new_incident
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag
@@ -385,6 +386,8 @@ async def assignments(
             await require_class_access(session, actor, class_id)
             query = query.where(LessonAssignment.class_id == class_id)
     rows = (await session.execute(query.order_by(LessonAssignment.assigned_at.desc()))).all()
+    # One query for every assigning teacher on the page, not one per row.
+    assigners = await _names_for(session, {item.teacher_id for item, _ in rows})
     return [
         {
             "id": str(item.id),
@@ -395,6 +398,8 @@ async def assignments(
             "dueAt": item.due_at,
             "availableFrom": item.available_from,
             "note": item.note,
+            "assignedById": str(item.teacher_id) if item.teacher_id else None,
+            "assignedByName": assigners.get(item.teacher_id),
             "assignedAt": item.assigned_at,
         }
         for item, lesson in rows
@@ -956,51 +961,6 @@ async def staged_file_upload(
     )
 
 
-#: What a teacher is told when a parse fails, by what went wrong. Prose, and
-#: promised to stay prose - unlike ``error``, which is whatever the driver
-#: said and exists for us to report with.
-#:
-#: The console rendered ``error`` as teacher-facing copy once, and a raw
-#: driver exception is a bad thing to show a person. That was fixed on their
-#: side; this is the channel that should have existed for it.
-GENERIC_FAILURE = (
-    "Nevo could not finish preparing this lesson. Nothing you did caused it. "
-    "Try uploading it again, and tell us the reference below if it happens twice."
-)
-
-FAILURE_REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (
-        ("no readable", "no text", "empty"),
-        "We could not find any lesson text in that file. If it is a scan, a "
-        "version with selectable text will work better.",
-    ),
-    (
-        ("timeout", "timed out", "readtimeout"),
-        "Preparing this lesson took longer than we allow. It is usually a very "
-        "long document - splitting it into separate lessons will get through.",
-    ),
-    (
-        ("rate limit", "429", "too many requests"),
-        "Nevo is busy preparing other lessons right now. Try this one again in a few minutes.",
-    ),
-)
-
-
-def _failure_reason(error: Exception) -> str:
-    """A sentence a teacher can act on, or an honest generic one.
-
-    Deliberately a small, closed list. A guess dressed as a diagnosis is
-    worse than saying plainly that we do not know, so anything unrecognised
-    gets the generic sentence rather than a paraphrase of the exception.
-    """
-
-    text = f"{error.__class__.__name__} {error}".casefold()
-    for markers, sentence in FAILURE_REASONS:
-        if any(marker in text for marker in markers):
-            return sentence
-    return GENERIC_FAILURE
-
-
 def _parse_into_job(
     *,
     job_id: UUID,
@@ -1031,7 +991,7 @@ def _parse_into_job(
             # looking at a failed parse has something to quote and we can find
             # it in the log. A parse fails behind the response, so there is no
             # 500 for it to ride on and it has to be written onto the job.
-            incident = uuid4().hex[:12]
+            incident = new_incident()
             logger.exception("Upload parse %s failed, incident %s", job_id, incident)
             async with sessions.begin() as session:
                 job = await session.get(UploadJob, job_id)
@@ -1041,7 +1001,7 @@ def _parse_into_job(
                     # driver or the provider said, and it was never prose.
                     job.error_message = str(error)[:1000]
                     job.incident_id = incident
-                    job.failure_reason = _failure_reason(error)
+                    job.failure_reason = failure_reason(error)
             raise
         async with sessions.begin() as session:
             job = await session.get(UploadJob, job_id)
@@ -1281,6 +1241,69 @@ async def retry_upload_pages(
     }
 
 
+def _title_of(job: UploadJob, titles: dict[UUID, str | None]) -> str | None:
+    """The lesson's title, where this upload has landed one yet."""
+
+    lesson_id = _uuid(job.structure.get("lessonId"))
+    return titles.get(lesson_id) if lesson_id is not None else None
+
+
+@router.get("/uploads", response_model=list[UploadStatusResponse])
+async def upload_list(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    unsettled_only: Annotated[bool, Query(alias="unsettledOnly")] = False,
+) -> list[dict[str, object]]:
+    """Every recent upload for this school, in one request.
+
+    A batch of twenty files was twenty polls every few seconds, because the
+    batch response comes back before any title exists and the only way to ask
+    was one upload at a time. One request answers for the whole screen.
+
+    ``unsettledOnly`` returns just the ones still working, which is what a
+    poll actually wants - a batch settles one file at a time and the finished
+    ones do not need re-reading.
+    """
+
+    actor = await require_school_actor(session, principal)
+    query = select(UploadJob).where(UploadJob.school_id == actor.school_id)
+    if unsettled_only:
+        query = query.where(UploadJob.status.in_(("pending", "processing")))
+    jobs = (await session.scalars(query.order_by(UploadJob.created_at.desc()).limit(limit))).all()
+    # Titles for the whole page in one query rather than one per upload, which
+    # is the thing this route exists to stop.
+    lesson_ids = [
+        lesson_id
+        for lesson_id in (_uuid(job.structure.get("lessonId")) for job in jobs)
+        if lesson_id is not None
+    ]
+    titles: dict[UUID, str | None] = {}
+    if lesson_ids:
+        rows = await session.execute(
+            select(Lesson.id, Lesson.title).where(Lesson.id.in_(lesson_ids))
+        )
+        titles = {lesson_id: title for lesson_id, title in rows.all()}  # noqa: C416
+    return [
+        {
+            "id": str(job.id),
+            "status": job.status,
+            "stage": job.stage,
+            "lessonTitle": _title_of(job, titles),
+            # Deliberately not the segments: this is the list, and a school
+            # with twenty uploads of eleven segments each would be sending a
+            # lesson's worth of body text to render a progress bar.
+            "segments": [],
+            "failedPages": _failed_pages(job.structure),
+            "structure": job.structure,
+            "error": job.error_message,
+            "failureReason": job.failure_reason,
+            "incidentId": job.incident_id,
+        }
+        for job in jobs
+    ]
+
+
 @router.get("/uploads/{upload_id}", response_model=UploadStatusResponse)
 async def upload_status(
     upload_id: UUID,
@@ -1364,6 +1387,29 @@ async def undo_upload_structure(
     job.undo_stack = history
     await session.commit()
     return {"id": str(job.id), "structure": job.structure, "canUndo": bool(history)}
+
+
+async def _names_for(session: DatabaseSession, user_ids: set[UUID | None]) -> dict[UUID, str]:
+    """Names for a page's worth of people, in one query.
+
+    Returns nothing for an id it cannot resolve rather than a placeholder: a
+    name that reaches a child attributed to a teacher has to be that
+    teacher's, and "Nevo user" over a note from Mrs Adeyemi is worse than no
+    name at all.
+    """
+
+    wanted = {user_id for user_id in user_ids if user_id is not None}
+    if not wanted:
+        return {}
+    rows = await session.execute(
+        select(User.id, User.first_name, User.last_name).where(User.id.in_(wanted))
+    )
+    named: dict[UUID, str] = {}
+    for user_id, first_name, last_name in rows:
+        name = " ".join(part for part in (first_name, last_name) if part).strip()
+        if name:
+            named[user_id] = name
+    return named
 
 
 async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) -> dict[str, object]:

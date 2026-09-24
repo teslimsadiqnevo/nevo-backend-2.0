@@ -143,14 +143,27 @@ class SqlAlchemyContentParsingRepository:
                 "model produced nothing usable on this run"
             )
 
-    async def fail_run(self, parse_run_id: UUID, *, reason: str) -> None:
-        """Say why a run stopped, rather than leaving it processing forever."""
+    async def fail_run(
+        self,
+        parse_run_id: UUID,
+        *,
+        reason: str,
+        failure_reason: str | None = None,
+        incident_id: str | None = None,
+    ) -> None:
+        """Say why a run stopped, rather than leaving it processing forever.
+
+        ``reason`` is raw and stays raw. ``failure_reason`` is the sentence a
+        teacher reads, and ``incident_id`` is what they quote.
+        """
         async with self._sessions.begin() as session:
             run = await session.get(ContentParseRun, parse_run_id)
             if run is None:
                 return
             run.status = ContentParseStatus.FAILED
             run.error_message = reason[:2000]
+            run.failure_reason = failure_reason
+            run.incident_id = incident_id
             run.completed_at = datetime.now(UTC)
             lesson = await session.get(Lesson, run.lesson_id)
             if lesson is not None and lesson.status is ContentParseStatus.PROCESSING:
@@ -214,10 +227,14 @@ class SqlAlchemyContentParsingRepository:
             requested_by_user_id=run.requested_by_user_id,
             started_at=run.created_at,
             completed_at=run.completed_at,
-            failure_reason=run.error_message,
+            # Prose if we worked one out, and nothing rather than the raw
+            # text if we did not - this field's name is a promise.
+            failure_reason=run.failure_reason,
             review_notes=tuple(run.review_notes or ()),
             segment_count=len(segments),
             fallback_segment_count=fallback_segments,
+            error=run.error_message,
+            incident_id=run.incident_id,
         )
 
     async def store(

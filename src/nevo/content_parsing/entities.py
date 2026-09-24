@@ -95,9 +95,15 @@ class ParseRunState:
     requested_by_user_id: UUID
     started_at: datetime
     completed_at: datetime | None
+    #: Prose, for the screen.
     failure_reason: str | None
     review_notes: tuple[dict[str, object], ...]
     segment_count: int
     #: Segments the AI contributed nothing to. Every lesson in the library was
     #: once entirely these, while the run reported completed_with_review.
     fallback_segment_count: int
+    #: Raw, for reporting. What the driver or the provider actually said.
+    #: Last, and defaulted, so the fields above keep their order.
+    error: str | None = None
+    #: The reference a teacher quotes for this failure.
+    incident_id: str | None = None

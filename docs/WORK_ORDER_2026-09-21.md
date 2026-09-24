@@ -58,6 +58,21 @@ See `docs/jira/LESSON_DEPTH_VARIANTS.md`. Measured at about $0.0225 a lesson,
 roughly one per cent of what a lesson already costs to parse - against the
 architecture doc's assumption that variants would roughly triple it.
 
+## Blocking, and mine to fix outside the code
+
+- **Image generation credits are exhausted.** Every visual comes back `429
+  credit_balance_exhausted`. Confirmed on a real parse, 24 September.
+- **The YarnGPT key is rejected**, `401` on every clip. The env var name and
+  the `Authorization: Bearer` header are both correct in the code, so the key
+  in Render is expired, revoked, or no longer entitled - not a wiring fault.
+- Together: **every lesson that lands is text-only**, with
+  `fewer_than_two_modalities` on every section, and the modality-suggestion
+  pill is structurally unreachable while it lasts. The adaptations stage runs,
+  reports, and produces nothing.
+- `/health` says `lessonImages: configured` and `lessonAudio: configured`
+  throughout, because `configured` means a key is set and not that a call
+  works. That is a liveness lie and it is why this was not noticed earlier.
+
 ## Open, and not owned
 
 - **Render stopped running migrations.** Production sat at `20260921_0073`

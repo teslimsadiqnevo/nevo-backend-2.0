@@ -191,6 +191,44 @@ class ClassInsightState(StrEnum):
     GATHERING = "gathering"
 
 
+class BreakThreshold(StrEnum):
+    """What can make Nevo suggest a break.
+
+    Typed because these went out as a bare array of strings, so the five names
+    existed only in our code and a client had no way to see them. Somebody
+    reading the contract could not tell this list from any other list of
+    strings, which cost three rounds of asking each other what the five were.
+    """
+
+    #: Twenty unbroken minutes.
+    TIME_THRESHOLD = "time_threshold"
+    #: Three minutes below this session's own engagement baseline.
+    ENGAGEMENT_DECLINE = "engagement_decline"
+    #: Comprehension has fallen away from its session average.
+    COMPREHENSION_DROP = "comprehension_drop"
+    #: Three wrong in a row.
+    REPEATED_ERRORS = "repeated_errors"
+    #: The same segment replayed three times.
+    REPLAY_ACCUMULATION = "replay_accumulation"
+
+
+class BreakSeverity(StrEnum):
+    """How strongly a break is being suggested.
+
+    Also a bare string until now, and a client drawing a gentle nudge and an
+    insistent one differently had to guess the values.
+    """
+
+    #: Nothing fired. breakType is null and there is nothing to draw.
+    NONE = "none"
+    #: One threshold.
+    MILD = "mild"
+    #: Two.
+    MEDIUM = "medium"
+    #: Three or more.
+    HIGH = "high"
+
+
 class ProactiveAction(StrEnum):
     """What the engine can ask a lesson to do next.
 

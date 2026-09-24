@@ -9,6 +9,8 @@ from nevo.api.casing import CAMEL_CONFIG
 from nevo.domain.intelligence.vocabulary import (
     AccommodationType,
     AdaptationMode,
+    BreakSeverity,
+    BreakThreshold,
     BreakType,
     ContentModality,
     ContentSegmentType,
@@ -172,8 +174,10 @@ class AdaptRequest(BaseModel):
 class BreakSuggestionResponse(BaseModel):
     model_config = CAMEL_CONFIG
 
-    triggered_thresholds: list[str]
-    severity: str
+    #: Named, so a client can see the five without asking. Empty when nothing
+    #: fired, which is the common case.
+    triggered_thresholds: list[BreakThreshold]
+    severity: BreakSeverity
     break_type: BreakType | None
     reason: str | None
 

@@ -130,6 +130,14 @@ class Lesson(Base):
     #: parser talking about its own confidence; this is what a learner reads
     #: when the lesson ends.
     recap: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Why this lesson could not be prepared, in words a teacher can read.
+    #: Denormalised from the parse run that failed, because the library list
+    #: has the lesson and not the run - and a card that says "couldn't be
+    #: processed" with no reason is a read per row to render one sentence.
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: What a teacher quotes for it, carried the same way and for the same
+    #: reason.
+    incident_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     #: Questions to close on, in the same shape as a segment checkpoint so one
     #: renderer serves both.
     assessment: Mapped[list[dict[str, object]]] = mapped_column(

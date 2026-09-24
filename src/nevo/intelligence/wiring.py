@@ -56,14 +56,10 @@ def build_scaffold_fading_service(
 def build_adaptation_event_log_service(
     sessions: async_sessionmaker[AsyncSession],
 ) -> AdaptationEventLogService:
-    return AdaptationEventLogService(
-        repository=SqlAlchemyAdaptationEventLogRepository(sessions)
-    )
+    return AdaptationEventLogService(repository=SqlAlchemyAdaptationEventLogRepository(sessions))
 
 
 def build_ndpa_compliance_audit_service(
     sessions: async_sessionmaker[AsyncSession],
 ) -> NdpaComplianceAuditService:
-    return NdpaComplianceAuditService(
-        repository=SqlAlchemyNdpaComplianceAuditRepository(sessions)
-    )
+    return NdpaComplianceAuditService(repository=SqlAlchemyNdpaComplianceAuditRepository(sessions))

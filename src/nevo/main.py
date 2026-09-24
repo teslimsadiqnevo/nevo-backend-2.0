@@ -84,6 +84,7 @@ from nevo.notifications.worker import NotificationEmailWorker
 from nevo.ops.config import OpsSettings
 from nevo.ops.jobs import ScheduledJobRunner
 from nevo.ops.scheduled_jobs import build_scheduled_jobs
+from nevo.ops.schema_version import schema_state, warn_if_behind
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
 from nevo.parents.wiring import build_parent_insight_service
 from nevo.partner_inquiries.wiring import build_partner_inquiry_service
@@ -105,6 +106,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_engine(get_settings().database_url)
     sessions = create_session_factory(engine)
     app.state.db_sessions = sessions
+    app.state.db_engine = engine
+    # Said once, at boot, in the log a deploy is read from. A schema behind the
+    # code fails at the first write and nowhere earlier, which is how a
+    # deployment ran for two days writing a column the database did not have.
+    app.state.schema_state = await warn_if_behind(engine)
     auth_settings = AuthSettings()  # type: ignore[call-arg]
     credential_hasher = build_credential_hasher(auth_settings)
     app.state.auth_service = build_auth_service(
@@ -387,8 +393,21 @@ async def health(request: Request) -> dict[str, str]:
     media = getattr(request.app.state, "lesson_media_service", None)
     email = getattr(request.app.state, "email_delivery", None)
     parsing = getattr(request.app.state, "content_parsing_service", None)
+    engine = getattr(request.app.state, "db_engine", None)
+    # Re-read rather than reported from boot: a migration applied by hand
+    # while the service is up should show here without a restart.
+    schema = (
+        await schema_state(engine)
+        if engine is not None
+        else {"state": "unknown", "expected": None, "applied": None}
+    )
     return {
         "status": "ok",
+        #: up_to_date, behind, or unknown. "behind" means some writes will
+        #: fail at the database however healthy everything else looks.
+        "schema": str(schema["state"]),
+        "schemaExpected": str(schema["expected"] or ""),
+        "schemaApplied": str(schema["applied"] or ""),
         "ai": "configured" if getattr(ai_gateway, "configured", False) else "fallback_only",
         "payments": "configured" if getattr(payments, "configured", False) else "not_configured",
         "media": "configured" if getattr(media, "configured", False) else "not_configured",

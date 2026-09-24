@@ -28,8 +28,7 @@ class SqlAlchemyAccommodationPatternRepository:
                     select(LessonSession)
                     .where(
                         LessonSession.student_id == student_id,
-                        LessonSession.completion_status
-                        == LessonCompletionStatus.COMPLETED,
+                        LessonSession.completion_status == LessonCompletionStatus.COMPLETED,
                     )
                     .order_by(LessonSession.started_at.desc())
                     .limit(lesson_limit)
@@ -100,12 +99,8 @@ def _evidence_from_event(event: SignalEvent) -> set[str]:
         evidence.add("task_switch")
     if data.get("navigationPattern") == "erratic" or data.get("erraticNavigation") is True:
         evidence.add("erratic_navigation")
-    if (
-        _number(data, "focusDropAfterMinutes") >= 5
-        or (
-            _number(data, "sustainedMinutes") >= 5
-            and _number(data, "engagementDropSeconds") >= 60
-        )
+    if _number(data, "focusDropAfterMinutes") >= 5 or (
+        _number(data, "sustainedMinutes") >= 5 and _number(data, "engagementDropSeconds") >= 60
     ):
         evidence.add("focus_drop")
     if data.get("fragmentedTaskFlow") is True or _number(data, "taskFragmentCount") >= 4:

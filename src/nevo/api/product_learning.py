@@ -209,8 +209,44 @@ def _lesson_summary(
         "estimatedMinutes": lesson.estimated_minutes,
         "createdById": str(lesson.created_by_user_id) if lesson.created_by_user_id else None,
         "createdByName": (author_names or {}).get(lesson.created_by_user_id),
+        "failureReason": lesson.failure_reason,
+        "incidentId": lesson.incident_id,
         "createdAt": lesson.created_at,
     }
+
+
+async def _classes_for_lesson(session: DatabaseSession, lesson_id: UUID) -> list[dict[str, object]]:
+    """Every class this lesson reached, with how many children hold it.
+
+    One query. The screen shows all of them rather than one, and the only
+    other way to build it was a request per class across the teacher's own
+    list, filtered to those with somebody assigned.
+    """
+
+    rows = await session.execute(
+        select(
+            Class.id,
+            Class.name,
+            Class.year_group,
+            func.count(func.distinct(LessonAssignment.student_id)),
+        )
+        .join(Class, Class.id == LessonAssignment.class_id)
+        .where(
+            LessonAssignment.lesson_id == lesson_id,
+            LessonAssignment.status != "cancelled",
+        )
+        .group_by(Class.id, Class.name, Class.year_group)
+        .order_by(Class.name)
+    )
+    return [
+        {
+            "id": str(class_id),
+            "name": name,
+            "yearGroup": year_group,
+            "studentCount": int(student_count or 0),
+        }
+        for class_id, name, year_group, student_count in rows
+    ]
 
 
 async def _lesson_for_actor(
@@ -317,6 +353,7 @@ async def lesson_detail(
     )
     return {
         **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)),
+        "classes": await _classes_for_lesson(session, lesson.id),
         "confirmationSummary": lesson.confirmation_summary,
         "recap": lesson.recap,
         "assessment": list(lesson.assessment or []),

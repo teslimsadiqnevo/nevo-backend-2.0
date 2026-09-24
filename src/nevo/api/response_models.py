@@ -382,6 +382,11 @@ class LessonSummaryResponse(CamelResponse):
     #: work from the rest of the school's, even after fetching the list.
     created_by_id: UUID | None = None
     created_by_name: str | None = None
+    #: Why this one could not be prepared, in words a teacher can read. Null
+    #: unless status is failed, and never the driver's own text.
+    failure_reason: str | None = None
+    #: What a teacher quotes for it.
+    incident_id: str | None = None
     created_at: datetime
 
 
@@ -425,6 +430,17 @@ class LessonModuleResponse(CamelResponse):
     segment_ids: list[str]
 
 
+class LessonClassResponse(CamelResponse):
+    """One class a lesson was assigned to."""
+
+    id: UUID
+    name: str
+    year_group: str | None = None
+    #: How many children in this class hold it, which is what the screen
+    #: counts rather than the raw assignment rows.
+    student_count: int = 0
+
+
 class LessonDetailResponse(LessonSummaryResponse):
     confirmation_summary: str | None
     #: Written for the child. confirmationSummary is the parser talking to a
@@ -437,6 +453,11 @@ class LessonDetailResponse(LessonSummaryResponse):
 
     segments: list[LessonSegmentResponse]
     modules: list[LessonModuleResponse]
+    #: Every class this lesson reached, not one of them. The detail screen
+    #: shows them all, and assignmentCount is a number - so the alternative
+    #: was a request per class across the teacher's own list, filtered to
+    #: those with somebody assigned.
+    classes: list[LessonClassResponse] = Field(default_factory=list)
 
 
 class AssignmentResponse(CamelResponse):

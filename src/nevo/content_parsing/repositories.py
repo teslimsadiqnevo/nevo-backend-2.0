@@ -168,6 +168,11 @@ class SqlAlchemyContentParsingRepository:
             lesson = await session.get(Lesson, run.lesson_id)
             if lesson is not None and lesson.status is ContentParseStatus.PROCESSING:
                 lesson.status = ContentParseStatus.FAILED
+                # Carried onto the lesson too: the library list has the lesson
+                # and not the run, and a card saying "couldn't be processed"
+                # with no reason would be one read per row to render a sentence.
+                lesson.failure_reason = failure_reason
+                lesson.incident_id = incident_id
 
     async def fail_stale_runs(self, *, older_than: timedelta) -> int:
         """Close out runs whose worker went away.

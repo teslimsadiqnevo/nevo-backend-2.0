@@ -1,4 +1,4 @@
-from nevo.domain.intelligence.vocabulary import BreakType
+from nevo.domain.intelligence.vocabulary import BreakSeverity, BreakThreshold, BreakType
 from nevo.intelligence.entities import (
     BreakThresholdResult,
     LearnerProfileSnapshot,
@@ -11,22 +11,22 @@ def monitor_break_thresholds(
     signals: RuntimeSignals,
     profile: LearnerProfileSnapshot,
 ) -> BreakThresholdResult:
-    thresholds: list[str] = []
+    thresholds: list[BreakThreshold] = []
     if signals.continuous_minutes >= 20:
-        thresholds.append("time_threshold")
+        thresholds.append(BreakThreshold.TIME_THRESHOLD)
     if signals.engagement_below_baseline_seconds >= 180:
-        thresholds.append("engagement_decline")
+        thresholds.append(BreakThreshold.ENGAGEMENT_DECLINE)
     if _comprehension_drop(signals):
-        thresholds.append("comprehension_drop")
+        thresholds.append(BreakThreshold.COMPREHENSION_DROP)
     if signals.consecutive_errors >= 3:
-        thresholds.append("repeated_errors")
+        thresholds.append(BreakThreshold.REPEATED_ERRORS)
     if signals.replay_count_on_segment >= 3:
-        thresholds.append("replay_accumulation")
+        thresholds.append(BreakThreshold.REPLAY_ACCUMULATION)
 
     if not thresholds:
         return BreakThresholdResult(
             triggered_thresholds=(),
-            severity="none",
+            severity=BreakSeverity.NONE,
             break_type=None,
             reason=None,
         )
@@ -56,31 +56,24 @@ def select_break_type(
         "comprehension_drop",
         "repeated_errors",
     }
-    if len(triggered_thresholds) >= 3 or len(
-        set(triggered_thresholds).intersection(high_severity)
-    ) >= 2:
+    if (
+        len(triggered_thresholds) >= 3
+        or len(set(triggered_thresholds).intersection(high_severity)) >= 2
+    ):
         return BreakType.FULL
 
-    if (
-        "time_threshold" in triggered_thresholds
-        and "engagement_decline" in triggered_thresholds
-    ):
+    if "time_threshold" in triggered_thresholds and "engagement_decline" in triggered_thresholds:
         return BreakType.MOVEMENT
 
-    if (
-        signals.midpoint_reached
-        and {"comprehension_drop", "replay_accumulation"}.intersection(
-            triggered_thresholds
-        )
+    if signals.midpoint_reached and {"comprehension_drop", "replay_accumulation"}.intersection(
+        triggered_thresholds
     ):
         return BreakType.CONSOLIDATION
 
     if (
         profile.working_memory_capacity is not None
         and profile.working_memory_capacity <= 2
-        and {"repeated_errors", "comprehension_drop"}.intersection(
-            triggered_thresholds
-        )
+        and {"repeated_errors", "comprehension_drop"}.intersection(triggered_thresholds)
     ):
         return BreakType.CONSOLIDATION
 
@@ -91,24 +84,21 @@ def select_break_type(
 
 
 def _comprehension_drop(signals: RuntimeSignals) -> bool:
-    if (
-        signals.comprehension_score is None
-        or signals.session_average_comprehension is None
-    ):
+    if signals.comprehension_score is None or signals.session_average_comprehension is None:
         return False
     return signals.session_average_comprehension - signals.comprehension_score >= 20
 
 
-def _severity(thresholds: list[str]) -> str:
+def _severity(thresholds: list[BreakThreshold]) -> BreakSeverity:
     if len(thresholds) >= 3:
-        return "high"
+        return BreakSeverity.HIGH
     if len(thresholds) == 2:
-        return "medium"
-    return "mild"
+        return BreakSeverity.MEDIUM
+    return BreakSeverity.MILD
 
 
-def _reason_for(break_type: BreakType, thresholds: list[str]) -> str:
-    joined = ", ".join(thresholds)
+def _reason_for(break_type: BreakType, thresholds: list[BreakThreshold]) -> str:
+    joined = ", ".join(threshold.value for threshold in thresholds)
     if break_type is BreakType.FULL:
         return f"Multiple high-severity signals fired: {joined}."
     if break_type is BreakType.MOVEMENT:

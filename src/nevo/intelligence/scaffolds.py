@@ -60,9 +60,7 @@ class ProgressiveScaffoldFadingEngine:
             student_id=state.student_id,
             concept_id=state.concept_id,
             current_intensity=next_intensity,
-            consecutive_correct=(
-                0 if next_intensity != intensity_used else consecutive_correct
-            ),
+            consecutive_correct=(0 if next_intensity != intensity_used else consecutive_correct),
             response_time_improvement_streak=response_time_streak,
             reduced_hint_streak=hint_streak,
             last_response_time_ms=attempt.response_time_ms,

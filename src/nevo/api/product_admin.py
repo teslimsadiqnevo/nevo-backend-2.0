@@ -104,6 +104,13 @@ class ClassWrite(BaseModel):
         max_length=20,
     )
     capacity: int | None = Field(default=None, gt=0, le=500)
+    #: What this class is taught, stated rather than derived. Sending a list
+    #: replaces whatever was derived from assigned lessons; sending an empty
+    #: list goes back to deriving them.
+    subjects: list[Annotated[str, Field(min_length=1, max_length=80)]] | None = Field(
+        default=None,
+        max_length=20,
+    )
 
 
 class BulkClassWrite(BaseModel):
@@ -469,7 +476,7 @@ async def list_classes(
     result: list[dict[str, object]] = []
     for item in classes:
         student_count = counts.get(item.id, 0)
-        subjects = subjects_by_class.get(item.id, [])
+        subjects = _subjects_for(item.stated_subjects, subjects_by_class.get(item.id, []))
         result.append(
             {
                 "id": str(item.id),
@@ -507,6 +514,7 @@ def _class_row(payload: ClassWrite, *, school_id: UUID | None, source: str = "ma
         capacity=payload.capacity,
         class_code=secrets.token_hex(3).upper(),
         source=source,
+        stated_subjects=list(payload.subjects or []),
     )
 
 
@@ -636,6 +644,10 @@ async def update_class(
     school_class = await require_class_access(session, user, class_id)
     school_class.name = payload.name
     school_class.year_group = payload.year_group
+    if payload.subjects is not None:
+        # Sent, so it is a statement - including an empty list, which means
+        # "stop stating and go back to deriving from the lessons assigned".
+        school_class.stated_subjects = list(payload.subjects)
     await session.commit()
     return {"id": str(school_class.id), "name": school_class.name}
 
@@ -653,7 +665,7 @@ async def class_detail(
             StudentClassEnrollment.class_id == class_id
         )
     )
-    subjects = await _class_subjects(session, class_id)
+    subjects = _subjects_for(school_class.stated_subjects, await _class_subjects(session, class_id))
     return {
         "id": str(school_class.id),
         "name": school_class.name,
@@ -745,6 +757,20 @@ async def _class_subjects_bulk(session, class_ids: list[UUID]) -> dict[UUID, lis
         if subject:
             grouped.setdefault(class_id, []).append(str(subject))
     return grouped
+
+
+def _subjects_for(stated: list[str] | None, derived: list[str]) -> list[str]:
+    """What a class's subjects are: what a teacher said, or what we worked out.
+
+    Stated replaces derived rather than adding to it. A teacher who writes a
+    list and still sees a subject they did not write has no way to remove it,
+    so a merging control would be lying about what it does. Nothing stated
+    falls back to the lessons assigned, which is what every class does today
+    and the only thing a class with no assignments yet can do.
+    """
+
+    kept = [subject.strip() for subject in (stated or []) if subject and subject.strip()]
+    return list(dict.fromkeys(kept)) if kept else derived
 
 
 async def _class_subjects(session, class_id: UUID) -> list[str]:

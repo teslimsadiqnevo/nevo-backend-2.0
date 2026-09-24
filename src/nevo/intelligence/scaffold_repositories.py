@@ -39,10 +39,8 @@ class SqlAlchemyScaffoldRepository:
         async with self._sessions.begin() as session:
             record = await session.scalar(
                 select(StudentConceptScaffoldState).where(
-                    StudentConceptScaffoldState.student_id
-                    == decision.state.student_id,
-                    StudentConceptScaffoldState.concept_id
-                    == decision.state.concept_id,
+                    StudentConceptScaffoldState.student_id == decision.state.student_id,
+                    StudentConceptScaffoldState.concept_id == decision.state.concept_id,
                 )
             )
             values = {

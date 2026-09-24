@@ -29,9 +29,7 @@ class SqlAlchemyNdpaComplianceAuditRepository:
 
     async def summary(self, *, school_id: UUID) -> ComplianceSummary:
         async with self._sessions() as session:
-            school_name = await session.scalar(
-                select(School.name).where(School.id == school_id)
-            )
+            school_name = await session.scalar(select(School.name).where(School.id == school_id))
             students_profiled = int(
                 await session.scalar(
                     select(func.count(LearnerProfile.id))
@@ -150,9 +148,7 @@ async def _student_scoped_records(
     user_id_column = model.student_id if hasattr(model, "student_id") else model.learner_id
     rows = (
         await session.execute(
-            select(model)
-            .join(User, User.id == user_id_column)
-            .where(User.school_id == school_id)
+            select(model).join(User, User.id == user_id_column).where(User.school_id == school_id)
         )
     ).scalars()
     return _records_from_rows(model.__tablename__, rows, fields)

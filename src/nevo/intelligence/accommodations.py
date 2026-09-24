@@ -30,9 +30,7 @@ class UdlAccommodationInferenceEngine:
 
         attention = _attention_evidence(aggregate)
         if _confirmed(aggregate.lesson_count, attention):
-            active.append(
-                _signal(AccommodationType.ATTENTION, attention, aggregate.lesson_count)
-            )
+            active.append(_signal(AccommodationType.ATTENTION, attention, aggregate.lesson_count))
 
         numerical = _numerical_evidence(aggregate)
         if _confirmed(aggregate.maths_lesson_count, numerical):

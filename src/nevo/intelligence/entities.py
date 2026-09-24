@@ -5,6 +5,8 @@ from uuid import UUID
 from nevo.domain.intelligence.vocabulary import (
     AccommodationType,
     AdaptationMode,
+    BreakSeverity,
+    BreakThreshold,
     BreakType,
     ContentModality,
     ContentSegmentType,
@@ -83,8 +85,8 @@ class RuntimeSignals:
 
 @dataclass(frozen=True, slots=True)
 class BreakThresholdResult:
-    triggered_thresholds: tuple[str, ...]
-    severity: str
+    triggered_thresholds: tuple[BreakThreshold, ...]
+    severity: BreakSeverity
     break_type: BreakType | None
     reason: str | None
 

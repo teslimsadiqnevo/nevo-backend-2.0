@@ -23,8 +23,23 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
-#: Where the migrations live, relative to the installed package.
-MIGRATIONS = Path(__file__).resolve().parents[3] / "alembic" / "versions"
+
+def _candidates() -> tuple[Path, ...]:
+    """Where the migrations might be, in the order worth trying.
+
+    Two layouts, and the first version of this only handled one. In a checkout
+    the package sits under ``src/`` beside ``alembic/``; installed with pip it
+    does not, and the migrations are only reachable from the working directory
+    the service was started in - which is where ``alembic upgrade head`` finds
+    them too. Checking the installed layout alone made this answer "unknown"
+    in the one deployment it was written for.
+    """
+
+    package = Path(__file__).resolve()
+    return (
+        package.parents[3] / "alembic" / "versions",
+        Path.cwd() / "alembic" / "versions",
+    )
 
 
 @lru_cache(maxsize=1)
@@ -36,11 +51,12 @@ def expected_revision() -> str | None:
     the revision that nothing else lists as its ``down_revision``.
     """
 
-    if not MIGRATIONS.is_dir():
+    migrations = next((path for path in _candidates() if path.is_dir()), None)
+    if migrations is None:
         return None
     revisions: set[str] = set()
     superseded: set[str] = set()
-    for path in MIGRATIONS.glob("*.py"):
+    for path in migrations.glob("*.py"):
         for line in path.read_text().splitlines():
             if line.startswith("revision:") or line.startswith("revision ="):
                 revisions.add(_quoted(line))

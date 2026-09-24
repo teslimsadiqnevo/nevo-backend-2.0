@@ -86,3 +86,36 @@ def test_health_reports_it() -> None:
     assert '"schema"' in source
     assert "schemaExpected" in source
     assert "schemaApplied" in source
+
+
+def test_the_migrations_are_found_in_both_layouts() -> None:
+    """The first version of this only handled the checkout layout.
+
+    Installed with pip the package does not sit beside ``alembic/``, so the
+    check reported "unknown" in the one deployment it was written for - which
+    means it would not have caught the bug it exists to catch.
+    """
+
+    from pathlib import Path
+
+    from nevo.ops.schema_version import _candidates
+
+    candidates = _candidates()
+
+    assert len(candidates) >= 2
+    # One relative to the package, one relative to where the service was
+    # started - which is where alembic itself finds them.
+    assert any(path == Path.cwd() / "alembic" / "versions" for path in candidates)
+
+
+def test_a_missing_migrations_directory_is_unknown_not_a_crash(monkeypatch) -> None:
+    from pathlib import Path
+
+    from nevo.ops import schema_version
+
+    schema_version.expected_revision.cache_clear()
+    monkeypatch.setattr(schema_version, "_candidates", lambda: (Path("/nowhere/at/all"),))
+    try:
+        assert schema_version.expected_revision() is None
+    finally:
+        schema_version.expected_revision.cache_clear()

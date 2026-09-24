@@ -107,6 +107,16 @@ class OnboardingState(CamelResponse):
     can_confirm: bool = False
     can_pay: bool = False
     can_activate: bool = False
+    #: Whether this school is partway through onboarding and its console
+    #: should be held read-only.
+    #:
+    #: False for a school that never came through the funnel at all - every
+    #: school that existed before it was built, and any opened by hand. The
+    #: stage of such a school reads as activated, which is the true answer to
+    #: "where is this school between uploading a file and opening its
+    #: workspace": open. Branch on this, not on the stage, and never on the
+    #: absence of a record - this route does not 404.
+    in_onboarding: bool = False
 
 
 class ClassCorrection(BaseModel):
@@ -357,9 +367,33 @@ async def read_onboarding(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> OnboardingState:
+    """Where this school is, if it is anywhere.
+
+    Reading does not start an onboarding. It used to: the helper this shared
+    with the write routes creates a record when it finds none, so the first
+    admin page load at a school that predates the funnel wrote a row saying
+    that school was back at "uploading" - and every console reading the stage
+    would then have held an established school read-only. A read that changes
+    the answer to itself is the bug; this one only looks.
+    """
+
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
-    record = await _onboarding(session, actor.school_id)
+    record = await session.scalar(
+        select(SchoolOnboarding).where(SchoolOnboarding.school_id == actor.school_id)
+    )
+    if record is None:
+        return OnboardingState(
+            stage=OnboardingStage.ACTIVATED,
+            classes=[],
+            teacher_count=0,
+            student_count=0,
+            rejected=[],
+            in_onboarding=False,
+        )
     state = await _state_for(session, record)
+    state = state.model_copy(
+        update={"in_onboarding": record.stage is not OnboardingStage.ACTIVATED}
+    )
     await session.commit()
     return state
 

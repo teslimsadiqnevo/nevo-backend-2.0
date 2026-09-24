@@ -464,7 +464,7 @@ async def list_classes(
     # the list every admin opens.
     class_ids = [item.id for item in classes]
     counts = await _student_counts(session, class_ids)
-    teachers = await _teacher_counts(session, class_ids)
+    teachers = await _teachers_by_class(session, class_ids)
     subjects_by_class = await _class_subjects_bulk(session, class_ids)
     result: list[dict[str, object]] = []
     for item in classes:
@@ -482,7 +482,8 @@ async def list_classes(
                 "source": item.source,
                 "subjects": subjects,
                 "studentCount": student_count or 0,
-                "teacherCount": teachers.get(item.id, 0),
+                "teachers": teachers.get(item.id, []),
+                "teacherCount": len(teachers.get(item.id, [])),
                 "archivedAt": item.archived_at,
             }
         )
@@ -680,23 +681,48 @@ async def _student_counts(session, class_ids: list[UUID]) -> dict[UUID, int]:
     return {class_id: int(total) for class_id, total in rows}
 
 
-async def _teacher_counts(session: AsyncSession, class_ids: list[UUID]) -> dict[UUID, int]:
-    """Teacher counts for many classes in one query, like the enrolments."""
+async def _teachers_by_class(
+    session: AsyncSession, class_ids: list[UUID]
+) -> dict[UUID, list[dict[str, object]]]:
+    """Who holds each class, for many classes in one query.
+
+    Names rather than a count: the screen is built around showing who teaches
+    each class, and a count meant one more request per class to find out. The
+    count is then just the length of this, so it is still one query for the
+    whole page.
+    """
 
     if not class_ids:
         return {}
     rows = await session.execute(
         select(
             TeacherClassAssignment.class_id,
-            func.count(func.distinct(TeacherClassAssignment.teacher_id)),
+            User.id,
+            User.first_name,
+            User.last_name,
+            User.role,
         )
+        .join(User, User.id == TeacherClassAssignment.teacher_id)
         .where(
             TeacherClassAssignment.class_id.in_(class_ids),
             TeacherClassAssignment.removed_at.is_(None),
         )
-        .group_by(TeacherClassAssignment.class_id)
+        .order_by(User.first_name, User.last_name)
     )
-    return {class_id: int(total) for class_id, total in rows}
+    by_class: dict[UUID, list[dict[str, object]]] = {}
+    for class_id, teacher_id, first_name, last_name, role in rows:
+        holders = by_class.setdefault(class_id, [])
+        # One teacher can hold a class through more than one assignment row.
+        if any(holder["id"] == str(teacher_id) for holder in holders):
+            continue
+        holders.append(
+            {
+                "id": str(teacher_id),
+                "name": " ".join(part for part in (first_name, last_name) if part) or "Nevo user",
+                "role": role.value if hasattr(role, "value") else str(role),
+            }
+        )
+    return by_class
 
 
 async def _class_subjects_bulk(session, class_ids: list[UUID]) -> dict[UUID, list[str]]:

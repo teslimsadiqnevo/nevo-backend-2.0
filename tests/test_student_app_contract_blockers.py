@@ -7,9 +7,13 @@ def test_onboarding_routes_are_pre_auth_and_use_json_contracts() -> None:
     class_code = schema["paths"]["/api/v1/connections/class-code"]["post"]
     pin = schema["paths"]["/api/v1/auth/pin"]["post"]
 
-    assert class_code["security"] == []
+    # Reachable without a session, which is what these two screens need. Not
+    # "closed to one": both handlers take an optional principal and behave
+    # differently signed in, so the declaration offers either and {} is the
+    # part that says a signed-out caller is allowed.
+    assert {} in class_code["security"]
     assert "requestBody" in class_code
-    assert pin["security"] == []
+    assert {} in pin["security"]
     # Digits only, still. The length is no longer pinned here: design settled
     # on four to eight, and every door that sets or checks a PIN now shares
     # one shape - see tests/test_pin_shape_contract.py, which holds all five

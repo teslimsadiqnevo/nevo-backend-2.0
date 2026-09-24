@@ -161,6 +161,18 @@ class SchoolOverviewResponse(CamelResponse):
     counts: SchoolRosterCounts
 
 
+class ClassTeacherResponse(CamelResponse):
+    """One teacher who holds a class, named.
+
+    The class list is built around showing who teaches each class, and the
+    count alone meant a request per class to find out who they were.
+    """
+
+    id: UUID
+    name: str
+    role: UserRole
+
+
 class ClassSummaryResponse(CamelResponse):
     id: UUID
     name: str
@@ -179,6 +191,9 @@ class ClassSummaryResponse(CamelResponse):
     #: yet" state the console draws, and it was counting that from a separate
     #: request per class.
     teacher_count: int = 0
+    #: Who they are, not just how many. Same single query as the count, so
+    #: the list still costs one query for the page rather than one per class.
+    teachers: list[ClassTeacherResponse] = Field(default_factory=list)
     archived_at: datetime | None
 
 
@@ -718,7 +733,16 @@ class UploadStatusResponse(CamelResponse):
     segments: list[UploadSegmentDocument] = Field(default_factory=list)
     failed_pages: list[int] = Field(default_factory=list)
     structure: "UploadStructureDocument"
+    #: Raw, for reporting. Whatever the driver or the provider said, which is
+    #: not prose and was never meant to be shown to a teacher.
     error: str | None
+    #: A sentence that promises to be prose, for the screen. Null unless the
+    #: parse failed. Where we cannot say anything specific it says so plainly
+    #: rather than paraphrasing the exception.
+    failure_reason: str | None = None
+    #: The reference a teacher can quote for a failed parse - the same twelve
+    #: hex characters an unhandled error carries, and in the log beside it.
+    incident_id: str | None = None
 
 
 class UploadModuleDocument(CamelResponse):

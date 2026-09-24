@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -93,6 +94,7 @@ from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 from nevo.ops.background import spawn
 from nevo.sso.service import SsoService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 ParsingService = Annotated[ContentParsingService, Depends(get_content_parsing_service)]
 LessonUpload = Annotated[UploadFile, File()]
@@ -748,7 +750,10 @@ async def teacher_dashboard(
     "/connections/class-code",
     response_model=ConnectionResponse,
     status_code=status.HTTP_201_CREATED,
-    openapi_extra={"security": []},
+    # Either, not neither: the handler takes an optional principal and
+    # behaves differently signed in, so a flat [] told a client the one
+    # thing it must not conclude - that sending a bearer changes nothing.
+    openapi_extra={"security": [{"HTTPBearer": []}, {}]},
 )
 async def connect_by_class_code(
     payload: ClassCodeConnectionRequest,
@@ -951,6 +956,51 @@ async def staged_file_upload(
     )
 
 
+#: What a teacher is told when a parse fails, by what went wrong. Prose, and
+#: promised to stay prose - unlike ``error``, which is whatever the driver
+#: said and exists for us to report with.
+#:
+#: The console rendered ``error`` as teacher-facing copy once, and a raw
+#: driver exception is a bad thing to show a person. That was fixed on their
+#: side; this is the channel that should have existed for it.
+GENERIC_FAILURE = (
+    "Nevo could not finish preparing this lesson. Nothing you did caused it. "
+    "Try uploading it again, and tell us the reference below if it happens twice."
+)
+
+FAILURE_REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("no readable", "no text", "empty"),
+        "We could not find any lesson text in that file. If it is a scan, a "
+        "version with selectable text will work better.",
+    ),
+    (
+        ("timeout", "timed out", "readtimeout"),
+        "Preparing this lesson took longer than we allow. It is usually a very "
+        "long document - splitting it into separate lessons will get through.",
+    ),
+    (
+        ("rate limit", "429", "too many requests"),
+        "Nevo is busy preparing other lessons right now. Try this one again in a few minutes.",
+    ),
+)
+
+
+def _failure_reason(error: Exception) -> str:
+    """A sentence a teacher can act on, or an honest generic one.
+
+    Deliberately a small, closed list. A guess dressed as a diagnosis is
+    worse than saying plainly that we do not know, so anything unrecognised
+    gets the generic sentence rather than a paraphrase of the exception.
+    """
+
+    text = f"{error.__class__.__name__} {error}".casefold()
+    for markers, sentence in FAILURE_REASONS:
+        if any(marker in text for marker in markers):
+            return sentence
+    return GENERIC_FAILURE
+
+
 def _parse_into_job(
     *,
     job_id: UUID,
@@ -977,11 +1027,21 @@ def _parse_into_job(
                 on_stage=note_stage,
             )
         except Exception as error:
+            # The same 12 hex characters an unhandled 500 carries, so a teacher
+            # looking at a failed parse has something to quote and we can find
+            # it in the log. A parse fails behind the response, so there is no
+            # 500 for it to ride on and it has to be written onto the job.
+            incident = uuid4().hex[:12]
+            logger.exception("Upload parse %s failed, incident %s", job_id, incident)
             async with sessions.begin() as session:
                 job = await session.get(UploadJob, job_id)
                 if job is not None:
                     job.status = "failed"
+                    # Raw, and staying raw: this is for us. It is whatever the
+                    # driver or the provider said, and it was never prose.
                     job.error_message = str(error)[:1000]
+                    job.incident_id = incident
+                    job.failure_reason = _failure_reason(error)
             raise
         async with sessions.begin() as session:
             job = await session.get(UploadJob, job_id)
@@ -1263,6 +1323,8 @@ async def upload_status(
         "failedPages": _failed_pages(job.structure),
         "structure": job.structure,
         "error": job.error_message,
+        "failureReason": job.failure_reason,
+        "incidentId": job.incident_id,
     }
 
 

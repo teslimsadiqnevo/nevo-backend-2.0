@@ -244,7 +244,10 @@ async def verify_school_code(
 @router.post(
     "/auth/pin",
     response_model=PinUpdateResponse,
-    openapi_extra={"security": []},
+    # Either, not neither: the handler takes an optional principal and
+    # behaves differently signed in, so a flat [] told a client the one
+    # thing it must not conclude - that sending a bearer changes nothing.
+    openapi_extra={"security": [{"HTTPBearer": []}, {}]},
 )
 async def set_pin(
     payload: PinUpdateRequest,

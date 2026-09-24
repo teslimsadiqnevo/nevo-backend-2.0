@@ -213,7 +213,15 @@ class UploadJob(Base):
     undo_stack: Mapped[list[dict[str, object]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    #: Raw, for us: whatever the driver or the provider said. Never prose and
+    #: never to be shown to a teacher.
     error_message: Mapped[str | None] = mapped_column(Text)
+    #: A sentence a teacher can act on. The channel ``error_message`` was
+    #: wrongly used as, kept apart from it so each can stay what it is.
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    #: The same 12 hex characters an unhandled 500 carries. A parse fails
+    #: behind the response, so there is no 500 for it to ride on.
+    incident_id: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

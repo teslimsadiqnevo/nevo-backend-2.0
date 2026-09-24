@@ -58,6 +58,22 @@ See `docs/jira/LESSON_DEPTH_VARIANTS.md`. Measured at about $0.0225 a lesson,
 roughly one per cent of what a lesson already costs to parse - against the
 architecture doc's assumption that variants would roughly triple it.
 
+## Open, and not owned
+
+- **Render stopped running migrations.** Production sat at `20260921_0073`
+  while the repo was at `0076`, so the depth-variants column and the Ask Nevo
+  usage table were missing from a deployment running the code that needs
+  them. Applied by hand from a developer machine on 24 September. The cause
+  is not found: `render-start.sh` runs `alembic upgrade head` under `set -e`,
+  so either the service is building from the Dockerfile - whose CMD is just
+  uvicorn, with no migration step - or the dashboard's start command
+  overrides the blueprint. Until this is answered, **every deploy carrying a
+  migration has to be followed by applying it by hand**, and nothing warns
+  when one is missed.
+- A schema behind the code fails at the first write and nowhere earlier.
+  Nothing checks, at boot or on the health endpoint, that the database is at
+  the revision the code expects.
+
 ## Carried, not in Jira
 
 - Date of birth on the roster. SCRUM-168 derives age from it and the school

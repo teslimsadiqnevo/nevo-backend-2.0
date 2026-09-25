@@ -1034,7 +1034,11 @@ def _segment_progress_rows(
         note = None
         if slowdown_count:
             note = f"{slowdown_count} students spent longer here than the class pattern."
-        elif assigned_student_count and completion_rate < 0.5:
+        elif matching and assigned_student_count and completion_rate < 0.5:
+            # Only once somebody has actually worked on it. A class that was
+            # assigned a lesson ten minutes ago has a completion rate of zero
+            # on every segment, and calling that "fewer than half have
+            # completed" put an alarm on every fresh assignment.
             note = "Fewer than half of assigned students have completed this segment."
         rows.append(
             {

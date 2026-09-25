@@ -147,9 +147,19 @@ class UploadStage(StrEnum):
 
 
 class AssignmentStatus(StrEnum):
-    """Lifecycle of a lesson assignment."""
+    """Lifecycle of a lesson assignment.
+
+    ``completed`` was missing, and the progress route has written it since it
+    was built. So the first child to finish a lesson made
+    GET /api/v1/assignments answer 500 for their whole school: the row was
+    valid, the response model was not, and it failed on the way out. A teacher
+    could not see or cancel anything they had assigned, and the trigger was a
+    child doing exactly what the product is for.
+    """
 
     ASSIGNED = "assigned"
+    #: The child finished it. Written by PUT /lessons/{id}/progress.
+    COMPLETED = "completed"
     CANCELLED = "cancelled"
 
 

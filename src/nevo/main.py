@@ -83,6 +83,7 @@ from nevo.notifications.email import EmailSettings, ResendEmailDelivery
 from nevo.notifications.worker import NotificationEmailWorker
 from nevo.ops.config import OpsSettings
 from nevo.ops.jobs import ScheduledJobRunner
+from nevo.ops.provider_health import LESSON_AUDIO, LESSON_IMAGES, PROVIDERS
 from nevo.ops.scheduled_jobs import build_scheduled_jobs
 from nevo.ops.schema_version import schema_state, warn_if_behind
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
@@ -417,6 +418,16 @@ async def health(request: Request) -> dict[str, str]:
         # one. It was previously only discoverable by timing a parse.
         "lessonImages": _generator_state(parsing, "_visual_generation"),
         "lessonAudio": _generator_state(parsing, "_audio_generation"),
+        # Whether a key is set says nothing about whether the provider accepts
+        # it. These two read "configured" through three days in which every
+        # image call was refused for want of credit and every audio call
+        # answered 401, so the one screen an administrator looks at was green
+        # while the feature was dead. working / failing / unknown, from what
+        # the last real call actually did.
+        "lessonImagesLastCall": PROVIDERS.state(LESSON_IMAGES),
+        "lessonAudioLastCall": PROVIDERS.state(LESSON_AUDIO),
+        "lessonImagesLastFailure": PROVIDERS.last_failure(LESSON_IMAGES) or "",
+        "lessonAudioLastFailure": PROVIDERS.last_failure(LESSON_AUDIO) or "",
     }
 
 

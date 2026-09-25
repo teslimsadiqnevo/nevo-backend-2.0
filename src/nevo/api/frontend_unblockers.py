@@ -950,6 +950,14 @@ async def upload_content(
     response_model=LessonAssignmentResponse,
     status_code=201,
     tags=["learning product"],
+    deprecated=True,
+    description=(
+        "Superseded by POST /api/v1/assignments, which takes several lessons, "
+        "reports duplicates rather than erroring on a retry, and refuses a "
+        "lesson a teacher has not approved. Nothing calls this one. Kept only "
+        "so a client written against it does not break on the day it is "
+        "removed; do not build anything new on it."
+    ),
 )
 async def create_lesson_assignments(
     payload: LessonAssignmentRequest,

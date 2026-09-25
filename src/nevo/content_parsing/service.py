@@ -38,6 +38,7 @@ from nevo.domain.intelligence.vocabulary import (
     SegmentReviewReason,
     UploadStage,
 )
+from nevo.ops.provider_health import LESSON_AUDIO, LESSON_IMAGES, PROVIDERS
 from nevo.visuals import EducationalImageService, VisualGenerationError
 
 logger = logging.getLogger(__name__)
@@ -454,7 +455,13 @@ class ContentParsingService:
             # The limit is on clips, so a segment's own narrations queue behind
             # it the same as another segment's audio does.
             async with limit:
-                return await generator.generate(script)
+                try:
+                    clip_result = await generator.generate(script)
+                except AudioGenerationError as error:
+                    PROVIDERS.record(LESSON_AUDIO, ok=False, detail=str(error))
+                    raise
+                PROVIDERS.record(LESSON_AUDIO, ok=True)
+                return clip_result
 
         async def segment_audio() -> None:
             nonlocal audio_variant, needs_review
@@ -532,7 +539,9 @@ class ContentParsingService:
                 lesson_text=segment.body,
                 requested_prompt=requested_prompt,
             )
+            PROVIDERS.record(LESSON_IMAGES, ok=True)
         except VisualGenerationError as error:
+            PROVIDERS.record(LESSON_IMAGES, ok=False, detail=str(error))
             # Into the run's notes, not only the log. "visual_generation_failed"
             # on its own told nobody why, which is how every image in a lesson
             # went missing for two days without anyone being able to say what

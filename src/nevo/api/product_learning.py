@@ -140,6 +140,13 @@ class ProgressWrite(BaseModel):
 
     session_id: UUID = Field(alias="sessionId")
     assignment_id: UUID | None = Field(default=None, alias="assignmentId")
+    #: Where the learner is, as a zero-based index. The first module is 0 and
+    #: the first segment in it is 0.
+    #:
+    #: Deliberately not the same counting as a segment's ``sequenceOrder``,
+    #: which is one-based and is the segment's own number in the lesson. These
+    #: are a cursor; that is an ordinal. Both were correct and neither said so,
+    #: which is why a client had to guess.
     module_position: int = Field(default=0, alias="modulePosition", ge=0)
     segment_position: int = Field(default=0, alias="segmentPosition", ge=0)
     status: LessonCompletionStatus
@@ -191,11 +198,34 @@ class RetryPagesRequest(BaseModel):
     page_numbers: list[int] = Field(alias="pageNumbers", min_length=1, max_length=100)
 
 
+async def _unapproved_counts(session: DatabaseSession, lesson_ids: list[UUID]) -> dict[UUID, int]:
+    """Sections a teacher has still not cleared, per lesson, in one query.
+
+    The same count the assignment refusal reports. reviewSegmentCount counts
+    what was ever flagged and never falls, so a lesson already read by seven
+    children still said "Needs review" on its card.
+    """
+
+    if not lesson_ids:
+        return {}
+    rows = await session.execute(
+        select(LessonSegment.lesson_id, func.count(LessonSegment.id))
+        .where(
+            LessonSegment.lesson_id.in_(lesson_ids),
+            LessonSegment.needs_review.is_(True),
+            LessonSegment.approved_at.is_(None),
+        )
+        .group_by(LessonSegment.lesson_id)
+    )
+    return {lesson_id: int(total) for lesson_id, total in rows}
+
+
 def _lesson_summary(
     lesson: Lesson,
     *,
     assignment_count: int = 0,
     author_names: dict[UUID, str] | None = None,
+    unapproved_segment_count: int = 0,
 ) -> dict[str, object]:
     return {
         "id": str(lesson.id),
@@ -209,6 +239,7 @@ def _lesson_summary(
         "estimatedMinutes": lesson.estimated_minutes,
         "createdById": str(lesson.created_by_user_id) if lesson.created_by_user_id else None,
         "createdByName": (author_names or {}).get(lesson.created_by_user_id),
+        "unapprovedSegmentCount": unapproved_segment_count,
         "failureReason": lesson.failure_reason,
         "incidentId": lesson.incident_id,
         "createdAt": lesson.created_at,
@@ -298,11 +329,13 @@ async def lessons(
         ).all()
     )
     authors = await _author_names(session, rows)
+    outstanding = await _unapproved_counts(session, [item.id for item in rows])
     return [
         _lesson_summary(
             item,
             assignment_count=int(counts.get(item.id, 0)),
             author_names=authors,
+            unapproved_segment_count=outstanding.get(item.id, 0),
         )
         for item in rows
     ]
@@ -330,7 +363,11 @@ async def lesson_detail(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
-    _, lesson = await _lesson_for_actor(lesson_id, principal, session)
+    actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
+    # A child's device has no use for a teacher's review state, and sending it
+    # anywhere it is not needed is how it ends up rendered somewhere it should
+    # not be. One route serves both, so it is omitted rather than removed.
+    for_teacher = actor.role is not UserRole.STUDENT
     segments = (
         await session.scalars(
             select(LessonSegment)
@@ -352,7 +389,13 @@ async def lesson_detail(
         )
     )
     return {
-        **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)),
+        **_lesson_summary(
+            lesson,
+            assignment_count=int(assignment_count or 0),
+            unapproved_segment_count=(await _unapproved_counts(session, [lesson.id])).get(
+                lesson.id, 0
+            ),
+        ),
         "classes": await _classes_for_lesson(session, lesson.id),
         "confirmationSummary": lesson.confirmation_summary,
         "recap": lesson.recap,
@@ -375,10 +418,16 @@ async def lesson_detail(
                 "interactiveVariant": item.interactive_variant,
                 "calculationVariant": item.calculation_variant,
                 "depthVariants": item.depth_variants,
-                "needsReview": item.needs_review,
-                "reviewReasons": item.review_reasons,
-                "approved": item.approved_at is not None,
-                "approvedAt": item.approved_at,
+                **(
+                    {
+                        "needsReview": item.needs_review,
+                        "reviewReasons": item.review_reasons,
+                        "approved": item.approved_at is not None,
+                        "approvedAt": item.approved_at,
+                    }
+                    if for_teacher
+                    else {}
+                ),
                 "estimatedMinutes": item.estimated_minutes,
             }
             for item in segments

@@ -382,6 +382,14 @@ class LessonSummaryResponse(CamelResponse):
     #: work from the rest of the school's, even after fetching the list.
     created_by_id: UUID | None = None
     created_by_name: str | None = None
+    #: How many sections a teacher has still not cleared.
+    #:
+    #: ``reviewSegmentCount`` counts what was ever flagged and does not fall as
+    #: sections are approved, which is correct but is not what a library card
+    #: needs - a lesson already read by seven children was still saying "Needs
+    #: review". This is the number that reaches zero, the same one the
+    #: assignment refusal reports as unapprovedSegmentCount.
+    unapproved_segment_count: int = 0
     #: Why this one could not be prepared, in words a teacher can read. Null
     #: unless status is failed, and never the driver's own text.
     failure_reason: str | None = None

@@ -23,7 +23,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.auth import PrincipalDependency
@@ -204,6 +204,24 @@ def _quote(school: School, student_count: int) -> PerStudentQuote:
         per_student_rate=school.per_student_rate,
         rate_locked_until=school.price_lock_expiry,
     )
+
+
+async def _already_running(session: AsyncSession, school_id: UUID | None) -> bool:
+    """Whether this school has children learning already.
+
+    The one signal that separates a school partway through setup from one that
+    has been open for months: during the funnel nobody is active until
+    activation, and after it everybody is.
+    """
+
+    active = await session.scalar(
+        select(func.count(User.id)).where(
+            User.school_id == school_id,
+            User.role == UserRole.STUDENT,
+            User.status == UserStatus.ACTIVE,
+        )
+    )
+    return bool(active)
 
 
 async def _onboarding(session: AsyncSession, school_id: UUID | None) -> SchoolOnboarding:
@@ -446,6 +464,24 @@ async def stage_import(
     """
 
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
+    if await _already_running(session, actor.school_id):
+        # A school that predates this funnel has no onboarding record, and the
+        # helper below creates one when it finds none - so without this guard
+        # an established school could start the funnel from scratch, confirm
+        # its whole roster and be invoiced a second time for children it is
+        # already paying for. The stage check underneath cannot catch it,
+        # because a fresh record's stage is exactly the one it allows.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "school_already_active",
+                "message": (
+                    "This school is already running. Add people from the admin "
+                    "console rather than through setup, so nobody is billed "
+                    "twice for the same child."
+                ),
+            },
+        )
     record = await _onboarding(session, actor.school_id)
     if record.stage is not OnboardingStage.UPLOADING:
         raise HTTPException(

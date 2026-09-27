@@ -150,6 +150,17 @@ class ProgressWrite(BaseModel):
     module_position: int = Field(default=0, alias="modulePosition", ge=0)
     segment_position: int = Field(default=0, alias="segmentPosition", ge=0)
     status: LessonCompletionStatus
+    #: A named result, never a score. It is supplied only when the result
+    #: screen closes a lesson; a lesson with no attempt resumes instead.
+    result_state: Literal[
+        "landed", "partly_landed", "nothing_landed", "not_attempted"
+    ] | None = Field(default=None, alias="resultState")
+
+    @model_validator(mode="after")
+    def result_belongs_to_a_close(self) -> "ProgressWrite":
+        if self.result_state is not None and self.status is not LessonCompletionStatus.COMPLETED:
+            raise ValueError("resultState is only accepted when a lesson is completed")
+        return self
 
 
 class ClassCodeConnectionRequest(BaseModel):
@@ -657,7 +668,12 @@ async def start_lesson_session(
         .order_by(LessonSession.started_at.desc())
     )
     if existing:
-        return {"sessionId": str(existing.id), "resumed": True}
+        return {
+            "sessionId": str(existing.id),
+            "resumed": True,
+            "depth": existing.delivery_depth,
+            "reroutedFromSessionId": existing.rerouted_from_session_id,
+        }
     record = LessonSession(
         id=uuid4(),
         student_id=actor.id,
@@ -667,7 +683,12 @@ async def start_lesson_session(
     )
     session.add(record)
     await session.commit()
-    return {"sessionId": str(record.id), "resumed": False}
+    return {
+        "sessionId": str(record.id),
+        "resumed": False,
+        "depth": record.delivery_depth,
+        "reroutedFromSessionId": record.rerouted_from_session_id,
+    }
 
 
 @router.put("/lessons/{lesson_id}/progress", response_model=LessonProgressResponse)
@@ -702,23 +723,67 @@ async def save_lesson_progress(
     progress.status = payload.status
     progress.started_at = progress.started_at or lesson_session.started_at
     lesson_session.exit_position = str(payload.segment_position)
-    if payload.status in {"completed", "exited"}:
+    # A lesson that was never attempted is not the "nothing landed" result.
+    # Keep its sitting open at the saved cursor so the next launch resumes it.
+    not_attempted = (
+        payload.status is LessonCompletionStatus.COMPLETED
+        and payload.result_state == "not_attempted"
+    )
+    if not_attempted:
+        progress.status = LessonCompletionStatus.IN_PROGRESS
+    elif payload.status in {"completed", "exited"}:
         lesson_session.ended_at = datetime.now(UTC)
         lesson_session.completion_status = LessonCompletionStatus(payload.status)
-    if payload.status == "completed":
+    reroute: dict[str, object] | None = None
+    nothing_landed = (
+        payload.status is LessonCompletionStatus.COMPLETED
+        and payload.result_state == "nothing_landed"
+    )
+    if payload.status == "completed" and not not_attempted:
         progress.completed_at = datetime.now(UTC)
         assignment = (
             await session.get(LessonAssignment, payload.assignment_id)
             if payload.assignment_id
             else None
         )
-        if assignment and assignment.student_id == actor.id:
+        if assignment and assignment.student_id == actor.id and not nothing_landed:
             assignment.status = "completed"
             assignment.completed_at = datetime.now(UTC)
+    if nothing_landed:
+        lower_session = LessonSession(
+            id=uuid4(),
+            student_id=actor.id,
+            lesson_id=lesson_id,
+            started_at=datetime.now(UTC),
+            completion_status=LessonCompletionStatus.IN_PROGRESS,
+            delivery_depth="lower",
+            rerouted_from_session_id=lesson_session.id,
+        )
+        session.add(lower_session)
+        progress.session_id = lower_session.id
+        progress.status = LessonCompletionStatus.IN_PROGRESS
+        progress.module_position = 0
+        progress.segment_position = 0
+        progress.completed_at = None
+        reroute = {
+            "sessionId": str(lower_session.id),
+            "lessonId": str(lesson_id),
+            "depth": "lower",
+            "segmentPosition": 0,
+            "reason": "nothing_landed",
+        }
+    elif not_attempted:
+        reroute = {
+            "sessionId": str(lesson_session.id),
+            "lessonId": str(lesson_id),
+            "depth": lesson_session.delivery_depth,
+            "segmentPosition": progress.segment_position,
+            "reason": "not_attempted",
+        }
     await session.commit()
 
     intelligence: dict[str, object] = {"status": "not_run"}
-    if payload.status == "completed":
+    if payload.status == "completed" and not not_attempted:
         worker = getattr(request.app.state, "post_lesson_worker", None)
         if isinstance(worker, PostLessonProcessingWorker):
             intelligence["status"] = await worker.enqueue(
@@ -734,6 +799,8 @@ async def save_lesson_progress(
         "modulePosition": progress.module_position,
         "segmentPosition": progress.segment_position,
         "intelligence": intelligence,
+        "resultState": payload.result_state,
+        "reroute": reroute,
     }
 
 

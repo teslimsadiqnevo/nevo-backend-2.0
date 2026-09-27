@@ -14,12 +14,16 @@ def test_onboarding_routes_are_pre_auth_and_use_json_contracts() -> None:
     assert {} in class_code["security"]
     assert "requestBody" in class_code
     assert {} in pin["security"]
-    # Digits only, still. The length is no longer pinned here: design settled
-    # on four to eight, and every door that sets or checks a PIN now shares
-    # one shape - see tests/test_pin_shape_contract.py, which holds all five
-    # together rather than two of them at a number.
-    for model in ("PinUpdateRequest", "PinLoginRequest"):
-        assert schema["components"]["schemas"][model]["properties"]["pin"]["pattern"] == r"^\d+$"
+    # New PINs are exactly four digits. Unlock accepts the old six-digit shape
+    # only long enough to return pinChangeRequired and migrate the learner.
+    update_pin = schema["components"]["schemas"]["PinUpdateRequest"]["properties"]["pin"]
+    login_pin = schema["components"]["schemas"]["PinLoginRequest"]["properties"]["pin"]
+    assert (update_pin["minLength"], update_pin["maxLength"], update_pin["pattern"]) == (
+        4,
+        4,
+        r"^\d+$",
+    )
+    assert login_pin["pattern"] == r"^(?:\d{4}|\d{6})$"
 
 
 def test_student_reply_and_non_lesson_signal_contracts_are_exposed() -> None:

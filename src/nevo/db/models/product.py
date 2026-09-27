@@ -375,6 +375,46 @@ class NotificationPreference(Base):
     )
 
 
+class SharedDeviceProfile(Base):
+    """One locally cached sign-in tile on a shared classroom device."""
+
+    __tablename__ = "shared_device_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "device_id", "student_id", name="uq_shared_device_profiles_device_student"
+        ),
+        UniqueConstraint(
+            "device_id",
+            "avatar_shape",
+            "avatar_colourway",
+            name="uq_shared_device_profiles_device_avatar",
+        ),
+        Index("ix_shared_device_profiles_school_device", "school_id", "device_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    avatar_shape: Mapped[str] = mapped_column(String(24), nullable=False)
+    avatar_colourway: Mapped[str] = mapped_column(String(24), nullable=False)
+    provisioned_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class PostLessonProcessing(Base):
     __tablename__ = "post_lesson_processing"
     __table_args__ = (Index("ix_post_lesson_processing_due", "status", "next_attempt_at"),)

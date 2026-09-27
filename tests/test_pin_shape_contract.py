@@ -16,6 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 from nevo.api.auth import (
+    LEGACY_STUDENT_PIN_DIGITS,
     STUDENT_PIN_MAX_DIGITS,
     STUDENT_PIN_MIN_DIGITS,
     PinLoginRequest,
@@ -28,6 +29,8 @@ from nevo.main import app
 #: Every model carrying a child's PIN: the two that set one, the three that
 #: check one.
 CARRIERS = (PinChoice, PinLoginRequest, PinUpdateRequest, JoinRequest, UnifiedLoginRequest)
+CHOOSERS = (PinChoice, PinUpdateRequest, JoinRequest)
+UNLOCKERS = (PinLoginRequest, UnifiedLoginRequest)
 
 
 def pin_schema(name: str) -> dict:
@@ -40,27 +43,27 @@ def pin_schema(name: str) -> dict:
     raise AssertionError(f"{name} has no string arm on pin")
 
 
-def test_design_settled_on_four_to_eight() -> None:
-    assert (STUDENT_PIN_MIN_DIGITS, STUDENT_PIN_MAX_DIGITS) == (4, 8)
+def test_new_pins_have_one_four_digit_shape() -> None:
+    assert (STUDENT_PIN_MIN_DIGITS, STUDENT_PIN_MAX_DIGITS) == (4, 4)
+    assert LEGACY_STUDENT_PIN_DIGITS == 6
 
 
-def test_every_door_publishes_the_same_shape() -> None:
+def test_every_door_that_creates_a_pin_publishes_four_digits() -> None:
     shapes = {
         model.__name__: (
             pin_schema(model.__name__).get("minLength"),
             pin_schema(model.__name__).get("maxLength"),
             pin_schema(model.__name__).get("pattern"),
         )
-        for model in CARRIERS
+        for model in CHOOSERS
     }
 
     assert len(set(shapes.values())) == 1, shapes
-    assert set(shapes.values()) == {(4, 8, r"^\d+$")}
+    assert set(shapes.values()) == {(4, 4, r"^\d+$")}
 
 
-@pytest.mark.parametrize("pin", ["1234", "123456", "12345678"])
-def test_a_pin_accepted_where_it_is_chosen_is_accepted_where_it_is_checked(pin: str) -> None:
-    # The four-digit case is the one that locked children out.
+def test_the_four_digit_pin_is_accepted_everywhere() -> None:
+    pin = "1234"
     PinChoice.model_validate({"pin": pin})
     PinLoginRequest.model_validate({"schoolCode": "ABC", "loginIdentifier": "ada", "pin": pin})
     PinUpdateRequest.model_validate({"pin": pin})
@@ -68,18 +71,27 @@ def test_a_pin_accepted_where_it_is_chosen_is_accepted_where_it_is_checked(pin: 
     UnifiedLoginRequest.model_validate({"method": "pin", "pin": pin})
 
 
-@pytest.mark.parametrize("pin", ["123", "123456789", "12a456", "", "12 456"])
+@pytest.mark.parametrize("pin", ["123", "12345", "1234567", "12345678", "12a4", "", "12 34"])
 def test_what_is_refused_is_refused_everywhere(pin: str) -> None:
     for model in CARRIERS:
         with pytest.raises(ValidationError):
             model.model_validate({"pin": pin, "method": "pin"})
 
 
-def test_an_administrators_generated_reset_still_fits() -> None:
-    # Six digits, unchanged, and still inside the shared range.
+def test_an_administrators_generated_reset_is_four_digits() -> None:
     import inspect
 
     from nevo.api.product_admin import issue_student_pin
 
-    assert "06d" in inspect.getsource(issue_student_pin)
-    PinLoginRequest.model_validate({"schoolCode": "ABC", "loginIdentifier": "ada", "pin": "000000"})
+    assert "04d" in inspect.getsource(issue_student_pin)
+    PinLoginRequest.model_validate({"schoolCode": "ABC", "loginIdentifier": "ada", "pin": "0000"})
+
+
+def test_a_legacy_six_digit_pin_can_only_unlock_for_migration() -> None:
+    PinLoginRequest.model_validate(
+        {"schoolCode": "ABC", "loginIdentifier": "ada", "pin": "123456"}
+    )
+    UnifiedLoginRequest.model_validate({"method": "pin", "pin": "123456"})
+    for model in CHOOSERS:
+        with pytest.raises(ValidationError):
+            model.model_validate({"pin": "123456"})

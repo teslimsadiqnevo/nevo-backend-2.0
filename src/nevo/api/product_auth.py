@@ -3,7 +3,7 @@ import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import (
@@ -16,7 +16,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
 from nevo.api.auth import (
@@ -55,6 +55,7 @@ from nevo.db.models.frontend_support import Notification, PasswordResetToken
 from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.product import (
     SchoolInvitation,
+    SharedDeviceProfile,
     StudentOnboardingGrant,
 )
 from nevo.domain.accounts.vocabulary import (
@@ -139,6 +140,7 @@ class PinUpdateResponse(BaseModel):
     user_id: UUID = Field(alias="userId")
     login_identifier: str | None = Field(alias="loginIdentifier")
     session: SessionResponse | None = None
+    pin_length: Literal[4] = Field(default=4, alias="pinLength")
 
 
 class PinResetRequest(BaseModel):
@@ -210,6 +212,147 @@ class ParentRightRequest(BaseModel):
 
     request_type: ParentRightType = Field(alias="requestType")
     reason: str | None = Field(default=None, max_length=2000)
+
+
+SHARED_DEVICE_SHAPES = ("circle", "triangle", "diamond", "square", "hexagon", "star")
+SHARED_DEVICE_COLOURWAYS = ("navy", "near_black", "cream_elevated")
+SHARED_DEVICE_AVATARS = tuple(
+    (shape, colourway)
+    for shape in SHARED_DEVICE_SHAPES
+    for colourway in SHARED_DEVICE_COLOURWAYS
+)
+
+
+class SharedDeviceProvisionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    student_ids: list[UUID] = Field(alias="studentIds", min_length=1, max_length=6)
+
+    @field_validator("student_ids")
+    @classmethod
+    def profiles_are_distinct(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("studentIds must not contain duplicates")
+        return value
+
+
+class SharedDeviceAvatar(BaseModel):
+    shape: Literal["circle", "triangle", "diamond", "square", "hexagon", "star"]
+    colourway: Literal["navy", "near_black", "cream_elevated"]
+
+
+class SharedDeviceProfileResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    student_id: UUID = Field(alias="studentId")
+    first_name: str | None = Field(alias="firstName")
+    login_identifier: str = Field(alias="loginIdentifier")
+    avatar: SharedDeviceAvatar
+
+
+class SharedDeviceProvisionResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    device_id: UUID = Field(alias="deviceId")
+    profiles: list[SharedDeviceProfileResponse]
+    shapes: list[str]
+    colourways: list[str]
+
+
+@router.put(
+    "/shared-devices/{device_id}/profiles",
+    response_model=SharedDeviceProvisionResponse,
+)
+async def provision_shared_device_profiles(
+    device_id: UUID,
+    payload: SharedDeviceProvisionRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> dict[str, object]:
+    """Assign non-colliding sign-in tiles before a tablet is handed over."""
+
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    students = (
+        await session.scalars(
+            select(User).where(
+                User.id.in_(payload.student_ids),
+                User.school_id == actor.school_id,
+                User.role == UserRole.STUDENT,
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+    ).all()
+    students_by_id = {student.id: student for student in students}
+    if set(students_by_id) != set(payload.student_ids):
+        raise HTTPException(status_code=404, detail="One or more students were not found")
+    if any(student.login_identifier is None for student in students):
+        raise HTTPException(status_code=409, detail="Every device profile needs a login identifier")
+
+    foreign_device = await session.scalar(
+        select(SharedDeviceProfile.id).where(
+            SharedDeviceProfile.device_id == device_id,
+            SharedDeviceProfile.school_id != actor.school_id,
+        )
+    )
+    if foreign_device is not None:
+        # Do not reveal that another school has provisioned this identifier.
+        raise HTTPException(status_code=404, detail="Shared device not found")
+
+    existing = (
+        await session.scalars(
+            select(SharedDeviceProfile).where(
+                SharedDeviceProfile.device_id == device_id,
+                SharedDeviceProfile.school_id == actor.school_id,
+            )
+        )
+    ).all()
+    requested = set(payload.student_ids)
+    await session.execute(
+        delete(SharedDeviceProfile).where(
+            SharedDeviceProfile.device_id == device_id,
+            SharedDeviceProfile.school_id == actor.school_id,
+            SharedDeviceProfile.student_id.not_in(requested),
+        )
+    )
+    retained = {item.student_id: item for item in existing if item.student_id in requested}
+    used = {(item.avatar_shape, item.avatar_colourway) for item in retained.values()}
+    available = iter(combo for combo in SHARED_DEVICE_AVATARS if combo not in used)
+    for student_id in payload.student_ids:
+        if student_id in retained:
+            continue
+        shape, colourway = next(available)
+        record = SharedDeviceProfile(
+            device_id=device_id,
+            school_id=actor.school_id,
+            student_id=student_id,
+            avatar_shape=shape,
+            avatar_colourway=colourway,
+            provisioned_by_user_id=actor.id,
+        )
+        session.add(record)
+        retained[student_id] = record
+    await session.commit()
+    return {
+        "deviceId": device_id,
+        "profiles": [
+            {
+                "studentId": student_id,
+                "firstName": students_by_id[student_id].first_name,
+                "loginIdentifier": students_by_id[student_id].login_identifier,
+                "avatar": {
+                    "shape": retained[student_id].avatar_shape,
+                    "colourway": retained[student_id].avatar_colourway,
+                },
+            }
+            for student_id in payload.student_ids
+        ],
+        "shapes": list(SHARED_DEVICE_SHAPES),
+        "colourways": list(SHARED_DEVICE_COLOURWAYS),
+    }
 
 
 @router.post("/auth/school-code/verify", response_model=SchoolCodeResponse)

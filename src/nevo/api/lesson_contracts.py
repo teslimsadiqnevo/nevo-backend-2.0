@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nevo.domain.intelligence.vocabulary import ManipulativeKind
 
@@ -171,6 +171,35 @@ class CalculationStep(BaseModel):
     visual_update: str = Field(alias="visualUpdate")
     equation_state: str = Field(alias="equationState")
     narration_audio: AudioVariant | None = Field(default=None, alias="narrationAudio")
+    #: Renderer contract for SCRUM-177. These fields say what the child does
+    #: and what appears in the equation after that one step; the client never
+    #: derives either from the answer.
+    input: Literal["tap", "choice", "number"]
+    targets: list[ScalarAnswer] = Field(default_factory=list)
+    assembles: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_renderer_contract(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        item = dict(value)
+        expected = str(item.get("expectedInput") or item.get("expected_input") or "")
+        item.setdefault(
+            "input",
+            {"selection": "choice", "numeric": "number", "drag": "tap", "text": "choice"}.get(
+                expected, "number"
+            ),
+        )
+        options = item.get("options")
+        item.setdefault(
+            "targets",
+            [option.get("value") for option in options if isinstance(option, dict)]
+            if isinstance(options, list)
+            else [],
+        )
+        item.setdefault("assembles", item.get("equationState") or item.get("equation_state") or "")
+        return item
 
 
 class ScaffoldImage(BaseModel):
@@ -206,21 +235,49 @@ class Manipulative(BaseModel):
     labels: list[str] = Field(default_factory=list, max_length=100)
 
 
+class CalculationScaffold(BaseModel):
+    """A calculation drawing described as data, never as a generated image."""
+
+    kind: Literal["bar", "number_line", "dots", "array", "place_value"]
+    parts: int = Field(ge=1, le=100)
+    rows: int = Field(default=1, ge=1, le=20)
+    marks: list[ScalarAnswer] = Field(default_factory=list, max_length=100)
+    labels: list[str] = Field(default_factory=list, max_length=100)
+
+
 class CalculationVariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     type: Literal["co_construction"] = "co_construction"
     full_equation: str = Field(alias="fullEquation")
+    expression: str
     #: What the whole problem comes to. Sent rather than left to be inferred
     #: from the last step: this is what a child is marked against, and a
     #: client guessing it would be guessing the mark.
     answer: str = ""
     steps: list[CalculationStep]
-    scaffold_image: ScaffoldImage | None = Field(default=None, alias="scaffoldImage")
+    scaffold: CalculationScaffold | None = None
     #: Present when the steps are meant to be dragged rather than typed. Null
     #: when this calculation is worked through in numbers alone.
     manipulative: Manipulative | None = None
     completion_statement: str = Field(alias="completionStatement")
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_renderer_contract(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        item = dict(value)
+        item.setdefault("expression", item.get("fullEquation") or item.get("full_equation") or "")
+        if "scaffold" not in item and isinstance(item.get("manipulative"), dict):
+            source = dict(item["manipulative"])
+            source["kind"] = {
+                "fraction_bar": "bar",
+                "counters": "dots",
+            }.get(str(source.get("kind")), source.get("kind"))
+            source.setdefault("marks", [])
+            item["scaffold"] = source
+        return item
 
 
 def checkpoint_payloads(

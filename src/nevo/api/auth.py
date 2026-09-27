@@ -28,24 +28,26 @@ class PasswordLoginRequest(BaseModel):
 
 #: A child's PIN, one shape on every door into the product.
 #:
-#: Four to eight digits, as design settled on 21 September 2026. The doors
-#: where a PIN is *chosen* were relaxed to that and the doors where one is
-#: *checked* were left at exactly six, so a child given a four-digit PIN at
-#: entry was refused on every sign-in afterwards. Worse than a plain refusal:
-#: a 422 is classified as our fault, so the child was told we could not check
-#: it just now rather than that the PIN was wrong, and had no way to learn
-#: why. A creation door and an unlock door that disagree is a lockout, so
-#: they share this.
-#:
-#: Six stays valid, which is what an administrator's generated reset issues.
+#: Every newly chosen or reset PIN is four digits. Six digits remain accepted
+#: only at sign-in so an existing learner can unlock once and be asked to
+#: replace it; no endpoint can create another legacy PIN.
 STUDENT_PIN_MIN_DIGITS = 4
-STUDENT_PIN_MAX_DIGITS = 8
+STUDENT_PIN_MAX_DIGITS = 4
+LEGACY_STUDENT_PIN_DIGITS = 6
 StudentPin = Annotated[
     str,
     Field(
         min_length=STUDENT_PIN_MIN_DIGITS,
         max_length=STUDENT_PIN_MAX_DIGITS,
         pattern=r"^\d+$",
+    ),
+]
+LoginPin = Annotated[
+    str,
+    Field(
+        min_length=STUDENT_PIN_MIN_DIGITS,
+        max_length=LEGACY_STUDENT_PIN_DIGITS,
+        pattern=r"^(?:\d{4}|\d{6})$",
     ),
 ]
 
@@ -55,7 +57,7 @@ class PinLoginRequest(BaseModel):
 
     school_code: str = Field(min_length=2, max_length=50)
     login_identifier: str = Field(min_length=1, max_length=50)
-    pin: StudentPin
+    pin: LoginPin
 
 
 class UnifiedLoginRequest(BaseModel):
@@ -68,7 +70,7 @@ class UnifiedLoginRequest(BaseModel):
         alias="loginIdentifier",
         max_length=50,
     )
-    pin: StudentPin | None = None
+    pin: LoginPin | None = None
 
 
 class SessionResponse(BaseModel):
@@ -80,9 +82,17 @@ class SessionResponse(BaseModel):
     user_id: UUID
     role: UserRole
     replaced_session: bool
+    pin_length: int | None = None
+    pin_change_required: bool = False
 
     @classmethod
-    def from_issued(cls, issued: IssuedSession) -> "SessionResponse":
+    def from_issued(
+        cls,
+        issued: IssuedSession,
+        *,
+        pin_length: int | None = None,
+        pin_change_required: bool = False,
+    ) -> "SessionResponse":
         return cls(
             access_token=issued.access_token,
             token_type=issued.token_type,
@@ -90,6 +100,8 @@ class SessionResponse(BaseModel):
             user_id=issued.user_id,
             role=issued.role,
             replaced_session=issued.replaced_session,
+            pin_length=pin_length,
+            pin_change_required=pin_change_required,
         )
 
 
@@ -175,7 +187,12 @@ async def unified_login(
     except AuthError as error:
         raise public_auth_error(error) from error
     response.headers["Cache-Control"] = "no-store"
-    return SessionResponse.from_issued(issued)
+    pin_length = len(payload.pin) if payload.method == "pin" and payload.pin else None
+    return SessionResponse.from_issued(
+        issued,
+        pin_length=pin_length,
+        pin_change_required=pin_length == LEGACY_STUDENT_PIN_DIGITS,
+    )
 
 
 @router.post(
@@ -238,7 +255,11 @@ async def login_with_pin(
     except AuthError as error:
         raise public_auth_error(error) from error
     response.headers["Cache-Control"] = "no-store"
-    return SessionResponse.from_issued(issued)
+    return SessionResponse.from_issued(
+        issued,
+        pin_length=len(payload.pin),
+        pin_change_required=len(payload.pin) == LEGACY_STUDENT_PIN_DIGITS,
+    )
 
 
 async def authenticated_principal(

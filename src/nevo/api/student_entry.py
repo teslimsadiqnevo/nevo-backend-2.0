@@ -71,6 +71,7 @@ class StudentEntrySession(CamelResponse):
     user_id: UUID
     login_identifier: str | None
     session: SessionResponse
+    pin_length: Literal[4] = 4
 
 
 def age_on(born: date | None, today: date | None = None) -> int | None:

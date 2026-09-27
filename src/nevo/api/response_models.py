@@ -269,6 +269,7 @@ class PinIssueResponse(CamelResponse):
     pin: str
     issued_at: datetime
     must_share_securely: bool
+    pin_length: Literal[4] = 4
 
 
 class NotificationPreferenceResponse(CamelResponse):
@@ -506,6 +507,16 @@ class AssignmentUpdatedResponse(CamelResponse):
 class LessonSessionResponse(CamelResponse):
     session_id: UUID
     resumed: bool
+    depth: Literal["standard", "lower"] = "standard"
+    rerouted_from_session_id: UUID | None = None
+
+
+class LessonRerouteResponse(CamelResponse):
+    session_id: UUID
+    lesson_id: UUID
+    depth: Literal["standard", "lower"]
+    segment_position: int
+    reason: Literal["nothing_landed", "not_attempted"]
 
 
 class LessonProgressResponse(CamelResponse):
@@ -514,6 +525,10 @@ class LessonProgressResponse(CamelResponse):
     module_position: int
     segment_position: int
     intelligence: dict[str, object]
+    result_state: Literal["landed", "partly_landed", "nothing_landed", "not_attempted"] | None = (
+        None
+    )
+    reroute: LessonRerouteResponse | None = None
 
 
 class PersonReferenceResponse(CamelResponse):

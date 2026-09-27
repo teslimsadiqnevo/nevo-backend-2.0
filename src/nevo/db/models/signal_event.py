@@ -103,6 +103,16 @@ class LessonSession(Base):
         default=0,
         server_default=text("0"),
     )
+    #: Standard on a normal sitting; lower when SCRUM-178 immediately routes
+    #: a learner back through the same lesson using its simplified variants.
+    delivery_depth: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="standard", server_default="standard"
+    )
+    rerouted_from_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("lesson_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

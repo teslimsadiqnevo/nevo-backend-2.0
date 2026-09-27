@@ -527,6 +527,11 @@ class ContentParsingService:
         notes: list[dict[str, object]],
     ) -> ParsedLessonSegment:
         generator = self._visual_generation
+        # Calculation drawings are deterministic scaffold data. A generated
+        # picture beside that model can disagree with it, so calculations
+        # never enter the image pipeline.
+        if segment.content_type is LessonContentType.CALCULATION:
+            return replace(segment, visual_variant=None)
         if generator is None or ContentModality.VISUAL not in segment.available_modalities:
             return segment
         requested_prompt = None
@@ -1012,6 +1017,38 @@ def _manipulative(value: object) -> dict[str, object] | None:
     }
 
 
+def _calculation_scaffold(value: object) -> dict[str, object] | None:
+    """Validate the finite drawing vocabulary the lesson player implements."""
+
+    if not isinstance(value, dict):
+        return None
+    kind = str(value.get("kind") or "").strip()
+    legacy_kinds = {"fraction_bar": "bar", "counters": "dots"}
+    kind = legacy_kinds.get(kind, kind)
+    if kind not in {"bar", "number_line", "dots", "array", "place_value"}:
+        return None
+    try:
+        parts = int(value.get("parts") or 0)
+        rows = int(value.get("rows") or 1)
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= parts <= 100 or not 1 <= rows <= 20:
+        return None
+    raw_marks = value.get("marks")
+    marks = (
+        [item for item in raw_marks if isinstance(item, str | int | float)]
+        if isinstance(raw_marks, list)
+        else []
+    )
+    return {
+        "kind": kind,
+        "parts": parts,
+        "rows": rows,
+        "marks": marks[:100],
+        "labels": [str(item).strip() for item in _string_list(value.get("labels"))][:100],
+    }
+
+
 def _step_options(value: object) -> list[dict[str, object]]:
     """The choices a selection or drag step offers, in checkpoint shape."""
 
@@ -1064,6 +1101,20 @@ def _validated_calculation_variant(
             # Nothing to render. A selection step with no options is a prompt
             # with no way to answer it.
             return None, "calculation_step_missing_options"
+        input_kind = str(step.get("input") or "").strip()
+        if input_kind not in {"tap", "choice", "number"}:
+            input_kind = {
+                "selection": "choice",
+                "numeric": "number",
+                "drag": "tap",
+                "text": "choice",
+            }[expected_input]
+        raw_targets = step.get("targets")
+        targets = (
+            [item for item in raw_targets if isinstance(item, str | int | float | bool)]
+            if isinstance(raw_targets, list)
+            else [option["value"] for option in options]
+        )
         normalized_steps.append(
             {
                 "stepId": step_id,
@@ -1082,10 +1133,16 @@ def _validated_calculation_variant(
                     prompt=prompt,
                     hint=hint,
                 ),
+                "input": input_kind,
+                "targets": targets,
+                "assembles": str(
+                    step.get("assembles") or step.get("equationState") or ""
+                ).strip(),
             }
         )
+    scaffold = _calculation_scaffold(variant.get("scaffold") or variant.get("manipulative"))
     manipulative = _manipulative(variant.get("manipulative"))
-    if any(step["expectedInput"] == "drag" for step in normalized_steps) and manipulative is None:
+    if any(step["expectedInput"] == "drag" for step in normalized_steps) and scaffold is None:
         # A drag step with nothing to drag cannot be rendered, which is why
         # drag was being refused on generated content altogether.
         return None, "calculation_variant_missing_manipulative"
@@ -1099,10 +1156,13 @@ def _validated_calculation_variant(
     return {
         "type": "co_construction",
         "fullEquation": str(variant.get("fullEquation") or "").strip(),
+        "expression": str(
+            variant.get("expression") or variant.get("fullEquation") or ""
+        ).strip(),
+        "scaffold": scaffold,
         "manipulative": manipulative,
         "answer": answer,
         "steps": normalized_steps,
-        "scaffoldImage": _dict_or_none(variant.get("scaffoldImage")),
         "completionStatement": str(variant.get("completionStatement") or "").strip(),
     }, None
 

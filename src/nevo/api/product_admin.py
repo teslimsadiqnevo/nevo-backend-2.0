@@ -1151,7 +1151,7 @@ async def issue_student_pin(
     hasher = getattr(request.app.state, "credential_hasher", None)
     if not isinstance(hasher, Argon2idCredentialHasher):
         raise HTTPException(status_code=503, detail="Credential service unavailable")
-    pin = f"{secrets.randbelow(1_000_000):06d}"
+    pin = f"{secrets.randbelow(10_000):04d}"
     student.pin_hash = hasher.hash_pin(pin)
     student.auth_method = AuthMethod.PIN
     now = datetime.now(UTC)
@@ -1166,6 +1166,7 @@ async def issue_student_pin(
         "pin": pin,
         "issuedAt": now,
         "mustShareSecurely": True,
+        "pinLength": 4,
     }
 
 

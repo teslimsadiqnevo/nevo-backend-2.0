@@ -54,6 +54,7 @@ class ParsedLessonSegment:
 class ParsedLesson:
     title: str
     segments: tuple[ParsedLessonSegment, ...]
+    description: str | None = None
     review_notes: tuple[dict[str, object], ...] = ()
     confirmation_summary: str | None = None
     #: Addressed to the child, and the questions they close on.
@@ -69,6 +70,7 @@ class StoredParsedLesson:
     parse_run_id: UUID
     status: ContentParseStatus
     title: str
+    description: str | None
     segment_count: int
     review_segment_count: int
     confirmation_summary: str | None

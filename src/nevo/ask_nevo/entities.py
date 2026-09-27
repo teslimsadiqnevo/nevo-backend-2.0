@@ -36,6 +36,8 @@ class AskNevoContext:
 @dataclass(frozen=True, slots=True)
 class AskNevoResponse:
     answer: str
+    can_help: bool
+    cannot_help_reason: str | None
     question_category: AskNevoQuestionCategory
     interaction_id: UUID
     ai_gateway_call_id: UUID

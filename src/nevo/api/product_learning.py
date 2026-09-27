@@ -20,7 +20,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -53,6 +53,7 @@ from nevo.api.response_models import (
     ConnectionResponse,
     LessonDetailResponse,
     LessonProgressResponse,
+    LessonQuestionAttemptResponse,
     LessonSessionResponse,
     LessonSummaryResponse,
     OfflineDownloadResponse,
@@ -77,6 +78,7 @@ from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.product import (
     LessonModule,
     LessonProgress,
+    LessonQuestionAttempt,
     OfflineDownload,
     StudentOnboardingGrant,
     UploadJob,
@@ -152,15 +154,26 @@ class ProgressWrite(BaseModel):
     status: LessonCompletionStatus
     #: A named result, never a score. It is supplied only when the result
     #: screen closes a lesson; a lesson with no attempt resumes instead.
-    result_state: Literal[
-        "landed", "partly_landed", "nothing_landed", "not_attempted"
-    ] | None = Field(default=None, alias="resultState")
+    result_state: Literal["landed", "partly_landed", "nothing_landed", "not_attempted"] | None = (
+        Field(default=None, alias="resultState")
+    )
 
     @model_validator(mode="after")
     def result_belongs_to_a_close(self) -> "ProgressWrite":
         if self.result_state is not None and self.status is not LessonCompletionStatus.COMPLETED:
             raise ValueError("resultState is only accepted when a lesson is completed")
         return self
+
+
+class LessonQuestionAttemptWrite(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: UUID = Field(alias="sessionId")
+    question_id: str = Field(alias="questionId", min_length=1, max_length=160)
+    segment_id: UUID | None = Field(default=None, alias="segmentId")
+    source: Literal["checkpoint", "assessment"] = "checkpoint"
+    answer: JsonValue
+    client_attempt_id: UUID | None = Field(default=None, alias="clientAttemptId")
 
 
 class ClassCodeConnectionRequest(BaseModel):
@@ -241,6 +254,7 @@ def _lesson_summary(
     return {
         "id": str(lesson.id),
         "title": lesson.title,
+        "description": lesson.description,
         "status": lesson.status.value,
         "sourceType": lesson.source_type.value,
         "segmentCount": lesson.segment_count,
@@ -255,6 +269,60 @@ def _lesson_summary(
         "incidentId": lesson.incident_id,
         "createdAt": lesson.created_at,
     }
+
+
+def _normalise_answer(value: JsonValue) -> object:
+    if isinstance(value, str):
+        return value.strip().casefold()
+    if isinstance(value, list):
+        return sorted((_normalise_answer(item) for item in value), key=repr)
+    if isinstance(value, dict):
+        return {key: _normalise_answer(item) for key, item in sorted(value.items())}
+    return value
+
+
+def _attempt_payload(item: LessonQuestionAttempt) -> dict[str, object]:
+    return {
+        "id": str(item.id),
+        "lessonId": str(item.lesson_id),
+        "sessionId": str(item.session_id),
+        "questionId": item.question_id,
+        "segmentId": str(item.segment_id) if item.segment_id else None,
+        "source": item.source,
+        "attemptNumber": item.attempt_number,
+        "question": item.question_snapshot,
+        "answer": item.answer,
+        "correct": item.correct,
+        "submittedAt": item.submitted_at,
+    }
+
+
+async def _question_for_attempt(
+    session: DatabaseSession,
+    lesson: Lesson,
+    payload: LessonQuestionAttemptWrite,
+) -> tuple[dict[str, object], UUID | None]:
+    if payload.source == "assessment":
+        questions = checkpoint_payloads(lesson.assessment or [], segment_key="lesson-assessment")
+        segment_id = None
+    else:
+        if payload.segment_id is None:
+            raise HTTPException(status_code=422, detail="segmentId is required for a checkpoint")
+        segment = await session.get(LessonSegment, payload.segment_id)
+        if segment is None or segment.lesson_id != lesson.id:
+            raise HTTPException(status_code=404, detail="Lesson question not found")
+        questions = checkpoint_payloads(
+            segment.comprehension_checkpoints,
+            segment_key=segment.segment_key,
+        )
+        segment_id = segment.id
+    question = next(
+        (item for item in questions if str(item.get("id")) == payload.question_id),
+        None,
+    )
+    if question is None:
+        raise HTTPException(status_code=404, detail="Lesson question not found")
+    return question, segment_id
 
 
 async def _classes_for_lesson(session: DatabaseSession, lesson_id: UUID) -> list[dict[str, object]]:
@@ -689,6 +757,108 @@ async def start_lesson_session(
         "depth": record.delivery_depth,
         "reroutedFromSessionId": record.rerouted_from_session_id,
     }
+
+
+@router.post(
+    "/lessons/{lesson_id}/attempts",
+    response_model=LessonQuestionAttemptResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def save_lesson_question_attempt(
+    lesson_id: UUID,
+    payload: LessonQuestionAttemptWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
+) -> dict[str, object]:
+    """Persist one answer attempt for later review.
+
+    The question is resolved from the stored lesson and snapshotted beside the
+    answer. Clients never submit an answer key or decide whether they were
+    correct.
+    """
+    del consent
+    actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
+    if actor.role is not UserRole.STUDENT:
+        raise HTTPException(status_code=403, detail="Student account required")
+    lesson_session = await session.get(LessonSession, payload.session_id)
+    if (
+        lesson_session is None
+        or lesson_session.student_id != actor.id
+        or lesson_session.lesson_id != lesson.id
+    ):
+        raise HTTPException(status_code=404, detail="Lesson session not found")
+    if payload.client_attempt_id is not None:
+        existing = await session.scalar(
+            select(LessonQuestionAttempt).where(
+                LessonQuestionAttempt.client_attempt_id == payload.client_attempt_id,
+                LessonQuestionAttempt.student_id == actor.id,
+            )
+        )
+        if existing is not None:
+            return _attempt_payload(existing)
+    question, segment_id = await _question_for_attempt(session, lesson, payload)
+    attempt_number = int(
+        await session.scalar(
+            select(func.coalesce(func.max(LessonQuestionAttempt.attempt_number), 0) + 1).where(
+                LessonQuestionAttempt.session_id == payload.session_id,
+                LessonQuestionAttempt.question_id == payload.question_id,
+            )
+        )
+        or 1
+    )
+    answer_key = question.get("answerKey")
+    record = LessonQuestionAttempt(
+        student_id=actor.id,
+        lesson_id=lesson.id,
+        session_id=lesson_session.id,
+        question_id=payload.question_id,
+        segment_id=segment_id,
+        source=payload.source,
+        client_attempt_id=payload.client_attempt_id,
+        attempt_number=attempt_number,
+        question_snapshot=question,
+        answer=payload.answer,
+        correct=(
+            None
+            if answer_key is None
+            else _normalise_answer(payload.answer) == _normalise_answer(answer_key)
+        ),
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return _attempt_payload(record)
+
+
+@router.get(
+    "/lessons/{lesson_id}/attempts",
+    response_model=list[LessonQuestionAttemptResponse],
+)
+async def lesson_question_attempts(
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    session_id: Annotated[UUID | None, Query(alias="sessionId")] = None,
+) -> list[dict[str, object]]:
+    actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
+    if actor.role is not UserRole.STUDENT:
+        raise HTTPException(status_code=403, detail="Student account required")
+    query = select(LessonQuestionAttempt).where(
+        LessonQuestionAttempt.student_id == actor.id,
+        LessonQuestionAttempt.lesson_id == lesson.id,
+    )
+    if session_id is not None:
+        query = query.where(LessonQuestionAttempt.session_id == session_id)
+    records = (
+        await session.scalars(
+            query.order_by(
+                LessonQuestionAttempt.submitted_at,
+                LessonQuestionAttempt.attempt_number,
+            )
+        )
+    ).all()
+    return [_attempt_payload(item) for item in records]
 
 
 @router.put("/lessons/{lesson_id}/progress", response_model=LessonProgressResponse)

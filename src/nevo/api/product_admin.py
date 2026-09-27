@@ -1324,7 +1324,8 @@ async def personal_settings(
     session: DatabaseSession,
 ) -> dict[str, object]:
     user = await actor_user(session, principal)
-    return {"userId": str(user.id), "preferences": user.preferences}
+    preferences = {**dict(user.preferences), "avatarTone": user.avatar_tone}
+    return {"userId": str(user.id), "preferences": preferences}
 
 
 @router.put("/settings/me", response_model=PersonalSettingsResponse)
@@ -1340,9 +1341,12 @@ async def update_personal_settings(
     every key the other had set.
     """
     user = await actor_user(session, principal)
+    if "avatarTone" in payload.preferences:
+        user.avatar_tone = str(payload.preferences["avatarTone"] or "").strip()[:40] or None
     user.preferences = merge_preferences(user.preferences, payload.preferences)
     await session.commit()
-    return {"userId": str(user.id), "preferences": user.preferences}
+    preferences = {**dict(user.preferences), "avatarTone": user.avatar_tone}
+    return {"userId": str(user.id), "preferences": preferences}
 
 
 def merge_preferences(

@@ -154,6 +154,7 @@ class CurrentUserResponse(BaseModel):
     school: SchoolSummary | None
     subjects: list[str] = Field(default_factory=list)
     profile_image_url: str | None = Field(default=None, alias="profileImageUrl")
+    avatar_tone: str | None = Field(default=None, alias="avatarTone")
 
 
 def _camel(value: str) -> str:
@@ -242,6 +243,7 @@ class ProfilePatch(BaseModel):
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
     subjects: list[str] | None = Field(default=None, max_length=50)
     profile_image_url: str | None = Field(default=None, alias="profileImageUrl", max_length=2_048)
+    avatar_tone: str | None = Field(default=None, alias="avatarTone", max_length=40)
 
 
 class ProfilePhotoResponse(BaseModel):
@@ -378,7 +380,106 @@ class BaselineSubmitResponse(BaseModel):
 
 
 class BaselinePromptResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     dimension: str
+    item_id: str = Field(alias="itemId")
+    question: str
+    options: list["BaselinePromptOption"]
+    answer: str
+
+
+class BaselinePromptOption(BaseModel):
+    value: str
+    label: str
+
+
+_BASELINE_ITEMS: dict[str, tuple[dict[str, object], ...]] = {
+    "working_memory": (
+        {
+            "id": "wm-1",
+            "question": "Remember 4, 7, 2. Which list is in the same order?",
+            "options": (("472", "4, 7, 2"), ("427", "4, 2, 7"), ("742", "7, 4, 2")),
+            "answer": "472",
+        },
+        {
+            "id": "wm-2",
+            "question": "Remember blue, sun, book. Which word came second?",
+            "options": (("blue", "Blue"), ("sun", "Sun"), ("book", "Book")),
+            "answer": "sun",
+        },
+        {
+            "id": "wm-3",
+            "question": "Keep 6 and 3 in mind. What is their total?",
+            "options": (("8", "8"), ("9", "9"), ("10", "10")),
+            "answer": "9",
+        },
+    ),
+    "attention": (
+        {
+            "id": "at-1",
+            "question": "Which word is different?",
+            "options": (("calm", "calm"), ("calm-2", "calm"), ("clam", "clam")),
+            "answer": "clam",
+        },
+        {
+            "id": "at-2",
+            "question": "Which number appears twice in 3, 8, 5, 8?",
+            "options": (("3", "3"), ("5", "5"), ("8", "8")),
+            "answer": "8",
+        },
+        {
+            "id": "at-3",
+            "question": "Choose the arrow pointing left.",
+            "options": (("left", "Left"), ("up", "Up"), ("right", "Right")),
+            "answer": "left",
+        },
+    ),
+    "reading_fluency": (
+        {
+            "id": "rf-1",
+            "question": "The rain stopped, so Ada closed her umbrella. Why did she close it?",
+            "options": (
+                ("stopped", "The rain stopped"),
+                ("lost", "She lost it"),
+                ("wind", "The wind blew"),
+            ),
+            "answer": "stopped",
+        },
+        {
+            "id": "rf-2",
+            "question": "Which word completes this sentence: The bird ___ over the tree?",
+            "options": (("flew", "flew"), ("blue", "blue"), ("floor", "floor")),
+            "answer": "flew",
+        },
+        {
+            "id": "rf-3",
+            "question": "Musa packed water because the day was hot. What did Musa pack?",
+            "options": (("water", "Water"), ("coat", "A coat"), ("lamp", "A lamp")),
+            "answer": "water",
+        },
+    ),
+    "number_sense": (
+        {
+            "id": "ns-1",
+            "question": "Which number is closest to 50?",
+            "options": (("29", "29"), ("48", "48"), ("71", "71")),
+            "answer": "48",
+        },
+        {
+            "id": "ns-2",
+            "question": "Which is greater?",
+            "options": (("34", "34"), ("43", "43"), ("equal", "They are equal")),
+            "answer": "43",
+        },
+        {
+            "id": "ns-3",
+            "question": "What is half of 12?",
+            "options": (("5", "5"), ("6", "6"), ("7", "7")),
+            "answer": "6",
+        },
+    ),
+}
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -430,6 +531,7 @@ async def current_user_profile(
         ),
         subjects=await _subjects_for_user(session, user),
         profileImageUrl=user.preferences.get("profileImageUrl"),
+        avatarTone=user.avatar_tone,
     )
 
 
@@ -473,6 +575,8 @@ async def update_current_user_profile(
         if value and not value.startswith("https://"):
             raise HTTPException(status_code=422, detail="profileImageUrl must use HTTPS")
         user.preferences = {**user.preferences, "profileImageUrl": value or None}
+    if "avatar_tone" in changes:
+        user.avatar_tone = (payload.avatar_tone or "").strip() or None
     await session.commit()
     school = await session.get(School, user.school_id) if user.school_id else None
     return CurrentUserResponse(
@@ -494,6 +598,7 @@ async def update_current_user_profile(
         ),
         subjects=await _subjects_for_user(session, user),
         profileImageUrl=user.preferences.get("profileImageUrl"),
+        avatarTone=user.avatar_tone,
     )
 
 
@@ -1509,8 +1614,21 @@ async def recalibrate_prompt(
             detail="Students can view only their own warm-up prompt",
         )
     dimensions = ("working_memory", "attention", "reading_fluency", "number_sense")
-    index = int(hashlib.sha256(str(student_id).encode()).hexdigest(), 16) % len(dimensions)
-    return BaselinePromptResponse(dimension=dimensions[index])
+    day_number = datetime.now(UTC).date().toordinal()
+    student_seed = int.from_bytes(hashlib.sha256(str(student_id).encode()).digest()[:8], "big")
+    dimension = dimensions[(day_number + student_seed) % len(dimensions)]
+    items = _BASELINE_ITEMS[dimension]
+    item = items[(day_number // len(dimensions) + student_seed) % len(items)]
+    return BaselinePromptResponse(
+        dimension=dimension,
+        itemId=str(item["id"]),
+        question=str(item["question"]),
+        options=[
+            BaselinePromptOption(value=value, label=label)
+            for value, label in item["options"]  # type: ignore[union-attr]
+        ],
+        answer=str(item["answer"]),
+    )
 
 
 @router.get("/api/analytics/schools", response_model=SchoolHealthResponse, tags=["admin"])
@@ -1820,9 +1938,8 @@ async def get_settings(
     principal: PrincipalDependency, session: DatabaseSession
 ) -> SettingsResponse:
     user = await actor_user(session, principal)
-    return SettingsResponse(
-        settings={"userId": str(user.id), "preferences": dict(user.preferences)}
-    )
+    preferences = {**dict(user.preferences), "avatarTone": user.avatar_tone}
+    return SettingsResponse(settings={"userId": str(user.id), "preferences": preferences})
 
 
 @router.put(
@@ -1842,7 +1959,10 @@ async def update_settings(
     session: DatabaseSession,
 ) -> SettingsResponse:
     user = await actor_user(session, principal)
-    user.preferences = merge_preferences(user.preferences, payload.model_extra or {})
+    incoming = payload.model_extra or {}
+    if "avatarTone" in incoming:
+        user.avatar_tone = str(incoming["avatarTone"] or "").strip()[:40] or None
+    user.preferences = merge_preferences(user.preferences, incoming)
     await session.commit()
     return SettingsResponse(settings={"userId": str(user.id), "preferences": user.preferences})
 
@@ -1919,6 +2039,7 @@ def _lesson_summary(
     return LessonSummaryResponse(
         id=lesson.id,
         title=lesson.title,
+        description=lesson.description,
         sourceType=lesson.source_type.value,
         status=lesson.status.value,
         segmentCount=lesson.segment_count,

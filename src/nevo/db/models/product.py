@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -280,6 +281,54 @@ class LessonProgress(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class LessonQuestionAttempt(Base):
+    """One submitted answer, preserved exactly as the learner saw it."""
+
+    __tablename__ = "lesson_question_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "question_id",
+            "attempt_number",
+            name="uq_lesson_question_attempt_session_question_number",
+        ),
+        UniqueConstraint("client_attempt_id", name="uq_lesson_question_attempt_client_id"),
+        Index(
+            "ix_lesson_question_attempts_student_lesson_submitted",
+            "student_id",
+            "lesson_id",
+            "submitted_at",
+        ),
+        CheckConstraint("attempt_number >= 1", name="lesson_question_attempt_number_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    lesson_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("lesson_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    segment_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("lesson_segments.id", ondelete="SET NULL"), nullable=True
+    )
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    client_attempt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    question_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    answer: Mapped[object] = mapped_column(JSONB, nullable=False)
+    correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 

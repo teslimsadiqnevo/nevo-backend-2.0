@@ -21,6 +21,8 @@ from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
 from nevo.ops.background import spawn
 
+CANNOT_HELP_MARKER = "[[CANNOT_HELP]]"
+
 
 class AskNevoRepository(Protocol):
     async def build_context(
@@ -231,6 +233,7 @@ class AskNevoService:
             )
         if not self._compliance.inspect(answer).allowed:
             answer = self._compliance.sanitize(answer)
+        can_help, cannot_help_reason, answer = interpret_help_state(answer)
         # Names go back only here, on the way to the user. The model saw
         # pseudonyms throughout, including in every tool result.
         if directory is not None:
@@ -269,6 +272,8 @@ class AskNevoService:
         )
         return AskNevoResponse(
             answer=answer,
+            can_help=can_help,
+            cannot_help_reason=cannot_help_reason,
             question_category=category,
             interaction_id=interaction_id,
             ai_gateway_call_id=result.call_id,
@@ -374,3 +379,14 @@ def blocks_for(answer: str) -> list[dict[str, object]]:
         {"type": block.type.value, "text": block.text, "items": list(block.items)}
         for block in structured.blocks
     ]
+
+
+def interpret_help_state(answer: str) -> tuple[bool, str | None, str]:
+    """Turn the model's explicit refusal marker into an API contract."""
+    stripped = answer.lstrip()
+    if not stripped.startswith(CANNOT_HELP_MARKER):
+        return True, None, answer
+    visible = stripped.removeprefix(CANNOT_HELP_MARKER).lstrip(" :\n")
+    if not visible:
+        visible = "I can't help with that here. You can ask your teacher for support."
+    return False, "outside_scope", visible

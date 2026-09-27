@@ -237,6 +237,7 @@ class ContentParsingService:
         review_notes: list[dict[str, object]] = []
         ai_call_count = 0
         recap: str | None = None
+        description: str | None = None
         title: str | None = None
         assessment: list[dict[str, object]] = []
 
@@ -269,6 +270,7 @@ class ContentParsingService:
                 # The lesson's ending comes from whichever chunk wrote one.
                 # A multi-chunk source closes once, not once per chunk.
                 recap = recap or _optional_string(payload.get("recap"))
+                description = description or _optional_string(payload.get("description"))
                 # Likewise its name. The filename is a fallback, not a title:
                 # nobody writing a lesson is naming it for a teacher's library.
                 title = title or _lesson_title(payload.get("title"))
@@ -320,6 +322,7 @@ class ContentParsingService:
         parsed = ParsedLesson(
             title=title or request.title,
             segments=tuple(normalized_segments),
+            description=description or _lesson_description(normalized_segments),
             review_notes=tuple(review_notes),
             confirmation_summary=_confirmation_summary(segments),
             recap=recap,
@@ -1135,9 +1138,7 @@ def _validated_calculation_variant(
                 ),
                 "input": input_kind,
                 "targets": targets,
-                "assembles": str(
-                    step.get("assembles") or step.get("equationState") or ""
-                ).strip(),
+                "assembles": str(step.get("assembles") or step.get("equationState") or "").strip(),
             }
         )
     scaffold = _calculation_scaffold(variant.get("scaffold") or variant.get("manipulative"))
@@ -1156,9 +1157,7 @@ def _validated_calculation_variant(
     return {
         "type": "co_construction",
         "fullEquation": str(variant.get("fullEquation") or "").strip(),
-        "expression": str(
-            variant.get("expression") or variant.get("fullEquation") or ""
-        ).strip(),
+        "expression": str(variant.get("expression") or variant.get("fullEquation") or "").strip(),
         "scaffold": scaffold,
         "manipulative": manipulative,
         "answer": answer,
@@ -1396,3 +1395,16 @@ def _confirmation_summary(segments: list[ParsedLessonSegment]) -> str:
         f"Parsed {len(segments)} lesson segment"
         f"{'' if len(segments) == 1 else 's'} for teacher review."
     )
+
+
+def _lesson_description(segments: list[ParsedLessonSegment]) -> str | None:
+    """A short learner-facing preview when an older prompt omitted one."""
+    for segment in segments:
+        body = " ".join(segment.body.split())
+        if not body:
+            continue
+        if len(body) <= 240:
+            return body
+        clipped = body[:237].rsplit(" ", 1)[0]
+        return f"{clipped}..."
+    return None

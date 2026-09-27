@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from nevo.api.auth import SessionResponse
 from nevo.api.lesson_contracts import (
@@ -370,6 +370,7 @@ class ParentRightResponse(CamelResponse):
 class LessonSummaryResponse(CamelResponse):
     id: UUID
     title: str
+    description: str | None = None
     status: ContentParseStatus
     source_type: LessonSourceType
     segment_count: int
@@ -529,6 +530,20 @@ class LessonProgressResponse(CamelResponse):
         None
     )
     reroute: LessonRerouteResponse | None = None
+
+
+class LessonQuestionAttemptResponse(CamelResponse):
+    id: UUID
+    lesson_id: UUID
+    session_id: UUID
+    question_id: str
+    segment_id: UUID | None = None
+    source: Literal["checkpoint", "assessment"]
+    attempt_number: int
+    question: ComprehensionCheckpoint
+    answer: JsonValue
+    correct: bool | None
+    submitted_at: datetime
 
 
 class PersonReferenceResponse(CamelResponse):

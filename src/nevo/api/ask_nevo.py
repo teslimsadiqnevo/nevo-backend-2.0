@@ -69,6 +69,10 @@ class AskResponse(BaseModel):
     #: The model's answer exactly as returned, unchanged. Kept so nothing that
     #: already reads it breaks, and so the raw output stays inspectable.
     answer: str
+    #: False when Ask Nevo deliberately declined the question. The answer is
+    #: still safe to render, and the client can show its handoff action.
+    can_help: bool = Field(alias="canHelp")
+    cannot_help_reason: str | None = Field(default=None, alias="cannotHelpReason")
     #: The same answer normalised into blocks. Parsed once here rather than in
     #: each client, so every surface renders identically.
     blocks: list[AnswerBlockResponse] = Field(default_factory=list)
@@ -92,6 +96,8 @@ class AskResponse(BaseModel):
         structured = structure_answer(result.answer)
         return cls(
             answer=result.answer,
+            can_help=result.can_help,
+            cannot_help_reason=result.cannot_help_reason,
             blocks=[
                 AnswerBlockResponse(
                     type=block.type,

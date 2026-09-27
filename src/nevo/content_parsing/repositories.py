@@ -274,6 +274,7 @@ class SqlAlchemyContentParsingRepository:
                         school_id=school_id,
                         created_by_user_id=requested_by_user_id,
                         title=parsed.title,
+                        description=parsed.description,
                         subject=(
                             str(request.source_metadata["subject"])
                             if request.source_metadata.get("subject")
@@ -303,6 +304,7 @@ class SqlAlchemyContentParsingRepository:
                     parsed=parsed,
                 )
                 lesson.title = parsed.title
+                lesson.description = parsed.description
                 lesson.subject = (
                     str(request.source_metadata["subject"])
                     if request.source_metadata.get("subject")
@@ -413,6 +415,7 @@ class SqlAlchemyContentParsingRepository:
             parse_run_id=parse_run_id,
             status=status,
             title=parsed.title,
+            description=parsed.description,
             segment_count=len(parsed.segments),
             review_segment_count=review_segment_count,
             confirmation_summary=parsed.confirmation_summary,

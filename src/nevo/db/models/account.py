@@ -286,6 +286,9 @@ class User(TimestampMixin, Base):
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+    #: A stable presentation preference, separate from the open-ended settings
+    #: bag so profile identity does not depend on an untyped key forever.
+    avatar_tone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     age_band: Mapped[str | None] = mapped_column(String(40), nullable=True)
     #: From the school's roster. Age is derived from it wherever a screen
     #: needs one, so a child is never asked for what the school already told

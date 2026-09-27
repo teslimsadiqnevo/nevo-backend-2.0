@@ -82,6 +82,7 @@ class Lesson(Base):
         nullable=False,
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     subject: Mapped[str | None] = mapped_column(String(120), nullable=True)
     source_type: Mapped[LessonSourceType] = mapped_column(
         lesson_source_type_enum,

@@ -25,6 +25,8 @@ class FakeAskNevoService(AskNevoService):
         self.requests.append((actor_user_id, request))
         return AskNevoResponse(
             answer="Let's use the current example and try one smaller step.",
+            can_help=True,
+            cannot_help_reason=None,
             question_category=AskNevoQuestionCategory.LESSON_HELP,
             interaction_id=INTERACTION_ID,
             ai_gateway_call_id=CALL_ID,

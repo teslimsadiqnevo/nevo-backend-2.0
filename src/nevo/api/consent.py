@@ -134,6 +134,13 @@ class CompleteParentConsentRequest(BaseModel):
         alias="parentRelationship",
         max_length=80,
     )
+    #: The parent's name, as the parent writes it.
+    #:
+    #: Kept in preference to the school's version wherever both exist. The two
+    #: will not always agree on spelling, and a name the data subject typed
+    #: themselves is better evidence of who consented than one a third party
+    #: transcribed off a roster.
+    parent_name: str | None = Field(default=None, alias="parentName", max_length=255)
 
 
 class ParentConsentCompletionResponse(BaseModel):
@@ -332,6 +339,7 @@ async def complete_parent_consent(
             granted_types=frozenset(payload.granted_types),
             child_date_of_birth=payload.child_date_of_birth,
             parent_relationship=payload.parent_relationship,
+            parent_name=payload.parent_name,
         )
         if completion is None:
             raise InvalidConsentInvitationError

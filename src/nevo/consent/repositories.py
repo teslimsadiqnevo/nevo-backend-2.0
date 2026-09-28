@@ -217,6 +217,7 @@ class SqlAlchemyConsentRepository:
         granted_types: frozenset[ConsentType],
         child_date_of_birth: date | None = None,
         parent_relationship: str | None = None,
+        parent_name: str | None = None,
         notice_version: str | None = None,
     ) -> ParentConsentCompletion | None:
         try:
@@ -286,6 +287,12 @@ class SqlAlchemyConsentRepository:
                         # two, and the digital route never carried either.
                         record.parent_relationship = parent_relationship
                         record.notice_version = notice_version
+                        if parent_name and parent_name.strip():
+                            # The parent's own spelling, kept in preference to
+                            # the school's: the two will not always agree, and
+                            # a name the data subject typed is better evidence
+                            # of who consented than a transcribed one.
+                            record.parent_name_on_form = parent_name.strip()
                 for consent_type in declined:
                     # Asked and not granted is an answer. Left pending it
                     # looks like a parent who never replied, and the school

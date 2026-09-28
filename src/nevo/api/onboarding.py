@@ -58,9 +58,27 @@ STUDENT_COLUMNS = (
     "last_name",
     "class",
     "date_of_birth",
-    "parent_name",
+    "parent_first_name",
+    "parent_surname",
     "parent_email",
 )
+
+#: Columns the file must carry a value in, per row.
+#:
+#: Date of birth, because age is derived from it and a row without one cannot
+#: pass the age check. Parent email, because activation depends on the consent
+#: request reaching somebody. A parent's name is not here: a school filling
+#: four hundred rows will miss some, and the parent confirms their own name at
+#: consent anyway - which is better evidence than a name a school transcribed.
+REQUIRED_STUDENT_COLUMNS = (
+    "first_name",
+    "last_name",
+    "class",
+    "date_of_birth",
+    "parent_email",
+)
+
+REQUIRED_TEACHER_COLUMNS = ("first_name", "last_name", "email")
 TEACHER_COLUMNS = ("first_name", "last_name", "email", "class")
 
 #: Teachers are free; students are what a school pays for. Adding a teacher
@@ -358,9 +376,22 @@ def _read_rows(raw: bytes, kind: OnboardingRowKind) -> list[OnboardingRow]:
         if class_name:
             row.class_name = parse_class_name(class_name).name
             row.normalised_class_name = normalise_class_name(class_name)
-        _reject_incomplete(row, values, wanted)
+        _reject_incomplete(row, values, _required(kind))
         rows.append(row)
     return rows
+
+
+def _required(kind: OnboardingRowKind) -> tuple[str, ...]:
+    """Which of the columns a row must actually fill in.
+
+    Separate from the header list: a column can be part of the template, and
+    so required to be present, without every row having to carry a value.
+    Parent name is exactly that.
+    """
+
+    if kind is OnboardingRowKind.STUDENT:
+        return REQUIRED_STUDENT_COLUMNS
+    return REQUIRED_TEACHER_COLUMNS
 
 
 def _reject_incomplete(

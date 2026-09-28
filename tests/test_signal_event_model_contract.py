@@ -117,6 +117,10 @@ def test_lesson_sessions_table_tracks_resume_and_counts() -> None:
         "exit_position",
         "break_count",
         "proactive_adjustments_count",
+        # SCRUM-178: a lesson where nothing landed is re-run at lower depth,
+        # and the re-run has to know it is one and what it came from.
+        "delivery_depth",
+        "rerouted_from_session_id",
         "created_at",
         "updated_at",
     }

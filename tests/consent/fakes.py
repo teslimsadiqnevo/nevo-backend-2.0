@@ -114,6 +114,9 @@ class MemoryConsentRepository:
         granted_types: frozenset[ConsentType] = frozenset(),
         child_date_of_birth: date | None = None,
         parent_relationship: str | None = None,
+        #: The parent's own spelling of their name, which the real repository
+        #: keeps in preference to the school's. SCRUM-189.
+        parent_name: str | None = None,
         notice_version: str | None = None,
     ) -> ParentConsentCompletion | None:
         draft = self.requests.get(token_digest)

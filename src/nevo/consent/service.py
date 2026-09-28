@@ -126,6 +126,7 @@ class ConsentService:
         granted_types: frozenset[ConsentType],
         child_date_of_birth: date | None = None,
         parent_relationship: str | None = None,
+        parent_name: str | None = None,
     ) -> ParentConsentCompletion | None:
         """Record what the parent ticked, and only what they ticked."""
 
@@ -135,6 +136,7 @@ class ConsentService:
             granted_types=granted_types,
             child_date_of_birth=child_date_of_birth,
             parent_relationship=parent_relationship,
+            parent_name=parent_name,
             notice_version=NOTICE_VERSION,
         )
 

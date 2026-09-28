@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +43,7 @@ from nevo.api.response_models import (
 from nevo.auth.security import Argon2idCredentialHasher
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.auth import AuthSession
+from nevo.db.models.consent import ParentLink
 from nevo.db.models.content import Lesson
 from nevo.db.models.frontend_support import LessonAssignment, Notification
 from nevo.db.models.product import (
@@ -64,6 +65,7 @@ from nevo.domain.accounts.vocabulary import (
     UserRole,
     UserStatus,
 )
+from nevo.domain.consent.vocabulary import ParentContactMethod
 from nevo.retention.anonymisation import anonymise_student
 
 router = APIRouter(prefix="/api/v1", tags=["school administration"])
@@ -156,6 +158,18 @@ class StudentEnroll(BaseModel):
     #: confirms the other half - so a child enrolled without one cannot have
     #: that check done until it is filled in.
     date_of_birth: date | None = Field(default=None, alias="dateOfBirth")
+    #: Where this child's consent request is sent.
+    #:
+    #: Email only on this path, deliberately. A proprietor enrolling one child
+    #: mid-term should not have to go and find a parent's full name first, and
+    #: the parent supplies their own name at consent - which is better evidence
+    #: than a name a school transcribed. The roster CSV asks for both because
+    #: a school filling that file already has them to hand.
+    #:
+    #: This was briefly removed on the advice that a contact we do not yet act
+    #: on should not be stored. That was wrong: consent gates activation, so
+    #: the address has a purpose the moment it is entered.
+    parent_email: EmailStr | None = Field(default=None, alias="parentEmail")
 
     @field_validator("date_of_birth")
     @classmethod
@@ -987,6 +1001,20 @@ async def enroll_student(
     session.add(student)
     await session.flush()
     session.add(StudentClassEnrollment(student_id=student.id, class_id=payload.class_id))
+    if payload.parent_email:
+        # Recorded now so the consent request has somewhere to go. The name is
+        # left for the parent to supply when they answer: theirs is the version
+        # the consent record should hold, and asking a proprietor to find it
+        # first is what kept this field off the screen.
+        session.add(
+            ParentLink(
+                school_id=actor.school_id,
+                student_id=student.id,
+                parent_name="",
+                parent_contact=str(payload.parent_email).casefold(),
+                contact_method=ParentContactMethod.EMAIL,
+            )
+        )
     session.add(
         EnrollmentHistory(
             student_id=student.id,

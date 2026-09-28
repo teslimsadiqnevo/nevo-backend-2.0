@@ -14,6 +14,7 @@ import inspect
 import pytest
 
 from nevo.api.onboarding import (
+    REQUIRED_STUDENT_COLUMNS,
     STUDENT_COLUMNS,
     TEACHER_COLUMNS,
     _derived_classes,
@@ -24,11 +25,12 @@ from nevo.domain.onboarding.vocabulary import OnboardingRowKind, OnboardingStage
 from nevo.main import app
 
 STUDENTS = (
-    b"first_name,last_name,class,date_of_birth,parent_name,parent_email\n"
-    b"Amara,Okafor,JSS 1A,2015-04-23,Ngozi Okafor,ngozi@example.com\n"
-    b"Tunde,Bello,jss 1a ,2015-06-02,Bisi Bello,bisi@example.com\n"
-    b"Chidi,Eze,JSS  2B,2014-11-30,Uche Eze,uche@example.com\n"
-    b"Sade,Adeyemi,,2015-01-09,Kemi Adeyemi,kemi@example.com\n"
+    b"first_name,last_name,class,date_of_birth,parent_first_name,parent_surname,parent_email\n"
+    b"Amara,Okafor,JSS 1A,2015-04-23,Ngozi,Okafor,ngozi@example.com\n"
+    b"Tunde,Bello,jss 1a ,2015-06-02,Bisi,Bello,bisi@example.com\n"
+    # No parent name, and the row still stands: SCRUM-189.
+    b"Chidi,Eze,JSS  2B,2014-11-30,,,uche@example.com\n"
+    b"Sade,Adeyemi,,2015-01-09,Kemi,Adeyemi,kemi@example.com\n"
 )
 
 
@@ -38,9 +40,14 @@ def spec() -> dict:
 
 
 def test_a_parent_is_mandatory_on_a_student_row() -> None:
-    # A child whose parent cannot be reached cannot be consented for.
-    assert "parent_name" in STUDENT_COLUMNS
+    # A child whose parent cannot be reached cannot be consented for, so the
+    # address is required. The name is asked for and not insisted on: the
+    # parent supplies their own at consent. SCRUM-189.
+    assert "parent_first_name" in STUDENT_COLUMNS
+    assert "parent_surname" in STUDENT_COLUMNS
     assert "parent_email" in STUDENT_COLUMNS
+    assert "parent_email" in REQUIRED_STUDENT_COLUMNS
+    assert "parent_first_name" not in REQUIRED_STUDENT_COLUMNS
     assert "parent_email" not in TEACHER_COLUMNS
 
 

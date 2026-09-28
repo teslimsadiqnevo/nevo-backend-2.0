@@ -43,6 +43,7 @@ class ConsentRepository(Protocol):
         granted_types: frozenset[ConsentType],
         child_date_of_birth: date | None = None,
         parent_relationship: str | None = None,
+        parent_name: str | None = None,
         notice_version: str | None = None,
     ) -> ParentConsentCompletion | None: ...
 

@@ -29,6 +29,7 @@ from nevo.api.docs import (
 from nevo.api.email_confirmation import router as email_confirmation_router
 from nevo.api.exports import router as exports_router
 from nevo.api.frontend_unblockers import router as frontend_unblockers_router
+from nevo.api.import_templates import router as import_templates_router
 from nevo.api.insights import router as insights_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.learning_support import router as learning_support_router
@@ -376,6 +377,7 @@ app.include_router(learning_support_records_router)
 app.include_router(student_entry_router)
 app.include_router(transformation_metrics_router)
 app.include_router(written_consent_router)
+app.include_router(import_templates_router)
 app.include_router(subjects_router)
 app.include_router(support_router)
 app.include_router(sso_router)

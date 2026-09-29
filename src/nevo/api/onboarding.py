@@ -448,8 +448,42 @@ def _parse_date(value: str) -> date | None:
     return None
 
 
+#: Words a school writes for a column we call something else.
+#:
+#: Tolerance in the same spirit as reading four date formats: a file that says
+#: "Surname" is not a malformed file. This list is also what makes the generated
+#: templates importable, since the readable heading has to fold back to the
+#: column the parser wants - a round trip the template test asserts.
+COLUMN_ALIASES = {
+    "surname": "last_name",
+    "family_name": "last_name",
+    "other_names": "first_name",
+    "given_name": "first_name",
+    "given_names": "first_name",
+    "forename": "first_name",
+    "dob": "date_of_birth",
+    "date_of_birth_yyyy_mm_dd": "date_of_birth",
+    "class_name": "name",
+    "classes": "class",
+    # What the drawn template actually says. Punctuation is stripped to a
+    # space, so "Class(es)" arrives here as class_es.
+    "class_es": "class",
+    "subject": "subjects",
+    "parent_name": "parent_first_name",
+    "guardian_email": "parent_email",
+    "parent_e_mail": "parent_email",
+    "e_mail": "email",
+    "email_address": "email",
+}
+
+
 def _column(name: str) -> str:
-    return name.strip().casefold().replace(" ", "_")
+    folded = name.strip().casefold()
+    # Punctuation a spreadsheet picks up: "Class (es)", "E-mail", "D.O.B".
+    for character in "().-/":
+        folded = folded.replace(character, " ")
+    folded = "_".join(folded.split())
+    return COLUMN_ALIASES.get(folded, folded)
 
 
 @router.get("", response_model=OnboardingState)

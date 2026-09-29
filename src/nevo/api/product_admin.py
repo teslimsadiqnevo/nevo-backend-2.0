@@ -707,7 +707,7 @@ async def class_detail(
     }
 
 
-async def _student_counts(session, class_ids: list[UUID]) -> dict[UUID, int]:
+async def _student_counts(session: AsyncSession, class_ids: list[UUID]) -> dict[UUID, int]:
     """Enrolment counts for many classes in one query."""
     if not class_ids:
         return {}
@@ -766,7 +766,9 @@ async def _teachers_by_class(
     return by_class
 
 
-async def _class_subjects_bulk(session, class_ids: list[UUID]) -> dict[UUID, list[str]]:
+async def _class_subjects_bulk(
+    session: AsyncSession, class_ids: list[UUID]
+) -> dict[UUID, list[str]]:
     """Distinct subjects for many classes in one query."""
     if not class_ids:
         return {}
@@ -802,7 +804,7 @@ def _subjects_for(stated: list[str] | None, derived: list[str]) -> list[str]:
     return list(dict.fromkeys(kept)) if kept else derived
 
 
-async def _class_subjects(session, class_id: UUID) -> list[str]:
+async def _class_subjects(session: AsyncSession, class_id: UUID) -> list[str]:
     subjects = await session.scalars(
         select(Lesson.subject)
         .join(LessonAssignment, LessonAssignment.lesson_id == Lesson.id)
@@ -1260,7 +1262,8 @@ async def restore_notification(
         )
         .values(archived_at=None)
     )
-    if result.rowcount == 0:
+    # CursorResult carries rowcount; the Result the stubs promise does not.
+    if result.rowcount == 0:  # type: ignore[attr-defined]
         raise HTTPException(status_code=404, detail="Notification not found")
     await session.commit()
 

@@ -4,7 +4,7 @@ import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -807,7 +807,11 @@ async def save_lesson_question_attempt(
         )
         or 1
     )
-    answer_key = question.get("answerKey")
+    # The snapshot is an untyped bag, so what comes out of it is object. Cast
+    # rather than widen _normalise_answer's signature: it is the one place that
+    # knows what shapes an answer can be, and loosening it there would let
+    # anything through everywhere else.
+    answer_key = cast(JsonValue | None, question.get("answerKey"))
     record = LessonQuestionAttempt(
         student_id=actor.id,
         lesson_id=lesson.id,

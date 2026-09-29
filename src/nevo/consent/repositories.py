@@ -1029,8 +1029,13 @@ async def _notify_school_of_pending_consent(
         notification_type=NotificationType.CONSENT_ACTION_REQUIRED,
         title=f"Consent requested for {child}",
         description=(
-            f"{parent_name} has been asked to give consent. Until they reply, "
-            f"{child} keeps learning - only a withdrawal stops a child."
+            # Addressed to an administrator, not to the parent, so it reports
+            # rather than asks. It used to say the child kept learning until
+            # the parent replied, which is the opposite of what the API does:
+            # student entry refuses an outstanding consent with
+            # consent_pending. A notification that contradicts the product is
+            # worse than none, because a school plans around it.
+            f"{parent_name} has been asked for permission. {child} cannot start until they answer."
         ),
         navigates_to="/admin/consent",
     )

@@ -6,7 +6,8 @@ from uuid import UUID
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from nevo.db.models.consent import ConsentNotificationOutbox
+from nevo.db.models.account import User
+from nevo.db.models.consent import ConsentInvitation, ConsentNotificationOutbox
 from nevo.domain.consent.vocabulary import (
     ConsentDeliveryStatus,
     ConsentNotificationKind,
@@ -20,15 +21,37 @@ EMAIL_SUBJECT = "Review your child's Nevo consent request"
 RECEIPT_SUBJECT = "Your Nevo consent - a copy for your records"
 
 
-def consent_message(consent_url: str) -> str:
+def opening_line(child_name: str | None) -> str:
+    """What the parent reads first. Copy from the CEO, 29 September.
+
+    It replaces "Nevo needs your confirmation before your child's learning
+    data is used", which asked for something without saying what turned on it.
+    This says what the parent's answer actually decides, and it is true: a
+    child whose consent is outstanding is refused at the door with
+    consent_pending, so nothing does start before then.
+    """
+
+    if child_name:
+        return (
+            f"{child_name}'s learning begins as soon as you give permission. "
+            "Nothing starts before then."
+        )
+    # No first name on the roster. The same promise, without pretending to a
+    # name we do not have.
     return (
-        "Nevo needs your confirmation before your child's learning data is used. "
+        "Your child's learning begins as soon as you give permission. Nothing starts before then."
+    )
+
+
+def consent_message(consent_url: str, child_name: str | None = None) -> str:
+    return (
+        f"{opening_line(child_name)} "
         f"Review and respond here: {consent_url}\n\n"
         "This link expires in 7 days. If you did not expect this, ignore this message."
     )
 
 
-def consent_html(consent_url: str) -> str:
+def consent_html(consent_url: str, child_name: str | None = None) -> str:
     """The same words as the plain-text version, in Nevo's shell.
 
     This is the message most likely to be mistaken for a phishing attempt: it
@@ -38,10 +61,12 @@ def consent_html(consent_url: str) -> str:
 
     return render_email(
         heading="A decision about your child's learning",
-        preheader="Nevo needs your confirmation. The link expires in 7 days.",
-        paragraphs=[
-            "Nevo needs your confirmation before your child's learning data is used.",
-        ],
+        # The preview line an inbox shows before the mail is opened. It
+        # carried the same sentence the new copy replaced, so leaving it would
+        # have put the struck wording back in front of every parent, in the
+        # one line they read first.
+        preheader="Nothing starts until you give permission. The link expires in 7 days.",
+        paragraphs=[opening_line(child_name)],
         cta=("Review and respond", consent_url),
         footnote=(
             "This link expires in 7 days. If you did not expect this, you can "
@@ -109,15 +134,15 @@ class ConsentDeliveryWorker:
         claimed = await self._claim()
         if claimed is None:
             return False
-        outbox_id, _method, destination, consent_url, kind = claimed
+        outbox_id, _method, destination, consent_url, kind, child_name = claimed
         is_receipt = kind is ConsentNotificationKind.RECEIPT
-        message = receipt_message() if is_receipt else consent_message(consent_url)
+        message = receipt_message() if is_receipt else consent_message(consent_url, child_name)
         try:
             await self._email.send(
                 to=destination,
                 subject=RECEIPT_SUBJECT if is_receipt else EMAIL_SUBJECT,
                 text=message,
-                html=(receipt_html() if is_receipt else consent_html(consent_url)),
+                html=(receipt_html() if is_receipt else consent_html(consent_url, child_name)),
             )
         except Exception as error:
             await self._failed(outbox_id, error)
@@ -132,7 +157,7 @@ class ConsentDeliveryWorker:
 
     async def _claim(
         self,
-    ) -> tuple[UUID, ParentContactMethod, str, str, ConsentNotificationKind] | None:
+    ) -> tuple[UUID, ParentContactMethod, str, str, ConsentNotificationKind, str | None] | None:
         now = datetime.now(UTC)
         async with self._sessions.begin() as session:
             record = await session.scalar(
@@ -159,12 +184,20 @@ class ConsentDeliveryWorker:
             record.status = ConsentDeliveryStatus.PROCESSING
             record.attempt_count += 1
             record.last_error = None
+            # The child's own name, so the email can say whose learning is
+            # waiting. One join, inside the claim that is already open.
+            child_name = await session.scalar(
+                select(User.first_name)
+                .join(ConsentInvitation, ConsentInvitation.student_id == User.id)
+                .where(ConsentInvitation.id == record.invitation_id)
+            )
             return (
                 record.id,
                 record.contact_method,
                 record.destination,
                 record.consent_url,
                 record.kind,
+                child_name,
             )
 
     async def _sent(self, outbox_id: UUID) -> None:

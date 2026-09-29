@@ -3,7 +3,7 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID, uuid4
 from xml.sax.saxutils import unescape
 from zipfile import ZipFile
@@ -1625,7 +1625,7 @@ async def recalibrate_prompt(
         question=str(item["question"]),
         options=[
             BaselinePromptOption(value=value, label=label)
-            for value, label in item["options"]  # type: ignore[union-attr]
+            for value, label in cast(list[tuple[str, str]], item["options"])
         ],
         answer=str(item["answer"]),
     )

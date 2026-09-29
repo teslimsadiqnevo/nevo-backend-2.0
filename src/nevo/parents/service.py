@@ -35,22 +35,28 @@ class ParentInsightService:
     async def children(self, parent_id: UUID) -> list[ParentChildView]:
         return await self._consent.children_for_parent(parent_id)
 
+    async def require_linked_child(self, *, parent_id: UUID, student_id: UUID) -> ParentChildView:
+        """Refuse a learner who is not this parent's, before reading anything.
+
+        The link table is the only authority on this, and the check runs first
+        rather than filtering afterwards - a read that happens and is then
+        discarded has still happened. Returns the child so a caller that needs
+        their name does not fetch them twice.
+        """
+
+        children = await self._consent.children_for_parent(parent_id)
+        child = next((item for item in children if item.student_id == student_id), None)
+        if child is None:
+            raise ChildNotLinkedError
+        return child
+
     async def growth(
         self,
         *,
         parent_id: UUID,
         student_id: UUID,
     ) -> GrowthNarrative:
-        children = await self._consent.children_for_parent(parent_id)
-        child = next(
-            (item for item in children if item.student_id == student_id),
-            None,
-        )
-        if child is None:
-            # The link table is the only authority on this. A parent asking
-            # about a learner who is not theirs is refused before any signal
-            # is read, not after.
-            raise ChildNotLinkedError
+        child = await self.require_linked_child(parent_id=parent_id, student_id=student_id)
 
         today = self._now().date()
         period_start = today - timedelta(days=WINDOW_DAYS)

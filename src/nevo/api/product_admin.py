@@ -44,8 +44,7 @@ from nevo.auth.security import Argon2idCredentialHasher
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.auth import AuthSession
 from nevo.db.models.consent import ParentLink
-from nevo.db.models.content import Lesson
-from nevo.db.models.frontend_support import LessonAssignment, Notification
+from nevo.db.models.frontend_support import Notification
 from nevo.db.models.product import (
     DpaAcceptance,
     EnrollmentHistory,
@@ -67,6 +66,11 @@ from nevo.domain.accounts.vocabulary import (
 )
 from nevo.domain.consent.vocabulary import ParentContactMethod
 from nevo.retention.anonymisation import anonymise_student
+from nevo.subjects.resolution import (
+    set_class_subjects,
+    subjects_for_class,
+    subjects_for_classes,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["school administration"])
 SearchQuery = Annotated[str | None, Query(max_length=100)]
@@ -501,11 +505,14 @@ async def list_classes(
     class_ids = [item.id for item in classes]
     counts = await _student_counts(session, class_ids)
     teachers = await _teachers_by_class(session, class_ids)
-    subjects_by_class = await _class_subjects_bulk(session, class_ids)
+    # The class's own scheme of work, which is authoritative for it. It used
+    # to be derived from the subjects of lessons already assigned, so a class
+    # with nothing assigned read as having no subjects at all. SCRUM-194.
+    subjects_by_class = await subjects_for_classes(session, class_ids)
     result: list[dict[str, object]] = []
     for item in classes:
         student_count = counts.get(item.id, 0)
-        subjects = _subjects_for(item.stated_subjects, subjects_by_class.get(item.id, []))
+        subjects = subjects_by_class.get(item.id, [])
         result.append(
             {
                 "id": str(item.id),
@@ -526,6 +533,26 @@ async def list_classes(
     return result
 
 
+def _school_of(user: User) -> UUID:
+    """The actor's school, narrowed.
+
+    require_school_actor has already established there is one; the column is
+    nullable because a Nevo-side account has no school, and that account cannot
+    reach these routes. Raising rather than asserting so a wrong turn is a 403
+    and not a 500.
+    """
+
+    if user.school_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "school_context_required",
+                "message": "This action belongs to a school account.",
+            },
+        )
+    return user.school_id
+
+
 def _class_row(payload: ClassWrite, *, school_id: UUID | None, source: str = "manual") -> Class:
     """One class, with the parts of its name it did not have to be told.
 
@@ -543,7 +570,6 @@ def _class_row(payload: ClassWrite, *, school_id: UUID | None, source: str = "ma
         capacity=payload.capacity,
         class_code=secrets.token_hex(3).upper(),
         source=source,
-        stated_subjects=list(payload.subjects or []),
     )
 
 
@@ -598,6 +624,15 @@ async def create_class(
             detail=_duplicate_class_detail(school_class, existing),
         )
     session.add(school_class)
+    await session.flush()
+    if payload.subjects:
+        await set_class_subjects(
+            session,
+            school_id=_school_of(user),
+            class_id=school_class.id,
+            typed=payload.subjects,
+            created_by_user_id=user.id,
+        )
     await session.commit()
     return {"id": str(school_class.id), "code": school_class.class_code}
 
@@ -655,6 +690,16 @@ async def create_classes(
         seen[key] = index
         session.add(row)
         await session.flush()
+        if item.subjects:
+            # Carried on the bulk path too: a school setting up nine classes at
+            # once is not forced through nine separate edits. SCRUM-194.
+            await set_class_subjects(
+                session,
+                school_id=_school_of(user),
+                class_id=row.id,
+                typed=item.subjects,
+                created_by_user_id=user.id,
+            )
         created.append(IdCodeResponse(id=row.id, code=row.class_code))
     await session.commit()
     return BulkClassResponse(created=created, rejected=rejected)
@@ -674,9 +719,16 @@ async def update_class(
     school_class.name = payload.name
     school_class.year_group = payload.year_group
     if payload.subjects is not None:
-        # Sent, so it is a statement - including an empty list, which means
-        # "stop stating and go back to deriving from the lessons assigned".
-        school_class.stated_subjects = list(payload.subjects)
+        # Sent, so it is the class's scheme of work. An empty list clears it,
+        # which is a school saying it has not decided yet rather than a school
+        # asking us to guess from assigned lessons.
+        await set_class_subjects(
+            session,
+            school_id=_school_of(user),
+            class_id=school_class.id,
+            typed=payload.subjects,
+            created_by_user_id=user.id,
+        )
     await session.commit()
     return {"id": str(school_class.id), "name": school_class.name}
 
@@ -694,7 +746,7 @@ async def class_detail(
             StudentClassEnrollment.class_id == class_id
         )
     )
-    subjects = _subjects_for(school_class.stated_subjects, await _class_subjects(session, class_id))
+    subjects = await subjects_for_class(session, class_id)
     return {
         "id": str(school_class.id),
         "name": school_class.name,
@@ -764,59 +816,6 @@ async def _teachers_by_class(
             }
         )
     return by_class
-
-
-async def _class_subjects_bulk(
-    session: AsyncSession, class_ids: list[UUID]
-) -> dict[UUID, list[str]]:
-    """Distinct subjects for many classes in one query."""
-    if not class_ids:
-        return {}
-    rows = await session.execute(
-        select(LessonAssignment.class_id, Lesson.subject)
-        .join(Lesson, Lesson.id == LessonAssignment.lesson_id)
-        .where(
-            LessonAssignment.class_id.in_(class_ids),
-            LessonAssignment.status != "cancelled",
-            Lesson.subject.is_not(None),
-        )
-        .distinct()
-        .order_by(LessonAssignment.class_id, Lesson.subject)
-    )
-    grouped: dict[UUID, list[str]] = {}
-    for class_id, subject in rows:
-        if subject:
-            grouped.setdefault(class_id, []).append(str(subject))
-    return grouped
-
-
-def _subjects_for(stated: list[str] | None, derived: list[str]) -> list[str]:
-    """What a class's subjects are: what a teacher said, or what we worked out.
-
-    Stated replaces derived rather than adding to it. A teacher who writes a
-    list and still sees a subject they did not write has no way to remove it,
-    so a merging control would be lying about what it does. Nothing stated
-    falls back to the lessons assigned, which is what every class does today
-    and the only thing a class with no assignments yet can do.
-    """
-
-    kept = [subject.strip() for subject in (stated or []) if subject and subject.strip()]
-    return list(dict.fromkeys(kept)) if kept else derived
-
-
-async def _class_subjects(session: AsyncSession, class_id: UUID) -> list[str]:
-    subjects = await session.scalars(
-        select(Lesson.subject)
-        .join(LessonAssignment, LessonAssignment.lesson_id == Lesson.id)
-        .where(
-            LessonAssignment.class_id == class_id,
-            LessonAssignment.status != "cancelled",
-            Lesson.subject.is_not(None),
-        )
-        .distinct()
-        .order_by(Lesson.subject)
-    )
-    return [str(item) for item in subjects.all() if item]
 
 
 @router.post("/classes/{class_id}/archive", status_code=204)

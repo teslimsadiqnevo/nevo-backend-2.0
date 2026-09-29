@@ -9,29 +9,30 @@ request per row.
 
 from __future__ import annotations
 
-from nevo.api.product_admin import _subjects_for
 from nevo.main import app
 
-DERIVED = ["Basic Science", "Mathematics"]
+
+def test_subjects_are_stated_and_not_derived() -> None:
+    """SCRUM-194 replaced the derived list with the class's own.
+
+    Subjects used to be worked out from the subjects of lessons already
+    assigned, so a class with nothing assigned read as having none - and a
+    teacher had no way to say what it is taught. The derivation is gone.
+    """
+
+    import nevo.api.product_admin as admin
+
+    assert not hasattr(admin, "_subjects_for")
+    assert not hasattr(admin, "_class_subjects_bulk")
 
 
-def test_nothing_stated_falls_back_to_what_was_derived() -> None:
-    # Today's behaviour, and the only thing a class with no assignments can do.
-    assert _subjects_for([], DERIVED) == DERIVED
-    assert _subjects_for(None, DERIVED) == DERIVED
+def test_normalising_folds_case_and_inner_spacing() -> None:
+    from nevo.subjects.resolution import normalise
 
-
-def test_stated_replaces_derived_rather_than_merging() -> None:
-    # A teacher who writes a list and still sees a subject they did not write
-    # has no way to remove it, so merging would be lying about the control.
-    assert _subjects_for(["English"], DERIVED) == ["English"]
-    assert "Mathematics" not in _subjects_for(["English"], DERIVED)
-
-
-def test_a_stated_list_is_tidied_but_not_second_guessed() -> None:
-    assert _subjects_for(["  English  ", "English", ""], DERIVED) == ["English"]
-    # Whitespace-only is not a statement, so it falls back.
-    assert _subjects_for(["   "], DERIVED) == DERIVED
+    # One school holding "Maths" and " maths " as two subjects is the thing
+    # the uniqueness on normalised_name exists to stop.
+    assert normalise("  Further   MATHS ") == "further maths"
+    assert normalise("Mathematics") == normalise("mathematics")
 
 
 def test_a_teacher_can_send_one_and_take_it_back() -> None:

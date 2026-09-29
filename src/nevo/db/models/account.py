@@ -382,20 +382,6 @@ class Class(TimestampMixin, Base):
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, default="manual", server_default="manual"
     )
-    #: Subjects a teacher stated for this class.
-    #:
-    #: Replaces the derived list rather than adding to it. A teacher who
-    #: writes a list and still sees a subject they did not write has no way to
-    #: remove it, so a merging control would be lying about what it does.
-    #: Empty means fall back to deriving them from the lessons assigned, which
-    #: is what every class does today and what a class with no assignments
-    #: still needs.
-    stated_subjects: Mapped[list[str]] = mapped_column(
-        JSONB,
-        nullable=False,
-        default=list,
-        server_default=text("'[]'::jsonb"),
-    )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     school: Mapped[School] = relationship(back_populates="classes")

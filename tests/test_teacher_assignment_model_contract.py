@@ -7,9 +7,7 @@ from nevo.db.base import Base
 
 
 def enum_values(column_name: str) -> list[str]:
-    column = Base.metadata.tables["teacher_class_assignments"].columns[
-        column_name
-    ]
+    column = Base.metadata.tables["teacher_class_assignments"].columns[column_name]
     assert isinstance(column.type, Enum)
     return list(column.type.enums)
 
@@ -25,9 +23,7 @@ def foreign_key_targets() -> set[tuple[str, str]]:
 
 
 def check_names() -> Iterable[str]:
-    for constraint in Base.metadata.tables[
-        "teacher_class_assignments"
-    ].constraints:
+    for constraint in Base.metadata.tables["teacher_class_assignments"].constraints:
         if isinstance(constraint, CheckConstraint) and constraint.name:
             yield constraint.name
 
@@ -35,9 +31,7 @@ def check_names() -> Iterable[str]:
 def index_names() -> set[str]:
     return {
         index.name
-        for index in Base.metadata.tables[
-            "teacher_class_assignments"
-        ].indexes
+        for index in Base.metadata.tables["teacher_class_assignments"].indexes
         if isinstance(index, Index) and index.name
     }
 
@@ -58,12 +52,13 @@ def test_assignment_references_tenant_teacher_class_and_history() -> None:
 
 def test_active_assignment_invariants_are_indexed() -> None:
     indexes = index_names()
-    assert "uq_teacher_class_assignments_active_pair" in indexes
+    # Teacher, class AND subject since SCRUM-194: one teacher teaching two
+    # subjects to the same class is two assignments, and the old pair index
+    # made that impossible.
+    assert "uq_teacher_class_assignments_active_triple" in indexes
+    assert "uq_teacher_class_assignments_active_pair" not in indexes
     assert "uq_teacher_class_assignments_active_primary" in indexes
 
 
 def test_removal_history_has_timestamp_check() -> None:
-    assert (
-        "ck_teacher_class_assignments_removed_after_assignment"
-        in set(check_names())
-    )
+    assert "ck_teacher_class_assignments_removed_after_assignment" in set(check_names())

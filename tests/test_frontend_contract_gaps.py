@@ -3,6 +3,7 @@
 Each test pins a read-side promise to the write path that can now fulfil it,
 so a required field cannot silently go back to having no way to change it.
 """
+
 from nevo.db.base import Base
 from nevo.domain.accounts.vocabulary import NotificationCategory
 from nevo.domain.intelligence.vocabulary import (
@@ -126,9 +127,7 @@ def test_segments_and_lessons_both_report_a_duration() -> None:
     source for its minute totals.
     """
     schemas = app.openapi()["components"]["schemas"]
-    segment_shapes = [
-        name for name in schemas if name.endswith(("LessonSegmentResponse",))
-    ]
+    segment_shapes = [name for name in schemas if name.endswith(("LessonSegmentResponse",))]
     lesson_shapes = [name for name in schemas if name.endswith(("LessonSummaryResponse",))]
 
     assert segment_shapes and lesson_shapes
@@ -194,7 +193,9 @@ def test_listing_classes_does_not_scale_queries_with_classes() -> None:
     body = inspect.getsource(product_admin.list_classes)
 
     assert "_student_counts" in body
-    assert "_class_subjects_bulk" in body
+    # SCRUM-194 replaced the derived subject list with the class's own, read
+    # for the whole page in one query rather than one per class.
+    assert "subjects_for_classes" in body
     # The per-class helpers must not be called from inside the loop.
     assert "await _class_subjects(" not in body
 

@@ -87,6 +87,12 @@ from nevo.db.models.sso import (
     RosterSyncRun,
     SchoolSsoConfiguration,
 )
+from nevo.db.models.subject import (
+    CanonicalSubject,
+    ClassSubject,
+    SchoolSubject,
+    TeacherSubject,
+)
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 
 __all__ = [
@@ -106,7 +112,9 @@ __all__ = [
     "BillingLedger",
     "BillingPaymentMethod",
     "BillingSubscriptionTier",
+    "CanonicalSubject",
     "Class",
+    "ClassSubject",
     "Concept",
     "ConsentInvitation",
     "ConsentInvitationItem",
@@ -155,6 +163,7 @@ __all__ = [
     "School",
     "SchoolInvitation",
     "SchoolSsoConfiguration",
+    "SchoolSubject",
     "SharedDeviceProfile",
     "SignalEvent",
     "StepUpSchedule",
@@ -166,6 +175,7 @@ __all__ = [
     "StudentRecordEvent",
     "SystemHeartbeat",
     "TeacherClassAssignment",
+    "TeacherSubject",
     "UploadJob",
     "UploadSourceBlob",
     "User",

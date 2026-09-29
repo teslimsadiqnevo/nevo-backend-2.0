@@ -49,20 +49,25 @@ class TeacherClassAssignment(Base):
             "class_id",
             "removed_at",
         ),
+        # Teacher, class AND subject. It used to be teacher and class, which
+        # made the thing SCRUM-194 asks for impossible: a teacher who teaches
+        # Mathematics and Further Mathematics to the same class is two
+        # assignments, not one. NULLS NOT DISTINCT so the rows that predate
+        # subjects still collide with each other rather than duplicating.
         Index(
-            "uq_teacher_class_assignments_active_pair",
+            "uq_teacher_class_assignments_active_triple",
             "teacher_id",
             "class_id",
+            "school_subject_id",
             unique=True,
             postgresql_where=text("removed_at IS NULL"),
+            postgresql_nulls_not_distinct=True,
         ),
         Index(
             "uq_teacher_class_assignments_active_primary",
             "class_id",
             unique=True,
-            postgresql_where=text(
-                "role = 'primary' AND removed_at IS NULL"
-            ),
+            postgresql_where=text("role = 'primary' AND removed_at IS NULL"),
         ),
     )
 
@@ -76,6 +81,16 @@ class TeacherClassAssignment(Base):
         ForeignKey("schools.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
+    )
+    #: Which subject this person teaches to this class.
+    #:
+    #: Nullable only because the rows that predate SCRUM-194 have no subject to
+    #: give them. A new assignment must carry one, and the API refuses a
+    #: subject that is not on both the teacher's list and the class's.
+    school_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("school_subjects.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     teacher_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,

@@ -27,6 +27,9 @@ from nevo.teacher_assignments.errors import (
     ClassNotFoundError,
     MissingSchoolContextError,
     PrimaryTeacherExistsError,
+    SubjectNotOnClassError,
+    SubjectNotOnTeacherError,
+    SubjectRequiredError,
     TeacherAssignmentError,
     TeacherNotAssignedError,
     TeacherNotFoundError,
@@ -37,11 +40,24 @@ router = APIRouter(prefix="/api/v1", tags=["teacher assignments"])
 
 
 class CreateAssignmentRequest(BaseModel):
+    """An assignment is a teacher, a subject, and a class.
+
+    It used to be a teacher and a class, which recorded where somebody worked
+    and not what they taught. Pick the teacher, pick one of her subjects, tick
+    the classes she teaches it to.
+    """
+
     model_config = CAMEL_CONFIG
 
     teacher_id: UUID
     class_id: UUID
     role: TeacherAssignmentRole
+    #: One of the teacher's subjects, which must also be on the class's list.
+    #:
+    #: Optional in the schema only so the rows that predate SCRUM-194 can still
+    #: be read back. Omitting it on a new assignment is refused with
+    #: subject_required rather than accepted as "unknown subject".
+    school_subject_id: UUID | None = None
 
 
 class ReassignRequest(BaseModel):
@@ -165,6 +181,17 @@ ItSsoDependency = Annotated[
     "/teacher-class-assignments",
     response_model=TeacherAssignmentResponse,
     status_code=status.HTTP_201_CREATED,
+    responses={
+        422: {
+            "description": (
+                "subject_required when no subject was chosen, "
+                "subject_not_on_teacher when that subject is not on this "
+                "teacher's list, subject_not_on_class when it is not on the "
+                "class's scheme of work. The last one is where a school finds "
+                "its own setup gap: neither list is widened as a side effect."
+            )
+        },
+    },
 )
 async def create_assignment(
     payload: CreateAssignmentRequest,
@@ -177,6 +204,7 @@ async def create_assignment(
             teacher_id=payload.teacher_id,
             class_id=payload.class_id,
             role=payload.role,
+            school_subject_id=payload.school_subject_id,
         )
     except TeacherAssignmentError as error:
         raise public_assignment_error(error) from error
@@ -293,6 +321,18 @@ def public_assignment_error(error: TeacherAssignmentError) -> HTTPException:
         ),
     ):
         status_code = status.HTTP_409_CONFLICT
+    elif isinstance(
+        error,
+        (
+            SubjectRequiredError,
+            SubjectNotOnTeacherError,
+            SubjectNotOnClassError,
+        ),
+    ):
+        # The request is well formed and the thing it asks for is not allowed,
+        # which is what 422 is for. A school reading this needs to know which
+        # of the two lists is short, so each carries its own code.
+        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
     elif isinstance(
         error,
         (

@@ -48,6 +48,7 @@ class TeacherAssignmentService:
         teacher_id: UUID,
         class_id: UUID,
         role: TeacherAssignmentRole,
+        school_subject_id: UUID | None = None,
     ) -> TeacherClassAssignment:
         school_id = self._school_id(actor)
         return await self._repository.assign(
@@ -55,6 +56,7 @@ class TeacherAssignmentService:
             teacher_id=teacher_id,
             class_id=class_id,
             role=role,
+            school_subject_id=school_subject_id,
             source=TeacherAssignmentSource.MANUAL,
             source_reference=None,
             assigned_by_user_id=actor.user_id,
@@ -163,11 +165,7 @@ class TeacherAssignmentService:
 
         requires_fallback = missing > 0
         return RosterSyncOutcome(
-            status=(
-                "partial_manual_fallback_required"
-                if requires_fallback
-                else "completed"
-            ),
+            status=("partial_manual_fallback_required" if requires_fallback else "completed"),
             imported_assignments=imported,
             missing_mappings=missing,
             message=(

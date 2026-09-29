@@ -37,10 +37,13 @@ from nevo.billing.service import quote_per_student
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.billing import Invoice
 from nevo.db.models.onboarding import OnboardingRow, SchoolOnboarding
+from nevo.db.models.subject import TeacherSubject
 from nevo.domain.accounts.classes import academic_session, normalise_class_name, parse_class_name
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.billing.vocabulary import InvoiceStatus, RateType
 from nevo.domain.onboarding.vocabulary import OnboardingRowKind, OnboardingStage
+from nevo.subjects.resolution import ensure
+from nevo.subjects.teacher_import import merge_rows
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 
@@ -78,8 +81,12 @@ REQUIRED_STUDENT_COLUMNS = (
     "parent_email",
 )
 
+#: Email is required and is the identity. A row with no email fails rather than
+#: being guessed at, because a teacher needs one to hold an account at all.
+#: Subjects are asked for and not insisted on - a school that has not decided
+#: which subjects a teacher covers can still get them into the product.
 REQUIRED_TEACHER_COLUMNS = ("first_name", "last_name", "email")
-TEACHER_COLUMNS = ("first_name", "last_name", "email", "class")
+TEACHER_COLUMNS = ("first_name", "last_name", "email", "subjects", "class")
 
 #: Teachers are free; students are what a school pays for. Adding a teacher
 #: after activation therefore costs nothing and adding a student does.
@@ -721,12 +728,61 @@ async def activate(
         if not row.countable:
             continue
         await _create_person(session, school, row, classes)
+    await session.flush()
+    # Subjects after the accounts exist, because a teacher's subject list hangs
+    # off their user row. Merged on email across every row that carried it, so
+    # a school that wrote one row per subject gets one teacher with several and
+    # not several teachers with one each. SCRUM-194.
+    await _attach_teacher_subjects(session, school, rows)
     record.activated_at = datetime.now(UTC)
     record.stage = OnboardingStage.ACTIVATED
     await session.flush()
     state = await _state_for(session, record)
     await session.commit()
     return state
+
+
+async def _attach_teacher_subjects(
+    session: AsyncSession,
+    school: School,
+    rows: list[OnboardingRow],
+) -> None:
+    """Give each imported teacher the subjects their rows named.
+
+    Merged on email and never on name: two teachers both called Mrs Bello with
+    different addresses are two teachers, and fusing them would file one
+    person's classes under the other with nothing to show it happened.
+    """
+
+    teacher_rows = [
+        (row.row_number, {str(k): str(v) for k, v in (row.values or {}).items()})
+        for row in rows
+        if row.countable and row.kind is OnboardingRowKind.TEACHER
+    ]
+    if not teacher_rows:
+        return
+    for merged in merge_rows(teacher_rows):
+        if not merged.subjects:
+            continue
+        teacher = await session.scalar(
+            select(User).where(
+                User.school_id == school.id,
+                func.lower(User.email) == merged.email,
+            )
+        )
+        if teacher is None:
+            continue
+        for typed in merged.subjects:
+            subject = await ensure(session, school_id=school.id, typed=typed)
+            already = await session.scalar(
+                select(TeacherSubject.id).where(
+                    TeacherSubject.teacher_id == teacher.id,
+                    TeacherSubject.school_subject_id == subject.id,
+                )
+            )
+            if already is None:
+                session.add(TeacherSubject(teacher_id=teacher.id, school_subject_id=subject.id))
+    await session.flush()
 
 
 async def _create_person(

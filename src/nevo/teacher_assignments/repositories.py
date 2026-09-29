@@ -5,6 +5,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import Class, User
+from nevo.db.models.subject import ClassSubject, TeacherSubject
 from nevo.db.models.teacher_assignment import (
     TeacherClassAssignment as TeacherClassAssignmentModel,
 )
@@ -23,6 +24,9 @@ from nevo.teacher_assignments.errors import (
     AssignmentNotFoundError,
     ClassNotFoundError,
     PrimaryTeacherExistsError,
+    SubjectNotOnClassError,
+    SubjectNotOnTeacherError,
+    SubjectRequiredError,
     TeacherNotFoundError,
 )
 
@@ -42,10 +46,17 @@ class SqlAlchemyTeacherAssignmentRepository:
         source_reference: str | None,
         assigned_by_user_id: UUID | None,
         assigned_at: datetime,
+        school_subject_id: UUID | None = None,
     ) -> TeacherClassAssignment:
         async with self._sessions.begin() as session:
             await self._lock_class(session, school_id, class_id)
             await self._require_teacher(session, school_id, teacher_id)
+            await self._require_subject_on_both(
+                session,
+                teacher_id=teacher_id,
+                class_id=class_id,
+                school_subject_id=school_subject_id,
+            )
 
             existing = await session.scalar(
                 select(TeacherClassAssignmentModel)
@@ -53,6 +64,9 @@ class SqlAlchemyTeacherAssignmentRepository:
                     TeacherClassAssignmentModel.school_id == school_id,
                     TeacherClassAssignmentModel.teacher_id == teacher_id,
                     TeacherClassAssignmentModel.class_id == class_id,
+                    # Per subject, because a teacher can hold the same class
+                    # for two of them and those are two assignments.
+                    TeacherClassAssignmentModel.school_subject_id == school_subject_id,
                     TeacherClassAssignmentModel.removed_at.is_(None),
                 )
                 .with_for_update()
@@ -75,6 +89,7 @@ class SqlAlchemyTeacherAssignmentRepository:
                 teacher_id=teacher_id,
                 class_id=class_id,
                 role=role,
+                school_subject_id=school_subject_id,
                 source=source,
                 source_reference=source_reference,
                 assigned_by_user_id=assigned_by_user_id,
@@ -83,6 +98,44 @@ class SqlAlchemyTeacherAssignmentRepository:
             session.add(assignment)
             await session.flush()
             return self._assignment(assignment)
+
+    @staticmethod
+    async def _require_subject_on_both(
+        session: AsyncSession,
+        *,
+        teacher_id: UUID,
+        class_id: UUID,
+        school_subject_id: UUID | None,
+    ) -> None:
+        """The one rule that keeps the two subject lists honest.
+
+        An assignment is only accepted where the subject sits on the teacher's
+        subjects and on that class's scheme of work. Neither list is widened as
+        a side effect: a teacher's subjects are a fact about that person, and a
+        class's are the school's statement about what it teaches. Where they
+        disagree, the school has a setup gap, and the refusal is where they
+        find it - at the moment somebody assigns a teacher, rather than a term
+        later when a report has nothing to group by.
+        """
+
+        if school_subject_id is None:
+            raise SubjectRequiredError
+        on_teacher = await session.scalar(
+            select(TeacherSubject.id).where(
+                TeacherSubject.teacher_id == teacher_id,
+                TeacherSubject.school_subject_id == school_subject_id,
+            )
+        )
+        if on_teacher is None:
+            raise SubjectNotOnTeacherError
+        on_class = await session.scalar(
+            select(ClassSubject.id).where(
+                ClassSubject.class_id == class_id,
+                ClassSubject.school_subject_id == school_subject_id,
+            )
+        )
+        if on_class is None:
+            raise SubjectNotOnClassError
 
     async def reassign(
         self,
@@ -96,8 +149,7 @@ class SqlAlchemyTeacherAssignmentRepository:
     ) -> TeacherClassAssignment:
         async with self._sessions.begin() as session:
             current = await session.scalar(
-                select(TeacherClassAssignmentModel)
-                .where(
+                select(TeacherClassAssignmentModel).where(
                     TeacherClassAssignmentModel.id == assignment_id,
                     TeacherClassAssignmentModel.school_id == school_id,
                     TeacherClassAssignmentModel.removed_at.is_(None),
@@ -121,10 +173,7 @@ class SqlAlchemyTeacherAssignmentRepository:
 
             await self._require_teacher(session, school_id, new_teacher_id)
             next_role = role or current.role
-            if (
-                current.teacher_id == new_teacher_id
-                and current.role is next_role
-            ):
+            if current.teacher_id == new_teacher_id and current.role is next_role:
                 return self._assignment(current)
 
             duplicate = await session.scalar(
@@ -336,9 +385,7 @@ class SqlAlchemyTeacherAssignmentRepository:
             TeacherClassAssignmentModel.removed_at.is_(None),
         )
         if excluding_assignment_id is not None:
-            statement = statement.where(
-                TeacherClassAssignmentModel.id != excluding_assignment_id
-            )
+            statement = statement.where(TeacherClassAssignmentModel.id != excluding_assignment_id)
         existing = await session.scalar(statement.limit(1))
         if existing is not None:
             raise PrimaryTeacherExistsError
@@ -357,4 +404,5 @@ class SqlAlchemyTeacherAssignmentRepository:
             assigned_at=assignment.assigned_at,
             removed_at=assignment.removed_at,
             replaced_by_assignment_id=assignment.replaced_by_assignment_id,
+            school_subject_id=assignment.school_subject_id,
         )

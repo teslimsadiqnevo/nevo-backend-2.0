@@ -26,6 +26,7 @@ class TeacherAssignmentRepository(Protocol):
         source_reference: str | None,
         assigned_by_user_id: UUID | None,
         assigned_at: datetime,
+        school_subject_id: UUID | None = None,
     ) -> TeacherClassAssignment: ...
 
     async def reassign(

@@ -19,6 +19,9 @@ class TeacherClassAssignment:
     assigned_at: datetime
     removed_at: datetime | None = None
     replaced_by_assignment_id: UUID | None = None
+    #: Which subject this person teaches to this class. Null only on the rows
+    #: that predate SCRUM-194; a new assignment cannot be made without one.
+    school_subject_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -39,17 +39,24 @@ class MemoryTeacherAssignmentRepository:
         source_reference: str | None,
         assigned_by_user_id: UUID | None,
         assigned_at: datetime,
+        #: SCRUM-194. Stored so the entity round-trips; the validity rule that
+        #: goes with it needs the subject tables and lives in the SQLAlchemy
+        #: repository, so this double records the subject and does not police
+        #: it. See tests/test_subject_model.py for the rule itself.
+        school_subject_id: UUID | None = None,
     ) -> TeacherClassAssignment:
         del source_reference, assigned_by_user_id
         active = [
             item
             for item in self.assignments.values()
-            if item.school_id == school_id
-            and item.class_id == class_id
-            and item.removed_at is None
+            if item.school_id == school_id and item.class_id == class_id and item.removed_at is None
         ]
         duplicate = next(
-            (item for item in active if item.teacher_id == teacher_id),
+            (
+                item
+                for item in active
+                if item.teacher_id == teacher_id and item.school_subject_id == school_subject_id
+            ),
             None,
         )
         if duplicate is not None:
@@ -68,6 +75,7 @@ class MemoryTeacherAssignmentRepository:
             role=role,
             source=source,
             assigned_at=assigned_at,
+            school_subject_id=school_subject_id,
         )
         self.assignments[assignment.id] = assignment
         return assignment
@@ -84,11 +92,7 @@ class MemoryTeacherAssignmentRepository:
     ) -> TeacherClassAssignment:
         del assigned_by_user_id
         current = self.assignments.get(assignment_id)
-        if (
-            current is None
-            or current.school_id != school_id
-            or current.removed_at is not None
-        ):
+        if current is None or current.school_id != school_id or current.removed_at is not None:
             raise AssignmentNotFoundError
         replacement = TeacherClassAssignment(
             id=uuid4(),
@@ -115,11 +119,7 @@ class MemoryTeacherAssignmentRepository:
         removed_at: datetime,
     ) -> bool:
         current = self.assignments.get(assignment_id)
-        if (
-            current is None
-            or current.school_id != school_id
-            or current.removed_at is not None
-        ):
+        if current is None or current.school_id != school_id or current.removed_at is not None:
             return False
         self.assignments[current.id] = replace(current, removed_at=removed_at)
         return True
@@ -177,9 +177,7 @@ class MemoryTeacherAssignmentRepository:
                 assigned_at=item.assigned_at,
             )
             for item in self.assignments.values()
-            if item.school_id == school_id
-            and item.class_id == class_id
-            and item.removed_at is None
+            if item.school_id == school_id and item.class_id == class_id and item.removed_at is None
         ]
 
     async def is_teacher_assigned(

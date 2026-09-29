@@ -328,6 +328,15 @@ class LessonSegment(Base):
         JSONB,
         nullable=True,
     )
+    #: How much help this segment's working needs, from the support ladder.
+    #: Recorded so coverage can be measured against real lessons after a term
+    #: rather than argued about from the matrix. SCRUM-185.
+    support_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: How the working is laid out: an equation refined down the page, a column
+    #: aligned on place value, free-standing steps, or a table. Emitted so the
+    #: player renders what the subject needs rather than forcing every subject
+    #: through a column of equations.
+    working_layout: Mapped[str | None] = mapped_column(String(16), nullable=True)
     #: ``{"simplified": {"body": ...}, "expanded": {"body": ...}}``, keyed by
     #: the adaptation engine's own action names. Null where nothing was
     #: written: the engine falls back to ``body``, which is the teacher's own

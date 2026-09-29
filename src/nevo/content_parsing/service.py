@@ -1052,6 +1052,32 @@ def _calculation_scaffold(value: object) -> dict[str, object] | None:
     }
 
 
+def _accepted_forms(step: dict[str, object], answer: object) -> list[str]:
+    """The forms this step accepts, with the answer itself always among them.
+
+    A step whose generated list somehow omits its own answer would mark a
+    correct child wrong, so the answer is added rather than assumed present.
+    Duplicates after normalising are collapsed: a list holding "0.5" twice
+    teaches nobody anything and makes the stored payload bigger.
+    """
+
+    from nevo.steps.answers import normalise
+
+    raw = step.get("accepted")
+    candidates: list[str] = []
+    if isinstance(raw, list):
+        candidates.extend(str(item) for item in raw if isinstance(item, str | int | float))
+    if answer is not None:
+        candidates.append(str(answer))
+    forms: dict[str, str] = {}
+    for candidate in candidates:
+        text = candidate.strip()
+        if not text:
+            continue
+        forms.setdefault(normalise(text), text)
+    return list(forms.values())[:40]
+
+
 def _step_options(value: object) -> list[dict[str, object]]:
     """The choices a selection or drag step offers, in checkpoint shape."""
 
@@ -1139,6 +1165,12 @@ def _validated_calculation_variant(
                 "input": input_kind,
                 "targets": targets,
                 "assembles": str(step.get("assembles") or step.get("equationState") or "").strip(),
+                # Every form that counts as correct for this step, generated
+                # from this lesson at upload. One half, 0.5 and 50 percent are
+                # all here; so are x+1 and 1+x. Nothing is judged at runtime
+                # beyond matching against this list, which is why it works for
+                # every subject. SCRUM-185.
+                "accepted": _accepted_forms(step, step_answer),
             }
         )
     scaffold = _calculation_scaffold(variant.get("scaffold") or variant.get("manipulative"))

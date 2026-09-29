@@ -49,7 +49,7 @@ class AttentionFlag(Base):
         JSONB,
         nullable=False,
         default=lambda: ["view_student", "open_recommendation"],
-        server_default=text("'[\"view_student\", \"open_recommendation\"]'::jsonb"),
+        server_default=text('\'["view_student", "open_recommendation"]\'::jsonb'),
     )
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

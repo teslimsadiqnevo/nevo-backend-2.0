@@ -42,6 +42,7 @@ from nevo.api.parents import router as parent_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
 from nevo.api.partner_inquiries import tosse_router
 from nevo.api.permissions import router as permission_router
+from nevo.api.probe import router as probe_router
 from nevo.api.product_admin import router as product_admin_router
 from nevo.api.product_auth import router as product_auth_router
 from nevo.api.product_learning import router as product_learning_router
@@ -378,6 +379,7 @@ app.include_router(student_entry_router)
 app.include_router(transformation_metrics_router)
 app.include_router(written_consent_router)
 app.include_router(import_templates_router)
+app.include_router(probe_router)
 app.include_router(subjects_router)
 app.include_router(support_router)
 app.include_router(sso_router)

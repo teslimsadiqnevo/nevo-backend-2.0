@@ -99,9 +99,7 @@ class ExportAnnotation(Base):
     """
 
     __tablename__ = "export_annotations"
-    __table_args__ = (
-        Index("ix_export_annotations_export", "export_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_export_annotations_export", "export_id", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,

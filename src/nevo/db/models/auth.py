@@ -29,6 +29,7 @@ REVOCATION_REASONS = (
     "user_unavailable",
 )
 
+
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
     __table_args__ = (
@@ -215,9 +216,7 @@ class EmailConfirmation(Base):
     """
 
     __tablename__ = "email_confirmations"
-    __table_args__ = (
-        Index("ix_email_confirmations_user_created", "user_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_email_confirmations_user_created", "user_id", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,

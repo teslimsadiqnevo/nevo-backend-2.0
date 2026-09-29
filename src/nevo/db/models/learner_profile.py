@@ -102,15 +102,11 @@ class LearnerProfileDimensionsMixin:
         default=ConfidenceLevel.LOW,
         server_default=ConfidenceLevel.LOW.value,
     )
-    interactive_kinesthetic_preference: Mapped[
-        ChannelPreferenceStrength | None
-    ] = mapped_column(
+    interactive_kinesthetic_preference: Mapped[ChannelPreferenceStrength | None] = mapped_column(
         channel_strength_enum,
         nullable=True,
     )
-    interactive_kinesthetic_preference_confidence: Mapped[
-        ConfidenceLevel
-    ] = mapped_column(
+    interactive_kinesthetic_preference_confidence: Mapped[ConfidenceLevel] = mapped_column(
         confidence_enum,
         nullable=False,
         default=ConfidenceLevel.LOW,

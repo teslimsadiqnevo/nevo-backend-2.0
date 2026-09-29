@@ -9,9 +9,7 @@ from nevo.db.base import Base
 
 class SystemHeartbeat(Base):
     __tablename__ = "system_heartbeats"
-    __table_args__ = (
-        UniqueConstraint("beat_date", name="uq_system_heartbeats_beat_date"),
-    )
+    __table_args__ = (UniqueConstraint("beat_date", name="uq_system_heartbeats_beat_date"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,

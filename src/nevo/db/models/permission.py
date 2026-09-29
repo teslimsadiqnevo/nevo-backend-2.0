@@ -120,9 +120,7 @@ class AdminInvitation(Base):
             "uq_admin_invitations_active_user",
             "user_id",
             unique=True,
-            postgresql_where=text(
-                "accepted_at IS NULL AND revoked_at IS NULL"
-            ),
+            postgresql_where=text("accepted_at IS NULL AND revoked_at IS NULL"),
         ),
     )
 

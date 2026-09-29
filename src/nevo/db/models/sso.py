@@ -62,8 +62,7 @@ class SchoolSsoConfiguration(Base):
             "provider",
         ),
         CheckConstraint(
-            "(connection_status = 'disconnected') = "
-            "(disconnected_at IS NOT NULL)",
+            "(connection_status = 'disconnected') = (disconnected_at IS NOT NULL)",
             name="disconnected_matches_timestamp",
         ),
     )

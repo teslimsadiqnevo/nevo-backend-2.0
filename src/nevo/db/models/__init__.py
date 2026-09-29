@@ -62,6 +62,7 @@ from nevo.db.models.mastery import (
 )
 from nevo.db.models.partner_inquiry import PartnerInquiry
 from nevo.db.models.permission import Admin, AdminInvitation, AdminScopeAssignment
+from nevo.db.models.probe import ProbeItem, ProbeResponse
 from nevo.db.models.product import (
     DpaAcceptance,
     EnrollmentHistory,
@@ -156,6 +157,8 @@ __all__ = [
     "PaymentTransaction",
     "PaymentWebhookEvent",
     "PostLessonProcessing",
+    "ProbeItem",
+    "ProbeResponse",
     "RosterSyncIssue",
     "RosterSyncRun",
     "ScaffoldProblemLog",

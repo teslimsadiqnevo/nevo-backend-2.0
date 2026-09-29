@@ -23,9 +23,7 @@ class ScheduledJobRun(Base):
     """
 
     __tablename__ = "scheduled_job_runs"
-    __table_args__ = (
-        UniqueConstraint("job_name", name="uq_scheduled_job_runs_job_name"),
-    )
+    __table_args__ = (UniqueConstraint("job_name", name="uq_scheduled_job_runs_job_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,

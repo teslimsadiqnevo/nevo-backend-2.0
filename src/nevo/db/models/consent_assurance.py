@@ -57,8 +57,7 @@ class AgeCheck(Base):
             postgresql_where=text("state = 'mismatch'"),
         ),
         CheckConstraint(
-            "(state = 'resolved')"
-            " = (resolved_at IS NOT NULL AND resolved_by_user_id IS NOT NULL)",
+            "(state = 'resolved') = (resolved_at IS NOT NULL AND resolved_by_user_id IS NOT NULL)",
             name="age_check_resolution_matches_state",
         ),
     )

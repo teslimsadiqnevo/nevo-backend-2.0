@@ -58,6 +58,7 @@ from nevo.db.models.product import (
     SharedDeviceProfile,
     StudentOnboardingGrant,
 )
+from nevo.domain.accounts.codes import new_school_code
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     ConsentStatus,
@@ -217,9 +218,7 @@ class ParentRightRequest(BaseModel):
 SHARED_DEVICE_SHAPES = ("circle", "triangle", "diamond", "square", "hexagon", "star")
 SHARED_DEVICE_COLOURWAYS = ("navy", "near_black", "cream_elevated")
 SHARED_DEVICE_AVATARS = tuple(
-    (shape, colourway)
-    for shape in SHARED_DEVICE_SHAPES
-    for colourway in SHARED_DEVICE_COLOURWAYS
+    (shape, colourway) for shape in SHARED_DEVICE_SHAPES for colourway in SHARED_DEVICE_COLOURWAYS
 )
 
 
@@ -673,11 +672,14 @@ async def register_school(
     school = School(
         id=school_id,
         name=school_name,
-        school_code=secrets.token_hex(4).upper(),
+        school_code=new_school_code(),
         school_url_slug=f"{slug_base}-{secrets.token_hex(2)}",
         auth_method=AuthMethod.EMAIL_PASSWORD,
     )
-    names = admin_name.split(maxsplit=1)
+    # A blank name is a 422, not a 500. split() on an empty string returns an
+    # empty list and names[0] would raise, which is a server fault reported for
+    # a client mistake.
+    names = admin_name.split(maxsplit=1) or [""]
     user = User(
         id=user_id,
         school_id=school_id,

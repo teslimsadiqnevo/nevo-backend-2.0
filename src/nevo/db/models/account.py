@@ -265,6 +265,18 @@ class User(TimestampMixin, Base):
         nullable=True,
     )
     login_identifier: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    #: The school's own Student ID or Admission Number, and the child's
+    #: identity at sign-in. SCRUM-202.
+    #:
+    #: Any string. Nigerian schools format these completely differently -
+    #: TEST/2024/001, 2024017 and NBA/JSS2/17 are all normal - so the shape is
+    #: not validated, only uniqueness within the school. Validating the shape
+    #: would reject valid rosters.
+    #:
+    #: Deliberately not called student_id: that name is the internal primary
+    #: key, including on parent_links, and two different things under one name
+    #: is a real bug waiting to happen.
+    admission_number: Mapped[str | None] = mapped_column(String(60), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sso_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -335,6 +347,17 @@ Index(
     func.lower(User.login_identifier),
     unique=True,
     postgresql_where=User.login_identifier.is_not(None),
+)
+# Unique on the pair, not globally. Brightgate's 2024/001 and Corona's
+# 2024/001 are two different children and neither blocks the other. Case
+# insensitive, because a school will write adm001 in one file and ADM001 in
+# the next and mean the same child. SCRUM-202.
+Index(
+    "uq_users_school_admission_number_ci",
+    User.school_id,
+    func.lower(User.admission_number),
+    unique=True,
+    postgresql_where=User.admission_number.is_not(None),
 )
 
 

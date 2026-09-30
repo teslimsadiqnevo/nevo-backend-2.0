@@ -152,7 +152,13 @@ class StudentEnroll(BaseModel):
     first_name: str = Field(alias="firstName", min_length=1, max_length=100)
     last_name: str = Field(alias="lastName", min_length=1, max_length=100)
     class_id: UUID = Field(alias="classId")
-    email: str | None = None
+    #: The school's own Student ID or Admission Number, and how this child
+    #: signs in. Any string: Nigerian schools format these completely
+    #: differently, so only uniqueness within the school is checked.
+    #:
+    #: Required, because a child without one cannot identify themselves at the
+    #: door. SCRUM-202.
+    admission_number: Annotated[str, Field(alias="admissionNumber", min_length=1, max_length=60)]
     age_band: str | None = Field(default=None, alias="ageBand", max_length=40)
     #: The school's own record of when the child was born.
     #:
@@ -966,34 +972,38 @@ async def enroll_student(
         session, principal, roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
     )
     await require_class_access(session, actor, payload.class_id)
-    # An address is unique across every account in the product, and a child
-    # usually has none. An empty string is not an address: sent for two
-    # children it collided on the second, and the unique violation came back
-    # as a 500 - the same fault for a genuine duplicate. Both are now the
-    # school being told which address is already taken.
-    email = (payload.email or "").strip().casefold() or None
-    if email is not None:
-        taken = await session.scalar(select(User.id).where(func.lower(User.email) == email))
-        if taken is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "email_already_in_use",
-                    "message": (
-                        f"{email} already belongs to a Nevo account. Leave the "
-                        "email blank - a learner signs in with their identifier "
-                        "and PIN, not an address."
-                    ),
-                },
-            )
+    # Students have no email and never will: the credential is a PIN and the
+    # identity is the school's own admission number. SCRUM-202.
+    admission_number = " ".join(payload.admission_number.split())
+    taken = await session.scalar(
+        select(User.id).where(
+            User.school_id == actor.school_id,
+            func.lower(User.admission_number) == admission_number.casefold(),
+        )
+    )
+    if taken is not None:
+        # Unique within the school, not globally: another school's 2024/001 is
+        # a different child and does not block this one.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "admission_number_in_use",
+                "message": (
+                    f"{admission_number} already belongs to a learner at this school. "
+                    "Two children cannot share one, because it is how each of them signs in."
+                ),
+            },
+        )
+    # Kept as the internal handle. The child never reads or types it; their
+    # admission number is what they sign in with.
     identifier = f"NV-{secrets.token_hex(3).upper()}"
     student = User(
         school_id=actor.school_id,
         role=UserRole.STUDENT,
         auth_method=AuthMethod.PIN,
         first_name=payload.first_name,
+        admission_number=admission_number,
         last_name=payload.last_name,
-        email=email,
         login_identifier=identifier,
         age_band=payload.age_band,
         date_of_birth=payload.date_of_birth,

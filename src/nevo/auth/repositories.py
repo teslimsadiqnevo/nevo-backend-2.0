@@ -35,8 +35,17 @@ class SqlAlchemyUserRepository:
             .join(School, School.id == User.school_id)
             .where(
                 func.lower(School.school_code) == school_code,
-                func.lower(User.login_identifier) == login_identifier,
+                # The admission number is the identity a child is given and
+                # types; login_identifier is the internal handle and is still
+                # accepted so nothing signed in today stops working. SCRUM-202.
+                or_(
+                    func.lower(User.admission_number) == login_identifier,
+                    func.lower(User.login_identifier) == login_identifier,
+                ),
             )
+            # Ordered so an admission number wins a collision with somebody
+            # else's internal handle, which is the identity a school owns.
+            .order_by(func.lower(User.admission_number) == login_identifier)
             .limit(1)
         )
         return await self._find(statement)
@@ -105,9 +114,7 @@ class SqlAlchemyUserRepository:
             password_hash=user.password_hash,
             pin_hash=user.pin_hash,
             login_identifier=user.login_identifier,
-            school_auth_method=school_auth_method.value
-            if school_auth_method is not None
-            else None,
+            school_auth_method=school_auth_method.value if school_auth_method is not None else None,
             deactivated_at=user.deactivated_at,
         )
 
@@ -230,13 +237,17 @@ class SqlAlchemyLoginRateLimiter:
 
     async def check(self, identity_digest: str, ip_digest: str) -> None:
         cutoff = datetime.now(UTC) - self._window
-        statement = select(func.count()).select_from(AuthLoginAttempt).where(
-            AuthLoginAttempt.succeeded.is_(False),
-            AuthLoginAttempt.occurred_at >= cutoff,
-            or_(
-                AuthLoginAttempt.identity_digest == identity_digest,
-                AuthLoginAttempt.ip_digest == ip_digest,
-            ),
+        statement = (
+            select(func.count())
+            .select_from(AuthLoginAttempt)
+            .where(
+                AuthLoginAttempt.succeeded.is_(False),
+                AuthLoginAttempt.occurred_at >= cutoff,
+                or_(
+                    AuthLoginAttempt.identity_digest == identity_digest,
+                    AuthLoginAttempt.ip_digest == ip_digest,
+                ),
+            )
         )
         async with self._sessions() as session:
             failures = await session.scalar(statement)

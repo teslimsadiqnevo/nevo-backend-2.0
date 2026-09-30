@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.auth.entities import AuthPrincipal, IssuedSession
@@ -56,7 +56,15 @@ class PinLoginRequest(BaseModel):
     model_config = CAMEL_CONFIG
 
     school_code: str = Field(min_length=2, max_length=50)
-    login_identifier: str = Field(min_length=1, max_length=50)
+    #: The child's Student ID / Admission Number. Sent as admissionNumber;
+    #: loginIdentifier is still accepted as the older name for the same field,
+    #: so a client mid-migration keeps working. SCRUM-202.
+    login_identifier: str = Field(
+        min_length=1,
+        max_length=60,
+        validation_alias=AliasChoices("admissionNumber", "loginIdentifier", "login_identifier"),
+        serialization_alias="admissionNumber",
+    )
     pin: LoginPin
 
 

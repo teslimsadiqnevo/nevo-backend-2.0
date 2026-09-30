@@ -974,21 +974,55 @@ async def _create_person(
     first_name = values.get("first_name", "").strip()
     last_name = values.get("last_name", "").strip() or None
     is_student = row.kind is OnboardingRowKind.STUDENT
-    user = User(
-        school_id=school.id,
-        role=UserRole.STUDENT if is_student else UserRole.TEACHER,
-        date_of_birth=_parse_date(values.get("date_of_birth", "")) if is_student else None,
-        auth_method=AuthMethod.EMAIL_PASSWORD,
-        first_name=first_name,
-        last_name=last_name,
-        email=(values.get("email") or "").casefold() or None,
-        status=UserStatus.ACTIVE if is_student else UserStatus.INVITED,
-    )
-    session.add(user)
+    admission_number = (values.get("admission_number") or "").strip() or None
+    user = None
+    if is_student and admission_number is not None:
+        # The admission number is the school's own name for the child, so a
+        # second roster carrying it is the same child again and not a new one.
+        # Merging keeps their history instead of stranding it behind a
+        # duplicate account - and the school's unique index would refuse the
+        # insert anyway. SCRUM-202.
+        user = await session.scalar(
+            select(User).where(
+                User.school_id == school.id,
+                User.role == UserRole.STUDENT,
+                func.lower(User.admission_number) == admission_number.lower(),
+            )
+        )
+    if user is not None:
+        user.first_name = first_name or user.first_name
+        user.last_name = last_name or user.last_name
+        user.date_of_birth = _parse_date(values.get("date_of_birth", "")) or user.date_of_birth
+    else:
+        user = User(
+            school_id=school.id,
+            role=UserRole.STUDENT if is_student else UserRole.TEACHER,
+            date_of_birth=_parse_date(values.get("date_of_birth", "")) if is_student else None,
+            auth_method=AuthMethod.EMAIL_PASSWORD,
+            first_name=first_name,
+            last_name=last_name,
+            email=(values.get("email") or "").casefold() or None,
+            admission_number=admission_number if is_student else None,
+            status=UserStatus.ACTIVE if is_student else UserStatus.INVITED,
+        )
+        session.add(user)
     await session.flush()
     school_class = classes.get(row.normalised_class_name or "")
     if is_student and school_class is not None:
-        session.add(StudentClassEnrollment(student_id=user.id, class_id=school_class.id))
+        await _hold_enrollment(session, user.id, school_class.id)
+
+
+async def _hold_enrollment(session: AsyncSession, student_id: UUID, class_id: UUID) -> None:
+    """Enrol a child in a class unless they are already in it."""
+
+    found = await session.scalar(
+        select(StudentClassEnrollment.id).where(
+            StudentClassEnrollment.student_id == student_id,
+            StudentClassEnrollment.class_id == class_id,
+        )
+    )
+    if found is None:
+        session.add(StudentClassEnrollment(student_id=student_id, class_id=class_id))
 
 
 #: How a school writes the term a price belongs to.

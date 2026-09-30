@@ -20,7 +20,7 @@ from nevo.domain.subjects.vocabulary import (
     SubjectReviewState,
 )
 from nevo.main import app
-from nevo.subjects.teacher_import import merge_rows, split_subjects
+from nevo.subjects.teacher_import import merge_rows, split_legacy
 
 
 def test_everything_points_at_the_school_list_and_not_the_canonical_one() -> None:
@@ -90,19 +90,23 @@ def test_a_school_addition_lands_in_review_and_a_canonical_one_does_not() -> Non
 @pytest.mark.parametrize(
     ("cell", "expected"),
     [
-        ("Maths, Further Maths and Physics", ["Maths", "Further Maths", "Physics"]),
-        ("Mathematics / Further Mathematics", ["Mathematics", "Further Mathematics"]),
-        ("Maths; Physics", ["Maths", "Physics"]),
         ("Mathematics", ["Mathematics"]),
+        # Semicolons, not commas: a comma inside a cell breaks the file for
+        # anyone editing it in Excel, which is everyone. SCRUM-203.
+        ("Maths; Physics", ["Maths", "Physics"]),
+        ("Mathematics / Further Mathematics", ["Mathematics", "Further Mathematics"]),
         ("", []),
-        # A repeat in one cell is one subject.
-        ("Maths, Maths", ["Maths"]),
+        ("Maths; Maths", ["Maths"]),
     ],
 )
-def test_a_cell_is_split_the_way_a_school_writes_it(cell: str, expected: list[str]) -> None:
-    # Splitting on commas alone reads "Maths and Physics" as one subject that
-    # nobody teaches.
-    assert split_subjects(cell) == expected
+def test_a_legacy_cell_is_split_on_semicolons(cell: str, expected: list[str]) -> None:
+    assert split_legacy(cell) == expected
+
+
+def test_a_comma_is_not_a_separator() -> None:
+    """Row-per-assignment needs none, and a comma breaks the CSV."""
+
+    assert split_legacy("Mathematics, Further Mathematics") == ["Mathematics, Further Mathematics"]
 
 
 def test_teacher_rows_merge_on_email_and_never_on_name() -> None:
@@ -114,7 +118,8 @@ def test_teacher_rows_merge_on_email_and_never_on_name() -> None:
                     "email": "B.Bello@x.com",
                     "first_name": "Bisi",
                     "last_name": "Bello",
-                    "subjects": "Maths",
+                    "subject": "Mathematics",
+                    "class": "JSS 1A",
                 },
             ),
             (
@@ -123,7 +128,8 @@ def test_teacher_rows_merge_on_email_and_never_on_name() -> None:
                     "email": "b.bello@x.com",
                     "first_name": "B",
                     "last_name": "Bello",
-                    "subjects": "Physics",
+                    "subject": "Further Mathematics",
+                    "class": "SS 1",
                 },
             ),
             (
@@ -132,26 +138,103 @@ def test_teacher_rows_merge_on_email_and_never_on_name() -> None:
                     "email": "other@x.com",
                     "first_name": "Bisi",
                     "last_name": "Bello",
-                    "subjects": "Maths",
+                    "subject": "Mathematics",
+                    "class": "JSS 1A",
                 },
             ),
         ]
     )
 
     by_email = {teacher.email: teacher for teacher in merged}
-    # Same address twice is one teacher with the union of both rows' subjects.
+    # Same address twice is one teacher holding both assignments.
     assert len(merged) == 2
-    assert by_email["b.bello@x.com"].subjects == ["Maths", "Physics"]
+    assert by_email["b.bello@x.com"].subjects == ["Mathematics", "Further Mathematics"]
     assert by_email["b.bello@x.com"].row_numbers == [2, 3]
     # Two Mrs Bellos with different addresses stay two people.
-    assert by_email["other@x.com"].subjects == ["Maths"]
+    assert by_email["other@x.com"].subjects == ["Mathematics"]
+
+
+def test_one_row_is_one_assignment_and_nothing_is_cross_multiplied() -> None:
+    """The failure this shape exists to prevent. SCRUM-203.
+
+    Two subjects against two classes as lists would produce four pairs, two of
+    which nobody teaches. Row per assignment produces exactly what was written.
+    """
+
+    merged = merge_rows(
+        [
+            (
+                2,
+                {
+                    "email": "a@x.com",
+                    "first_name": "Bisi",
+                    "last_name": "Bello",
+                    "subject": "Mathematics",
+                    "class": "JSS 2A",
+                },
+            ),
+            (
+                3,
+                {
+                    "email": "a@x.com",
+                    "first_name": "Bisi",
+                    "last_name": "Bello",
+                    "subject": "Further Mathematics",
+                    "class": "SS 1",
+                },
+            ),
+        ]
+    )
+
+    pairs = {(a.subject, a.class_name) for a in merged[0].assignments}
+    assert pairs == {("Mathematics", "JSS 2A"), ("Further Mathematics", "SS 1")}
+    # Never these.
+    assert ("Further Mathematics", "JSS 2A") not in pairs
+    assert ("Mathematics", "SS 1") not in pairs
+
+
+def test_a_row_with_no_class_is_not_an_assignment() -> None:
+    merged = merge_rows(
+        [
+            (
+                2,
+                {
+                    "email": "a@x.com",
+                    "first_name": "A",
+                    "last_name": "B",
+                    "subject": "Mathematics",
+                    "class": "",
+                },
+            )
+        ]
+    )
+
+    assert merged[0].assignments == []
 
 
 def test_the_first_spelling_of_a_name_wins() -> None:
     merged = merge_rows(
         [
-            (2, {"email": "a@x.com", "first_name": "Bisi", "last_name": "Bello", "subjects": ""}),
-            (3, {"email": "a@x.com", "first_name": "B", "last_name": "Bello", "subjects": ""}),
+            (
+                2,
+                {
+                    "email": "a@x.com",
+                    "first_name": "Bisi",
+                    "last_name": "Bello",
+                    "subject": "Maths",
+                    "class": "JSS 1A",
+                },
+            ),
+            (
+                3,
+                {
+                    "email": "a@x.com",
+                    "first_name": "B",
+                    "last_name": "Bello",
+                    "subject": "Maths",
+                    "class": "JSS 1A",
+                },
+            ),
         ]
     )
 
@@ -161,17 +244,18 @@ def test_the_first_spelling_of_a_name_wins() -> None:
 
 def test_a_row_with_no_email_cannot_be_merged_at_all() -> None:
     # It is rejected upstream by row number; nothing here can identify it.
-    assert merge_rows([(2, {"email": "", "first_name": "Bisi", "subjects": "Maths"})]) == []
+    assert merge_rows([(2, {"email": "", "first_name": "Bisi", "subject": "Maths"})]) == []
 
 
 def test_the_teacher_template_asks_for_subjects_and_requires_an_email() -> None:
     from nevo.api.onboarding import REQUIRED_TEACHER_COLUMNS, TEACHER_COLUMNS
 
-    assert "subjects" in TEACHER_COLUMNS
+    # Singular, and required: one row is one thing a teacher teaches, so a row
+    # without a subject or a class is not an assignment. SCRUM-203.
+    assert "subject" in TEACHER_COLUMNS
+    assert "class" in TEACHER_COLUMNS
     assert "email" in REQUIRED_TEACHER_COLUMNS
-    # Asked for, not insisted on: a school that has not decided can still
-    # get its teachers into the product.
-    assert "subjects" not in REQUIRED_TEACHER_COLUMNS
+    assert "subject" in REQUIRED_TEACHER_COLUMNS
 
 
 def test_the_validity_rule_refuses_rather_than_widening_either_list() -> None:

@@ -86,23 +86,47 @@ def test_the_required_columns_are_a_subset_of_the_template() -> None:
     assert set(REQUIRED_TEACHER_COLUMNS) <= set(TEACHER_COLUMNS)
 
 
-def test_the_student_template_keeps_the_two_it_cannot_do_without() -> None:
-    # Age is derived from one; activation depends on the other reaching a
-    # parent. SCRUM-168 rejects a row without a date of birth at import.
-    assert "date_of_birth" in REQUIRED_STUDENT_COLUMNS
-    assert "parent_email" in REQUIRED_STUDENT_COLUMNS
+def test_the_student_template_keeps_what_it_cannot_do_without() -> None:
+    # Age is derived from the date of birth; activation depends on the guardian
+    # email reaching somebody; and without an admission number the child cannot
+    # identify themselves at the door or be matched on a re-upload.
+    for column in ("date_of_birth", "guardian_email", "admission_number", "class"):
+        assert column in REQUIRED_STUDENT_COLUMNS, column
 
 
-def test_parent_name_is_asked_for_and_not_insisted_on() -> None:
-    assert "parent_first_name" in STUDENT_COLUMNS
-    assert "parent_surname" in STUDENT_COLUMNS
-    assert "parent_first_name" not in REQUIRED_STUDENT_COLUMNS
+def test_a_guardian_name_is_asked_for_and_not_insisted_on() -> None:
+    assert "guardian_first_name" in STUDENT_COLUMNS
+    assert "guardian_last_name" in STUDENT_COLUMNS
+    assert "guardian_relationship" in STUDENT_COLUMNS
+    for optional in ("guardian_first_name", "guardian_last_name", "guardian_relationship"):
+        assert optional not in REQUIRED_STUDENT_COLUMNS, optional
 
 
-def test_the_teacher_template_carries_subjects_and_needs_an_email() -> None:
-    assert "subjects" in TEACHER_COLUMNS
-    assert "email" in REQUIRED_TEACHER_COLUMNS
-    assert "subjects" not in REQUIRED_TEACHER_COLUMNS
+def test_a_column_the_template_does_not_insist_on_is_an_optional_header() -> None:
+    """Last term's copy of the template still imports.
+
+    Refusing a file for a header we ourselves made optional is the same drift
+    this ticket prevents, arriving from the other direction.
+    """
+
+    import inspect
+
+    from nevo.api.onboarding import _read_rows
+
+    source = inspect.getsource(_read_rows)
+
+    assert "_required(kind)" in source
+    assert "for column in STUDENT_COLUMNS" not in source
+
+
+def test_the_teacher_template_is_one_row_per_assignment() -> None:
+    # Singular subject, plus the class it is taught to. A row missing either is
+    # not an assignment. SCRUM-203.
+    assert "subject" in TEACHER_COLUMNS
+    assert "class" in TEACHER_COLUMNS
+    assert "subjects" not in TEACHER_COLUMNS
+    for column in ("email", "subject", "class"):
+        assert column in REQUIRED_TEACHER_COLUMNS, column
 
 
 def test_the_example_demonstrates_exactly_one_date_format() -> None:
@@ -121,13 +145,13 @@ def test_the_example_row_is_marked_for_deletion() -> None:
     assert "EXAMPLE" in EXAMPLE_MARKER.upper()
 
 
-def test_the_teacher_example_shows_both_accepted_shapes() -> None:
+def test_the_teacher_example_repeats_one_teacher_rather_than_listing() -> None:
     source = inspect.getsource(download_template)
 
-    # One row with several subjects, and the teacher repeated once per subject.
-    # A school shown only one shape assumes the other is refused.
-    assert "both" in source
-    assert source.count("chidi.eze@example.com") == 2
+    # Three rows, one teacher. A list of subjects against a list of classes
+    # cross multiplies wrongly, so the template never demonstrates one.
+    assert source.count("bisi.bello@example.com") == 3
+    assert "which are one teacher" in source
 
 
 def test_the_examples_use_the_school_own_words() -> None:

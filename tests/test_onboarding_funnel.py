@@ -25,12 +25,13 @@ from nevo.domain.onboarding.vocabulary import OnboardingRowKind, OnboardingStage
 from nevo.main import app
 
 STUDENTS = (
-    b"first_name,last_name,class,date_of_birth,parent_first_name,parent_surname,parent_email\n"
-    b"Amara,Okafor,JSS 1A,2015-04-23,Ngozi,Okafor,ngozi@example.com\n"
-    b"Tunde,Bello,jss 1a ,2015-06-02,Bisi,Bello,bisi@example.com\n"
-    # No parent name, and the row still stands: SCRUM-189.
-    b"Chidi,Eze,JSS  2B,2014-11-30,,,uche@example.com\n"
-    b"Sade,Adeyemi,,2015-01-09,Kemi,Adeyemi,kemi@example.com\n"
+    b"first_name,last_name,class,date_of_birth,admission_number,"
+    b"guardian_first_name,guardian_last_name,guardian_email,guardian_relationship\n"
+    b"Amara,Okafor,JSS 1A,2015-04-23,ADM001,Ngozi,Okafor,ngozi@example.com,Mother\n"
+    b"Tunde,Bello,jss 1a ,2015-06-02,ADM002,Bisi,Bello,bisi@example.com,Mother\n"
+    # No guardian name, and the row still stands: SCRUM-189.
+    b"Chidi,Eze,JSS  2B,2014-11-30,ADM003,,,uche@example.com,\n"
+    b"Sade,Adeyemi,,2015-01-09,ADM004,Kemi,Adeyemi,kemi@example.com,Mother\n"
 )
 
 
@@ -39,16 +40,17 @@ def spec() -> dict:
     return app.openapi()
 
 
-def test_a_parent_is_mandatory_on_a_student_row() -> None:
-    # A child whose parent cannot be reached cannot be consented for, so the
+def test_a_guardian_contact_is_mandatory_and_a_guardian_name_is_not() -> None:
+    # A child whose guardian cannot be reached cannot be consented for, so the
     # address is required. The name is asked for and not insisted on: the
-    # parent supplies their own at consent. SCRUM-189.
-    assert "parent_first_name" in STUDENT_COLUMNS
-    assert "parent_surname" in STUDENT_COLUMNS
-    assert "parent_email" in STUDENT_COLUMNS
-    assert "parent_email" in REQUIRED_STUDENT_COLUMNS
-    assert "parent_first_name" not in REQUIRED_STUDENT_COLUMNS
-    assert "parent_email" not in TEACHER_COLUMNS
+    # parent supplies their own at account setup. SCRUM-189, SCRUM-203.
+    assert "guardian_first_name" in STUDENT_COLUMNS
+    assert "guardian_last_name" in STUDENT_COLUMNS
+    assert "guardian_email" in REQUIRED_STUDENT_COLUMNS
+    assert "guardian_first_name" not in REQUIRED_STUDENT_COLUMNS
+    # The child's own identifier, which is how they sign in.
+    assert "admission_number" in REQUIRED_STUDENT_COLUMNS
+    assert "guardian_email" not in TEACHER_COLUMNS
 
 
 def test_the_class_list_is_read_out_of_the_school_own_file() -> None:

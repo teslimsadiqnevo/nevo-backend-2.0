@@ -40,7 +40,7 @@ TemplateName = Literal["students", "teachers", "classes"]
 #: The class template has no import parser of its own yet - bulk class creation
 #: is a JSON route - so its columns are stated here and the drift test holds
 #: them against the bulk create request model instead.
-CLASS_COLUMNS = ("name", "subjects")
+CLASS_COLUMNS = ("name", "subject")
 
 #: Marked so plainly because a school will otherwise upload it as a real
 #: record. It has happened on every product that shipped an example row
@@ -63,11 +63,13 @@ HEADINGS: dict[str, str] = {
     "last_name": "Surname",
     "class": "Class",
     "date_of_birth": "Date of birth",
-    "parent_first_name": "Parent first name",
-    "parent_surname": "Parent surname",
-    "parent_email": "Parent email",
+    "admission_number": "Student ID / Admission Number",
+    "guardian_first_name": "Guardian first name",
+    "guardian_last_name": "Guardian surname",
+    "guardian_email": "Guardian email",
+    "guardian_relationship": "Relationship to the child",
     "email": "Email",
-    "subjects": "Subjects",
+    "subject": "Subject",
     "name": "Class name",
 }
 
@@ -147,9 +149,11 @@ async def download_template(
             "last_name": "Okafor",
             "class": first_class,
             "date_of_birth": EXAMPLE_DATE,
-            "parent_first_name": "Ngozi",
-            "parent_surname": "Okafor",
-            "parent_email": "ngozi.okafor@example.com",
+            "admission_number": "ADM001",
+            "guardian_first_name": "Ngozi",
+            "guardian_last_name": "Okafor",
+            "guardian_email": "ngozi.okafor@example.com",
+            "guardian_relationship": "Mother",
         }
         rows = [
             [heading(column) for column in STUDENT_COLUMNS],
@@ -159,18 +163,19 @@ async def download_template(
         return _download("nevo-student-roster.csv", _csv(rows))
 
     if template == "teachers":
-        both = ", ".join(subjects) if len(subjects) > 1 else (subjects[0] if subjects else "")
         one = subjects[0] if subjects else ""
         second = subjects[1] if len(subjects) > 1 else one
-        # Both accepted shapes shown, because either is valid and a school that
-        # sees only one will assume the other is refused. Same email on the two
-        # repeated rows: that is what merges them into one teacher.
+        other_class = classes[1] if len(classes) > 1 else first_class
+        # One row per thing a teacher teaches, and the example shows a teacher
+        # appearing three times rather than a list in a cell. A list of
+        # subjects against a list of classes cross multiplies wrongly, so the
+        # template never demonstrates one.
         rows = [
             [heading(column) for column in TEACHER_COLUMNS],
-            ["Bisi", "Bello", "bisi.bello@example.com", both, first_class],
-            ["Chidi", "Eze", "chidi.eze@example.com", one, first_class],
-            ["Chidi", "Eze", "chidi.eze@example.com", second, first_class],
-            [EXAMPLE_MARKER + " - all three"],
+            ["Bisi", "Bello", "bisi.bello@example.com", one, first_class],
+            ["Bisi", "Bello", "bisi.bello@example.com", one, other_class],
+            ["Bisi", "Bello", "bisi.bello@example.com", second, first_class],
+            [EXAMPLE_MARKER + " - all three, which are one teacher"],
         ]
         return _download("nevo-teacher-import.csv", _csv(rows))
 

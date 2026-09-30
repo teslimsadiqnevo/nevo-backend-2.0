@@ -37,11 +37,16 @@ from nevo.billing.service import quote_per_student
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.billing import Invoice
 from nevo.db.models.onboarding import OnboardingRow, SchoolOnboarding
-from nevo.db.models.subject import TeacherSubject
+from nevo.db.models.subject import ClassSubject, TeacherSubject
+from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.classes import academic_session, normalise_class_name, parse_class_name
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.billing.vocabulary import InvoiceStatus, RateType
 from nevo.domain.onboarding.vocabulary import OnboardingRowKind, OnboardingStage
+from nevo.domain.teacher_assignments.vocabulary import (
+    TeacherAssignmentRole,
+    TeacherAssignmentSource,
+)
 from nevo.subjects.resolution import ensure
 from nevo.subjects.teacher_import import merge_rows
 
@@ -54,39 +59,53 @@ ADMIN_ROLES = {"senco_admin", "other_admin"}
 #: the API down from a file upload.
 MAX_UPLOAD_BYTES = 2_000_000
 
-#: What each template asks for. Parent details are mandatory on a student row,
-#: because a child whose parent cannot be reached cannot be consented for.
+#: The student roster, final columns. SCRUM-203.
+#:
+#: The guardian's contact is required and their name is not: the parent supplies
+#: their own at account setup, so a school pre-filling it is a convenience. A
+#: proprietor should not have to go and find a parent's full name before a child
+#: can be enrolled.
 STUDENT_COLUMNS = (
     "first_name",
     "last_name",
     "class",
     "date_of_birth",
-    "parent_first_name",
-    "parent_surname",
-    "parent_email",
+    "admission_number",
+    "guardian_first_name",
+    "guardian_last_name",
+    "guardian_email",
+    "guardian_relationship",
 )
 
-#: Columns the file must carry a value in, per row.
+#: Columns a student row must actually carry a value in, and why each one
+#: blocks rather than warns:
 #:
-#: Date of birth, because age is derived from it and a row without one cannot
-#: pass the age check. Parent email, because activation depends on the consent
-#: request reaching somebody. A parent's name is not here: a school filling
-#: four hundred rows will miss some, and the parent confirms their own name at
-#: consent anyway - which is better evidence than a name a school transcribed.
+#: No class and the child has nowhere to go. No date of birth and age cannot be
+#: derived, which SCRUM-168 needs. No admission number and the child cannot
+#: identify themselves at the door or be matched on a re-upload. No guardian
+#: email and consent cannot be requested, so the child can never be activated.
 REQUIRED_STUDENT_COLUMNS = (
     "first_name",
     "last_name",
     "class",
     "date_of_birth",
-    "parent_email",
+    "admission_number",
+    "guardian_email",
 )
 
-#: Email is required and is the identity. A row with no email fails rather than
-#: being guessed at, because a teacher needs one to hold an account at all.
-#: Subjects are asked for and not insisted on - a school that has not decided
-#: which subjects a teacher covers can still get them into the product.
-REQUIRED_TEACHER_COLUMNS = ("first_name", "last_name", "email")
-TEACHER_COLUMNS = ("first_name", "last_name", "email", "subjects", "class")
+#: The teacher roster, final columns. One row per thing a teacher teaches.
+#:
+#: A teacher taking three class-and-subject combinations appears three times,
+#: and those three rows merge into one teacher holding three assignments. The
+#: alternative - one row with a list of subjects and a list of classes - cross
+#: multiplies wrongly: "Maths; Further Maths" against "JSS 2A; SS1" would
+#: assign Further Maths to JSS 2A and Maths to SS1, neither of which she
+#: teaches.
+TEACHER_COLUMNS = ("first_name", "last_name", "email", "subject", "class")
+
+#: All of them. A row missing the subject or the class is not an assignment,
+#: and a row without an email cannot be attached to a person at all.
+REQUIRED_TEACHER_COLUMNS = TEACHER_COLUMNS
 
 #: Teachers are free; students are what a school pays for. Adding a teacher
 #: after activation therefore costs nothing and adding a student does.
@@ -345,7 +364,6 @@ def _read_rows(raw: bytes, kind: OnboardingRowKind) -> list[OnboardingRow]:
     line, its field, the value that caused it and a sentence to act on.
     """
 
-    wanted = STUDENT_COLUMNS if kind is OnboardingRowKind.STUDENT else TEACHER_COLUMNS
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as error:
@@ -361,7 +379,12 @@ def _read_rows(raw: bytes, kind: OnboardingRowKind) -> list[OnboardingRow]:
         ) from error
     reader = csv.DictReader(io.StringIO(text))
     headers = {_column(name) for name in (reader.fieldnames or [])}
-    missing = [column for column in wanted if column not in headers]
+    # Only the columns whose values are required. A column the template offers
+    # but does not insist on - a guardian's name, the relationship - is
+    # optional as a header too, so last term's copy of the template still
+    # imports. Refusing a file for a header we ourselves made optional is the
+    # drift SCRUM-199 exists to prevent, arriving from the other direction.
+    missing = [column for column in _required(kind) if column not in headers]
     if missing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -385,7 +408,39 @@ def _read_rows(raw: bytes, kind: OnboardingRowKind) -> list[OnboardingRow]:
             row.normalised_class_name = normalise_class_name(class_name)
         _reject_incomplete(row, values, _required(kind))
         rows.append(row)
+    _reject_duplicate_admission_numbers(rows)
     return rows
+
+
+def _reject_duplicate_admission_numbers(rows: list[OnboardingRow]) -> None:
+    """Two children sharing an identity is the same failure as none. SCRUM-203.
+
+    The admission number is how a child identifies themselves at the door and
+    how a re-upload is matched to the right row. Two rows carrying one number
+    means one of those children signs in as the other, so the later row is
+    refused and named rather than quietly overwriting the earlier one.
+    """
+
+    seen: dict[str, int] = {}
+    for row in rows:
+        if row.kind is not OnboardingRowKind.STUDENT or row.rejected:
+            continue
+        raw = (row.values or {}).get("admission_number", "")
+        number = " ".join(str(raw).split()).casefold()
+        if not number:
+            continue
+        first = seen.get(number)
+        if first is None:
+            seen[number] = row.row_number
+            continue
+        row.rejected = True
+        row.rejection_field = "admission_number"
+        row.rejection_value = str((row.values or {}).get("admission_number", ""))
+        row.rejection_reason = (
+            f"Row {row.row_number} has the same admission number as row {first}. "
+            "Two children cannot share one, because it is how each of them "
+            "signs in. Give this row its own number, or take it out."
+        )
 
 
 def _required(kind: OnboardingRowKind) -> tuple[str, ...]:
@@ -451,9 +506,13 @@ def _parse_date(value: str) -> date | None:
 #: Words a school writes for a column we call something else.
 #:
 #: Tolerance in the same spirit as reading four date formats: a file that says
-#: "Surname" is not a malformed file. This list is also what makes the generated
-#: templates importable, since the readable heading has to fold back to the
-#: column the parser wants - a round trip the template test asserts.
+#: "Surname" is not a malformed file. This list is also what makes the
+#: generated templates importable, since the readable heading has to fold back
+#: to the column the parser wants - a round trip the template test asserts.
+#:
+#: The guardian_* aliases matter for a different reason. Schools keep old
+#: copies of the template, and the columns were called parent_* until
+#: SCRUM-203. A file downloaded last week still imports.
 COLUMN_ALIASES = {
     "surname": "last_name",
     "family_name": "last_name",
@@ -468,13 +527,38 @@ COLUMN_ALIASES = {
     # What the drawn template actually says. Punctuation is stripped to a
     # space, so "Class(es)" arrives here as class_es.
     "class_es": "class",
-    "subject": "subjects",
-    "parent_name": "parent_first_name",
-    "guardian_email": "parent_email",
-    "parent_e_mail": "parent_email",
+    "subjects": "subject",
     "e_mail": "email",
     "email_address": "email",
+    # The child's own identifier. Always read to a person as
+    # "Student ID / Admission Number", so both halves resolve.
+    "student_id": "admission_number",
+    "student_id_admission_number": "admission_number",
+    "admission_no": "admission_number",
+    "admission": "admission_number",
+    # Older templates, before the guardian rename.
+    "parent_first_name": "guardian_first_name",
+    "parent_surname": "guardian_last_name",
+    "parent_last_name": "guardian_last_name",
+    "parent_name": "guardian_first_name",
+    "guardian_name": "guardian_first_name",
+    "guardian_surname": "guardian_last_name",
+    "parent_email": "guardian_email",
+    "guardian_e_mail": "guardian_email",
+    "parent_relationship": "guardian_relationship",
+    "relationship": "guardian_relationship",
+    # The readable heading on the generated template. It has to fold back to
+    # the column the parser wants, which is the round trip the template test
+    # asserts - and the reason that test exists.
+    "relationship_to_the_child": "guardian_relationship",
 }
+
+#: Columns a file may still carry that Nevo no longer wants.
+#:
+#: Ignored rather than rejected. guardian_phone was struck when parent contact
+#: became email only, and a school holding last term's template should not be
+#: turned away over a column we asked for ourselves.
+RETIRED_COLUMNS = frozenset({"guardian_phone", "parent_phone", "phone", "parent_contact"})
 
 
 def _column(name: str) -> str:
@@ -767,7 +851,7 @@ async def activate(
     # off their user row. Merged on email across every row that carried it, so
     # a school that wrote one row per subject gets one teacher with several and
     # not several teachers with one each. SCRUM-194.
-    await _attach_teacher_subjects(session, school, rows)
+    await _attach_teacher_subjects(session, school, rows, classes)
     record.activated_at = datetime.now(UTC)
     record.stage = OnboardingStage.ACTIVATED
     await session.flush()
@@ -780,8 +864,17 @@ async def _attach_teacher_subjects(
     session: AsyncSession,
     school: School,
     rows: list[OnboardingRow],
+    classes: dict[str, Class],
 ) -> None:
-    """Give each imported teacher the subjects their rows named.
+    """Derive subjects and assignments from the teacher file. SCRUM-203.
+
+    Three things fall out of one pass, and none of them is typed by a school:
+
+    The teacher's own subject list, which is what that person teaches. Each
+    class's subject list, which is every subject taught to that class - this
+    closes the hole where a derived class arrived with no subjects at all,
+    leaving its teachers unassignable and its students with no subjects. And
+    the assignment itself, which is a teacher, a subject and a class.
 
     Merged on email and never on name: two teachers both called Mrs Bello with
     different addresses are two teachers, and fusing them would file one
@@ -795,9 +888,8 @@ async def _attach_teacher_subjects(
     ]
     if not teacher_rows:
         return
+    now = datetime.now(UTC)
     for merged in merge_rows(teacher_rows):
-        if not merged.subjects:
-            continue
         teacher = await session.scalar(
             select(User).where(
                 User.school_id == school.id,
@@ -806,17 +898,63 @@ async def _attach_teacher_subjects(
         )
         if teacher is None:
             continue
-        for typed in merged.subjects:
-            subject = await ensure(session, school_id=school.id, typed=typed)
-            already = await session.scalar(
-                select(TeacherSubject.id).where(
-                    TeacherSubject.teacher_id == teacher.id,
-                    TeacherSubject.school_subject_id == subject.id,
+        for assignment in merged.assignments:
+            subject = await ensure(session, school_id=school.id, typed=assignment.subject)
+            await _hold(
+                session,
+                TeacherSubject,
+                teacher_id=teacher.id,
+                school_subject_id=subject.id,
+            )
+            school_class = classes.get(normalise_class_name(assignment.class_name))
+            if school_class is None:
+                # A class named in the teacher file that the student file never
+                # mentioned. The teacher keeps the subject; there is no class to
+                # attach it to, and inventing one would put a class on the
+                # invoice that has no children in it.
+                continue
+            await _hold(
+                session, ClassSubject, class_id=school_class.id, school_subject_id=subject.id
+            )
+            existing = await session.scalar(
+                select(TeacherClassAssignment.id).where(
+                    TeacherClassAssignment.teacher_id == teacher.id,
+                    TeacherClassAssignment.class_id == school_class.id,
+                    TeacherClassAssignment.school_subject_id == subject.id,
+                    TeacherClassAssignment.removed_at.is_(None),
                 )
             )
-            if already is None:
-                session.add(TeacherSubject(teacher_id=teacher.id, school_subject_id=subject.id))
+            if existing is None:
+                session.add(
+                    TeacherClassAssignment(
+                        school_id=school.id,
+                        teacher_id=teacher.id,
+                        class_id=school_class.id,
+                        school_subject_id=subject.id,
+                        # Not primary. One class may have only one primary
+                        # teacher, and the roster describes who teaches which
+                        # subject rather than who holds the form - so every
+                        # derived assignment being primary would refuse the
+                        # second subject teacher of every class.
+                        role=TeacherAssignmentRole.CO_TEACHER,
+                        source=TeacherAssignmentSource.ROSTER_SYNC,
+                        assigned_at=now,
+                    )
+                )
     await session.flush()
+
+
+async def _hold(
+    session: AsyncSession,
+    model: type[ClassSubject] | type[TeacherSubject],
+    **keys: object,
+) -> None:
+    """Add a join row unless it is already there."""
+
+    columns = [getattr(model, name) == value for name, value in keys.items()]
+    found = await session.scalar(select(model.id).where(*columns))
+    if found is None:
+        session.add(model(**keys))
 
 
 async def _create_person(

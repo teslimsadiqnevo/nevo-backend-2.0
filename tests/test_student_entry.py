@@ -50,8 +50,8 @@ def test_age_is_derived_the_way_a_person_counts_it(born: date, today: date, age:
 
 def test_a_missing_date_of_birth_is_refused_at_import_not_asked_of_the_child() -> None:
     rows = _read_rows(
-        b"first_name,last_name,class,date_of_birth,parent_first_name,parent_surname,parent_email\n"
-        b"Amara,Okafor,JSS 1A,,Ngozi,Okafor,ngozi@example.com\n",
+        b"first_name,last_name,class,date_of_birth,admission_number,guardian_email\n"
+        b"Amara,Okafor,JSS 1A,,ADM001,ngozi@example.com\n",
         OnboardingRowKind.STUDENT,
     )
 
@@ -61,9 +61,9 @@ def test_a_missing_date_of_birth_is_refused_at_import_not_asked_of_the_child() -
 
 def test_a_date_written_the_way_a_school_writes_it_is_read() -> None:
     rows = _read_rows(
-        b"first_name,last_name,class,date_of_birth,parent_first_name,parent_surname,parent_email\n"
-        b"Amara,Okafor,JSS 1A,23/04/2015,Ngozi,Okafor,ngozi@example.com\n"
-        b"Tunde,Bello,JSS 1A,not a date,Bisi,Bello,bisi@example.com\n",
+        b"first_name,last_name,class,date_of_birth,admission_number,guardian_email\n"
+        b"Amara,Okafor,JSS 1A,23/04/2015,ADM001,ngozi@example.com\n"
+        b"Tunde,Bello,JSS 1A,not a date,ADM002,bisi@example.com\n",
         OnboardingRowKind.STUDENT,
     )
 

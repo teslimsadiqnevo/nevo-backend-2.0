@@ -26,24 +26,25 @@ from nevo.main import app
 
 
 def test_the_roster_asks_for_a_first_name_and_a_surname() -> None:
-    assert "parent_first_name" in STUDENT_COLUMNS
-    assert "parent_surname" in STUDENT_COLUMNS
-    # Replaced, not added alongside.
+    # Renamed to guardian_* by SCRUM-203; still two columns, still optional.
+    assert "guardian_first_name" in STUDENT_COLUMNS
+    assert "guardian_last_name" in STUDENT_COLUMNS
     assert "parent_name" not in STUDENT_COLUMNS
+    assert "guardian_name" not in STUDENT_COLUMNS
 
 
 def test_a_missing_parent_name_does_not_lose_the_row() -> None:
     # A school filling four hundred rows will miss some, and the parent
     # confirms their own name at consent anyway.
-    assert "parent_first_name" not in REQUIRED_STUDENT_COLUMNS
-    assert "parent_surname" not in REQUIRED_STUDENT_COLUMNS
+    assert "guardian_first_name" not in REQUIRED_STUDENT_COLUMNS
+    assert "guardian_last_name" not in REQUIRED_STUDENT_COLUMNS
 
 
 def test_what_a_row_must_still_carry() -> None:
     # Date of birth, because age is derived from it. Parent email, because
     # activation depends on the consent request reaching somebody.
     assert "date_of_birth" in REQUIRED_STUDENT_COLUMNS
-    assert "parent_email" in REQUIRED_STUDENT_COLUMNS
+    assert "guardian_email" in REQUIRED_STUDENT_COLUMNS
 
 
 def test_the_single_enrol_takes_an_email_and_not_a_name() -> None:

@@ -39,7 +39,12 @@ from nevo.db.models.billing import Invoice
 from nevo.db.models.onboarding import OnboardingRow, SchoolOnboarding
 from nevo.db.models.subject import ClassSubject, TeacherSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
-from nevo.domain.accounts.classes import academic_session, normalise_class_name, parse_class_name
+from nevo.domain.accounts.classes import (
+    academic_session,
+    class_merge_key,
+    normalise_class_name,
+    parse_class_name,
+)
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.billing.vocabulary import InvoiceStatus, RateType
 from nevo.domain.onboarding.vocabulary import OnboardingRowKind, OnboardingStage
@@ -48,7 +53,7 @@ from nevo.domain.teacher_assignments.vocabulary import (
     TeacherAssignmentSource,
 )
 from nevo.subjects.resolution import ensure
-from nevo.subjects.teacher_import import merge_rows
+from nevo.subjects.teacher_import import LEGACY_SEPARATORS, merge_rows
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 
@@ -130,8 +135,41 @@ class DerivedClass(CamelResponse):
     section: str | None
     student_count: int
     teacher_count: int
+    #: What this class is taught, read out of the teacher file: every subject
+    #: a teacher row named against this class. Empty where the school has not
+    #: uploaded teachers yet. SCRUM-203, SCRUM-204.
+    subjects: list[str] = Field(default_factory=list)
     #: True once this class exists as a row rather than as a proposal.
     committed: bool = False
+
+
+class MergeCandidate(CamelResponse):
+    """One of the several spellings a single class arrived under."""
+
+    name: str
+    normalised_name: str
+    student_count: int
+    teacher_count: int
+
+
+class ClassMergeProposal(CamelResponse):
+    """Several spellings of what looks like one class, for a person to settle.
+
+    Not applied on its own. A four-hundred-row hand-maintained spreadsheet
+    will carry JSS 2A, JSS2A, Jss 2a and JSS 2 A for one cohort, and guessing
+    would be guessing at an invoice: the headcount per class is what the
+    school pays, and a teacher assigned to one of four phantom classes sees a
+    quarter of their students.
+    """
+
+    #: The key to answer with. Stable for the same set of spellings.
+    key: str
+    #: The name Nevo would keep, the most-used spelling winning.
+    proposed_name: str
+    candidates: list[MergeCandidate]
+    #: Headcount of the merged class, which is what would be invoiced.
+    student_count: int
+    reason: str
 
 
 class OnboardingState(CamelResponse):
@@ -142,6 +180,9 @@ class OnboardingState(CamelResponse):
     teacher_count: int
     student_count: int
     rejected: list[RejectedRow]
+    #: Spellings that look like one class, each needing a yes or no before the
+    #: headcount can be confirmed. Empty once every one is settled.
+    class_merges: list[ClassMergeProposal] = Field(default_factory=list)
     #: Null until the headcount is confirmed and priced.
     invoice_id: UUID | None = None
     amount_due: Decimal | None = None
@@ -182,6 +223,27 @@ class ClassCorrections(BaseModel):
     model_config = CAMEL_CONFIG
 
     corrections: Annotated[list[ClassCorrection], Field(min_length=1, max_length=200)]
+
+
+class MergeDecision(BaseModel):
+    """One answer to one proposal."""
+
+    model_config = CAMEL_CONFIG
+
+    key: Annotated[str, Field(min_length=1, max_length=255)]
+    #: True folds the spellings into one class and moves their students into
+    #: it. False says the school really does run these as separate classes,
+    #: which is a legitimate answer and is remembered so it is not asked
+    #: again.
+    merge: bool
+    #: Which name survives a merge. Defaults to the proposal's own.
+    keep_name: Annotated[str | None, Field(default=None, max_length=255)] = None
+
+
+class MergeDecisions(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    decisions: Annotated[list[MergeDecision], Field(min_length=1, max_length=200)]
 
 
 class AdditionQuoteRequest(BaseModel):
@@ -288,7 +350,27 @@ async def _rows(session: AsyncSession, onboarding_id: UUID) -> list[OnboardingRo
     return list(rows)
 
 
+def _row_subjects(row: OnboardingRow) -> list[str]:
+    """Every subject one teacher row named, in the words the school wrote."""
+
+    raw = str((row.values or {}).get("subject", "") or "")
+    return [part.strip() for part in LEGACY_SEPARATORS.split(raw) if part.strip()]
+
+
 def _derived_classes(rows: list[OnboardingRow]) -> list[DerivedClass]:
+    subjects: dict[str, dict[str, str]] = {}
+    for row in rows:
+        if row.kind is not OnboardingRowKind.TEACHER or not row.countable:
+            continue
+        if not row.normalised_class_name:
+            continue
+        held = subjects.setdefault(row.normalised_class_name, {})
+        for name in _row_subjects(row):
+            # Keyed on the folded spelling so one class is not listed as
+            # teaching Maths and Mathematics; the first spelling seen is the
+            # one rendered, and which of two spellings survives for real is
+            # settled on the classes screen, not here. SCRUM-204.
+            held.setdefault(" ".join(name.split()).casefold(), name)
     found: dict[str, DerivedClass] = {}
     for row in rows:
         if not row.countable or not row.normalised_class_name or row.class_name is None:
@@ -309,7 +391,52 @@ def _derived_classes(rows: list[OnboardingRow]) -> list[DerivedClass]:
             derived.student_count += 1
         else:
             derived.teacher_count += 1
+    for normalised, derived in found.items():
+        derived.subjects = sorted(subjects.get(normalised, {}).values())
     return sorted(found.values(), key=lambda item: item.normalised_name)
+
+
+def _merge_proposals(
+    classes: list[DerivedClass], decided: dict[str, str]
+) -> list[ClassMergeProposal]:
+    """Spellings that look like one class and have not been settled yet.
+
+    Only ever proposed. Applying this without asking would be rewriting an
+    invoice on a guess about somebody's spacing.
+    """
+
+    grouped: dict[str, list[DerivedClass]] = {}
+    for derived in classes:
+        grouped.setdefault(class_merge_key(derived.normalised_name), []).append(derived)
+    proposals = []
+    for key, members in sorted(grouped.items()):
+        if len(members) < 2 or decided.get(key):
+            continue
+        # The most-used spelling wins, headcount breaking the tie, then the
+        # name itself so the same file always proposes the same answer.
+        best = max(members, key=lambda item: (item.student_count, item.name))
+        spellings = ", ".join(sorted(item.name for item in members))
+        proposals.append(
+            ClassMergeProposal(
+                key=key,
+                proposed_name=best.name,
+                candidates=[
+                    MergeCandidate(
+                        name=item.name,
+                        normalised_name=item.normalised_name,
+                        student_count=item.student_count,
+                        teacher_count=item.teacher_count,
+                    )
+                    for item in sorted(members, key=lambda item: item.normalised_name)
+                ],
+                student_count=sum(item.student_count for item in members),
+                reason=(
+                    f"{spellings} differ only in spacing or capitals, so they "
+                    "look like one class written several ways."
+                ),
+            )
+        )
+    return proposals
 
 
 def _state(
@@ -318,6 +445,7 @@ def _state(
     invoice: Invoice | None,
 ) -> OnboardingState:
     classes = _derived_classes(rows)
+    merges = _merge_proposals(classes, record.class_merge_decisions or {})
     students = sum(1 for row in rows if row.countable and row.kind is OnboardingRowKind.STUDENT)
     teachers = sum(1 for row in rows if row.countable and row.kind is OnboardingRowKind.TEACHER)
     paid = invoice is not None and invoice.status is InvoiceStatus.PAID
@@ -336,11 +464,15 @@ def _state(
             for row in rows
             if row.rejected
         ],
+        class_merges=merges,
         invoice_id=invoice.id if invoice else None,
         amount_due=invoice.amount if invoice else None,
         currency=invoice.currency.value if invoice else None,
         period_label=invoice.period_label if invoice else None,
-        can_confirm=record.stage is OnboardingStage.UPLOADING and students > 0,
+        # An unresolved merge blocks confirmation, and the block is here and
+        # in the route rather than in a hidden button, because the headcount
+        # per class becomes the invoice. SCRUM-204.
+        can_confirm=(record.stage is OnboardingStage.UPLOADING and students > 0 and not merges),
         can_pay=record.stage is OnboardingStage.AWAITING_PAYMENT and not paid,
         can_activate=record.stage is OnboardingStage.AWAITING_PAYMENT and paid,
     )
@@ -714,6 +846,71 @@ async def correct_derived_classes(
     return state
 
 
+@router.post("/classes/merges", response_model=OnboardingState)
+async def decide_class_merges(
+    payload: MergeDecisions,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> OnboardingState:
+    """Settle the spellings that look like one class.
+
+    A yes folds them together and moves their students into the kept name. A
+    no says the school really does run them separately, which is a real answer
+    and is remembered, so the same file is not questioned twice.
+    """
+
+    actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
+    record = await _onboarding(session, actor.school_id)
+    if record.stage is not OnboardingStage.UPLOADING:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "onboarding_already_confirmed",
+                "message": "The roster is confirmed. Merge classes in the admin console.",
+            },
+        )
+    rows = await _rows(session, record.id)
+    proposals = {
+        proposal.key: proposal
+        for proposal in _merge_proposals(_derived_classes(rows), record.class_merge_decisions or {})
+    }
+    unknown = [decision.key for decision in payload.decisions if decision.key not in proposals]
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "merge_not_proposed",
+                "message": (
+                    "Nevo is not proposing that merge. Read the list again - it "
+                    "changes when the file does."
+                ),
+                "keys": unknown,
+            },
+        )
+    decided = dict(record.class_merge_decisions or {})
+    for decision in payload.decisions:
+        proposal = proposals[decision.key]
+        if not decision.merge:
+            decided[decision.key] = "separate"
+            continue
+        keep = decision.keep_name or proposal.proposed_name
+        parsed = parse_class_name(keep)
+        wanted = normalise_class_name(keep)
+        for row in rows:
+            if class_merge_key(row.normalised_class_name or "") != decision.key:
+                continue
+            row.class_name = parsed.name
+            row.normalised_class_name = wanted
+        decided[decision.key] = "merged"
+    # Reassigned rather than mutated: SQLAlchemy does not track a change made
+    # inside a JSONB dict, so a mutated one is silently not saved.
+    record.class_merge_decisions = decided
+    await session.flush()
+    state = await _state_for(session, record)
+    await session.commit()
+    return state
+
+
 @router.post("/confirm", response_model=OnboardingState)
 async def confirm_and_price(
     principal: PrincipalDependency,
@@ -738,6 +935,24 @@ async def confirm_and_price(
             detail={
                 "code": "nothing_to_confirm",
                 "message": "Upload a student file before confirming. Nevo is priced per student.",
+            },
+        )
+    # Refused here as well as reported in canConfirm, because the headcount
+    # per class is what the invoice is built from: a school that confirms
+    # while JSS 2A and JSS2A are still two classes pays for a phantom and its
+    # teachers see half a roster. SCRUM-204.
+    unresolved = _merge_proposals(_derived_classes(rows), record.class_merge_decisions or {})
+    if unresolved:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "class_merges_unresolved",
+                "message": (
+                    "Some classes look like the same class written twice. "
+                    "Settle those before confirming - the headcount per class "
+                    "is what the invoice is built from."
+                ),
+                "keys": [proposal.key for proposal in unresolved],
             },
         )
     school = await session.get(School, actor.school_id)

@@ -44,6 +44,22 @@ class SubjectReviewState(StrEnum):
     MERGED = "merged"
 
 
+class SpellingAnswer(StrEnum):
+    """What a school said about two spellings of one subject.
+
+    Binary by design. "Maths and Mathematics, same subject or different?" has
+    no third answer worth building a screen for, and the fuller spelling
+    surviving a "same" is stated on screen rather than offered as an edit.
+    """
+
+    #: Nobody has been asked yet. The two are already folded into one.
+    UNANSWERED = "unanswered"
+    #: One subject. The fold stands and the fuller spelling survives.
+    SAME = "same"
+    #: Two subjects. Split back out, both labels kept exactly as written.
+    DIFFERENT = "different"
+
+
 #: A starting canonical list, from the Nigerian secondary curriculum: NERDC
 #: junior and the WAEC senior syllabuses.
 #:

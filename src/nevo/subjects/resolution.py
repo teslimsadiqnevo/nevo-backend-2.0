@@ -19,8 +19,17 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nevo.db.models.subject import CanonicalSubject, SchoolSubject
-from nevo.domain.subjects.vocabulary import SubjectOrigin, SubjectReviewState
+from nevo.db.models.subject import (
+    CanonicalSubject,
+    SchoolSubject,
+    SubjectSpellingQuestion,
+)
+from nevo.domain.subjects import spelling
+from nevo.domain.subjects.vocabulary import (
+    SpellingAnswer,
+    SubjectOrigin,
+    SubjectReviewState,
+)
 
 
 def normalise(name: str) -> str:
@@ -132,6 +141,9 @@ async def ensure(
     )
     if existing is not None:
         return existing
+    folded = await _fold_spelling(session, school_id=school_id, typed=name)
+    if folded is not None:
+        return folded
     canonical = await session.scalar(
         select(CanonicalSubject).where(CanonicalSubject.display_name.ilike(name))
     )
@@ -148,6 +160,57 @@ async def ensure(
     session.add(subject)
     await session.flush()
     return subject
+
+
+async def _fold_spelling(
+    session: AsyncSession, *, school_id: UUID, typed: str
+) -> SchoolSubject | None:
+    """Fold a second spelling of a subject this school already has into it.
+
+    Maths arriving at a school that already has Mathematics is one subject
+    written twice, and two rows would split a child's mastery across two
+    knowledge graphs. So the existing row is returned, renamed to the fuller
+    spelling, and the question is recorded for the classes screen to ask.
+    Nothing is folded where ``possible_pair`` cannot argue for it: a subject
+    Nevo has never heard of is the school's own, accepted as given, with no
+    prompt. SCRUM-204.
+    """
+
+    already = await session.scalar(
+        select(SubjectSpellingQuestion).where(
+            SubjectSpellingQuestion.school_id == school_id,
+            SubjectSpellingQuestion.normalised_other == normalise(typed),
+        )
+    )
+    if already is not None:
+        # Asked once already. A school that said "different" has its own row
+        # for this spelling by now, and one that has not answered keeps the
+        # fold rather than being asked twice for the same two words.
+        if already.answer is SpellingAnswer.DIFFERENT and already.split_subject_id:
+            return await session.get(SchoolSubject, already.split_subject_id)
+        return await session.get(SchoolSubject, already.kept_subject_id)
+    candidates = list(
+        await session.scalars(select(SchoolSubject).where(SchoolSubject.school_id == school_id))
+    )
+    for candidate in candidates:
+        if not spelling.possible_pair(candidate.name, typed):
+            continue
+        keep = spelling.fuller(candidate.name, typed)
+        other = typed if keep != typed else candidate.name
+        if keep != candidate.name:
+            candidate.name = keep
+            candidate.normalised_name = normalise(keep)
+        session.add(
+            SubjectSpellingQuestion(
+                school_id=school_id,
+                kept_subject_id=candidate.id,
+                other_label=other,
+                normalised_other=normalise(other),
+            )
+        )
+        await session.flush()
+        return candidate
+    return None
 
 
 async def subjects_for_class(session: AsyncSession, class_id: UUID) -> list[str]:

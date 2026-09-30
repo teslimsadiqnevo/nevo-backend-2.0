@@ -29,7 +29,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nevo.db.base import Base
-from nevo.domain.subjects.vocabulary import SubjectOrigin, SubjectReviewState
+from nevo.domain.subjects.vocabulary import (
+    SpellingAnswer,
+    SubjectOrigin,
+    SubjectReviewState,
+)
 
 subject_origin_enum = Enum(
     SubjectOrigin,
@@ -40,6 +44,12 @@ subject_origin_enum = Enum(
 subject_review_state_enum = Enum(
     SubjectReviewState,
     name="subject_review_state",
+    values_callable=lambda enum: [member.value for member in enum],
+)
+
+spelling_answer_enum = Enum(
+    SpellingAnswer,
+    name="subject_spelling_answer",
     values_callable=lambda enum: [member.value for member in enum],
 )
 
@@ -158,6 +168,61 @@ class TeacherSubject(Base):
     school_subject_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("school_subjects.id", ondelete="RESTRICT"), nullable=False
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SubjectSpellingQuestion(Base):
+    """Two spellings of one subject, folded into one and asked about after.
+
+    The fold happens at import: Maths written on one row and Mathematics on
+    another become one subject, because two subjects would split a child's
+    mastery across two knowledge graphs and halve their progress for no
+    reason. The words the school actually typed would be lost by that fold,
+    so they are kept here and the question is put on the classes screen -
+    after payment, because a subject spelling does not change the invoice.
+    SCRUM-204.
+    """
+
+    __tablename__ = "subject_spelling_questions"
+    __table_args__ = (
+        UniqueConstraint(
+            "school_id",
+            "kept_subject_id",
+            "normalised_other",
+            name="uq_subject_spelling_questions",
+        ),
+        Index("ix_subject_spelling_questions_school", "school_id", "answer"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+    )
+    #: The row the other spelling was folded into. Its name is the fuller of
+    #: the two, which is the spelling that survives.
+    kept_subject_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("school_subjects.id", ondelete="CASCADE"), nullable=False
+    )
+    #: The other spelling, exactly as the school wrote it, so that answering
+    #: "different" can keep it as the school's own words.
+    other_label: Mapped[str] = mapped_column(String(120), nullable=False)
+    normalised_other: Mapped[str] = mapped_column(String(120), nullable=False)
+    answer: Mapped[SpellingAnswer] = mapped_column(
+        spelling_answer_enum,
+        nullable=False,
+        default=SpellingAnswer.UNANSWERED,
+        server_default=SpellingAnswer.UNANSWERED.value,
+    )
+    #: The school's own row for the other spelling, once they said the two are
+    #: different subjects and it was split back out.
+    split_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("school_subjects.id", ondelete="SET NULL"), nullable=True
+    )
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

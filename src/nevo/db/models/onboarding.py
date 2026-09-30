@@ -85,6 +85,16 @@ class SchoolOnboarding(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    #: What the school decided about each proposed class merge, keyed by the
+    #: loose merge key: "merged" or "separate". A proposal with no entry here
+    #: is unresolved, and an unresolved proposal blocks confirmation, because
+    #: the headcount per class becomes the invoice. SCRUM-204.
+    class_merge_decisions: Mapped[dict[str, str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     #: When accounts were created, invitations sent, consent requested and
     #: credentials released. Never set before the invoice is paid.
     activated_at: Mapped[datetime | None] = mapped_column(

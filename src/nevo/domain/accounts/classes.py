@@ -75,3 +75,21 @@ def parse_class_name(name: str) -> ClassName:
         year_group=year_group or None,
         section=section.upper() if section else None,
     )
+
+
+#: Everything that is not a letter or a digit. "JSS 2A", "JSS2A", "Jss 2a" and
+#: "JSS 2 A" differ only in spacing and case, and a hand-maintained
+#: spreadsheet of four hundred rows will carry all four for one cohort.
+NOT_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
+
+
+def class_merge_key(name: str) -> str:
+    """What several spellings of one class have in common, spacing included.
+
+    ``normalise_class_name`` is deliberately stricter: it is what the database
+    enforces, and collapsing spaces entirely there would make "JSS 2 A" and
+    "JSS2A" the same class without anybody having agreed to it. This is the
+    looser key, used only to *propose* a merge for a person to confirm.
+    """
+
+    return NOT_ALPHANUMERIC.sub("", name.casefold())

@@ -14,6 +14,7 @@ loses nothing.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -30,10 +31,15 @@ from nevo.db.models.subject import (
     CanonicalSubject,
     ClassSubject,
     SchoolSubject,
+    SubjectSpellingQuestion,
     TeacherSubject,
 )
 from nevo.domain.accounts.vocabulary import UserRole
-from nevo.domain.subjects.vocabulary import SubjectOrigin, SubjectReviewState
+from nevo.domain.subjects.vocabulary import (
+    SpellingAnswer,
+    SubjectOrigin,
+    SubjectReviewState,
+)
 from nevo.subjects.resolution import display_names, ensure, normalise, resolve
 
 router = APIRouter(prefix="/api/v1", tags=["subjects"])
@@ -85,6 +91,155 @@ class ResolvePreview(CamelResponse):
     display_name: str | None = None
     school_subject_id: UUID | None = None
     origin: SubjectOrigin | None = None
+
+
+class SpellingQuestion(CamelResponse):
+    """ "Maths and Mathematics, same subject or different?"
+
+    One question, two answers, asked on the classes screen and not during
+    onboarding: a class merge changes the headcount and therefore the invoice,
+    a subject spelling does not, so this one waits. Until it is answered the
+    two are already treated as one subject, which is the safe default - two
+    subjects would split a child's mastery across two knowledge graphs and
+    halve their progress for no reason.
+    """
+
+    id: UUID
+    #: The spelling that survives a "same": the fuller of the two. Stated on
+    #: screen, not editable in v1.
+    kept_name: str
+    #: The other spelling, exactly as the school wrote it.
+    other_name: str
+    question: str
+
+
+class SpellingAnswerRequest(CamelResponse):
+    """The answer. Binary: they are one subject, or they are two."""
+
+    same: bool
+
+
+@router.get("/subjects/spelling-questions", response_model=list[SpellingQuestion])
+async def spelling_questions(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> list[SpellingQuestion]:
+    """Every pair of spellings still waiting on an answer, listed together.
+
+    Listed rather than shown one modal at a time, because a school whose file
+    carried four abbreviations should answer four questions on one screen.
+    """
+
+    actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
+    rows = list(
+        await session.scalars(
+            select(SubjectSpellingQuestion)
+            .where(
+                SubjectSpellingQuestion.school_id == _school_of(actor),
+                SubjectSpellingQuestion.answer == SpellingAnswer.UNANSWERED,
+            )
+            .order_by(SubjectSpellingQuestion.created_at)
+        )
+    )
+    kept = await _kept_names(session, rows)
+    return [
+        SpellingQuestion(
+            id=row.id,
+            kept_name=kept.get(row.kept_subject_id, row.other_label),
+            other_name=row.other_label,
+            question=(
+                f"{kept.get(row.kept_subject_id, row.other_label)} and "
+                f"{row.other_label} - same subject or different?"
+            ),
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/subjects/spelling-questions/{question_id}",
+    response_model=list[SchoolSubjectResponse],
+)
+async def answer_spelling_question(
+    question_id: UUID,
+    payload: SpellingAnswerRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> list[SchoolSubjectResponse]:
+    """Settle one pair, and return the subjects it left behind.
+
+    "Same" lets the fold stand: one subject, the fuller spelling surviving.
+    "Different" splits the other spelling back out as the school's own row,
+    keeping both labels exactly as the school wrote them. Nothing already
+    recorded against the kept row moves, because records reference the row
+    and not the words.
+    """
+
+    actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
+    school_id = _school_of(actor)
+    question = await session.get(SubjectSpellingQuestion, question_id)
+    if question is None or question.school_id != school_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "question_not_found", "message": "No such question."},
+        )
+    if question.answer is not SpellingAnswer.UNANSWERED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "question_already_answered",
+                "message": "Somebody has answered this already.",
+            },
+        )
+    subjects = [question.kept_subject_id]
+    question.answer = SpellingAnswer.SAME if payload.same else SpellingAnswer.DIFFERENT
+    question.answered_at = datetime.now(UTC)
+    if not payload.same:
+        split = SchoolSubject(
+            school_id=school_id,
+            name=question.other_label,
+            normalised_name=question.normalised_other,
+            origin=SubjectOrigin.SCHOOL,
+            # The school's own words, kept as the school's own words. This is
+            # not a near-duplicate to be reviewed - they have just told us it
+            # is a subject in its own right.
+            review_state=SubjectReviewState.KEPT,
+            created_by_user_id=actor.id,
+        )
+        session.add(split)
+        await session.flush()
+        question.split_subject_id = split.id
+        subjects.append(split.id)
+    await session.commit()
+    rows = list(await session.scalars(select(SchoolSubject).where(SchoolSubject.id.in_(subjects))))
+    names = await display_names(session, [row.id for row in rows])
+    used = await _referenced(session, [row.id for row in rows])
+    return [
+        SchoolSubjectResponse(
+            id=row.id,
+            name=row.name,
+            display_name=names.get(row.id, row.name),
+            origin=row.origin,
+            review_state=row.review_state,
+            removable=row.id not in used,
+        )
+        for row in sorted(rows, key=lambda row: row.name)
+    ]
+
+
+async def _kept_names(
+    session: DatabaseSession, rows: list[SubjectSpellingQuestion]
+) -> dict[UUID, str]:
+    """The surviving spelling of each pair, in one query rather than one each."""
+
+    if not rows:
+        return {}
+    found = await session.execute(
+        select(SchoolSubject.id, SchoolSubject.name).where(
+            SchoolSubject.id.in_([row.kept_subject_id for row in rows])
+        )
+    )
+    return dict(found.all())  # type: ignore[arg-type]
 
 
 @router.get("/subjects/canonical", response_model=list[CanonicalSubjectResponse])

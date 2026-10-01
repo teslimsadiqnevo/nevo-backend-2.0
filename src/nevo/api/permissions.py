@@ -161,6 +161,35 @@ class RequireScope:
             raise public_permission_error(error) from error
 
 
+class RequireAnyScope:
+    """Holds any one of several scopes.
+
+    Some work belongs to more than one job. Asking a parent for consent is
+    roster work during onboarding and learning-support work afterwards, and
+    requiring the narrower of the two meant a school that had only just signed
+    up could not ask anybody for anything.
+    """
+
+    def __init__(self, *scopes: PermissionScope) -> None:
+        if not scopes:
+            raise ValueError("at least one scope is required")
+        self.scopes = scopes
+
+    async def __call__(
+        self,
+        principal: PrincipalDependency,
+        service: PermissionServiceDependency,
+    ) -> PermissionSnapshot:
+        last: PermissionError | None = None
+        for scope in self.scopes:
+            try:
+                return await service.require(principal, scope)
+            except PermissionError as error:
+                last = error
+        assert last is not None
+        raise public_permission_error(last) from last
+
+
 def scope_dependency(
     scope: PermissionScope,
 ) -> Callable[..., Awaitable[PermissionSnapshot]]:

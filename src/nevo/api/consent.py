@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
-from nevo.api.permissions import RequireScope
+from nevo.api.permissions import RequireAnyScope, RequireScope
 from nevo.consent.entities import (
     ConsentActor,
     ConsentGate,
@@ -75,7 +75,11 @@ class ConsentRecordResponse(BaseModel):
 class ParentConsentRequest(BaseModel):
     model_config = CAMEL_CONFIG
 
-    parent_name: str = Field(min_length=2, max_length=255)
+    #: Optional, because a guardian who arrived on a roster may have no name
+    #: against them: the import asks for guardian names and does not insist on
+    #: them, since the parent supplies their own at account setup. Requiring it
+    #: here made every roster-imported guardian unaskable. SCRUM-189.
+    parent_name: str = Field(default="", max_length=255)
     parent_contact: str = Field(min_length=3, max_length=255)
     contact_method: ParentContactMethod
     consent_types: set[ConsentType] = Field(
@@ -278,6 +282,21 @@ SencoDependency = Annotated[
     Depends(RequireScope(PermissionScope.SENCO)),
 ]
 
+#: Asking a parent for consent, and seeing who a child's parents are.
+#:
+#: Roster *or* learning support, not learning support alone. A school's
+#: founding admin is created with every scope except SENCO - deliberately,
+#: because the deepest view of every child should be granted to somebody on
+#: purpose rather than fall to whoever signed up. But requesting consent is
+#: the first thing a new school has to do, and gating it on SENCO meant a
+#: brand-new school could not ask a single parent for anything until it had
+#: granted itself a scope it had been deliberately denied. Roster is the right
+#: altitude: it is the scope that already covers classes, students and team.
+ConsentRequesterDependency = Annotated[
+    PermissionSnapshot,
+    Depends(RequireAnyScope(PermissionScope.ROSTER, PermissionScope.SENCO)),
+]
+
 
 @router.post(
     "/consents/school-confirmations",
@@ -308,7 +327,7 @@ async def confirm_consent_by_school(
 async def request_parent_consent(
     student_id: UUID,
     payload: ParentConsentRequest,
-    actor: SencoDependency,
+    actor: ConsentRequesterDependency,
     service: ConsentServiceDependency,
 ) -> QueuedParentConsentResponse:
     try:
@@ -385,7 +404,7 @@ async def inspect_parent_consent(
 )
 async def list_parent_links(
     student_id: UUID,
-    actor: SencoDependency,
+    actor: ConsentRequesterDependency,
     service: ConsentServiceDependency,
 ) -> list[ParentLinkResponse]:
     try:

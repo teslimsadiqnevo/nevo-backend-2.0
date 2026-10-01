@@ -725,7 +725,14 @@ class SqlAlchemyConsentRepository:
             school_name=school_name,
             school_phone=school_phone,
             school_email=school_email,
-            parent_name=parent_link.parent_name if parent_link else "Parent or guardian",
+            # Blank as well as absent. A guardian who came off a roster may
+            # have no name against them, and "Hello," with nothing after it is
+            # worse than not using a name at all.
+            parent_name=(
+                (parent_link.parent_name or "").strip() or "Parent or guardian"
+                if parent_link
+                else "Parent or guardian"
+            ),
             parent_contact=parent_link.parent_contact if parent_link else "",
             parent_contact_method=(
                 parent_link.contact_method if parent_link else ParentContactMethod.EMAIL

@@ -366,4 +366,23 @@ def public_auth_error(error: AuthError) -> HTTPException:
 
 
 def client_ip(request: Request) -> str:
+    """The caller's address, as seen from in front of the load balancer.
+
+    ``request.client.host`` is the proxy, and on Render it is a different
+    internal address on almost every request - so a rate limit keyed on it
+    counted each attempt against a fresh bucket and never fired. Proved
+    against production: seven requests from one machine arrived as six
+    distinct hosts.
+
+    The last entry of X-Forwarded-For is taken, not the first. A proxy
+    appends, so the first entry is whatever the caller sent and is therefore
+    spoofable - which for a throttle means an attacker rotates the header and
+    walks straight through. The last entry is what our own proxy observed and
+    is the one thing in that header the caller cannot choose.
+    """
+
+    forwarded = request.headers.get("x-forwarded-for", "")
+    hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+    if hops:
+        return hops[-1]
     return request.client.host if request.client else "unknown"

@@ -23,7 +23,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.age_checks import age_check_blocks
-from nevo.api.auth import AuthServiceDependency, SessionResponse, StudentPin
+from nevo.api.auth import AuthServiceDependency, SessionResponse, StudentPin, client_ip
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.response_models import CamelResponse
@@ -327,7 +327,7 @@ async def lookup_entry(
     code = payload.school_code.strip().upper()
     admission = payload.admission_number.strip()
     identity = _digest(f"entry:{code.casefold()}:{admission.casefold()}")
-    ip = _digest(request.client.host if request.client else "unknown")
+    ip = _digest(client_ip(request))
     await _throttle(session, identity, ip)
     response.headers["Cache-Control"] = "no-store"
     student = await session.scalar(

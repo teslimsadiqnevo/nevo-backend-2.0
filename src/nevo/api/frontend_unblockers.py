@@ -149,7 +149,13 @@ class CurrentUserResponse(BaseModel):
     role: UserRole
     first_name: str | None
     last_name: str | None
+    #: What to call this person on screen. The chosen name where they set one,
+    #: otherwise their roster name. Still read-only - set preferredName.
     display_name: str
+    #: What the child asked to be called, exactly as they typed it, so a
+    #: client can show the field's current value rather than reverse it out of
+    #: displayName. Null where they have never been asked. Ask B35.
+    preferred_name: str | None = Field(default=None, alias="preferredName")
     email: str | None
     school: SchoolSummary | None
     subjects: list[str] = Field(default_factory=list)
@@ -244,6 +250,9 @@ class ProfilePatch(BaseModel):
     subjects: list[str] | None = Field(default=None, max_length=50)
     profile_image_url: str | None = Field(default=None, alias="profileImageUrl", max_length=2_048)
     avatar_tone: str | None = Field(default=None, alias="avatarTone", max_length=40)
+    #: The name a child chooses for themselves. Send "" to clear it and fall
+    #: back to the roster name. Ask B35.
+    preferred_name: str | None = Field(default=None, alias="preferredName", max_length=60)
 
 
 class ProfilePhotoResponse(BaseModel):
@@ -386,7 +395,34 @@ class BaselinePromptResponse(BaseModel):
     item_id: str = Field(alias="itemId")
     question: str
     options: list["BaselinePromptOption"]
-    answer: str
+    #: Whether this child has already answered today's warm-up, on any device.
+    #:
+    #: It was remembered on one tablet only, so a child who started on one and
+    #: finished on another was offered the warm-up twice and submitted twice.
+    #: Held against the account instead. Ask B10.
+    done_today: bool = Field(default=False, alias="doneToday")
+    answered_at: datetime | None = Field(default=None, alias="answeredAt")
+
+
+class BaselinePromptAnswer(BaseModel):
+    """The child's pick. Marking happens on the server, not here."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    item_id: str = Field(alias="itemId", max_length=80)
+    value: str = Field(max_length=200)
+
+
+class BaselinePromptResult(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    #: Scored here, against the key this file holds. It used to be returned
+    #: with the question, which put the answer key on the device - and the
+    #: architecture forbids the client deciding correctness. Ask B8.
+    correct: bool
+    dimension: str
+    done_today: bool = Field(default=True, alias="doneToday")
+    answered_at: datetime = Field(alias="answeredAt")
 
 
 class BaselinePromptOption(BaseModel):
@@ -532,6 +568,7 @@ async def current_user_profile(
         subjects=await _subjects_for_user(session, user),
         profileImageUrl=user.preferences.get("profileImageUrl"),
         avatarTone=user.avatar_tone,
+        preferredName=user.preferred_name,
     )
 
 
@@ -547,9 +584,10 @@ async def update_current_user_profile(
 ) -> CurrentUserResponse:
     """Update the caller's own editable profile fields.
 
-    Name and subjects only. Email is an authentication identifier, so changing
-    it needs a verification flow rather than a silent write, and role and
-    school are set by an administrator rather than by the account holder.
+    Names, the name they choose to be called, subjects, a profile picture and
+    an avatar tone. Email is an authentication identifier, so changing it needs
+    a verification flow rather than a silent write, and role and school are set
+    by an administrator rather than by the account holder.
 
     ``subjects`` replaces the user's explicitly chosen list. Subjects inferred
     from their lessons are still merged into the response, so the value read
@@ -577,6 +615,8 @@ async def update_current_user_profile(
         user.preferences = {**user.preferences, "profileImageUrl": value or None}
     if "avatar_tone" in changes:
         user.avatar_tone = (payload.avatar_tone or "").strip() or None
+    if "preferred_name" in changes:
+        user.preferred_name = (payload.preferred_name or "").strip() or None
     await session.commit()
     school = await session.get(School, user.school_id) if user.school_id else None
     return CurrentUserResponse(
@@ -599,6 +639,7 @@ async def update_current_user_profile(
         subjects=await _subjects_for_user(session, user),
         profileImageUrl=user.preferences.get("profileImageUrl"),
         avatarTone=user.avatar_tone,
+        preferredName=user.preferred_name,
     )
 
 
@@ -1607,18 +1648,15 @@ async def submit_baseline(
 async def recalibrate_prompt(
     student_id: UUID,
     principal: PrincipalDependency,
+    session: DatabaseSession,
 ) -> BaselinePromptResponse:
     if principal.role == "student" and principal.user_id != student_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Students can view only their own warm-up prompt",
         )
-    dimensions = ("working_memory", "attention", "reading_fluency", "number_sense")
-    day_number = datetime.now(UTC).date().toordinal()
-    student_seed = int.from_bytes(hashlib.sha256(str(student_id).encode()).digest()[:8], "big")
-    dimension = dimensions[(day_number + student_seed) % len(dimensions)]
-    items = _BASELINE_ITEMS[dimension]
-    item = items[(day_number // len(dimensions) + student_seed) % len(items)]
+    dimension, item = _todays_item(student_id)
+    done, answered_at = await _warm_up_state(session, student_id)
     return BaselinePromptResponse(
         dimension=dimension,
         itemId=str(item["id"]),
@@ -1627,8 +1665,105 @@ async def recalibrate_prompt(
             BaselinePromptOption(value=value, label=label)
             for value, label in cast(list[tuple[str, str]], item["options"])
         ],
-        answer=str(item["answer"]),
+        doneToday=done,
+        answeredAt=answered_at,
     )
+
+
+@router.post(
+    "/api/baseline/recalibrate-prompt/{student_id}/response",
+    response_model=BaselinePromptResult,
+    tags=["intelligence"],
+)
+async def record_recalibrate_answer(
+    student_id: UUID,
+    payload: BaselinePromptAnswer,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> BaselinePromptResult:
+    """Take the child's warm-up pick and mark it here.
+
+    The prompt used to come with its own answer key, so the device marked the
+    child's pick and sent a verdict. The architecture forbids that, and it
+    means a measure of a child is decided by something a child is holding.
+    The key stays on this side; the client sends the pick.
+
+    Answering twice on the same day is accepted and does not overwrite the
+    first answer - a second tablet offering the warm-up again is the bug in
+    ask B10, and punishing the child for it would be a worse one.
+    """
+
+    if principal.role == "student" and principal.user_id != student_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Students can answer only their own warm-up",
+        )
+    dimension, item = _todays_item(student_id)
+    if payload.item_id != str(item["id"]):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "warm_up_item_stale",
+                "message": "That is not today's warm-up. Read the prompt again.",
+            },
+        )
+    user = await session.get(User, student_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
+    correct = payload.value.strip().casefold() == str(item["answer"]).strip().casefold()
+    done, answered_at = await _warm_up_state(session, student_id)
+    if not done:
+        answered_at = datetime.now(UTC)
+        user.preferences = {
+            **dict(user.preferences or {}),
+            _WARM_UP_KEY: {
+                "date": answered_at.date().isoformat(),
+                "itemId": payload.item_id,
+                "dimension": dimension,
+                "correct": correct,
+                "answeredAt": answered_at.isoformat(),
+            },
+        }
+        await session.commit()
+    return BaselinePromptResult(
+        correct=correct,
+        dimension=dimension,
+        answeredAt=answered_at or datetime.now(UTC),
+    )
+
+
+#: Where today's warm-up is remembered. On the account, not the device.
+_WARM_UP_KEY = "warmUp"
+
+
+def _todays_item(student_id: UUID) -> tuple[str, dict[str, object]]:
+    """Today's dimension and item for this child. Same answer all day."""
+
+    dimensions = ("working_memory", "attention", "reading_fluency", "number_sense")
+    day_number = datetime.now(UTC).date().toordinal()
+    student_seed = int.from_bytes(hashlib.sha256(str(student_id).encode()).digest()[:8], "big")
+    dimension = dimensions[(day_number + student_seed) % len(dimensions)]
+    items = _BASELINE_ITEMS[dimension]
+    return dimension, items[(day_number // len(dimensions) + student_seed) % len(items)]
+
+
+async def _warm_up_state(
+    session: DatabaseSession, student_id: UUID
+) -> tuple[bool, datetime | None]:
+    """Whether this child has done today's warm-up, and when."""
+
+    user = await session.get(User, student_id)
+    held = (user.preferences or {}).get(_WARM_UP_KEY) if user else None
+    if not isinstance(held, dict):
+        return False, None
+    if str(held.get("date")) != datetime.now(UTC).date().isoformat():
+        return False, None
+    stamp = held.get("answeredAt")
+    try:
+        answered_at = datetime.fromisoformat(str(stamp)) if stamp else None
+    except ValueError:
+        answered_at = None
+    return True, answered_at
 
 
 @router.get("/api/analytics/schools", response_model=SchoolHealthResponse, tags=["admin"])
@@ -1968,6 +2103,16 @@ async def update_settings(
 
 
 def _display_name(user: User) -> str:
+    """What to call this person, their own choice winning.
+
+    A child who answered "What should we call you?" is called that, and the
+    roster name stays as the school's record of them rather than being
+    overwritten by a nickname.
+    """
+
+    chosen = (user.preferred_name or "").strip()
+    if chosen:
+        return chosen
     name = " ".join(part for part in (user.first_name, user.last_name) if part)
     return name or user.email or user.login_identifier or "Nevo user"
 

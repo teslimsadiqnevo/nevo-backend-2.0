@@ -168,6 +168,20 @@ class NotificationType(StrEnum):
     ROSTER_SYNC_NEEDS_ATTENTION = "roster_sync_needs_attention"
     INVOICE_ISSUED = "invoice_issued"
     SSO_NEEDS_ATTENTION = "sso_needs_attention"
+    #: A child's own bell, which was always empty: every type above addresses
+    #: a teacher or an administrator, so nothing could ever be addressed to a
+    #: learner. Ask B34.
+    #:
+    #: Deliberately few, and none of them about performance. A child is told
+    #: that something is waiting for them or ready for them - never that they
+    #: are behind, and never anything another child's work is the measure of.
+    LESSON_ASSIGNED = "lesson_assigned"
+    REVIEW_DUE = "review_due"
+    TEACHER_REPLIED = "teacher_replied"
+    #: Their own account changed under them - a new PIN after a reset, or an
+    #: adult turning the account back on. Without it a child meets a PIN that
+    #: no longer works and has no idea why.
+    SIGN_IN_CHANGED = "sign_in_changed"
 
 
 #: Which preference switch governs each kind of notification.
@@ -177,7 +191,37 @@ class NotificationType(StrEnum):
 #: preference had seven switches and no notification could be matched to any of
 #: them. Derived from the type rather than stored beside it, so the two cannot
 #: disagree and no existing row needs correcting.
-NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {}
+#: Empty until now, which meant ``notification_category`` answered None for
+#: every type in the product and no switch on the settings screen could mute
+#: anything at all. The mechanism was built and never connected.
+NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {
+    NotificationType.ATTENTION_SUMMARY: NotificationCategory.ATTENTION,
+    NotificationType.MODALITY_SHIFT: NotificationCategory.ATTENTION,
+    NotificationType.PIN_RESET_REQUESTED: NotificationCategory.ACCOUNT,
+    NotificationType.ADMIN_WELCOME: NotificationCategory.ACCOUNT,
+    NotificationType.CONSENT_ACTION_REQUIRED: NotificationCategory.CONSENT,
+    NotificationType.ROSTER_SYNC_COMPLETED: NotificationCategory.REPORTS,
+    NotificationType.ROSTER_SYNC_NEEDS_ATTENTION: NotificationCategory.REPORTS,
+    NotificationType.INVOICE_ISSUED: NotificationCategory.BILLING,
+    NotificationType.SSO_NEEDS_ATTENTION: NotificationCategory.ACCOUNT,
+    NotificationType.LESSON_ASSIGNED: NotificationCategory.ASSIGNMENTS,
+    NotificationType.REVIEW_DUE: NotificationCategory.ASSIGNMENTS,
+    NotificationType.TEACHER_REPLIED: NotificationCategory.MESSAGES,
+    # Not mutable in practice, but it belongs to a category so the settings
+    # screen can describe it rather than show an uncategorised row.
+    NotificationType.SIGN_IN_CHANGED: NotificationCategory.ACCOUNT,
+}
+
+#: The types a child can be sent. Everything else addresses an adult, and a
+#: notification leaving this set for a student recipient is a bug.
+STUDENT_NOTIFICATION_TYPES: frozenset[NotificationType] = frozenset(
+    {
+        NotificationType.LESSON_ASSIGNED,
+        NotificationType.REVIEW_DUE,
+        NotificationType.TEACHER_REPLIED,
+        NotificationType.SIGN_IN_CHANGED,
+    }
+)
 
 
 def notification_category(

@@ -36,8 +36,18 @@ def test_every_warm_up_dimension_has_rotating_server_owned_items() -> None:
         "number_sense",
     }
     assert all(len(items) >= 3 for items in _BASELINE_ITEMS.values())
-    schema = app.openapi()["components"]["schemas"]["BaselinePromptResponse"]["properties"]
-    assert {"dimension", "itemId", "question", "options", "answer"} <= set(schema)
+    spec = app.openapi()
+    schema = spec["components"]["schemas"]["BaselinePromptResponse"]["properties"]
+    assert {"dimension", "itemId", "question", "options"} <= set(schema)
+    # The answer key must NOT be here. It was, which put the key on the device
+    # and left the child's pick to be marked there - and the architecture
+    # forbids the client deciding correctness. Ask B8.
+    assert "answer" not in schema
+    # So the pick has somewhere to go, and is marked on this side.
+    assert "/api/baseline/recalibrate-prompt/{student_id}/response" in spec["paths"]
+    # And whether today's warm-up is done is held against the account rather
+    # than one tablet, which was offering it twice. Ask B10.
+    assert "doneToday" in schema
 
 
 def test_lesson_description_has_a_deterministic_fallback() -> None:

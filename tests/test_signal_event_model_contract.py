@@ -79,6 +79,24 @@ def test_signal_event_type_enum_is_exact() -> None:
         "ask_nevo_cannot_help",
         "ask_nevo_redirect_used",
         "adaptation_suppressed",
+        # The student console was dropping all of these at the door: the
+        # client filters every event against a copy of this enum before
+        # posting, because one unknown type refuses the whole batch. Asks
+        # B12, B13 and B20.
+        "media_load_failed",
+        "system_busy",
+        "tap_blocked",
+        "session_context",
+        "baseline_module_start",
+        "baseline_module_complete",
+        "baseline_submitted",
+        "hint_offered",
+        "hint_used",
+        "step_up_offered",
+        "step_up_accepted",
+        "step_up_declined",
+        "guided_question_shown",
+        "guided_question_answered",
     ]
 
 

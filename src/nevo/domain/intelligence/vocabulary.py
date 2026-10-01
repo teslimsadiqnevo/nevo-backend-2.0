@@ -59,6 +59,12 @@ class DensityLevel(StrEnum):
 
 
 class ScaffoldingLevel(StrEnum):
+    #: No support at all. Support could be reduced but never removed: three
+    #: values meant the lightest an ordinary lesson could offer was still
+    #: something, so a child who no longer needed help kept being given it.
+    #: Easing off completely is the point of a ladder. SCRUM-204's rule again -
+    #: a rung the engine cannot reach is not a rung.
+    NONE = "none"
     LIGHT = "light"
     STANDARD = "standard"
     STRONG = "strong"

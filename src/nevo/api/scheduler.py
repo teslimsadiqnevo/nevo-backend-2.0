@@ -1,9 +1,10 @@
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
@@ -44,13 +45,56 @@ class ConceptScheduleResponse(BaseModel):
         )
 
 
+class ReviewOutcome(StrEnum):
+    """How a review actually went.
+
+    ``recallSuccessful`` alone made the client decide what "all right first
+    time" meant, which is the client deciding a measure. These four are what
+    the screen can observe; whether each counts as recall is decided here.
+    """
+
+    #: Right, unaided, first attempt. The only one that means untroubled
+    #: recall, and the only one that lengthens the interval.
+    FIRST_TIME = "first_time"
+    #: Right, but a hint was used getting there.
+    AFTER_HINT = "after_hint"
+    #: Right on a second attempt.
+    SECOND_ATTEMPT = "second_attempt"
+    #: Not recalled.
+    NOT_RECALLED = "not_recalled"
+
+
+#: Which outcomes count as the concept having been recalled. A hint or a
+#: second attempt is a pass for the lesson and not for the scheduler: a child
+#: who needed help remembering needs to see it again sooner, not later.
+RECALLED = frozenset({ReviewOutcome.FIRST_TIME})
+
+
 class RecordReviewRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     student_id: UUID = Field(alias="studentId")
     concept_id: UUID = Field(alias="conceptId")
-    recall_successful: bool = Field(alias="recallSuccessful")
+    #: Preferred. Send this and leave recallSuccessful out.
+    outcome: ReviewOutcome | None = None
+    #: The older shape, still accepted so nothing in flight breaks. Ignored
+    #: when ``outcome`` is sent.
+    recall_successful: bool | None = Field(default=None, alias="recallSuccessful")
     reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
+
+    @model_validator(mode="after")
+    def one_of_the_two(self) -> "RecordReviewRequest":
+        if self.outcome is None and self.recall_successful is None:
+            raise ValueError("Send outcome, or recallSuccessful.")
+        return self
+
+    @property
+    def recalled(self) -> bool:
+        """Whether this counts as recall, decided here and not on the device."""
+
+        if self.outcome is not None:
+            return self.outcome in RECALLED
+        return bool(self.recall_successful)
 
 
 class RecordReviewResponse(BaseModel):
@@ -58,12 +102,18 @@ class RecordReviewResponse(BaseModel):
 
     schedule: ConceptScheduleResponse
     recall_successful: bool = Field(alias="recallSuccessful")
+    #: Echoed back so a client can see which outcome the server scored, rather
+    #: than inferring it from the bool.
+    outcome: ReviewOutcome | None = None
 
     @classmethod
-    def from_result(cls, result: ReviewResult) -> "RecordReviewResponse":
+    def from_result(
+        cls, result: ReviewResult, outcome: ReviewOutcome | None = None
+    ) -> "RecordReviewResponse":
         return cls(
             schedule=ConceptScheduleResponse.from_schedule(result.schedule),
             recall_successful=result.recall_successful,
+            outcome=outcome,
         )
 
 
@@ -118,10 +168,12 @@ async def record_review(
     result = await service.record_review(
         student_id=payload.student_id,
         concept_id=payload.concept_id,
-        recall_successful=payload.recall_successful,
+        # Scored from the outcome here rather than taken as a bool from the
+        # device, so "all right first time" means one thing everywhere.
+        recall_successful=payload.recalled,
         reviewed_at=reviewed_at,
     )
-    return RecordReviewResponse.from_result(result)
+    return RecordReviewResponse.from_result(result, payload.outcome)
 
 
 @router.post("/refresh-due-dates", response_model=RefreshSchedulesResponse)

@@ -302,6 +302,13 @@ class User(TimestampMixin, Base):
     #: bag so profile identity does not depend on an untyped key forever.
     avatar_tone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     age_band: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: What the child asked to be called, from "What should we call you?".
+    #:
+    #: Its own column rather than overwriting first_name, because the roster
+    #: name is the school's record of a child and a nickname is not a
+    #: correction to it. Had nowhere typed to live before this, so the screen
+    #: that asks the question had nowhere to put the answer. Ask B35.
+    preferred_name: Mapped[str | None] = mapped_column(String(60), nullable=True)
     #: From the school's roster. Age is derived from it wherever a screen
     #: needs one, so a child is never asked for what the school already told
     #: us - and the two-point age check has something to check against.

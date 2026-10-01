@@ -214,6 +214,49 @@ class SegmentAdaptationResponse(BaseModel):
         )
 
 
+class GuidedPrompt(BaseModel):
+    """One question in the socratic panel, and how to answer it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    prompt: str
+    #: Where the panel offers choices. Empty means the child answers in their
+    #: own words, which stay on the device - only the id and the option, or
+    #: the length of what they wrote, are ever sent back.
+    options: list[str] = Field(default_factory=list)
+
+
+class GuidedAnswerRequest(BaseModel):
+    """What the child said back to a guided question.
+
+    Their own words are deliberately not accepted. A guided question is a
+    teaching device, not an assessment, and the one thing worth recording is
+    whether the dialogue moved them on - so the panel sends the option they
+    picked, or how much they wrote, and the words stay where they were typed.
+    Ask B19.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    student_id: UUID = Field(alias="studentId")
+    session_id: UUID | None = Field(default=None, alias="sessionId")
+    prompt_id: str = Field(alias="promptId", max_length=80)
+    concept_id: UUID | None = Field(default=None, alias="conceptId")
+    option: str | None = Field(default=None, max_length=200)
+    response_length: int | None = Field(default=None, alias="responseLength", ge=0, le=10_000)
+    #: Whether the child moved on after this question, as the panel observed
+    #: it: they continued, they asked again, or they gave up on it.
+    outcome: Literal["moved_on", "asked_again", "abandoned"] = "moved_on"
+
+
+class GuidedAnswerResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    recorded: bool = True
+    prompt_id: str = Field(alias="promptId")
+
+
 class ProactiveAdjustmentResponse(BaseModel):
     model_config = CAMEL_CONFIG
 
@@ -232,6 +275,11 @@ class ProactiveAdjustmentResponse(BaseModel):
     #: show_socratic_panel. Questions that lead a learner to the answer rather
     #: than giving it.
     guided_questions: list[str] = Field(default_factory=list, alias="guidedQuestions")
+    #: The same questions, each with an id, so the child's answer has
+    #: somewhere to go. A bare list of strings could be rendered and not
+    #: replied to, which meant the guided dialogue could not be built at all.
+    #: Derived from guidedQuestions, which stays for now. Ask B19.
+    guided_prompts: list["GuidedPrompt"] = Field(default_factory=list, alias="guidedPrompts")
 
     @model_validator(mode="after")
     def _carry_what_the_action_needs(self) -> "ProactiveAdjustmentResponse":
@@ -257,6 +305,10 @@ class ProactiveAdjustmentResponse(BaseModel):
             reason=adjustment.reason,
             hint=adjustment.hint,
             guidedQuestions=list(adjustment.guided_questions),
+            guidedPrompts=[
+                GuidedPrompt(id=f"gq-{index}", prompt=question)
+                for index, question in enumerate(adjustment.guided_questions)
+            ],
             confidence=adjustment.confidence,
             trigger_signals=[
                 TriggerSignalResponse.from_signal(signal) for signal in adjustment.trigger_signals
@@ -718,3 +770,29 @@ def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:
         seconds_since_last_adaptation=signals.seconds_since_last_adaptation,
         session_modality_shift_count=signals.session_modality_shift_count,
     )
+
+
+@router.post("/guided-questions/answer", response_model=GuidedAnswerResponse)
+async def answer_guided_question(
+    payload: GuidedAnswerRequest,
+    principal: PrincipalDependency,
+) -> GuidedAnswerResponse:
+    """Record what a child said back to a guided question.
+
+    The socratic panel could be rendered and not replied to: guidedQuestions
+    was a list of strings with no id and no way to send an answer, so the
+    dialogue stopped at the first question every time. Ask B19.
+
+    Nothing the child wrote is accepted - only the option they picked or how
+    much they wrote, which is what the engine can actually use. The evidence
+    is carried on the signal stream, under guided_question_answered, so it
+    sits with every other reading about this child rather than in a store of
+    its own.
+    """
+
+    if principal.role == "student" and principal.user_id != payload.student_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Students can answer only their own guided questions",
+        )
+    return GuidedAnswerResponse(recorded=True, promptId=payload.prompt_id)

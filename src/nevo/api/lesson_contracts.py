@@ -29,6 +29,13 @@ class ComprehensionCheckpoint(BaseModel):
     answer_key: ScalarAnswer | list[ScalarAnswer] | None = Field(default=None, alias="answerKey")
     explanation: str | None = None
     position: str = "after_segment"
+    #: How the check is put to the child. Decided here and not on the device:
+    #: choosing it client-side would mean keeping a preferred modality against
+    #: a child, which the first rule of the engine forbids. "spoken" means the
+    #: prompt is read aloud, and ``promptAudioUrl`` carries the recording when
+    #: one has been generated.
+    format: Literal["text", "spoken"] = "text"
+    prompt_audio_url: str | None = Field(default=None, alias="promptAudioUrl")
 
 
 class DepthVariantBody(BaseModel):

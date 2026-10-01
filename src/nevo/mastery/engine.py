@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from nevo.domain.accounts.age_bands import AgeBand, coerce_band
 from nevo.domain.mastery.vocabulary import FailureAttribution
 from nevo.mastery.entities import (
     BaselineMasterySeed,
@@ -43,9 +44,7 @@ class HybridAktMasteryEngine:
             student_id=student_id,
             concept_id=concept_id,
             concept_name=None,
-            mastery_probability_concept=_clamp(
-                min(seed.concept_probability, BASELINE_CONCEPT_CAP)
-            ),
+            mastery_probability_concept=_clamp(min(seed.concept_probability, BASELINE_CONCEPT_CAP)),
             mastery_probability_reading=_clamp(seed.reading_probability),
             attention_weights=attention_weights,
             guess_probability=DEFAULT_GUESS_PROBABILITY,
@@ -144,10 +143,7 @@ class HybridAktMasteryEngine:
             and item_text_density >= TEXT_HEAVY_THRESHOLD
         ):
             return FailureAttribution.READING
-        if (
-            reading_probability < BORDERLINE_READING_THRESHOLD
-            and item_text_density >= 0.45
-        ):
+        if reading_probability < BORDERLINE_READING_THRESHOLD and item_text_density >= 0.45:
             return FailureAttribution.MIXED
         return FailureAttribution.CONCEPT
 
@@ -166,18 +162,26 @@ def reading_seed_from_wpm(reading_wpm: float | None, *, age_band: str | None) ->
     return _clamp(reading_wpm / expected)
 
 
+#: Words a minute expected of a reader in each band.
+EXPECTED_WPM: dict[AgeBand, float] = {
+    AgeBand.EARLY_PRIMARY: 70,
+    AgeBand.UPPER_PRIMARY: 110,
+    AgeBand.JUNIOR_SECONDARY: 140,
+    AgeBand.SENIOR_SECONDARY: 165,
+}
+
+#: Used where the band is unknown. Reached far more often than it should have
+#: been: the two paths that set a band stored the string form of an age, so
+#: the lookup never matched and every child was measured against this one
+#: number whatever their age. SCRUM-175.
+DEFAULT_EXPECTED_WPM = 120.0
+
+
 def _expected_wpm(age_band: str | None) -> float:
-    match age_band:
-        case "early_primary":
-            return 70
-        case "upper_primary":
-            return 110
-        case "junior_secondary":
-            return 140
-        case "senior_secondary":
-            return 165
-        case _:
-            return 120
+    band = coerce_band(age_band)
+    if band is None:
+        return DEFAULT_EXPECTED_WPM
+    return EXPECTED_WPM[band]
 
 
 def _uniform_attention(related_concept_ids: tuple[UUID, ...]) -> dict[str, float]:

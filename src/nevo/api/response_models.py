@@ -14,6 +14,7 @@ from nevo.api.lesson_contracts import (
     TextVariant,
     VisualVariant,
 )
+from nevo.domain.accounts.age_bands import AgeBand
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
     ClassSource,
@@ -237,7 +238,10 @@ class StudentSummaryResponse(CamelResponse):
     name: str
     login_identifier: str | None
     status: UserStatus
-    age_band: str | None
+    #: A closed set, derived from the date of birth. Free text until now, and
+    #: in practice the string form of an age, which nothing could match.
+    #: SCRUM-175, and ask B5.
+    age_band: AgeBand | None
     consent: StudentConsentSummaryResponse
 
 
@@ -248,7 +252,7 @@ class StudentDetailResponse(CamelResponse):
     login_identifier: str | None
     email: str | None
     status: UserStatus
-    age_band: str | None
+    age_band: AgeBand | None
     class_ids: list[UUID]
     first_use: bool
     consent: StudentConsentSummaryResponse
@@ -345,6 +349,12 @@ class JoinInspectionResponse(CamelResponse):
     role: UserRole
     school_name: str | None
     expires_at: datetime
+    #: Who the invitation was addressed to, so the screen can greet them
+    #: rather than ask a child to type a name the link already knows. Null
+    #: where the school did not supply one - the roster import asks for names
+    #: without insisting on them.
+    first_name: str | None = None
+    last_name: str | None = None
 
 
 class JoinAcceptedResponse(CamelResponse):
@@ -550,7 +560,7 @@ class PersonReferenceResponse(CamelResponse):
     id: UUID
     first_name: str | None
     last_name: str | None = None
-    age_band: str | None = None
+    age_band: AgeBand | None = None
 
 
 class RecentProgressResponse(CamelResponse):
@@ -735,6 +745,18 @@ class OfflineManifestResponse(CamelResponse):
     segment_count: int
     generated_at: datetime
     package_url: str
+    #: The size of the package the Downloads screen is about to fetch, in
+    #: bytes. The screen was drawing a size it had no way of knowing, so it
+    #: had to either guess or leave it blank. Measured from the archive this
+    #: manifest describes, not estimated. Ask B31.
+    size_bytes: int = 0
+    #: The files inside the archive, so a client knows what it is caching
+    #: before it opens it.
+    files: list[str] = Field(default_factory=lambda: ["lesson.json", "manifest.json"])
+    #: What the package does not contain. Media is referenced by URL and is
+    #: not bundled, so a lesson cached this way is text-only offline - which
+    #: the Downloads screen should say rather than discover.
+    includes_media: bool = False
 
 
 class OfflineDownloadResponse(CamelResponse):
@@ -1009,6 +1031,10 @@ class StudentProgressResponse(CamelResponse):
     concepts: list[ConceptProgressResponse]
     lessons: list[LessonProgressItemResponse]
     reflection: str
+    #: The same thing in a few words, for the Progress frame, which draws a
+    #: short note per subject and had only a paragraph to draw it from. Not a
+    #: truncation of the reflection - written short. Ask B29.
+    note: str = ""
     highlights: list[str]
 
 

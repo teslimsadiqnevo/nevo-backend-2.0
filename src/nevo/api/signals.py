@@ -52,7 +52,10 @@ class LessonSessionRequest(BaseModel):
 
     session_id: UUID = Field(alias="sessionId")
     lesson_id: UUID | None = Field(default=None, alias="lessonId")
-    session_type: Literal["lesson", "onboarding", "profiling", "sso"] = Field(
+    #: "ask_nevo" added because Ask Nevo had no session to report under, so
+    #: its four event types had nowhere to hang and the questions a child asks
+    #: outside a lesson were invisible. Ask B15.
+    session_type: Literal["lesson", "onboarding", "profiling", "sso", "ask_nevo"] = Field(
         default="lesson", alias="sessionType"
     )
     started_at: datetime = Field(alias="startedAt")
@@ -98,6 +101,7 @@ class SignalEventRequest(BaseModel):
         if self.model_extra:
             self.event_data = {**self.model_extra, **self.event_data}
         self._validate_ask_nevo_signal_payload()
+        self._settle_break_trigger()
         return self
 
     def _validate_ask_nevo_signal_payload(self) -> None:
@@ -148,6 +152,52 @@ class SignalEventRequest(BaseModel):
             _require_keys(self.event_data, {"role", "currentPage", "redirectTarget"})
             if self.event_data.get("role") not in {"student", "teacher"}:
                 raise ValueError("Ask Nevo redirect role must be student or teacher.")
+
+    def _settle_break_trigger(self) -> None:
+        """Close the break trigger to the four, folding the old name in."""
+
+        if self.event_type not in {
+            SignalEventType.BREAK_START,
+            SignalEventType.BREAK_TAKEN,
+        }:
+            return
+        raw = self.event_data.get("trigger")
+        if raw is None:
+            return
+        trigger = RETIRED_BREAK_TRIGGERS.get(str(raw), str(raw))
+        if trigger not in BREAK_TRIGGERS:
+            joined = ", ".join(sorted(BREAK_TRIGGERS))
+            raise ValueError(f"Break trigger must be one of: {joined}.")
+        self.event_data = {**self.event_data, "trigger": trigger}
+
+
+#: What started a break, closed to the four the client actually sends.
+#:
+#: Free text until now, which meant the one field saying why a child stopped
+#: could not be grouped or counted - and the question of what belonged in it
+#: had been open since 17 September.
+#:
+#: "plan_offer" replaces "affect_offer": the offer stopped being gated on
+#: affect, so the old name described a condition that no longer applies.
+#: Both are accepted while the client switches over; the old one is folded to
+#: the new one on the way in, so nothing downstream has to know there were
+#: ever two names for it.
+BREAK_TRIGGERS: frozenset[str] = frozenset(
+    {
+        #: The plan scheduled it after a segment.
+        "adaptation_plan",
+        #: The child accepted a break the load-time plan offered.
+        "plan_offer",
+        #: The child accepted one from the mid-lesson /adapt answer.
+        "engine_offer",
+        #: The child chose "Take a break first" at a module boundary.
+        "module_boundary",
+    }
+)
+
+#: The old spelling, mapped rather than refused, so the client can switch in
+#: its own change and not in lockstep with this deploy.
+RETIRED_BREAK_TRIGGERS: dict[str, str] = {"affect_offer": "plan_offer"}
 
 
 def _require_keys(payload: dict[str, Any], keys: set[str]) -> None:

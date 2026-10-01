@@ -29,10 +29,19 @@ TRIGGERED: dict[NotificationType, str] = {
     NotificationType.MODALITY_SHIFT: "a lesson finishes in which delivery changed",
 }
 
-#: Nothing left. Every kind is raised by something, which is the state this
-#: file exists to keep: a kind nobody raises is a preference switch that
-#: silences nothing and a teacher waiting for a message never coming.
-AWAITING_A_TRIGGER: set[NotificationType] = set()
+#: The four a child can receive, declared ahead of the code that raises them.
+#:
+#: Deliberately listed here rather than claimed as triggered. A child's bell
+#: was always empty because every kind addressed an adult, so the types had to
+#: exist before the console could render anything at all - but a type with no
+#: producer is exactly what this file exists to catch, so each one stays on
+#: this list until something raises it. Ask B34.
+AWAITING_A_TRIGGER: set[NotificationType] = {
+    NotificationType.LESSON_ASSIGNED,
+    NotificationType.REVIEW_DUE,
+    NotificationType.TEACHER_REPLIED,
+    NotificationType.SIGN_IN_CHANGED,
+}
 
 
 def test_every_kind_is_accounted_for() -> None:

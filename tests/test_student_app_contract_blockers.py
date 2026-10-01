@@ -37,6 +37,10 @@ def test_student_reply_and_non_lesson_signal_contracts_are_exposed() -> None:
         "onboarding",
         "profiling",
         "sso",
+        # Ask Nevo had no session to report under, so its four event types
+        # had nowhere to hang and a question asked outside a lesson was
+        # invisible. Ask B15.
+        "ask_nevo",
     ]
 
 
@@ -71,9 +75,7 @@ def test_lesson_variants_and_checkpoints_are_typed() -> None:
 
 
 def test_legacy_checkpoint_is_normalized_without_inventing_an_answer() -> None:
-    payload = checkpoint_payloads(
-        [{"prompt": "What changed?"}], segment_key="segment-2"
-    )[0]
+    payload = checkpoint_payloads([{"prompt": "What changed?"}], segment_key="segment-2")[0]
 
     assert payload["id"] == "segment-2-check-1"
     assert payload["answerKey"] is None
@@ -83,7 +85,5 @@ def test_legacy_checkpoint_is_normalized_without_inventing_an_answer() -> None:
 def test_progress_and_review_navigation_fields_are_documented() -> None:
     schemas = app.openapi()["components"]["schemas"]
 
-    assert {"reflection", "highlights"}.issubset(
-        schemas["StudentProgressResponse"]["properties"]
-    )
+    assert {"reflection", "highlights"}.issubset(schemas["StudentProgressResponse"]["properties"])
     assert "lessonId" in schemas["ConceptScheduleResponse"]["properties"]

@@ -724,7 +724,7 @@ async def _progress_payload(session, student_id, subject):
         ]
     probabilities = [item.mastery_probability_concept for item, _ in mastery]
     mastery_average = sum(probabilities) / len(probabilities) if probabilities else None
-    reflection, highlights = _progress_narrative(
+    reflection, highlights, note = _progress_narrative(
         mastery_average=mastery_average,
         concept_count=len(mastery),
         practice_count=sum(item.practice_count for item, _ in mastery),
@@ -762,6 +762,7 @@ async def _progress_payload(session, student_id, subject):
             for progress, lesson in lesson_rows
         ],
         "reflection": reflection,
+        "note": note,
         "highlights": highlights,
     }
 
@@ -773,19 +774,23 @@ def _progress_narrative(
     practice_count: int,
     lesson_count: int,
     subject: str | None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], str]:
     area = subject or "your recent learning"
     if mastery_average is None:
         return (
             f"Your {area} reflection will grow as you complete lessons.",
             ["Complete a lesson to start building your progress story."],
+            "Nothing yet - finish a lesson to start.",
         )
     if mastery_average >= 0.8:
         reflection = f"You are applying most of the ideas you have practised in {area}."
+        note = "Applying what you have practised."
     elif mastery_average >= 0.6:
         reflection = f"Your understanding in {area} is becoming steadier with practice."
+        note = "Getting steadier with practice."
     else:
         reflection = f"You are building familiarity with the ideas in {area}, one step at a time."
+        note = "Building familiarity, one step at a time."
     highlights = [f"Worked with {concept_count} concept{'s' if concept_count != 1 else ''}."]
     if practice_count:
         practice_suffix = "s" if practice_count != 1 else ""
@@ -793,7 +798,7 @@ def _progress_narrative(
     if lesson_count:
         lesson_suffix = "s" if lesson_count != 1 else ""
         highlights.append(f"Made progress in {lesson_count} lesson{lesson_suffix}.")
-    return reflection, highlights
+    return reflection, highlights, note
 
 
 def _plain_trigger(event: SignalEvent) -> str:

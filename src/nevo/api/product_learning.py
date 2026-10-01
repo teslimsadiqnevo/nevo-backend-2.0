@@ -85,6 +85,7 @@ from nevo.db.models.product import (
     UploadSourceBlob,
 )
 from nevo.db.models.signal_event import LessonSession
+from nevo.domain.accounts.age_bands import coerce_band
 from nevo.domain.accounts.vocabulary import SsoProvider, UserRole
 from nevo.domain.intelligence.vocabulary import (
     AssignmentStatus,
@@ -1037,7 +1038,10 @@ async def student_profile(
             "id": str(student.id),
             "firstName": student.first_name,
             "lastName": student.last_name,
-            "ageBand": student.age_band,
+            # Derived where the stored value is absent or is a legacy age
+            # string, so the dashboard can band the warm-up off this rather
+            # than asking the child how old they are. Ask B5.
+            "ageBand": coerce_band(student.age_band, student.date_of_birth),
         },
         "profile": (
             {
@@ -1166,12 +1170,19 @@ async def create_offline_download(
         )
     )
     package = await _offline_package_payload(session, lesson_id)
+    # Built here as well as on the GET, because a size the Downloads screen
+    # can show has to be measured rather than estimated, and the only honest
+    # measure is the archive itself. Ask B31.
+    archive = _offline_archive(package, lesson_id)
     manifest = {
         "lessonId": str(lesson_id),
         "version": 1,
         "segmentCount": len(package["segments"]),
         "generatedAt": datetime.now(UTC).isoformat(),
         "packageUrl": f"/api/v1/lessons/{lesson_id}/offline-package",
+        "sizeBytes": len(archive),
+        "files": ["lesson.json", "manifest.json"],
+        "includesMedia": False,
     }
     if record is None:
         record = OfflineDownload(
@@ -1186,16 +1197,15 @@ async def create_offline_download(
     return {"id": str(record.id), "manifest": record.manifest}
 
 
-@router.get("/lessons/{lesson_id}/offline-package")
-async def offline_package(
-    lesson_id: UUID,
-    principal: PrincipalDependency,
-    session: DatabaseSession,
-) -> Response:
-    actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
-    if actor.role != UserRole.STUDENT:
-        raise HTTPException(status_code=403, detail="Student account required")
-    payload = await _offline_package_payload(session, lesson_id)
+def _offline_archive(payload: dict[str, object], lesson_id: UUID) -> bytes:
+    """The zip a client caches, built once and used by both routes.
+
+    Two files: the lesson as JSON, and a manifest naming what is in the
+    archive. Media is referenced rather than bundled, so this is the text of
+    a lesson and not the whole of it - stated in the manifest so an offline
+    client knows what it has.
+    """
+
     output = BytesIO()
     with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr(
@@ -1206,16 +1216,46 @@ async def offline_package(
             "manifest.json",
             json.dumps(
                 {
-                    "lessonId": str(lesson.id),
+                    "lessonId": str(lesson_id),
                     "version": 1,
-                    "files": ["lesson.json"],
+                    "files": ["lesson.json", "manifest.json"],
+                    "includesMedia": False,
                 },
                 separators=(",", ":"),
             ),
         )
+    return output.getvalue()
+
+
+@router.get(
+    "/lessons/{lesson_id}/offline-package",
+    # Declared so the spec says what this returns. It was showing an untyped
+    # empty object, which is not something a client can cache against: it is
+    # a zip, and the shape inside it is the lesson package. Ask B31.
+    response_class=Response,
+    responses={
+        200: {
+            "description": (
+                "A zip holding lesson.json (the lesson package) and "
+                "manifest.json. Media is referenced by URL, not bundled."
+            ),
+            "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
+        }
+    },
+)
+async def offline_package(
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> Response:
+    actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
+    if actor.role != UserRole.STUDENT:
+        raise HTTPException(status_code=403, detail="Student account required")
+    payload = await _offline_package_payload(session, lesson_id)
+    content = _offline_archive(payload, lesson.id)
     filename = f"nevo-lesson-{lesson.id}.zip"
     return Response(
-        content=output.getvalue(),
+        content=content,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

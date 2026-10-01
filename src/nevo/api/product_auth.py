@@ -58,6 +58,7 @@ from nevo.db.models.product import (
     SharedDeviceProfile,
     StudentOnboardingGrant,
 )
+from nevo.domain.accounts.age_bands import band_for_age
 from nevo.domain.accounts.codes import new_school_code
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
@@ -206,6 +207,15 @@ class JoinRequest(BaseModel):
     pin: StudentPin | None = None
     first_name: str | None = Field(default=None, alias="firstName", max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
+    #: The child's age, stored on the account rather than used once to pick a
+    #: baseline band and then thrown away. The class-code path already sent
+    #: this; an invite-link child had no age on their account at all, so
+    #: nothing downstream that bands by age could see them.
+    #:
+    #: Only read for a student, and only where the roster has no date of birth
+    #: to compute from - a date of birth is the better source and is never
+    #: overwritten by this.
+    age: int | None = Field(default=None, ge=2, le=25)
 
 
 class ParentRightRequest(BaseModel):
@@ -451,7 +461,10 @@ async def set_pin(
         first_name=payload.first_name.strip(),
         last_name=payload.last_name.strip() if payload.last_name else None,
         login_identifier=identifier,
-        age_band=str(payload.age) if payload.age is not None else None,
+        # The band, not the age. This used to store str(age) - "11" - which
+        # no consumer could match, so the mastery engine's reading seed fell
+        # through to its default for every child ever created here. SCRUM-175.
+        age_band=band_for_age(payload.age),
         pin_hash=credential_hasher().hash_pin(payload.pin),
         status=UserStatus.ACTIVE,
     )
@@ -1013,6 +1026,10 @@ async def inspect_join(token: str, session: DatabaseSession) -> dict[str, object
         "role": record.role,
         "schoolName": school.name if school else None,
         "expiresAt": record.expires_at,
+        # The link already knows who it was sent to, so the screen greets them
+        # instead of asking a child to type a name we hold.
+        "firstName": record.first_name,
+        "lastName": record.last_name,
     }
 
 
@@ -1056,6 +1073,11 @@ async def accept_join(
             credential_hasher().hash_password(payload.password) if payload.password else None
         ),
         pin_hash=credential_hasher().hash_pin(payload.pin) if payload.pin else None,
+        # An invite-link child had no age on their account at all: the age was
+        # used once to pick a baseline band and thrown away, so anything that
+        # bands by age could not see them. A date of birth would be better and
+        # the roster is where that comes from, so this is only a fallback.
+        age_band=band_for_age(payload.age) if record.role == "student" else None,
         status=UserStatus.ACTIVE,
     )
     session.add(user)

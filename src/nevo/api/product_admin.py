@@ -53,6 +53,11 @@ from nevo.db.models.product import (
 )
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
+from nevo.domain.accounts.age_bands import (
+    AgeBand,
+    band_for_date_of_birth,
+    coerce_band,
+)
 from nevo.domain.accounts.classes import (
     academic_session,
     normalise_class_name,
@@ -159,7 +164,10 @@ class StudentEnroll(BaseModel):
     #: Required, because a child without one cannot identify themselves at the
     #: door. SCRUM-202.
     admission_number: Annotated[str, Field(alias="admissionNumber", min_length=1, max_length=60)]
-    age_band: str | None = Field(default=None, alias="ageBand", max_length=40)
+    #: Optional and rarely needed: the band is derived from the date of birth
+    #: below, which is the better source. Accepted only as a fallback for a
+    #: school that has an age but not a birthday to hand. SCRUM-175, ask B5.
+    age_band: AgeBand | None = Field(default=None, alias="ageBand")
     #: The school's own record of when the child was born.
     #:
     #: Optional, because a school office mid-term may not have it to hand and
@@ -951,7 +959,7 @@ async def list_students(
             "name": _name(item),
             "loginIdentifier": item.login_identifier,
             "status": item.status.value,
-            "ageBand": item.age_band,
+            "ageBand": coerce_band(item.age_band, item.date_of_birth),
             "consent": consent.get(item.id, empty_consent_summary()),
         }
         for item in students
@@ -1005,7 +1013,9 @@ async def enroll_student(
         admission_number=admission_number,
         last_name=payload.last_name,
         login_identifier=identifier,
-        age_band=payload.age_band,
+        # Derived from the date of birth where there is one, since that is the
+        # fact the school actually holds and it stays true as the child ages.
+        age_band=(band_for_date_of_birth(payload.date_of_birth) or payload.age_band),
         date_of_birth=payload.date_of_birth,
         status=UserStatus.ACTIVE,
     )
@@ -1075,7 +1085,7 @@ async def student_detail(
         "loginIdentifier": student.login_identifier,
         "email": student.email,
         "status": student.status.value,
-        "ageBand": student.age_band,
+        "ageBand": coerce_band(student.age_band, student.date_of_birth),
         "classIds": [str(item) for item in class_ids],
         "firstUse": student.is_first_use,
         "consent": consent.get(student.id, empty_consent_summary()),

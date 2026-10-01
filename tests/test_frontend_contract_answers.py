@@ -57,16 +57,21 @@ def test_sso_health_warns_before_the_credential_expires(spec: dict) -> None:
     assert CREDENTIAL_WARNING.days >= 30
 
 
-def test_enrolling_a_student_with_a_taken_email_is_named_not_a_500() -> None:
-    from nevo.api.product_admin import enroll_student
+def test_enrolling_a_student_cannot_collide_on_an_email_it_never_takes() -> None:
+    from nevo.api.product_admin import StudentEnroll, enroll_student
 
     source = inspect.getsource(enroll_student)
 
-    # users.email is unique across the product. An empty string sent for two
-    # children collided on the second and came back as a server fault.
-    assert "email_already_in_use" in source
+    # users.email is unique across the product, and an empty string sent for
+    # two children used to collide on the second and come back as a server
+    # fault. The normalisation that fixed it is gone because the field is:
+    # enrolment no longer asks for a child's email at all, since children do
+    # not have one and asking was why schools were inventing them. SCRUM-202.
+    assert "email" not in StudentEnroll.model_fields
+    # The collision is still named rather than raised as a 500, because the
+    # admission number is unique per school and can collide the same way.
     assert "IntegrityError" in source
-    assert '(payload.email or "").strip().casefold() or None' in source
+    assert "admission_number_in_use" in source
 
 
 def test_an_unexpected_error_carries_something_to_trace_it_by() -> None:

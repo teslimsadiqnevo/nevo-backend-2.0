@@ -66,11 +66,14 @@ def test_the_email_is_recorded_so_consent_has_somewhere_to_go() -> None:
 
 def test_an_enrol_without_a_parent_email_still_works() -> None:
     # Optional: a school may not have it at the moment it adds the child.
+    # The admission number is not optional - it is how the child identifies
+    # themselves at the door, so there is no enrolling without one. SCRUM-202.
     enrol = StudentEnroll.model_validate(
         {
             "firstName": "Zainab",
             "lastName": "Bello",
             "classId": "00000000-0000-4000-8000-000000000001",
+            "admissionNumber": "ADM001",
         }
     )
 

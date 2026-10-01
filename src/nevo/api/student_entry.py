@@ -53,7 +53,14 @@ class StudentEntryState(CamelResponse):
     #: The child's own name, from the roster. Never typed by the child.
     first_name: str
     class_name: str | None
-    consent_state: Literal["given", "pending"]
+    #: "withdrawn" is its own answer, not a kind of "pending".
+    #:
+    #: A parent who has withdrawn and a parent nobody has asked yet are
+    #: different situations and get different screens: the first is a child
+    #: who signs in and is told their learning is suspended, the second is a
+    #: child waiting on a grown-up. Collapsing them meant the console could
+    #: not tell which it was looking at. Ruling from Lydia, 1 Oct.
+    consent_state: Literal["given", "pending", "withdrawn"]
     #: Derived from the date of birth on the roster, never asked for and never
     #: stored twice. Null where the roster has no date of birth, which the
     #: import is supposed to have refused.
@@ -124,14 +131,26 @@ async def _student(session: AsyncSession, grant: StudentOnboardingGrant) -> User
     return student
 
 
-async def _has_consent(session: AsyncSession, student_id: UUID) -> bool:
+async def _consent_state(
+    session: AsyncSession, student_id: UUID
+) -> Literal["given", "pending", "withdrawn"]:
+    """Where this child's learning consent stands, in the three real states."""
+
     status_value = await session.scalar(
         select(ConsentRecord.status).where(
             ConsentRecord.subject_user_id == student_id,
             ConsentRecord.consent_type == REQUIRED_LEARNING_CONSENT,
         )
     )
-    return status_value is ConsentStatus.CONFIRMED
+    if status_value is ConsentStatus.CONFIRMED:
+        return "given"
+    if status_value is ConsentStatus.WITHDRAWN:
+        return "withdrawn"
+    return "pending"
+
+
+async def _has_consent(session: AsyncSession, student_id: UUID) -> bool:
+    return await _consent_state(session, student_id) == "given"
 
 
 async def _class_name(session: AsyncSession, grant: StudentOnboardingGrant) -> str | None:
@@ -144,7 +163,7 @@ async def _state(session: AsyncSession, grant: StudentOnboardingGrant) -> Studen
     return StudentEntryState(
         first_name=student.first_name or "",
         class_name=await _class_name(session, grant),
-        consent_state="given" if await _has_consent(session, student.id) else "pending",
+        consent_state=await _consent_state(session, student.id),
         age_check_pending=await age_check_blocks(session, student.id),
         age=age_on(student.date_of_birth),
         account_ready=student.pin_hash is not None,
@@ -399,7 +418,7 @@ async def lookup_entry(
     return StudentEntryState(
         first_name=student.first_name or "",
         class_name=enrolled_class.name if enrolled_class else None,
-        consent_state="given" if await _has_consent(session, student.id) else "pending",
+        consent_state=await _consent_state(session, student.id),
         age_check_pending=await age_check_blocks(session, student.id),
         age=age_on(student.date_of_birth),
         account_ready=student.pin_hash is not None,

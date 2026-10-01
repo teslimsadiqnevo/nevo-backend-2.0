@@ -13,13 +13,13 @@ a lesson and cannot finish setting up an account, whatever URL they open.
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
-from pydantic import BaseModel
-from sqlalchemy import select
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.age_checks import age_check_blocks
@@ -27,7 +27,14 @@ from nevo.api.auth import AuthServiceDependency, SessionResponse, StudentPin
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.response_models import CamelResponse
-from nevo.db.models.account import Class, ConsentRecord, StudentClassEnrollment, User
+from nevo.db.models.account import (
+    Class,
+    ConsentRecord,
+    School,
+    StudentClassEnrollment,
+    User,
+)
+from nevo.db.models.auth import AuthLoginAttempt
 from nevo.db.models.product import StudentOnboardingGrant
 from nevo.domain.accounts.vocabulary import AuthMethod, ConsentStatus, UserRole, UserStatus
 from nevo.domain.consent.vocabulary import REQUIRED_LEARNING_CONSENT
@@ -225,4 +232,133 @@ async def set_pin_and_start(
         user_id=student.id,
         login_identifier=student.login_identifier,
         session=SessionResponse.from_issued(issued),
+    )
+
+
+#: Five wrong guesses in fifteen minutes, the same rule the sign-in doors use.
+#: This endpoint is unauthenticated with a four-character school code in front
+#: of it, so without this it is an enumeration tool for a children's roster.
+LOOKUP_MAX_ATTEMPTS = 5
+LOOKUP_WINDOW = timedelta(minutes=15)
+
+#: Said for every miss, whatever the miss was. It never says which field was
+#: wrong and never reveals whether an ID exists: SCRUM-208, and the reason is
+#: that a child's identifier is not a thing to confirm to a stranger.
+NO_MATCH = {
+    "code": "entry_not_found",
+    "message": "That did not match. Check the code and the ID with your teacher.",
+}
+
+
+class StudentEntryLookup(BaseModel):
+    """What a child types on 05 Entry: the school's code, then their own ID."""
+
+    model_config = CAMEL_CONFIG
+
+    #: Four characters on the screen, but not validated to four here - an
+    #: older school whose code predates SCRUM-201 must still be able to sign
+    #: its children in.
+    school_code: str = Field(min_length=2, max_length=50)
+    admission_number: str = Field(min_length=1, max_length=60)
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+async def _throttle(session: AsyncSession, identity: str, ip: str) -> None:
+    cutoff = datetime.now(UTC) - LOOKUP_WINDOW
+    failures = await session.scalar(
+        select(func.count())
+        .select_from(AuthLoginAttempt)
+        .where(
+            AuthLoginAttempt.succeeded.is_(False),
+            AuthLoginAttempt.occurred_at >= cutoff,
+            or_(
+                AuthLoginAttempt.identity_digest == identity,
+                AuthLoginAttempt.ip_digest == ip,
+            ),
+        )
+    )
+    if failures is not None and failures >= LOOKUP_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "too_many_attempts",
+                "message": "Too many tries. Wait a few minutes and try again.",
+            },
+        )
+
+
+async def _record(session: AsyncSession, identity: str, ip: str, *, succeeded: bool) -> None:
+    session.add(
+        AuthLoginAttempt(
+            identity_digest=identity,
+            ip_digest=ip,
+            succeeded=succeeded,
+            occurred_at=datetime.now(UTC),
+        )
+    )
+    await session.commit()
+
+
+@router.post("/lookup", response_model=StudentEntryState)
+async def lookup_entry(
+    payload: StudentEntryLookup,
+    request: Request,
+    response: Response,
+    session: DatabaseSession,
+) -> StudentEntryState:
+    """Which child has arrived, from the school's code and their own ID.
+
+    05 Entry's one screen. Unauthenticated, because the child has no account
+    yet and this is what identifies them; the school code comes first because
+    an admission number is only unique within a school, which is what gives
+    the number something to be looked up in. SCRUM-202, SCRUM-208.
+
+    Replaces the entry *link*, which could never resolve: nothing ever wrote
+    a grant naming a child, so every token 404'd. There is no link now.
+
+    Nothing is collected. Name, class and date of birth are on the roster
+    already and age computes from the date of birth, so the response states
+    them rather than asking the child for what the school has told us twice.
+    """
+
+    code = payload.school_code.strip().upper()
+    admission = payload.admission_number.strip()
+    identity = _digest(f"entry:{code.casefold()}:{admission.casefold()}")
+    ip = _digest(request.client.host if request.client else "unknown")
+    await _throttle(session, identity, ip)
+    response.headers["Cache-Control"] = "no-store"
+    student = await session.scalar(
+        select(User)
+        .join(School, School.id == User.school_id)
+        .where(
+            func.upper(School.school_code) == code,
+            User.role == UserRole.STUDENT,
+            func.lower(User.admission_number) == admission.casefold(),
+            User.status != UserStatus.DEACTIVATED,
+        )
+        .limit(1)
+    )
+    if student is None:
+        await _record(session, identity, ip, succeeded=False)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_MATCH)
+    await _record(session, identity, ip, succeeded=True)
+    enrolled_class = await session.scalar(
+        select(Class)
+        .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)
+        .where(StudentClassEnrollment.student_id == student.id)
+        .limit(1)
+    )
+    # Routed on consent state and on nothing the child did. A child whose
+    # parent has not answered gets the waiting screen; when consent arrives
+    # the same two fields go straight on by themselves.
+    return StudentEntryState(
+        first_name=student.first_name or "",
+        class_name=enrolled_class.name if enrolled_class else None,
+        consent_state="given" if await _has_consent(session, student.id) else "pending",
+        age_check_pending=await age_check_blocks(session, student.id),
+        age=age_on(student.date_of_birth),
+        account_ready=student.pin_hash is not None,
     )

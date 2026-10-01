@@ -45,7 +45,10 @@ class SqlAlchemyUserRepository:
             )
             # Ordered so an admission number wins a collision with somebody
             # else's internal handle, which is the identity a school owns.
-            .order_by(func.lower(User.admission_number) == login_identifier)
+            # Descending: Postgres sorts false before true, so the plain
+            # ascending form handed the win to the internal handle - the exact
+            # opposite of this comment.
+            .order_by((func.lower(User.admission_number) == login_identifier).desc())
             .limit(1)
         )
         return await self._find(statement)

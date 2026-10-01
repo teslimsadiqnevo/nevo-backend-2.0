@@ -246,9 +246,11 @@ def test_bank_transfer_details_are_served_not_hardcoded() -> None:
     response = client.get("/api/billing/bank-transfer-details")
 
     assert response.status_code == 200
+    # The placeholder, because the real receiving account lives in the
+    # deployed environment and not in this repository. SCRUM-205.
     assert response.json() == {
         "bankName": "Kuda Bank",
-        "accountNumber": "3004167012",
+        "accountNumber": "0000000000",
         "accountName": "Nevo Learning Limited",
         "currency": "NGN",
     }

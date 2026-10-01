@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,8 +23,24 @@ class BankTransferSettings(BaseSettings):
     )
 
     bank_name: str = Field(default="Kuda Bank", validation_alias="BILLING_BANK_NAME")
+    #: A placeholder, deliberately. The real number lives in the deployed
+    #: environment and nowhere else. SCRUM-205.
+    #:
+    #: Not because an account number is secret - it is printed on every
+    #: invoice and goes to every school that pays. Two operational reasons.
+    #: A wrong account number on a billing screen is the most expensive field
+    #: in the product to get wrong, and while it sat in the repository
+    #: changing it needed a deploy. And it makes the rule about never showing
+    #: the real number outside the product mechanical rather than remembered:
+    #: a demo or staging environment that has not been given the variable
+    #: shows ten zeroes, which is obviously not an account to pay into.
+    #:
+    #: What a paying school sees is unchanged, still served from the endpoint
+    #: in SCRUM-119.
+    PLACEHOLDER_ACCOUNT_NUMBER: ClassVar[str] = "0000000000"
+
     account_number: str = Field(
-        default="3004167012",
+        default=PLACEHOLDER_ACCOUNT_NUMBER,
         validation_alias="BILLING_BANK_ACCOUNT_NUMBER",
     )
     account_name: str = Field(

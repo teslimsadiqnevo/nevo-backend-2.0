@@ -1,4 +1,5 @@
 """Invoice issuance: the right periods, priced per student, exactly once."""
+
 from datetime import date
 
 from nevo.billing.issuance import InvoiceIssuanceService
@@ -77,9 +78,7 @@ def test_annual_and_per_term_invoice_numbers_cannot_collide() -> None:
 
 def test_invoice_numbers_are_deterministic() -> None:
     assert InvoiceIssuanceService._invoice_number("lagos-01", 2) == "NEVO-LAGOS01-Y2"
-    assert (
-        InvoiceIssuanceService._invoice_number("lagos-01", 2, term=3) == "NEVO-LAGOS01-Y2T3"
-    )
+    assert InvoiceIssuanceService._invoice_number("lagos-01", 2, term=3) == "NEVO-LAGOS01-Y2T3"
 
 
 def test_first_contract_year_starts_on_the_contract_start_date() -> None:

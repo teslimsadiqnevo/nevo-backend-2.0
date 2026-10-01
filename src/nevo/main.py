@@ -417,6 +417,13 @@ async def health(request: Request) -> dict[str, str]:
         "schemaApplied": str(schema["applied"] or ""),
         "ai": "configured" if getattr(ai_gateway, "configured", False) else "fallback_only",
         "payments": "configured" if getattr(payments, "configured", False) else "not_configured",
+        # Whether this environment has been given the real receiving account,
+        # or is still showing the placeholder. The real number lives only in
+        # the deployed environment now, which is the right place for it and
+        # also a thing that can silently not be set - and a school paying
+        # fees into ten zeroes is the most expensive failure in the product.
+        # So it is on the one screen an administrator looks at. SCRUM-205.
+        "bankDetails": _bank_details_state(),
         "media": "configured" if getattr(media, "configured", False) else "not_configured",
         "email": "configured" if getattr(email, "configured", False) else "not_configured",
         # Whether a lesson parse will draw images and record narration, which
@@ -435,6 +442,17 @@ async def health(request: Request) -> dict[str, str]:
         "lessonImagesLastFailure": PROVIDERS.last_failure(LESSON_IMAGES) or "",
         "lessonAudioLastFailure": PROVIDERS.last_failure(LESSON_AUDIO) or "",
     }
+
+
+def _bank_details_state() -> str:
+    """ "configured" once this environment holds the real account number."""
+
+    from nevo.billing.config import BankTransferSettings
+
+    settings = BankTransferSettings()
+    if settings.account_number == BankTransferSettings.PLACEHOLDER_ACCOUNT_NUMBER:
+        return "placeholder"
+    return "configured"
 
 
 def _generator_state(service: object, attribute: str) -> str:

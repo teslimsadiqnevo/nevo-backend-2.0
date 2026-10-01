@@ -1,4 +1,6 @@
 """Per-student pricing: the rate is the input, the total is derived."""
+
+import subprocess
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -73,9 +75,7 @@ def test_a_negotiated_rate_overrides_the_rate_card() -> None:
 
 
 def test_a_school_with_no_learners_owes_nothing() -> None:
-    quote = quote_per_student(
-        plan=PricingPlan.ANNUAL, student_count=0, rate_type=RateType.STANDARD
-    )
+    quote = quote_per_student(plan=PricingPlan.ANNUAL, student_count=0, rate_type=RateType.STANDARD)
 
     assert quote.total_before_vat == Decimal("0.00")
     assert quote.vat_amount == Decimal("0.00")
@@ -84,9 +84,7 @@ def test_a_school_with_no_learners_owes_nothing() -> None:
 
 def test_negative_inputs_are_refused() -> None:
     with pytest.raises(ValueError):
-        quote_per_student(
-            plan=PricingPlan.ANNUAL, student_count=-1, rate_type=RateType.STANDARD
-        )
+        quote_per_student(plan=PricingPlan.ANNUAL, student_count=-1, rate_type=RateType.STANDARD)
     with pytest.raises(ValueError):
         quote_per_student(
             plan=PricingPlan.ANNUAL,
@@ -103,13 +101,47 @@ def test_the_rate_card_is_the_one_the_ceo_confirmed() -> None:
     }
 
 
-def test_bank_transfer_details_default_to_the_receiving_account() -> None:
+def test_bank_transfer_details_default_to_a_placeholder_account() -> None:
+    """The real receiving account is never the default. SCRUM-205.
+
+    Not because an account number is secret - it is printed on every invoice.
+    A wrong one on a billing screen is the most expensive field in the product
+    to get wrong, and while it lived here changing it needed a deploy. This
+    way a demo or staging environment that has not been given the variable
+    shows ten zeroes, which is obviously not an account to pay into, rather
+    than a real one somebody might.
+    """
+
     details = BankTransferSettings().details()
 
     assert details.bank_name == "Kuda Bank"
-    assert details.account_number == "3004167012"
+    assert details.account_number == BankTransferSettings.PLACEHOLDER_ACCOUNT_NUMBER
+    assert details.account_number == "0000000000"
     assert details.account_name == "Nevo Learning Limited"
     assert details.currency is PricingCurrency.NGN
+
+
+def test_the_environment_supplies_the_real_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BILLING_BANK_ACCOUNT_NUMBER", "1234567890")
+
+    assert BankTransferSettings().details().account_number == "1234567890"
+
+
+def test_the_repository_does_not_carry_a_real_account_number() -> None:
+    """Mechanical, so the rule is not something anybody has to remember."""
+
+    # Assembled rather than written, so this test is not itself the thing it
+    # is looking for.
+    needle = "30041" + "67012"
+    found = subprocess.run(
+        ["git", "grep", "-l", needle, "--", "src", "tests", "alembic", "scripts"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert not found, f"the live account number is back in: {found}"
 
 
 def test_the_invoice_pdf_shows_the_working_not_just_the_total() -> None:

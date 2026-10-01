@@ -131,30 +131,6 @@ how two sources drift apart.
 
 ---
 
-## How it was done, and how to do it again
-
-```bash
-.venv/bin/python scripts/seed_clean_slate.py   # empties every table, builds the school
-.venv/bin/python scripts/seed_learning.py      # the lesson, concepts, mastery, reviews
-```
-
-Both scripts write through the application's own models rather than raw SQL,
-because a seed that bypasses the constraints protecting real data proves
-nothing. Three of them caught mistakes while this ran, and each one was the
-constraint doing its job:
-
-1. A parent link has to agree with itself about whether a parent account
-   exists.
-2. A **withdrawal carries the same record of who decided it as a confirmation
-   does** — a withdrawal is a decision somebody made, not an absence of one.
-3. FSRS difficulty runs 1 to 10, not 0 to 1.
-
-`scripts/seed_clean_slate.py` truncates every table it finds in the model
-metadata rather than a hand-written list, so a table added next month is
-included without anyone remembering to add it.
-
----
-
 ## Two things to know
 
 **The old school codes are gone, and so are the new ones you may have noted.**

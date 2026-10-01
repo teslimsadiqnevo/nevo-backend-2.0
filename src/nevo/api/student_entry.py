@@ -241,6 +241,17 @@ async def set_pin_and_start(
 LOOKUP_MAX_ATTEMPTS = 5
 LOOKUP_WINDOW = timedelta(minutes=15)
 
+#: Misses against one school code before that code is held, whoever is asking.
+#:
+#: The backstop, and the only one of the three buckets nothing in the caller's
+#: control can dodge: an IP bucket is spoofable through X-Forwarded-For and an
+#: identity bucket is sidestepped by guessing a different ID each time, which
+#: is exactly what enumerating a roster looks like. Set high enough that a
+#: classroom of children mistyping on their first morning never reaches it -
+#: sixty in a quarter of an hour - and far below the thousands of guesses
+#: reading a roster out of this would take.
+LOOKUP_MAX_PER_SCHOOL = 60
+
 #: Said for every miss, whatever the miss was. It never says which field was
 #: wrong and never reveals whether an ID exists: SCRUM-208, and the reason is
 #: that a child's identifier is not a thing to confirm to a stranger.
@@ -266,37 +277,67 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-async def _throttle(session: AsyncSession, identity: str, ip: str) -> None:
-    cutoff = datetime.now(UTC) - LOOKUP_WINDOW
-    failures = await session.scalar(
+async def _misses(session: AsyncSession, cutoff: datetime, *digests: str) -> int:
+    found = await session.scalar(
         select(func.count())
         .select_from(AuthLoginAttempt)
         .where(
             AuthLoginAttempt.succeeded.is_(False),
             AuthLoginAttempt.occurred_at >= cutoff,
             or_(
-                AuthLoginAttempt.identity_digest == identity,
-                AuthLoginAttempt.ip_digest == ip,
+                AuthLoginAttempt.identity_digest.in_(digests),
+                AuthLoginAttempt.ip_digest.in_(digests),
             ),
         )
     )
-    if failures is not None and failures >= LOOKUP_MAX_ATTEMPTS:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "code": "too_many_attempts",
-                "message": "Too many tries. Wait a few minutes and try again.",
-            },
-        )
+    return found or 0
 
 
-async def _record(session: AsyncSession, identity: str, ip: str, *, succeeded: bool) -> None:
+def _too_many() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "code": "too_many_attempts",
+            "message": "Too many tries. Wait a few minutes and try again.",
+        },
+    )
+
+
+async def _throttle(session: AsyncSession, identity: str, ip: str, school: str) -> None:
+    """Three buckets, because no one of them holds on its own.
+
+    This child, from this address, against this school. The first two are
+    cheap to dodge - a new ID each guess, or a rotated X-Forwarded-For - and
+    the third is the one that actually stops a roster being read out.
+    """
+
+    cutoff = datetime.now(UTC) - LOOKUP_WINDOW
+    if await _misses(session, cutoff, identity, ip) >= LOOKUP_MAX_ATTEMPTS:
+        raise _too_many()
+    if await _misses(session, cutoff, school) >= LOOKUP_MAX_PER_SCHOOL:
+        raise _too_many()
+
+
+async def _record(
+    session: AsyncSession, identity: str, ip: str, school: str, *, succeeded: bool
+) -> None:
+    now = datetime.now(UTC)
     session.add(
         AuthLoginAttempt(
             identity_digest=identity,
             ip_digest=ip,
             succeeded=succeeded,
-            occurred_at=datetime.now(UTC),
+            occurred_at=now,
+        )
+    )
+    # A second row carrying only the school bucket. Written on the same table
+    # so the whole throttle is one query shape and one retention policy.
+    session.add(
+        AuthLoginAttempt(
+            identity_digest=school,
+            ip_digest=school,
+            succeeded=succeeded,
+            occurred_at=now,
         )
     )
     await session.commit()
@@ -328,7 +369,8 @@ async def lookup_entry(
     admission = payload.admission_number.strip()
     identity = _digest(f"entry:{code.casefold()}:{admission.casefold()}")
     ip = _digest(client_ip(request))
-    await _throttle(session, identity, ip)
+    school = _digest(f"entry-school:{code.casefold()}")
+    await _throttle(session, identity, ip, school)
     response.headers["Cache-Control"] = "no-store"
     student = await session.scalar(
         select(User)
@@ -342,9 +384,9 @@ async def lookup_entry(
         .limit(1)
     )
     if student is None:
-        await _record(session, identity, ip, succeeded=False)
+        await _record(session, identity, ip, school, succeeded=False)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_MATCH)
-    await _record(session, identity, ip, succeeded=True)
+    await _record(session, identity, ip, school, succeeded=True)
     enrolled_class = await session.scalar(
         select(Class)
         .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)

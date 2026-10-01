@@ -374,15 +374,21 @@ def client_ip(request: Request) -> str:
     against production: seven requests from one machine arrived as six
     distinct hosts.
 
-    The last entry of X-Forwarded-For is taken, not the first. A proxy
-    appends, so the first entry is whatever the caller sent and is therefore
-    spoofable - which for a throttle means an attacker rotates the header and
-    walks straight through. The last entry is what our own proxy observed and
-    is the one thing in that header the caller cannot choose.
+    The first entry of X-Forwarded-For is the caller. The last entry was
+    tried first, on the reasoning that a caller cannot choose what our own
+    proxy appends - but measured against production it varies too, so it
+    bucketed one machine several ways and the limit fired only sometimes.
+
+    The first entry is stable and is therefore the one that works, at the
+    cost of being client-supplied and so spoofable. That is a real limit and
+    not a hidden one: an IP bucket alone cannot carry a throttle here, which
+    is why the entry lookup also throttles on the identity being guessed and
+    on the school code being guessed against. Neither of those is in the
+    caller's gift.
     """
 
     forwarded = request.headers.get("x-forwarded-for", "")
     hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
     if hops:
-        return hops[-1]
+        return hops[0]
     return request.client.host if request.client else "unknown"

@@ -58,21 +58,33 @@ class ResendEmailDelivery:
         """
         if self._settings.resend_api_key is None:
             raise EmailDeliveryUnavailableError("Resend email delivery is not configured")
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(
-                RESEND_API_URL,
-                headers={
-                    "Authorization": (f"Bearer {self._settings.resend_api_key.get_secret_value()}"),
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "from": self._settings.from_address,
-                    "to": [to],
-                    "subject": subject,
-                    "text": text,
-                    **({"html": html} if html else {}),
-                },
-            )
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post(
+                    RESEND_API_URL,
+                    headers={
+                        "Authorization": (
+                            f"Bearer {self._settings.resend_api_key.get_secret_value()}"
+                        ),
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": self._settings.from_address,
+                        "to": [to],
+                        "subject": subject,
+                        "text": text,
+                        **({"html": html} if html else {}),
+                    },
+                )
+        except httpx.HTTPError as error:
+            # A timeout or a refused connection is the email being unavailable,
+            # same as Resend saying no - and it has to say so in those terms.
+            # Escaping uncaught, it reached the client as a bare 500 with no
+            # code, after the accounts had already been written: the admin saw
+            # a failure, retried, and half a roster existed twice. SCRUM-118.
+            raise EmailDeliveryUnavailableError(
+                f"Resend could not be reached: {type(error).__name__}"
+            ) from error
         if response.is_error:
             raise EmailDeliveryUnavailableError(
                 f"Resend rejected the email with status {response.status_code}"

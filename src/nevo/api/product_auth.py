@@ -744,7 +744,15 @@ async def register_school(
     # permission in its tenant, and until this is answered it can read the
     # console and write nothing to it.
     confirmation_token = await _start_email_confirmation(session, user)
-    await _send_email_confirmation(request, user, confirmation_token)
+    # Sent off the request. Inline, registration spent most of its three and a
+    # half seconds waiting on Resend, and a slow provider held a school on the
+    # signup form after its account had already been written. The invitation
+    # path already worked this way. SCRUM-118.
+    recipient, greeting_name = str(user.email), user.first_name
+    spawn(
+        lambda: _send_email_confirmation(request, recipient, greeting_name, confirmation_token),
+        name=f"confirmation-email-{user_id}",
+    )
     return SchoolRegistrationResponse(
         schoolId=school_id,
         adminId=user_id,
@@ -760,7 +768,9 @@ async def _start_email_confirmation(session: DatabaseSession, user: User) -> str
     return token
 
 
-async def _send_email_confirmation(request: Request, user: User, token: str) -> None:
+async def _send_email_confirmation(
+    request: Request, to: str, admin_name: str | None, token: str
+) -> None:
     from nevo.api.email_confirmation import send_confirmation
 
     try:
@@ -769,12 +779,10 @@ async def _send_email_confirmation(request: Request, user: User, token: str) -> 
         # No mail provider configured is not a failed registration: the school
         # exists, and the console offers a resend.
         return
-    await send_confirmation(
-        mailer,
-        to=str(user.email),
-        token=token,
-        admin_name=user.first_name,
-    )
+    # Takes the address and the name rather than the User row: this runs after
+    # the request's session is closed, and touching the row there would be a
+    # lazy load against nothing.
+    await send_confirmation(mailer, to=to, token=token, admin_name=admin_name)
 
 
 async def _create_invitation(

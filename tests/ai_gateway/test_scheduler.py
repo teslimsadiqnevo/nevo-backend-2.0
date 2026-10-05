@@ -36,16 +36,10 @@ async def test_waiting_requests_are_dispatched_by_priority() -> None:
         order.append("high")
         return response("high")
 
-    first = asyncio.create_task(
-        scheduler.execute(AiPriority.LESSON_GENERATION, blocking)
-    )
+    first = asyncio.create_task(scheduler.execute(AiPriority.LESSON_GENERATION, blocking))
     await started.wait()
-    low = asyncio.create_task(
-        scheduler.execute(AiPriority.NARRATIVE, low_priority)
-    )
-    high = asyncio.create_task(
-        scheduler.execute(AiPriority.ADAPTATION, high_priority)
-    )
+    low = asyncio.create_task(scheduler.execute(AiPriority.NARRATIVE, low_priority))
+    high = asyncio.create_task(scheduler.execute(AiPriority.ADAPTATION, high_priority))
     await asyncio.sleep(0)
     release.set()
 

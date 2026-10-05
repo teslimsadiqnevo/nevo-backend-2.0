@@ -1,4 +1,5 @@
 """Structuring whatever the model happens to return."""
+
 from nevo.ask_nevo.formatting import (
     AnswerBlockType,
     AnswerFormat,
@@ -131,8 +132,7 @@ def test_strip_inline_markup_tidies_spacing_left_behind() -> None:
 def test_the_fallback_answer_structures_cleanly() -> None:
     """The rule-based fallback is plain prose and must not confuse the parser."""
     result = structure_answer(
-        "I can help with this, but I need the live assistant connection to give "
-        "a specific answer."
+        "I can help with this, but I need the live assistant connection to give a specific answer."
     )
 
     assert result.format is AnswerFormat.PLAIN

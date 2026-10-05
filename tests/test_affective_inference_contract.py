@@ -54,13 +54,9 @@ def test_affective_states_and_touch_contract_are_declared() -> None:
 
 def test_affective_engine_has_no_backend_route_or_database_model() -> None:
     backend_files = [
-        path
-        for path in (ROOT / "src" / "nevo").rglob("*.py")
-        if path.name != "__init__.py"
+        path for path in (ROOT / "src" / "nevo").rglob("*.py") if path.name != "__init__.py"
     ]
-    backend_text = "\n".join(
-        path.read_text(encoding="utf-8") for path in backend_files
-    )
+    backend_text = "\n".join(path.read_text(encoding="utf-8") for path in backend_files)
 
     assert "affective" not in backend_text.casefold()
     assert "Affective" not in backend_text

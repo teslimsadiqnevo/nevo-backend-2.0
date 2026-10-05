@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -223,6 +224,37 @@ NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {
     # Not mutable in practice, but it belongs to a category so the settings
     # screen can describe it rather than show an uncategorised row.
     NotificationType.SIGN_IN_CHANGED: NotificationCategory.ACCOUNT,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class StudentNotificationShape:
+    """Where a child's notification sends them, and what it says. Ask B62.
+
+    Declared rather than confirmed, because nothing raises these four yet and
+    a promise about a value nobody produces is worth nothing. This is the
+    guarantee instead: whatever eventually raises one takes its path and its
+    title from here, so it cannot invent a target the student app has no
+    route for - which would render as a row with no link.
+
+    ``navigates_to`` is a prefix. A producer appends an id where one applies.
+    Titles are frame 28's words.
+    """
+
+    navigates_to: str
+    title: str
+
+
+#: One per student type, and a test refuses to pass while any is missing.
+STUDENT_NOTIFICATION_SHAPES: dict[str, StudentNotificationShape] = {
+    "lesson_assigned": StudentNotificationShape(
+        "/student/lessons", "A new lesson is ready for you"
+    ),
+    "review_due": StudentNotificationShape("/student/review", "Time to go over something again"),
+    "teacher_replied": StudentNotificationShape(
+        "/student/messages", "{teacher} sent you a message"
+    ),
+    "sign_in_changed": StudentNotificationShape("/student/profile", "Your PIN has changed"),
 }
 
 #: The types a child can be sent. Everything else addresses an adult, and a

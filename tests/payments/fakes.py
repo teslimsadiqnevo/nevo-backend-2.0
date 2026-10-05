@@ -1,4 +1,5 @@
 """In-memory doubles for payment reconciliation tests."""
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -30,9 +31,7 @@ class FakePaymentRepository:
     invoice_paid: bool = False
     manual_references: dict[str, UUID] = field(default_factory=dict)
 
-    async def payable_invoice(
-        self, *, school_id: UUID, invoice_id: UUID
-    ) -> PayableInvoice | None:
+    async def payable_invoice(self, *, school_id: UUID, invoice_id: UUID) -> PayableInvoice | None:
         if self.invoice is None:
             return None
         if self.invoice.school_id != school_id or self.invoice.invoice_id != invoice_id:

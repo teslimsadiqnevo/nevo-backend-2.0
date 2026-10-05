@@ -55,13 +55,8 @@ def test_gaming_suspicion_is_not_a_learning_dimension() -> None:
 
 def test_profile_gaming_invariants_are_enforced_in_the_database() -> None:
     names = check_names("learner_profiles")
-    assert any(
-        name.endswith("gaming_anomaly_count_nonnegative") for name in names
-    )
-    assert any(
-        name.endswith("gaming_suspicion_level_matches_timestamp")
-        for name in names
-    )
+    assert any(name.endswith("gaming_anomaly_count_nonnegative") for name in names)
+    assert any(name.endswith("gaming_suspicion_level_matches_timestamp") for name in names)
 
 
 def test_anomaly_ledger_records_evidence_with_its_rule() -> None:
@@ -105,10 +100,7 @@ def test_rule_keys_are_unique_and_addressable() -> None:
 def test_weak_signals_cannot_reach_the_highest_level_alone() -> None:
     """Errors and abandonment look identical to disengagement."""
     for key in ("errors_spike_against_mastery", "abandoned_attempts_spike"):
-        assert (
-            GAMING_THRESHOLD_RULES_BY_KEY[key].suspicion_level
-            is GamingSuspicionLevel.LOW
-        )
+        assert GAMING_THRESHOLD_RULES_BY_KEY[key].suspicion_level is GamingSuspicionLevel.LOW
 
 
 def test_higher_levels_demand_stronger_evidence() -> None:

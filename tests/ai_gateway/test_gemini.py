@@ -14,13 +14,7 @@ async def test_gemini_provider_uses_header_auth_and_parses_usage() -> None:
         return httpx.Response(
             200,
             json={
-                "candidates": [
-                    {
-                        "content": {
-                            "parts": [{"text": "Grounded response."}]
-                        }
-                    }
-                ],
+                "candidates": [{"content": {"parts": [{"text": "Grounded response."}]}}],
                 "usageMetadata": {
                     "promptTokenCount": 11,
                     "candidatesTokenCount": 7,

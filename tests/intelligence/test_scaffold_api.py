@@ -78,9 +78,7 @@ def test_current_scaffold_state_endpoint_returns_level_for_student() -> None:
     client, _, principal = client_for()
     concept_id = uuid4()
 
-    response = client.get(
-        f"/api/intelligence/scaffolds/state/{principal.user_id}/{concept_id}"
-    )
+    response = client.get(f"/api/intelligence/scaffolds/state/{principal.user_id}/{concept_id}")
 
     assert response.status_code == 200
     assert response.json()["currentIntensity"] == "full_support"

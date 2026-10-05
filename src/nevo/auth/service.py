@@ -19,7 +19,11 @@ from nevo.auth.errors import (
     SessionReplacedError,
     SessionRevokedError,
 )
-from nevo.auth.policies import idle_timeout_for_role, requires_single_session
+from nevo.auth.policies import (
+    absolute_lifetime_for_role,
+    idle_timeout_for_role,
+    requires_single_session,
+)
 from nevo.auth.ports import (
     AuthAuditLog,
     CredentialHasher,
@@ -209,6 +213,25 @@ class AuthService:
             await self._sessions.revoke(
                 session.id,
                 reason="expired",
+                revoked_at=now,
+            )
+            await self._audit_log.record(
+                "session_expired",
+                occurred_at=now,
+                user_id=session.user_id,
+                session_id=session.id,
+                identity_digest=None,
+                ip_digest=None,
+            )
+            raise SessionExpiredError
+
+        # The idle timeout slides on every request, so without this a tab
+        # left open and polling renews indefinitely. Counted from sign-in,
+        # not from the last request. Ask B57.
+        if now - session.created_at >= absolute_lifetime_for_role(session.role):
+            await self._sessions.revoke(
+                session.id,
+                reason="absolute_lifetime_reached",
                 revoked_at=now,
             )
             await self._audit_log.record(

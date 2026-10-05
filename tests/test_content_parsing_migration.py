@@ -5,9 +5,7 @@ import sys
 
 def render_sql(*arguments: str) -> str:
     environment = os.environ.copy()
-    environment["DATABASE_URL"] = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/nevo"
-    )
+    environment["DATABASE_URL"] = "postgresql+asyncpg://postgres:postgres@localhost:5432/nevo"
     result = subprocess.run(
         [sys.executable, "-m", "alembic", *arguments, "--sql"],
         check=True,

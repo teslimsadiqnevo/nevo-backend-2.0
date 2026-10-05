@@ -82,9 +82,7 @@ async def test_parent_request_normalizes_email_and_queues_link() -> None:
     draft = repository.requests[FixedConsentTokenService.digest_value]
     assert draft.parent_name == "Ada Parent"
     assert draft.parent_contact == "ada@example.com"
-    assert draft.consent_url == (
-        f"https://app.nevo.test/parent/{FixedConsentTokenService.token}"
-    )
+    assert draft.consent_url == (f"https://app.nevo.test/parent/{FixedConsentTokenService.token}")
     assert queued.invitation_id == draft.invitation_id
 
 

@@ -1,4 +1,5 @@
 """Lesson media URL re-issue tests."""
+
 import httpx
 import pytest
 

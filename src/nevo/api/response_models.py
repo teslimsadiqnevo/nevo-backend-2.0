@@ -581,6 +581,13 @@ class LessonProgressResponse(CamelResponse):
     #: A sentence for the result screen, derived from the two lists above so
     #: it cannot disagree with them. Empty when there is nothing to say.
     result_note: str = ""
+    #: Where the child is inside the after-lesson check, echoed back so a
+    #: resumed check starts where it stopped. Null when not in one. Ask B49.
+    check_position: int | None = None
+    #: When a half-finished check stops being resumable: the end of the day it
+    #: was started. Sent so two tablets agree on when it has lapsed rather
+    #: than each deciding.
+    check_resumable_until: datetime | None = None
 
 
 class LessonQuestionAttemptResponse(CamelResponse):
@@ -786,6 +793,61 @@ class ConnectionResponse(CamelResponse):
     school_code: str | None = None
     onboarding_token: str | None = None
     expires_at: datetime | None = None
+
+
+class OfflinePackageModalityVariants(CamelResponse):
+    """The four variants, as the offline package nests them.
+
+    Nested under one key here, unlike the lesson detail read which carries
+    them as four fields on the segment. That difference is the reason this
+    is not a LessonDetailResponse and had to be written down. Ask B60.
+    """
+
+    text: dict[str, object] | None = None
+    visual: dict[str, object] | None = None
+    audio: dict[str, object] | None = None
+    interactive: dict[str, object] | None = None
+    calculation: dict[str, object] | None = None
+
+
+class OfflinePackageSegment(CamelResponse):
+    """One segment inside lesson.json."""
+
+    id: UUID
+    #: The segment key, under "key" rather than "segmentKey".
+    key: str
+    title: str | None = None
+    body: str
+    content_type: LessonContentType
+    sequence_order: int
+    available_modalities: list[str] = Field(default_factory=list)
+    modality_variants: OfflinePackageModalityVariants = Field(
+        default_factory=OfflinePackageModalityVariants
+    )
+    #: Bundled so a cached lesson still adapts with no network. An adaptation
+    #: that cannot reach its text is not one.
+    depth_variants: dict[str, object] | None = None
+    comprehension_checkpoints: list[ComprehensionCheckpoint] = Field(default_factory=list)
+
+
+class OfflinePackage(CamelResponse):
+    """lesson.json, the file inside the offline archive. Ask B60.
+
+    **Not** a LessonDetailResponse. It is a narrower, differently shaped
+    thing - the variants are nested, the segment key is "key", and none of
+    the review or authorship fields are present - so a client validating it
+    as a lesson detail would reject a correct package.
+
+    Media is referenced by URL and not bundled, which is why a cached lesson
+    is text-only offline.
+    """
+
+    id: UUID
+    title: str
+    #: The parser version the lesson was built by, so a client can tell a
+    #: cached package from a newer parse of the same lesson.
+    version: str | None = None
+    segments: list[OfflinePackageSegment] = Field(default_factory=list)
 
 
 class OfflineManifestResponse(CamelResponse):
@@ -1157,6 +1219,17 @@ class StudentProgressResponse(CamelResponse):
     #: short note per subject and had only a paragraph to draw it from. Not a
     #: truncation of the reflection - written short. Ask B29.
     note: str = ""
+    #: "N of M topics done", as the card draws it. A topic is done when
+    #: understanding has passed the threshold the engine treats as learned;
+    #: the total is the topics this child has actually met, not the whole
+    #: curriculum, because a denominator a child has never seen makes early
+    #: progress read as failure. Ask B53.
+    topics_done: int = 0
+    topics_total: int = 0
+    #: "Working on X" - the topic with the most practice behind it that is
+    #: not done yet. Empty when every topic met so far is done, or none has
+    #: been met.
+    current_topic: str = ""
     highlights: list[str]
 
 

@@ -26,11 +26,7 @@ def test_student_concept_scheduling_constraints_and_indexes() -> None:
         for constraint in table.constraints
         if isinstance(constraint, CheckConstraint)
     }
-    indexes = {
-        index.name
-        for index in table.indexes
-        if isinstance(index, Index) and index.name
-    }
+    indexes = {index.name for index in table.indexes if isinstance(index, Index) and index.name}
     unique_sets = {
         tuple(column.name for column in constraint.columns)
         for constraint in table.constraints

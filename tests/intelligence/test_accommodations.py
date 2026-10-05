@@ -17,9 +17,7 @@ def test_reading_accommodation_requires_three_aligned_signals_over_five_lessons(
         ),
     )
 
-    assert [signal.accommodation for signal in result.active] == [
-        AccommodationType.READING
-    ]
+    assert [signal.accommodation for signal in result.active] == [AccommodationType.READING]
     assert result.active[0].frontend_signal == "reading_accommodation_active"
 
 

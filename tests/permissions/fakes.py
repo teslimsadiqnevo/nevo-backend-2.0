@@ -14,9 +14,7 @@ from nevo.permissions.errors import LastOversightAdminError
 
 class MemoryPermissionRepository:
     def __init__(self, snapshots: list[PermissionSnapshot] | None = None) -> None:
-        self.snapshots = {
-            snapshot.user_id: snapshot for snapshot in snapshots or []
-        }
+        self.snapshots = {snapshot.user_id: snapshot for snapshot in snapshots or []}
         self.team: dict[UUID, list[AdminTeamMember]] = {}
         self.invitations: dict[str, InvitationDraft] = {}
         self.password_hashes: dict[UUID, str] = {}
@@ -81,9 +79,7 @@ class MemoryPermissionRepository:
         self.password_hashes[invitation.user_id] = password_hash
         members = self.team.get(invitation.school_id, [])
         self.team[invitation.school_id] = [
-            replace(member, status="active")
-            if member.user_id == invitation.user_id
-            else member
+            replace(member, status="active") if member.user_id == invitation.user_id else member
             for member in members
         ]
         return AcceptedInvitation(

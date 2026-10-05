@@ -1,4 +1,5 @@
 """Server-side privacy guard tests."""
+
 from uuid import UUID
 
 from nevo.ai_gateway.privacy import AiPrivacyGuard

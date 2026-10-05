@@ -1,4 +1,5 @@
 """Segment duration estimate tests."""
+
 from nevo.content_parsing.entities import ParsedLessonSegment
 from nevo.content_parsing.service import (
     WORDS_READ_PER_MINUTE,

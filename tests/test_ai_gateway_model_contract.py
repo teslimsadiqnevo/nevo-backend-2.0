@@ -22,9 +22,7 @@ def test_prompt_templates_are_versioned_with_one_active_name() -> None:
         for constraint in table.constraints
         if isinstance(constraint, UniqueConstraint)
     }
-    index_names = {
-        index.name for index in table.indexes if isinstance(index, Index)
-    }
+    index_names = {index.name for index in table.indexes if isinstance(index, Index)}
 
     assert "uq_ai_prompt_templates_name_version" in unique_names
     assert "uq_ai_prompt_templates_active_name" in index_names

@@ -4,6 +4,7 @@ The model is an untrusted caller. Every identifier it supplies has to be
 resolved against the asking user's own accessible set, so these tests are
 mostly about what a tool refuses.
 """
+
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -115,9 +116,7 @@ async def test_an_unknown_tool_is_reported_not_raised() -> None:
 
 async def test_bad_arguments_are_reported_not_raised() -> None:
     """A refusal has to be a value, so the model can explain it."""
-    result = await execute_tool(
-        context(directory()), "get_learner_overview", {"learner": None}
-    )
+    result = await execute_tool(context(directory()), "get_learner_overview", {"learner": None})
 
     assert result == NOT_PERMITTED
 
@@ -174,10 +173,7 @@ def test_rehydrate_restores_names_only_on_the_way_out() -> None:
 
 def test_rehydrate_handles_several_learners_in_one_answer() -> None:
     book = directory((AMARA, "Amara Okafor"), (DARA, "Dara Ibrahim"))
-    answer = (
-        f"{AiPrivacyGuard.pseudonym(AMARA)} is ahead of "
-        f"{AiPrivacyGuard.pseudonym(DARA)}."
-    )
+    answer = f"{AiPrivacyGuard.pseudonym(AMARA)} is ahead of {AiPrivacyGuard.pseudonym(DARA)}."
 
     assert book.rehydrate(answer) == "Amara Okafor is ahead of Dara Ibrahim."
 
@@ -393,7 +389,7 @@ def test_the_directory_maps_names_back_out_before_a_replay() -> None:
 
 
 def test_a_longer_name_is_not_broken_by_a_shorter_one() -> None:
-    """"Ada" must not eat the start of "Adaeze"."""
+    """ "Ada" must not eat the start of "Adaeze"."""
     from nevo.ask_nevo.directory import DirectoryEntry, PseudonymDirectory
 
     built = PseudonymDirectory(

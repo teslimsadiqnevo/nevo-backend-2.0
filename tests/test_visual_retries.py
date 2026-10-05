@@ -1,4 +1,5 @@
 """A rate-limited image provider is asking us to wait, not refusing."""
+
 import time
 
 import httpx

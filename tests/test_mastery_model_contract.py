@@ -27,11 +27,7 @@ def test_student_concept_mastery_table_matches_ticket_contract() -> None:
 
 def test_mastery_table_is_indexed_by_student_and_concept() -> None:
     table = Base.metadata.tables["student_concept_mastery"]
-    indexes = {
-        index.name
-        for index in table.indexes
-        if isinstance(index, Index) and index.name
-    }
+    indexes = {index.name for index in table.indexes if isinstance(index, Index) and index.name}
     assert "ix_student_concept_mastery_student" in indexes
     assert "ix_student_concept_mastery_concept" in indexes
     assert "ix_student_concept_mastery_student_concept" in indexes
@@ -47,9 +43,7 @@ def test_mastery_table_is_indexed_by_student_and_concept() -> None:
 def test_mastery_probabilities_are_bounded_in_schema() -> None:
     checks = {
         constraint.name or ""
-        for constraint in Base.metadata.tables[
-            "student_concept_mastery"
-        ].constraints
+        for constraint in Base.metadata.tables["student_concept_mastery"].constraints
         if isinstance(constraint, CheckConstraint)
     }
 

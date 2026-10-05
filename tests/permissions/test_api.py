@@ -42,9 +42,7 @@ def test_my_permissions_returns_scopes_and_navigation() -> None:
 
 
 def test_team_endpoint_requires_oversight_scope() -> None:
-    client, _, _ = client_for_actor(
-        scopes=frozenset({PermissionScope.BILLING})
-    )
+    client, _, _ = client_for_actor(scopes=frozenset({PermissionScope.BILLING}))
 
     response = client.get("/api/v1/admin/team")
 
@@ -53,9 +51,7 @@ def test_team_endpoint_requires_oversight_scope() -> None:
 
 
 def test_invite_and_accept_flow() -> None:
-    client, _, _ = client_for_actor(
-        scopes=frozenset({PermissionScope.OVERSIGHT})
-    )
+    client, _, _ = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
 
     invited = client.post(
         "/api/v1/admin/team/invitations",
@@ -82,9 +78,7 @@ def test_invite_and_accept_flow() -> None:
 
 
 def test_student_role_cannot_be_invited() -> None:
-    client, _, _ = client_for_actor(
-        scopes=frozenset({PermissionScope.OVERSIGHT})
-    )
+    client, _, _ = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
 
     response = client.post(
         "/api/v1/admin/team/invitations",
@@ -100,9 +94,7 @@ def test_student_role_cannot_be_invited() -> None:
 
 
 def test_scope_payload_rejects_unknown_scope() -> None:
-    client, _, _ = client_for_actor(
-        scopes=frozenset({PermissionScope.OVERSIGHT})
-    )
+    client, _, _ = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
 
     response = client.post(
         "/api/v1/admin/team/invitations",
@@ -117,9 +109,7 @@ def test_scope_payload_rejects_unknown_scope() -> None:
 
 
 def test_unknown_team_member_returns_404() -> None:
-    client, _, _ = client_for_actor(
-        scopes=frozenset({PermissionScope.OVERSIGHT})
-    )
+    client, _, _ = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
 
     response = client.put(
         "/api/v1/admin/team/00000000-0000-0000-0000-000000000099/scopes",
@@ -131,9 +121,7 @@ def test_unknown_team_member_returns_404() -> None:
 
 
 def test_invitation_token_is_one_time_use() -> None:
-    client, _, _ = client_for_actor(
-        scopes=frozenset({PermissionScope.OVERSIGHT})
-    )
+    client, _, _ = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
     invitation = client.post(
         "/api/v1/admin/team/invitations",
         json={

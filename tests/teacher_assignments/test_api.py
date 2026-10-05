@@ -68,9 +68,7 @@ def client_for(
     assignment_repository = MemoryTeacherAssignmentRepository()
     assignments = TeacherAssignmentService(
         repository=assignment_repository,
-        roster_provider=FakeRosterAssignmentProvider(
-            RosterAssignmentBatch(supported=False)
-        ),
+        roster_provider=FakeRosterAssignmentProvider(RosterAssignmentBatch(supported=False)),
         now=Clock(),
     )
     app = FastAPI()
@@ -155,9 +153,7 @@ def test_roster_sync_returns_explicit_fallback() -> None:
 def test_remove_unknown_assignment_returns_404() -> None:
     client, _, _ = client_for(scopes=frozenset({PermissionScope.ROSTER}))
 
-    response = client.delete(
-        f"/api/v1/teacher-class-assignments/{uuid4()}"
-    )
+    response = client.delete(f"/api/v1/teacher-class-assignments/{uuid4()}")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "assignment_not_found"

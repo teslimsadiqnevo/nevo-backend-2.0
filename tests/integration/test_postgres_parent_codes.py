@@ -3,6 +3,7 @@
 A four-digit code is ten thousand combinations. What makes that safe is the
 controls around it, so these are the tests that matter.
 """
+
 import os
 import uuid
 
@@ -110,10 +111,7 @@ async def test_a_flood_of_requests_stops_producing_codes() -> None:
     """The attempt cap is worthless if new codes are free."""
 
     async def check(codes, sessions):  # type: ignore[no-untyped-def]
-        return [
-            (await codes.issue(contact=CONTACT, parent_user_id=None)).code
-            for _ in range(8)
-        ]
+        return [(await codes.issue(contact=CONTACT, parent_user_id=None)).code for _ in range(8)]
 
     produced = await in_rollback(check)
 

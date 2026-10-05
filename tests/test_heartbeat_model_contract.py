@@ -7,9 +7,7 @@ from nevo.db.base import Base
 def unique_constraint_names() -> set[str]:
     return {
         constraint.name
-        for constraint in Base.metadata.tables[
-            "system_heartbeats"
-        ].constraints
+        for constraint in Base.metadata.tables["system_heartbeats"].constraints
         if isinstance(constraint, UniqueConstraint) and constraint.name
     }
 

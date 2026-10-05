@@ -66,10 +66,7 @@ def test_cold_start_seeds_only_low_confidence_dimensions() -> None:
 
     assert result["visual_spatial_preference"].value is ChannelPreferenceStrength.STRONG
     assert result["auditory_preference"].value is ChannelPreferenceStrength.STRONG
-    assert (
-        result["interactive_kinesthetic_preference"].value
-        is ChannelPreferenceStrength.MODERATE
-    )
+    assert result["interactive_kinesthetic_preference"].value is ChannelPreferenceStrength.MODERATE
     assert result["working_memory_capacity"].value == 5
     assert result["cognitive_load_threshold"].value == 4
     assert result["attention_span"].value == 2
@@ -182,10 +179,7 @@ def test_calculation_narration_and_manipulative_events_update_dimensions() -> No
         ]
     )
 
-    assert (
-        result["interactive_kinesthetic_preference"].value
-        is ChannelPreferenceStrength.STRONG
-    )
+    assert result["interactive_kinesthetic_preference"].value is ChannelPreferenceStrength.STRONG
     assert result["working_memory_capacity"].value == 4
     assert result["auditory_preference"].value is ChannelPreferenceStrength.STRONG
 

@@ -1,4 +1,5 @@
 """A lesson's ending: parsed out of the same payload as its segments."""
+
 import json
 
 from nevo.content_parsing.service import (

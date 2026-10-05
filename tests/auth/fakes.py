@@ -147,9 +147,7 @@ class MemoryRateLimiter:
         succeeded: bool,
         occurred_at: datetime,
     ) -> None:
-        self.attempts.append(
-            (identity_digest, ip_digest, succeeded, occurred_at)
-        )
+        self.attempts.append((identity_digest, ip_digest, succeeded, occurred_at))
 
 
 class MemoryAuditLog:

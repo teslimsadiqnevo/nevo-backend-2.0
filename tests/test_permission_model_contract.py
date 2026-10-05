@@ -66,12 +66,8 @@ def test_permission_foreign_keys_are_tenant_anchored() -> None:
 
 
 def test_active_scope_and_invitation_uniqueness_are_indexed() -> None:
-    assert "uq_admin_scope_assignments_active" in index_names(
-        "admin_scope_assignments"
-    )
-    assert "uq_admin_invitations_active_user" in index_names(
-        "admin_invitations"
-    )
+    assert "uq_admin_scope_assignments_active" in index_names("admin_scope_assignments")
+    assert "uq_admin_invitations_active_user" in index_names("admin_invitations")
 
 
 def test_history_and_invitation_state_checks_exist() -> None:

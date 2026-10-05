@@ -1,4 +1,5 @@
 """Payment reconciliation tests — the money-safety rules."""
+
 import hashlib
 import hmac
 import json

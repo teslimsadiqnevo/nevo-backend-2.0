@@ -21,6 +21,4 @@ def test_iep_export_tables_are_mapped() -> None:
     }.issubset(export_columns)
 
     share_columns = {column.name for column in IepExportShare.__table__.columns}
-    assert {"export_id", "student_id", "parent_id", "shared_by_user_id"}.issubset(
-        share_columns
-    )
+    assert {"export_id", "student_id", "parent_id", "shared_by_user_id"}.issubset(share_columns)

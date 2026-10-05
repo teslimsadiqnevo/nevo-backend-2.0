@@ -3,6 +3,7 @@
 Everything here runs on a connection whose outer transaction is discarded, so
 a test contract can never leak into the live schedule and bill a real school.
 """
+
 import os
 import uuid
 from datetime import date, timedelta

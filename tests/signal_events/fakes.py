@@ -7,4 +7,3 @@ class MemorySignalIngestionRepository:
 
     async def ingest(self, batch: SignalIngestionBatch) -> None:
         self.batches.append(batch)
-

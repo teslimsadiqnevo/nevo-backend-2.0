@@ -5,9 +5,7 @@ import sys
 
 def render_sql(*arguments: str) -> str:
     environment = os.environ.copy()
-    environment["DATABASE_URL"] = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/nevo"
-    )
+    environment["DATABASE_URL"] = "postgresql+asyncpg://postgres:postgres@localhost:5432/nevo"
     result = subprocess.run(
         [sys.executable, "-m", "alembic", *arguments, "--sql"],
         check=True,
@@ -35,8 +33,5 @@ def test_downgrade_removes_parent_consent_schema() -> None:
     assert "drop table parent_links" in sql
     assert "drop table consent_invitations" in sql
     assert "drop table consent_notification_outbox" in sql
-    assert (
-        "drop function if exists create_pending_consent_for_roster_student"
-        in sql
-    )
+    assert "drop function if exists create_pending_consent_for_roster_student" in sql
     assert "where confirmation_source = 'parent'" in sql

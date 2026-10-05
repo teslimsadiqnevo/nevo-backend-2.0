@@ -200,12 +200,10 @@ async def test_repository_reassignment_preserves_history() -> None:
             school_id=school_id,
             teacher_id=teacher_two,
         )
-        is_old_teacher_assigned = (
-            await assignment_repository.is_teacher_assigned(
-                school_id=school_id,
-                teacher_id=teacher_one,
-                class_id=class_id,
-            )
+        is_old_teacher_assigned = await assignment_repository.is_teacher_assigned(
+            school_id=school_id,
+            teacher_id=teacher_one,
+            class_id=class_id,
         )
     finally:
         await engine.dispose()

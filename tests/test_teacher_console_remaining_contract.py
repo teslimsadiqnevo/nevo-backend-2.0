@@ -8,17 +8,15 @@ def test_teacher_console_routes_and_shapes_are_typed() -> None:
     paths = spec["paths"]
     schemas = spec["components"]["schemas"]
 
-    assert paths["/api/v1/escalations"]["post"]["responses"]["201"]["content"][
-        "application/json"
-    ]["schema"]["$ref"].endswith("/EscalationResponse")
-    assert paths["/api/v1/students/{student_id}/sessions/{session_id}"]["get"][
-        "responses"
-    ]["200"]["content"]["application/json"]["schema"]["$ref"].endswith(
-        "/StudentSessionDetailResponse"
-    )
-    assert paths["/api/v1/classes/{class_id}/insights"]["get"]["responses"]["200"][
+    assert paths["/api/v1/escalations"]["post"]["responses"]["201"]["content"]["application/json"][
+        "schema"
+    ]["$ref"].endswith("/EscalationResponse")
+    assert paths["/api/v1/students/{student_id}/sessions/{session_id}"]["get"]["responses"]["200"][
         "content"
-    ]["application/json"]["schema"]["$ref"].endswith("/ClassInsightsNarrativeResponse")
+    ]["application/json"]["schema"]["$ref"].endswith("/StudentSessionDetailResponse")
+    assert paths["/api/v1/classes/{class_id}/insights"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]["$ref"].endswith("/ClassInsightsNarrativeResponse")
 
     assert {"weeklySummary", "lookingAhead"} <= set(
         schemas["ClassInsightsNarrativeResponse"]["properties"]

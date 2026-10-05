@@ -29,9 +29,7 @@ def test_local_intelligence_layers_do_not_call_ai_gateway() -> None:
 
 
 def test_model_routing_docs_record_haiku_sonnet_and_batch_rules() -> None:
-    text = (ROOT / "docs" / "jira" / "AI_MODEL_ROUTING.md").read_text(
-        encoding="utf-8"
-    )
+    text = (ROOT / "docs" / "jira" / "AI_MODEL_ROUTING.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split()).casefold()
 
     assert "claude-haiku-4-5" in text

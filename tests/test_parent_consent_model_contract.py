@@ -26,8 +26,7 @@ def constraint_names(
     return {
         constraint.name
         for constraint in Base.metadata.tables[table_name].constraints
-        if isinstance(constraint, constraint_type)
-        and constraint.name is not None
+        if isinstance(constraint, constraint_type) and constraint.name is not None
     }
 
 
@@ -81,7 +80,6 @@ def test_consent_record_distinguishes_confirmation_source() -> None:
         "parent",
     ]
     assert ("users", "id") in foreign_key_targets("consent_records")
-    assert (
-        "ck_consent_records_confirmation_fields_match_status"
-        in constraint_names("consent_records", CheckConstraint)
+    assert "ck_consent_records_confirmation_fields_match_status" in constraint_names(
+        "consent_records", CheckConstraint
     )

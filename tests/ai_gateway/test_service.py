@@ -95,9 +95,7 @@ def service_with(
     scheduler = ImmediateScheduler()
     compliance = ZeroTagCompliancePolicy()
     service = AiGatewayService(
-        prompts=MemoryPromptRepository(
-            template() if include_template else None
-        ),
+        prompts=MemoryPromptRepository(template() if include_template else None),
         calls=calls,
         provider=provider,
         fallback=RuleBasedFallbackGenerator(compliance),

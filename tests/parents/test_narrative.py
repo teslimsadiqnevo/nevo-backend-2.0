@@ -1,4 +1,5 @@
 """The growth narrative: evidence in, prose out, and nothing numeric."""
+
 import re
 
 from nevo.domain.parents.vocabulary import GrowthDimension, GrowthTrend
@@ -76,9 +77,7 @@ def test_finishing_more_lessons_reads_as_staying_with_hard_problems() -> None:
         previous=signals(sessions=20, completed_sessions=10),
     )
     persistence = next(
-        item
-        for item in statements
-        if item.dimension is GrowthDimension.STAYING_WITH_HARD_PROBLEMS
+        item for item in statements if item.dimension is GrowthDimension.STAYING_WITH_HARD_PROBLEMS
     )
 
     assert persistence.trend is GrowthTrend.GROWING
@@ -92,9 +91,7 @@ def test_fewer_attempts_per_idea_reads_as_learning_faster() -> None:
         previous=signals(practice_per_confident_concept=6.0),
     )
     speed = next(
-        item
-        for item in statements
-        if item.dimension is GrowthDimension.LEARNING_NEW_THINGS_FASTER
+        item for item in statements if item.dimension is GrowthDimension.LEARNING_NEW_THINGS_FASTER
     )
 
     assert speed.trend is GrowthTrend.GROWING
@@ -124,9 +121,7 @@ def test_the_child_is_named_and_never_gendered() -> None:
 
 
 def test_a_term_with_nothing_in_it_says_so_rather_than_encouraging() -> None:
-    statements = compose(
-        name="Amara", current=signals(sessions=0), previous=signals(sessions=0)
-    )
+    statements = compose(name="Amara", current=signals(sessions=0), previous=signals(sessions=0))
     headline, summary = headline_and_summary(name="Amara", statements=statements)
 
     assert "not had enough lessons" in summary

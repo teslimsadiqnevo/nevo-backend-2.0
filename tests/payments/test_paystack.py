@@ -1,4 +1,5 @@
 """Paystack client and signature tests."""
+
 import hashlib
 import hmac
 import json
@@ -229,9 +230,7 @@ async def test_non_reusable_authorization_is_still_parsed(
 async def test_provider_error_body_is_surfaced(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(
         monkeypatch,
-        lambda request: httpx.Response(
-            400, json={"status": False, "message": "Invalid key"}
-        ),
+        lambda request: httpx.Response(400, json={"status": False, "message": "Invalid key"}),
     )
 
     with pytest.raises(PaymentProviderRejectedError, match="Invalid key"):

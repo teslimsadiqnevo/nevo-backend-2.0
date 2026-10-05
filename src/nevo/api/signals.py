@@ -7,7 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.api.consent import public_consent_error
 from nevo.api.privacy import is_private_interaction_key
+from nevo.auth.entities import AuthPrincipal
+from nevo.consent.errors import ConsentError
 from nevo.domain.signal_events.catalogue import SIGNAL_CONTRACTS
 from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
@@ -75,7 +78,23 @@ class LessonSessionRequest(BaseModel):
         default=0,
         alias="proactiveAdjustmentsCount",
         ge=0,
+        description=(
+            "Adaptations the child actually saw applied during this session - "
+            "simplify, expand, slower, a modality change, a hint. Not offers, "
+            "and not decisions the engine made and held back. Used to review "
+            "afterwards how much a session was rearranged; leave it 0 if you "
+            "are not counting, which reads as 'not reported' rather than "
+            "'none happened'."
+        ),
     )
+
+
+#: Which rewrite of a segment's text was on screen. "standard" is the body
+#: as written; the other two are the parse-time rewrites. Design D23 ruled
+#: that the engine is told this on every segment, not only where an
+#: adaptation changed it - otherwise a child who read the simpler wording all
+#: lesson is indistinguishable from one who read the original. Ask B45.
+DEPTH_SHOWN_VALUES = ("standard", "simplified", "expanded")
 
 
 class SignalEventRequest(BaseModel):
@@ -85,6 +104,23 @@ class SignalEventRequest(BaseModel):
     event_type: SignalEventType = Field(alias="eventType")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     event_data: dict[str, Any] = Field(default_factory=dict, alias="eventData")
+
+    @field_validator("event_data")
+    @classmethod
+    def depth_shown_is_one_of_three(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Refuse a depth nobody can act on. Ask B45.
+
+        Validated rather than accepted loosely, because this one is read back
+        as evidence about what a child actually saw: a typo here is a wrong
+        answer to "which version did she read", and a wrong answer is worse
+        than a missing one.
+        """
+
+        shown = value.get("depthShown")
+        if shown is not None and shown not in DEPTH_SHOWN_VALUES:
+            allowed = ", ".join(DEPTH_SHOWN_VALUES)
+            raise ValueError(f"depthShown must be one of: {allowed}.")
+        return value
 
     @field_validator("event_data")
     @classmethod
@@ -292,6 +328,30 @@ SignalIngestionDependency = Annotated[
 ]
 
 
+async def _refuse_a_withdrawn_child(request: Request, principal: AuthPrincipal) -> None:
+    """Stop the stream for a child whose consent has been withdrawn. Ask B44.
+
+    Resolved here rather than injected as a route dependency, and that is the
+    point rather than a detail. A dependency resolves before the handler, so
+    an unreachable consent service answered 503 to a request this route
+    should have refused with 403 or 422 on its own terms - the second time a
+    route-level gate has turned a client's own mistake into a server fault.
+
+    An unconfigured service is not a withdrawal, so the batch is taken: the
+    gate exists to stop processing a child nobody may process, and refusing
+    every child because one service is down would lose a lesson's evidence
+    to protect nobody.
+    """
+
+    service = getattr(request.app.state, "consent_service", None)
+    if service is None:
+        return
+    try:
+        await service.require_student_consent(principal)
+    except ConsentError as error:
+        raise public_consent_error(error) from error
+
+
 @router.post("/", response_model=SignalBatchResponse, status_code=status.HTTP_202_ACCEPTED)
 async def ingest_signal_batch(
     payload: SignalBatchRequest,
@@ -299,11 +359,22 @@ async def ingest_signal_batch(
     service: SignalIngestionDependency,
     request: Request,
 ) -> SignalBatchResponse:
+    """Take a batch of signals for the child who sent them.
+
+    Refused for a child whose consent has been withdrawn. The client stops
+    the stream itself on a withdrawal, and this is what backs that up: the
+    gate was on starting a lesson, recording progress, taking one offline and
+    asking Nevo, and not on the stream - so a client that missed the
+    withdrawal, or never knew, went on reporting a child nobody may process.
+    Ask B44.
+    """
+
     if principal.role != "student":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "student_required", "message": "Student account required."},
         )
+    await _refuse_a_withdrawn_child(request, principal)
     try:
         receipt = await service.ingest(
             SignalIngestionBatch(

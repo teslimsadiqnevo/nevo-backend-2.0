@@ -1,4 +1,5 @@
 """A parent sees their own child, and refuses to see anyone else's."""
+
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -100,9 +101,7 @@ def test_growth_reads_the_link_table_before_it_reads_a_signal() -> None:
     """Refused on the link, not filtered afterwards."""
     client, signals = build()
 
-    response = client.get(
-        f"/api/v1/parents/me/children/{SOMEONE_ELSES_CHILD}/growth"
-    )
+    response = client.get(f"/api/v1/parents/me/children/{SOMEONE_ELSES_CHILD}/growth")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "child_not_linked"

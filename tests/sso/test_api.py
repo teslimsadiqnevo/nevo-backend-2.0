@@ -131,9 +131,7 @@ class FakeSsoService(SsoService):
         if not self.configured:
             raise LookupError("SSO is not configured for this school")
         if self.disconnected:
-            raise SsoDisconnectedError(
-                "Single sign-on is disconnected for this school."
-            )
+            raise SsoDisconnectedError("Single sign-on is disconnected for this school.")
         self.manual_sync_actor = triggered_by_user_id
         return RUN_ID
 
@@ -277,10 +275,13 @@ def test_admin_sync_history_explains_failed_events() -> None:
 def test_admin_sync_history_window_is_bounded() -> None:
     client, service, _ = client_for()
 
-    assert client.get(
-        "/api/v1/admin/sso/roster-sync-history",
-        params={"window_days": 7},
-    ).status_code == 200
+    assert (
+        client.get(
+            "/api/v1/admin/sso/roster-sync-history",
+            params={"window_days": 7},
+        ).status_code
+        == 200
+    )
     assert service.history_window_days == 7
 
     for invalid in (0, 366):

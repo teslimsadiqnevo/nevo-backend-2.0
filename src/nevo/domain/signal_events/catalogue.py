@@ -34,8 +34,11 @@ class SignalContract:
 #: Every type, in the order the enum declares them.
 SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
     SignalEventType.TIME_ON_SEGMENT: SignalContract(
-        "The child leaves a segment, or the lesson ends on it.",
-        ("segmentId", "durationMs"),
+        "The child leaves a segment, or the lesson ends on it. depthShown "
+        "says which text version was actually on screen - standard, "
+        "simplified or expanded - on every segment, not only the ones an "
+        "adaptation touched. Design D23, ask B45.",
+        ("segmentId", "durationMs", "depthShown"),
     ),
     SignalEventType.REPLAY: SignalContract(
         "The child plays a finished piece of media again from the start. "

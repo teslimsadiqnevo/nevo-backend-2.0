@@ -1,4 +1,5 @@
 """Retention anonymisation tests."""
+
 from datetime import UTC, datetime, timedelta
 
 from nevo.db.models.account import User

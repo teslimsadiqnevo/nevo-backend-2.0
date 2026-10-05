@@ -38,9 +38,7 @@ class MutableClock:
 def snapshot(
     *,
     role: str = "other_admin",
-    scopes: frozenset[PermissionScope] = frozenset(
-        {PermissionScope.OVERSIGHT}
-    ),
+    scopes: frozenset[PermissionScope] = frozenset({PermissionScope.OVERSIGHT}),
     status: str = "active",
     school_auth_method: str = "email_password",
 ) -> PermissionSnapshot:
@@ -128,8 +126,7 @@ async def test_invite_normalizes_email_and_issues_seven_day_token() -> None:
         PermissionScope.CURRICULUM,
     }
     assert (
-        repository.invitations[f"digest:{invitation.invitation_token}"].school_id
-        == actor.school_id
+        repository.invitations[f"digest:{invitation.invitation_token}"].school_id == actor.school_id
     )
 
 
@@ -175,9 +172,7 @@ async def test_accept_invitation_hashes_password_and_activates_member() -> None:
     )
 
     assert accepted.user_id == invitation.user_id
-    assert repository.password_hashes[invitation.user_id] == (
-        "hashed:valid-password"
-    )
+    assert repository.password_hashes[invitation.user_id] == ("hashed:valid-password")
 
 
 async def test_reinviting_pending_user_replaces_token_and_scopes() -> None:

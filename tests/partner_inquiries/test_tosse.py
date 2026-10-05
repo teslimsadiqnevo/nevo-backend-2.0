@@ -4,6 +4,7 @@ This runs once, at a stand, on event wifi, in front of the schools we are
 trying to sign. The rules that matter are: a lead is never lost, and a
 notification failure is not a lead failure.
 """
+
 from datetime import UTC, datetime
 from uuid import uuid4
 

@@ -59,9 +59,7 @@ async def test_service_persists_valid_batch() -> None:
     student_id = uuid4()
 
     receipt = await service.ingest(
-        batch_with_events(
-            signal_event(session_id=session_id, student_id=student_id)
-        )
+        batch_with_events(signal_event(session_id=session_id, student_id=student_id))
     )
 
     assert receipt.session_id == session_id

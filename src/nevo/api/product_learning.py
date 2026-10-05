@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from io import BytesIO
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
@@ -58,6 +58,7 @@ from nevo.api.response_models import (
     LessonSummaryResponse,
     OfflineDownloadResponse,
     OfflineManifestResponse,
+    OfflinePackage,
     StudentDashboardResponse,
     StudentProfileResponse,
     TeacherDashboardResponse,
@@ -153,6 +154,15 @@ class ProgressWrite(BaseModel):
     #: which is why a client had to guess.
     module_position: int = Field(default=0, alias="modulePosition", ge=0)
     segment_position: int = Field(default=0, alias="segmentPosition", ge=0)
+    #: How far into the after-lesson check the child got, when they left part
+    #: way through one. A cursor like the two above, zero-based.
+    #:
+    #: Sent so a resumed check starts where it stopped. The attempts for the
+    #: session are the record of what was answered; this is only the place in
+    #: the list, which attempts cannot tell you because a skipped question
+    #: leaves no attempt behind. Null when the child is not in a check.
+    #: Ask B49.
+    check_position: int | None = Field(default=None, alias="checkPosition", ge=0)
     status: LessonCompletionStatus
     #: A named result, never a score. It is supplied only when the result
     #: screen closes a lesson; a lesson with no attempt resumes instead.
@@ -981,7 +991,19 @@ async def save_lesson_progress(
         "masteredConcepts": mastered,
         "revisitConcepts": revisit,
         "resultNote": _result_note(mastered, revisit),
+        "checkPosition": payload.check_position,
+        # A half-finished check is resumable for the rest of the day and no
+        # longer. Stated rather than left to the client, so two tablets agree
+        # on when it has lapsed. Ask B49.
+        "checkResumableUntil": _end_of_day(),
     }
+
+
+def _end_of_day() -> datetime:
+    """Midnight tonight, UTC. When a half-finished check stops resuming."""
+
+    now = datetime.now(UTC)
+    return datetime.combine(now.date(), time.max, tzinfo=UTC)
 
 
 #: A concept counts as landed when the child got every question on it right.
@@ -1291,6 +1313,32 @@ async def read_offline_manifest(
         "files": ["lesson.json", "manifest.json"],
         "includesMedia": False,
     }
+
+
+@router.get(
+    "/lessons/{lesson_id}/offline-package.json",
+    response_model=OfflinePackage,
+)
+async def read_offline_package_json(
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
+) -> dict[str, object]:
+    """lesson.json on its own, so a client can check it without unzipping.
+
+    The spec described the archive's contents as "the lesson package" and
+    nothing more, so the app had to validate it by guessing - and guessing
+    LessonDetailResponse would have rejected a correct package, because this
+    is a narrower and differently shaped thing. Ask B60.
+
+    The same payload the archive carries, from the same builder, so the two
+    cannot drift.
+    """
+
+    del consent
+    await _lesson_for_actor(lesson_id, principal, session)
+    return await _offline_package_payload(session, lesson_id)
 
 
 @router.post("/lessons/{lesson_id}/download", response_model=OfflineDownloadResponse)
@@ -1938,7 +1986,9 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
     ).all()
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
-    return {
+    # Built as a dict and then validated through OfflinePackage, so the shape
+    # the spec publishes is the shape that actually ships. Ask B60.
+    payload: dict[str, object] = {
         "id": str(lesson.id),
         "title": lesson.title,
         "version": lesson.parser_version,
@@ -1969,6 +2019,7 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
             for item in segments
         ],
     }
+    return OfflinePackage.model_validate(payload).model_dump(by_alias=True, mode="json")
 
 
 def _upload_structure(parsed) -> dict[str, object]:

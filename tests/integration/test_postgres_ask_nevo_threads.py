@@ -1,4 +1,5 @@
 """Ask Nevo conversations against real Postgres, inside a rolled-back txn."""
+
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -176,9 +177,7 @@ async def test_a_chat_past_its_school_window_is_swept_away() -> None:
         async with sessions() as session:
             surviving = set(
                 await session.scalars(
-                    select(AskNevoThread.id).where(
-                        AskNevoThread.actor_user_id == asker.id
-                    )
+                    select(AskNevoThread.id).where(AskNevoThread.actor_user_id == asker.id)
                 )
             )
         return result, fresh, stale, surviving

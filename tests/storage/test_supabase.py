@@ -1,4 +1,5 @@
 """Supabase object storage tests."""
+
 import httpx
 import pytest
 
@@ -53,8 +54,7 @@ async def test_public_bucket_returns_a_direct_public_url() -> None:
     url = await _storage(public=True).url_for("audio/yarngpt/abc.mp3")
 
     assert url == (
-        "https://project.supabase.co/storage/v1/object/public/"
-        "lesson-media/audio/yarngpt/abc.mp3"
+        "https://project.supabase.co/storage/v1/object/public/lesson-media/audio/yarngpt/abc.mp3"
     )
 
 
@@ -65,9 +65,7 @@ async def test_private_bucket_returns_a_signed_url(monkeypatch: pytest.MonkeyPat
         assert b'"expiresIn":3600' in request.content.replace(b" ", b"")
         return httpx.Response(
             200,
-            json={
-                "signedURL": "/object/sign/lesson-media/audio/yarngpt/abc.mp3?token=jwt-token"
-            },
+            json={"signedURL": "/object/sign/lesson-media/audio/yarngpt/abc.mp3?token=jwt-token"},
         )
 
     requests = _mock_httpx(monkeypatch, handler)

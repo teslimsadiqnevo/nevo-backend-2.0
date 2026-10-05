@@ -84,9 +84,7 @@ async def main() -> None:
     hasher = build_credential_hasher(AuthSettings())
     try:
         async with sessions.begin() as session:
-            school = await session.scalar(
-                select(School).where(School.school_code == SCHOOL_CODE)
-            )
+            school = await session.scalar(select(School).where(School.school_code == SCHOOL_CODE))
             if school is None:
                 school = School(
                     id=stable_id("school"),
@@ -152,9 +150,7 @@ async def main() -> None:
             if admin_password:
                 admin.password_hash = hasher.hash_password(admin_password)
             await session.flush()
-            admin_record = await session.scalar(
-                select(Admin).where(Admin.user_id == admin.id)
-            )
+            admin_record = await session.scalar(select(Admin).where(Admin.user_id == admin.id))
             if admin_record is None:
                 admin_record = Admin(
                     id=stable_id("admin-record"),

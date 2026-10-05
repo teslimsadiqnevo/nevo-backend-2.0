@@ -1,4 +1,5 @@
 """Which lessons a confirmed upload should produce."""
+
 from nevo.api.product_learning import _structure_lessons
 
 

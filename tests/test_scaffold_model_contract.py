@@ -35,11 +35,7 @@ def test_scaffold_state_is_unique_per_student_and_concept() -> None:
         for constraint in table.constraints
         if isinstance(constraint, UniqueConstraint)
     }
-    indexes = {
-        index.name
-        for index in table.indexes
-        if isinstance(index, Index) and index.name
-    }
+    indexes = {index.name for index in table.indexes if isinstance(index, Index) and index.name}
 
     assert ("student_id", "concept_id") in unique_sets
     assert "ix_student_concept_scaffold_states_student_concept" in indexes

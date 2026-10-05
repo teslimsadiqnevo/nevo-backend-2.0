@@ -1,5 +1,3 @@
-
-
 def _lead():
     from datetime import UTC, datetime
     from uuid import uuid4
@@ -69,9 +67,7 @@ def test_a_sparse_lead_does_not_render_empty_rows() -> None:
 
     from nevo.partner_inquiries.notifier import LeadEmailNotifier
 
-    sparse = dataclasses.replace(
-        _lead(), phone=None, student_count=None, message=None, intent=None
-    )
+    sparse = dataclasses.replace(_lead(), phone=None, student_count=None, message=None, intent=None)
     html = LeadEmailNotifier.html_summary(sparse)
 
     assert "tel:" not in html

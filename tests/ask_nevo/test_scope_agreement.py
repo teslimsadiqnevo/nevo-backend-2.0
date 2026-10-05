@@ -5,6 +5,7 @@ the directory can resolve, a name reaches the provider unmasked. If it masks
 more, the model is handed a code no tool can turn back into a record. Both
 failures have happened; this pins them shut.
 """
+
 import inspect
 
 from nevo import access
@@ -15,9 +16,7 @@ from nevo.ask_nevo.directory import PseudonymDirectory
 def test_both_sides_derive_from_one_definition() -> None:
     """Two copies of this rule would drift, and the drift is a privacy hole."""
     assert "accessible_students" in inspect.getsource(gateway_repositories)
-    assert "accessible_students" in inspect.getsource(
-        inspect.getmodule(PseudonymDirectory)
-    )
+    assert "accessible_students" in inspect.getsource(inspect.getmodule(PseudonymDirectory))
 
 
 def test_the_guard_masks_every_learner_the_tools_can_reach() -> None:

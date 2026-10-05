@@ -30,8 +30,7 @@ def test_modality_suggestion_renders_plain_language_for_admin_log() -> None:
 
 def test_non_modality_adaptations_render_content_shift() -> None:
     assert (
-        adaptation_plain_language(SignalEventType.SIMPLIFY_TRIGGER, {})
-        == "Original -> Simplified"
+        adaptation_plain_language(SignalEventType.SIMPLIFY_TRIGGER, {}) == "Original -> Simplified"
     )
     assert (
         adaptation_plain_language(SignalEventType.SLOWER_TRIGGER, {})

@@ -116,7 +116,17 @@ class RuntimeSignalsRequest(BaseModel):
         ge=0,
         le=100,
     )
-    consecutive_errors: int = Field(default=0, alias="consecutiveErrors", ge=0)
+    consecutive_errors: int = Field(
+        default=0,
+        alias="consecutiveErrors",
+        ge=0,
+        description=(
+            "Wrong answers in a row anywhere in this lesson, reset by a right "
+            "one. A running streak, not per step - which is what you are "
+            "already sending, so nothing changes. Two in a row is what makes "
+            "the engine offer a hint."
+        ),
+    )
     replay_count_on_segment: int = Field(
         default=0,
         alias="replayCountOnSegment",
@@ -154,11 +164,26 @@ class RuntimeSignalsRequest(BaseModel):
         default=None,
         alias="secondsSinceLastAdaptation",
         ge=0,
+        description=(
+            "Seconds since the last adaptation was *applied* on screen - not "
+            "since it was decided, and not since the last request. Null when "
+            "none has been applied this session. It feeds the cooldown that "
+            "stops the lesson rearranging itself twice in a minute, so "
+            "counting from the wrong moment makes the engine either too eager "
+            "or deaf."
+        ),
     )
     session_modality_shift_count: int | None = Field(
         default=None,
         alias="sessionModalityShiftCount",
         ge=0,
+        description=(
+            "Modality changes so far in the whole session, not within the "
+            "current segment, and however they came about - offered, accepted "
+            "or switched by the child. It caps how often one session may be "
+            "rearranged, and a per-segment count would reset that cap at "
+            "every segment."
+        ),
     )
 
 

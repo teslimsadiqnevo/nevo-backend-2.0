@@ -820,6 +820,7 @@ async def _progress_payload(session, student_id, subject):
         "studentId": str(student_id),
         "subject": subject,
         "masteryAverage": round(mastery_average, 4) if mastery_average is not None else None,
+        **_topic_counts(mastery),
         "concepts": [
             {
                 "conceptId": str(item.concept_id),
@@ -849,6 +850,40 @@ async def _progress_payload(session, student_id, subject):
         "reflection": reflection,
         "note": note,
         "highlights": highlights,
+    }
+
+
+#: Understanding at or above this counts as a topic done. The same number the
+#: engine treats as learned, so a card and the engine cannot disagree about
+#: whether a child has got something.
+TOPIC_DONE_AT = 0.8
+
+
+def _topic_counts(mastery: object) -> dict[str, object]:
+    """The three fields the Progress card draws. Ask B53.
+
+    "N of M topics done" and "Working on X". M is the topics this child has
+    met, not the curriculum: a denominator a child has never seen makes early
+    progress read as failure.
+
+    "Working on" is the unfinished topic with the most practice behind it -
+    the one they are actually in, rather than the first alphabetically.
+    """
+
+    rows = list(mastery)  # type: ignore[call-overload]
+    done = 0
+    unfinished: list[tuple[int, str]] = []
+    for item, concept in rows:
+        name = concept.name if concept else "Concept"
+        if item.mastery_probability_concept >= TOPIC_DONE_AT:
+            done += 1
+        else:
+            unfinished.append((item.practice_count, name))
+    current = max(unfinished, key=lambda row: row[0])[1] if unfinished else ""
+    return {
+        "topicsDone": done,
+        "topicsTotal": len(rows),
+        "currentTopic": current,
     }
 
 

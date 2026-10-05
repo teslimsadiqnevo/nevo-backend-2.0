@@ -3,6 +3,7 @@
 Every avoidable round trip here is latency on every request, so these pin the
 choices that were costing one.
 """
+
 from nevo.db.session import _is_transaction_pooler, create_engine, statement_cache_size
 
 SESSION_URL = "postgresql+asyncpg://u:p@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"

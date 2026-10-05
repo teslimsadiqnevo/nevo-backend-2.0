@@ -3,6 +3,7 @@
 The rule spans four tables, so an in-memory double would be asserting its own
 behaviour rather than the query's.
 """
+
 import os
 import uuid
 from datetime import UTC, datetime
@@ -156,10 +157,7 @@ async def in_rollback(check):  # type: ignore[no-untyped-def]
 
 async def test_a_teacher_defaults_to_the_lessons_that_are_theirs() -> None:
     async def check(session, world):  # type: ignore[no-untyped-def]
-        return {
-            lesson.title
-            for lesson in await accessible_lessons(session, world.mine)
-        }
+        return {lesson.title for lesson in await accessible_lessons(session, world.mine)}
 
     titles = await in_rollback(check)
 
@@ -177,9 +175,7 @@ async def test_a_teacher_can_still_ask_for_the_whole_school() -> None:
     async def check(session, world):  # type: ignore[no-untyped-def]
         return {
             lesson.title
-            for lesson in await accessible_lessons(
-                session, world.mine, scope=LessonScope.SCHOOL
-            )
+            for lesson in await accessible_lessons(session, world.mine, scope=LessonScope.SCHOOL)
         }
 
     assert "Nothing to do with me" in await in_rollback(check)
@@ -194,10 +190,7 @@ async def test_an_administrator_oversees_the_whole_school_by_default() -> None:
 
 async def test_a_learner_sees_what_was_assigned_and_not_what_was_cancelled() -> None:
     async def check(session, world):  # type: ignore[no-untyped-def]
-        return {
-            lesson.title
-            for lesson in await accessible_lessons(session, world.learner)
-        }
+        return {lesson.title for lesson in await accessible_lessons(session, world.learner)}
 
     titles = await in_rollback(check)
 
@@ -210,9 +203,7 @@ async def test_a_learner_cannot_widen_their_own_view() -> None:
     async def check(session, world):  # type: ignore[no-untyped-def]
         return {
             lesson.title
-            for lesson in await accessible_lessons(
-                session, world.learner, scope=LessonScope.SCHOOL
-            )
+            for lesson in await accessible_lessons(session, world.learner, scope=LessonScope.SCHOOL)
         }
 
     assert "Nothing to do with me" not in await in_rollback(check)

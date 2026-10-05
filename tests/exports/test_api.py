@@ -71,9 +71,7 @@ def _export(
         annotations=(),
         ai_gateway_call_id=uuid4(),
         reviewed_by_user_id=reviewed_by_user_id,
-        reviewed_at=datetime(2026, 1, 31)
-        if reviewed_by_user_id is not None
-        else None,
+        reviewed_at=datetime(2026, 1, 31) if reviewed_by_user_id is not None else None,
         review_note=review_note,
     )
 

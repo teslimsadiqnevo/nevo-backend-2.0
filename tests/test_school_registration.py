@@ -1,4 +1,5 @@
 """Registration must fail loudly on bad input, not with a 500."""
+
 from typing import Any
 
 from fastapi import FastAPI

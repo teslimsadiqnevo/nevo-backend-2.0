@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.privacy import is_private_interaction_key
+from nevo.domain.signal_events.catalogue import SIGNAL_CONTRACTS
 from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
     SignalEventType,
@@ -212,6 +213,42 @@ def _require_category(payload: dict[str, Any], *, allowed: set[str]) -> None:
     if category not in allowed:
         joined = ", ".join(sorted(allowed))
         raise ValueError(f"Ask Nevo questionCategory must be one of: {joined}.")
+
+
+class SignalContractResponse(BaseModel):
+    """One signal type, as a client needs to know it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    event_type: SignalEventType = Field(alias="eventType")
+    trigger: str
+    #: The keys eventData carries. A key in brackets is optional.
+    payload: list[str]
+    #: True where this type is written on the server. A client sending one
+    #: would have it counted twice.
+    server_written: bool = Field(default=False, alias="serverWritten")
+
+
+@router.get("/catalogue", response_model=list[SignalContractResponse])
+async def signal_catalogue() -> list[SignalContractResponse]:
+    """Every signal type, its trigger and its payload. Ask B37.
+
+    The triggers were written as comments beside the enum, which reaches
+    nobody generating a client - openapi.json carried the names and nothing
+    else. They are also rendered into the enum's own schema description now,
+    but this is the form a test can assert against, so a client and the
+    server cannot drift without something failing.
+    """
+
+    return [
+        SignalContractResponse(
+            eventType=event_type,
+            trigger=contract.trigger,
+            payload=list(contract.payload),
+            serverWritten="Server-written" in contract.trigger,
+        )
+        for event_type, contract in SIGNAL_CONTRACTS.items()
+    ]
 
 
 class SignalBatchRequest(BaseModel):

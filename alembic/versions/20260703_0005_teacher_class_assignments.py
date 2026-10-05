@@ -124,9 +124,7 @@ def upgrade() -> None:
         "teacher_class_assignments",
         ["class_id"],
         unique=True,
-        postgresql_where=sa.text(
-            "role = 'primary' AND removed_at IS NULL"
-        ),
+        postgresql_where=sa.text("role = 'primary' AND removed_at IS NULL"),
     )
 
 

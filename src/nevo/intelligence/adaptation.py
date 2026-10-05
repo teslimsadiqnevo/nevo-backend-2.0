@@ -651,7 +651,7 @@ def _proactive_adjustment(
         signals=signals, segment=segment, confidence=confidence, evidence=evidence
     )
     if stuck is not None:
-        return stuck
+        return replace(stuck, segment_id=signals.current_segment_id)
     evidence_by_category = _evidence_by_category(evidence)
     if "comprehension" in evidence_by_category and {
         "engagement",
@@ -659,6 +659,7 @@ def _proactive_adjustment(
     }.intersection(evidence_by_category):
         return ProactiveAdjustment(
             action="simplify",
+            segment_id=signals.current_segment_id,
             reason="Comprehension has dropped below this session's average.",
             confidence=confidence,
             trigger_signals=evidence,
@@ -666,6 +667,7 @@ def _proactive_adjustment(
     if "engagement" in evidence_by_category and "comprehension" in evidence_by_category:
         return ProactiveAdjustment(
             action="slower",
+            segment_id=signals.current_segment_id,
             reason="Multiple signals suggest the current pace may be too high.",
             confidence=confidence,
             trigger_signals=evidence,
@@ -674,6 +676,7 @@ def _proactive_adjustment(
     if _evidence_allows_adaptation(signals=signals, evidence=positive_evidence):
         return ProactiveAdjustment(
             action="expand",
+            segment_id=signals.current_segment_id,
             reason="Engagement and comprehension are both above the current baseline.",
             confidence=_combined_confidence(positive_evidence),
             trigger_signals=positive_evidence,

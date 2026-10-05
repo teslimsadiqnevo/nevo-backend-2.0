@@ -27,13 +27,15 @@ def upgrade() -> None:
         sa.Column("avatar_shape", sa.String(length=24), nullable=False),
         sa.Column("avatar_colourway", sa.String(length=24), nullable=False),
         sa.Column("provisioned_by_user_id", sa.Uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["school_id"], ["schools.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["student_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["provisioned_by_user_id"], ["users.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["provisioned_by_user_id"], ["users.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "device_id", "student_id", name="uq_shared_device_profiles_device_student"
@@ -53,7 +55,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_shared_device_profiles_school_device", table_name="shared_device_profiles"
-    )
+    op.drop_index("ix_shared_device_profiles_school_device", table_name="shared_device_profiles")
     op.drop_table("shared_device_profiles")

@@ -26,21 +26,15 @@ consent_type_values = ("data_processing", "camera", "offline_storage")
 consent_method_values = ("written", "verbal", "email", "digital")
 
 user_role_enum = postgresql.ENUM(*user_role_values, name="user_role", create_type=False)
-auth_method_enum = postgresql.ENUM(
-    *auth_method_values, name="auth_method", create_type=False
-)
-user_status_enum = postgresql.ENUM(
-    *user_status_values, name="user_status", create_type=False
-)
+auth_method_enum = postgresql.ENUM(*auth_method_values, name="auth_method", create_type=False)
+user_status_enum = postgresql.ENUM(*user_status_values, name="user_status", create_type=False)
 enrollment_band_enum = postgresql.ENUM(
     *enrollment_band_values, name="school_enrollment_band", create_type=False
 )
 consent_status_enum = postgresql.ENUM(
     *consent_status_values, name="consent_status", create_type=False
 )
-consent_type_enum = postgresql.ENUM(
-    *consent_type_values, name="consent_type", create_type=False
-)
+consent_type_enum = postgresql.ENUM(*consent_type_values, name="consent_type", create_type=False)
 consent_method_enum = postgresql.ENUM(
     *consent_method_values, name="consent_confirmed_via", create_type=False
 )

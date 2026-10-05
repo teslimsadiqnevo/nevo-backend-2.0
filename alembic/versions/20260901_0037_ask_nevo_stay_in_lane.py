@@ -84,10 +84,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for name in ("ask_nevo.student", "ask_nevo.teacher"):
+        op.execute(f"DELETE FROM ai_prompt_templates WHERE name = '{name}' AND version = 4")
         op.execute(
-            f"DELETE FROM ai_prompt_templates WHERE name = '{name}' AND version = 4"
-        )
-        op.execute(
-            f"UPDATE ai_prompt_templates SET active = true "
-            f"WHERE name = '{name}' AND version = 3"
+            f"UPDATE ai_prompt_templates SET active = true WHERE name = '{name}' AND version = 3"
         )

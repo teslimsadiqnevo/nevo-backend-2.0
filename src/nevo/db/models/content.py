@@ -296,6 +296,15 @@ class LessonSegment(Base):
         nullable=False,
     )
     sequence_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Which concept this segment teaches.
+    #:
+    #: Absent until now, so per-concept help could not adapt inside the
+    #: calculation solver and a check-in answer could only be attributed to a
+    #: concept through the checkpoint that happened to carry one. SCRUM-177,
+    #: ask B25.
+    concept_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("concepts.id", ondelete="SET NULL"), nullable=True
+    )
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     available_modalities: Mapped[list[str]] = mapped_column(

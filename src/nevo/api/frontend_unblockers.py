@@ -20,7 +20,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
@@ -421,8 +421,15 @@ class BaselinePromptResponse(BaseModel):
 
     dimension: str
     item_id: str = Field(alias="itemId")
-    question: str
-    options: list["BaselinePromptOption"]
+    #: Empty on the five days the warm-up runs a task on the device rather
+    #: than asking anything. Only the domain task has a question, and
+    #: requiring these of every dimension made the other five look like
+    #: served questions with nothing in them. Ask B65.
+    question: str = ""
+    options: list["BaselinePromptOption"] = Field(default_factory=list)
+    #: Whether this day's warm-up is answered here or run on the device. The
+    #: client no longer has to infer it from an empty question.
+    served: bool = True
     #: Whether this child has already answered today's warm-up, on any device.
     #:
     #: It was remembered on one tablet only, so a child who started on one and
@@ -433,21 +440,36 @@ class BaselinePromptResponse(BaseModel):
 
 
 class BaselinePromptAnswer(BaseModel):
-    """The child's pick. Marking happens on the server, not here."""
+    """The child's pick, or word that a device task finished.
+
+    On five days of six the warm-up runs a task on the device and answers no
+    served question, so there was nothing to send and ``doneToday`` stayed
+    false on those days - which meant a second tablet offered the child a
+    second run and took a second measurement. A completion with no item is
+    accepted for exactly that reason. Ask B54.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    item_id: str = Field(alias="itemId", max_length=80)
-    value: str = Field(max_length=200)
+    #: Omitted on a device-task day. Sent with ``value`` when the child
+    #: answered the served question.
+    item_id: str | None = Field(default=None, alias="itemId", max_length=80)
+    value: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _an_answer_or_a_completion(self) -> "BaselinePromptAnswer":
+        if self.item_id is not None and self.value is None:
+            raise ValueError("Send value with itemId.")
+        return self
 
 
 class BaselinePromptResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    #: Scored here, against the key this file holds. It used to be returned
-    #: with the question, which put the answer key on the device - and the
-    #: architecture forbids the client deciding correctness. Ask B8.
-    correct: bool
+    #: Deliberately not here. It is scored on this side, against the key this
+    #: file holds, and the client has no use for the verdict - it is a
+    #: judgement about a child that the device has no reason to hold, and the
+    #: warm-up shows the same encouragement either way. Asks B8 and B55.
     dimension: str
     done_today: bool = Field(default=True, alias="doneToday")
     answered_at: datetime = Field(alias="answeredAt")
@@ -1764,6 +1786,10 @@ async def recalibrate_prompt(
             BaselinePromptOption(value=value, label=label)
             for value, label in cast(list[tuple[str, str]], item["options"])
         ],
+        # Every dimension in _BASELINE_ITEMS is served; a device task would
+        # arrive here with no item and say so. Stated rather than inferred
+        # from an empty question. Ask B65.
+        served=True,
         doneToday=done,
         answeredAt=answered_at,
     )
@@ -1798,7 +1824,7 @@ async def record_recalibrate_answer(
             detail="Students can answer only their own warm-up",
         )
     dimension, item = _todays_item(student_id)
-    if payload.item_id != str(item["id"]):
+    if payload.item_id is not None and payload.item_id != str(item["id"]):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -1809,7 +1835,13 @@ async def record_recalibrate_answer(
     user = await session.get(User, student_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
-    correct = payload.value.strip().casefold() == str(item["answer"]).strip().casefold()
+    # A device task carries no answer to mark. It is still a completed
+    # warm-up, and the point of recording it is that the next tablet knows.
+    correct = (
+        payload.value.strip().casefold() == str(item["answer"]).strip().casefold()
+        if payload.item_id is not None and payload.value is not None
+        else None
+    )
     done, answered_at = await _warm_up_state(session, student_id)
     if not done:
         answered_at = datetime.now(UTC)
@@ -1819,13 +1851,13 @@ async def record_recalibrate_answer(
                 "date": answered_at.date().isoformat(),
                 "itemId": payload.item_id,
                 "dimension": dimension,
+                "served": payload.item_id is not None,
                 "correct": correct,
                 "answeredAt": answered_at.isoformat(),
             },
         }
         await session.commit()
     return BaselinePromptResult(
-        correct=correct,
         dimension=dimension,
         answeredAt=answered_at or datetime.now(UTC),
     )

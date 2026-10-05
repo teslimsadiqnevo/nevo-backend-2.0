@@ -355,12 +355,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "DROP TRIGGER IF EXISTS trg_users_roster_student_pending_consent ON users"
-    )
-    op.execute(
-        "DROP FUNCTION IF EXISTS create_pending_consent_for_roster_student()"
-    )
+    op.execute("DROP TRIGGER IF EXISTS trg_users_roster_student_pending_consent ON users")
+    op.execute("DROP FUNCTION IF EXISTS create_pending_consent_for_roster_student()")
     op.execute(
         """
         UPDATE consent_records

@@ -31,9 +31,7 @@ def upgrade() -> None:
         "users",
         sa.Column("email_confirmed_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.execute(
-        "UPDATE users SET email_confirmed_at = created_at WHERE email IS NOT NULL"
-    )
+    op.execute("UPDATE users SET email_confirmed_at = created_at WHERE email IS NOT NULL")
 
     op.create_table(
         "email_confirmations",

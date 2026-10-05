@@ -77,8 +77,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "(state = 'resolved')"
-            " = (resolved_at IS NOT NULL AND resolved_by_user_id IS NOT NULL)",
+            "(state = 'resolved') = (resolved_at IS NOT NULL AND resolved_by_user_id IS NOT NULL)",
             name="age_check_resolution_matches_state",
         ),
         sa.ForeignKeyConstraint(["school_id"], ["schools.id"], ondelete="CASCADE"),

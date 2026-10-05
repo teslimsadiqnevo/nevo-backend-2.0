@@ -27,6 +27,21 @@ class SessionRevokedError(InvalidSessionError):
     public_message = "You were signed out. Sign in again to continue."
 
 
+class AccountClosedError(InvalidSessionError):
+    """The account is gone, not resting.
+
+    A removed child told their account is "on pause" is being told their
+    school can turn it back on, which is not true and leaves them opening the
+    app again. Its own code so the screen can say the right thing. Ask B58,
+    design D53.
+    """
+
+    code = "account_closed"
+    public_message = (
+        "This account has been closed. Your school can tell you more."
+    )
+
+
 class AccountPausedError(InvalidSessionError):
     code = "account_paused"
     public_message = (

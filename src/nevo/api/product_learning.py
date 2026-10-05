@@ -57,6 +57,7 @@ from nevo.api.response_models import (
     LessonSessionResponse,
     LessonSummaryResponse,
     OfflineDownloadResponse,
+    OfflineManifestResponse,
     StudentDashboardResponse,
     StudentProfileResponse,
     TeacherDashboardResponse,
@@ -1079,6 +1080,20 @@ async def student_dashboard(
             .order_by(LessonProgress.updated_at.desc())
         )
     ).all()
+    recent = list(progress[:5])
+    # One read for the five lessons rather than one each, so a library lesson
+    # can appear under "Pick up where you left off" with its own name on it.
+    # Asks B51 and B52.
+    lessons = (
+        {
+            lesson.id: lesson
+            for lesson in await session.scalars(
+                select(Lesson).where(Lesson.id.in_([item.lesson_id for item in recent]))
+            )
+        }
+        if recent
+        else {}
+    )
     return {
         "student": {"id": str(actor.id), "firstName": actor.first_name},
         "assignments": due,
@@ -1088,8 +1103,13 @@ async def student_dashboard(
                 "status": item.status,
                 "segmentPosition": item.segment_position,
                 "updatedAt": item.updated_at,
+                "title": (lesson.title if (lesson := lessons.get(item.lesson_id)) else ""),
+                "subject": lesson.subject if lesson else None,
+                # The denominator segmentPosition is counted against, so a
+                # client can draw a fraction without inventing a total.
+                "segmentCount": lesson.segment_count or 0 if lesson else 0,
             }
-            for item in progress[:5]
+            for item in recent
         ],
     }
 
@@ -1235,6 +1255,44 @@ async def connect_by_class_code(
     }
 
 
+@router.get(
+    "/lessons/{lesson_id}/offline-manifest",
+    response_model=OfflineManifestResponse,
+)
+async def read_offline_manifest(
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
+) -> dict[str, object]:
+    """What a lesson would cost to keep, without keeping it. Ask B61.
+
+    The Downloads screen shows a size on every row, and the only place a size
+    existed was the response to POST /download - which records a download. So
+    a size could not be shown until the child had already committed to one.
+
+    A read, so it records nothing. The size is measured from the archive this
+    describes rather than estimated, which costs a build per call: that is
+    why this is per lesson and not a field on the list. A client wanting
+    sizes for a page of lessons should ask for the ones it is about to show.
+    """
+
+    del consent
+    _actor, _lesson = await _lesson_for_actor(lesson_id, principal, session)
+    package = await _offline_package_payload(session, lesson_id)
+    archive = _offline_archive(package, lesson_id)
+    return {
+        "lessonId": str(lesson_id),
+        "version": 1,
+        "segmentCount": _segment_count(package),
+        "generatedAt": datetime.now(UTC).isoformat(),
+        "packageUrl": f"/api/v1/lessons/{lesson_id}/offline-package",
+        "sizeBytes": len(archive),
+        "files": ["lesson.json", "manifest.json"],
+        "includesMedia": False,
+    }
+
+
 @router.post("/lessons/{lesson_id}/download", response_model=OfflineDownloadResponse)
 async def create_offline_download(
     lesson_id: UUID,
@@ -1260,7 +1318,7 @@ async def create_offline_download(
     manifest = {
         "lessonId": str(lesson_id),
         "version": 1,
-        "segmentCount": len(package["segments"]),
+        "segmentCount": _segment_count(package),
         "generatedAt": datetime.now(UTC).isoformat(),
         "packageUrl": f"/api/v1/lessons/{lesson_id}/offline-package",
         "sizeBytes": len(archive),
@@ -1278,6 +1336,13 @@ async def create_offline_download(
         record.manifest = manifest
     await session.commit()
     return {"id": str(record.id), "manifest": record.manifest}
+
+
+def _segment_count(package: dict[str, object]) -> int:
+    """How many segments the package holds, from an untyped payload."""
+
+    segments = package.get("segments")
+    return len(segments) if isinstance(segments, list) else 0
 
 
 def _offline_archive(payload: dict[str, object], lesson_id: UUID) -> bytes:

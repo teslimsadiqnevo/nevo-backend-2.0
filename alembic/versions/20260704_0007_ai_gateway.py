@@ -171,8 +171,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
         sa.CheckConstraint(
-            "input_tokens >= 0 AND output_tokens >= 0 "
-            "AND thought_tokens >= 0",
+            "input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0",
             name="token_counts_non_negative",
         ),
         sa.CheckConstraint(

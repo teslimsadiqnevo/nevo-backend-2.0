@@ -60,7 +60,9 @@ def upgrade() -> None:
     op.create_table(
         "school_sso_configurations",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("school_id", sa.Uuid(), sa.ForeignKey("schools.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "school_id", sa.Uuid(), sa.ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("provider", sso_provider_enum, nullable=False),
         sa.Column("tenant_id", sa.String(length=255), nullable=True),
         sa.Column("hosted_domain", sa.String(length=255), nullable=True),
@@ -68,8 +70,12 @@ def upgrade() -> None:
         sa.Column("client_secret_ref", sa.String(length=255), nullable=True),
         sa.Column("school_url_slug", sa.String(length=100), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
     )
     op.create_index(
         "uq_school_sso_configurations_school_provider",
@@ -86,46 +92,94 @@ def upgrade() -> None:
     op.create_table(
         "roster_sync_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("school_id", sa.Uuid(), sa.ForeignKey("schools.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "school_id", sa.Uuid(), sa.ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("provider", sso_provider_enum, nullable=False),
         sa.Column("status", roster_sync_status_enum, nullable=False),
         sa.Column("imported_students", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("imported_teachers", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("missing_teacher_class_mappings", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "missing_teacher_class_mappings", sa.Integer(), nullable=False, server_default="0"
+        ),
+        sa.Column(
+            "started_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.create_index("ix_roster_sync_runs_school_started", "roster_sync_runs", ["school_id", "started_at"])
-    op.create_index("ix_roster_sync_runs_provider_started", "roster_sync_runs", ["provider", "started_at"])
+    op.create_index(
+        "ix_roster_sync_runs_school_started", "roster_sync_runs", ["school_id", "started_at"]
+    )
+    op.create_index(
+        "ix_roster_sync_runs_provider_started", "roster_sync_runs", ["provider", "started_at"]
+    )
 
     op.create_table(
         "roster_sync_issues",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("roster_sync_run_id", sa.Uuid(), sa.ForeignKey("roster_sync_runs.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("school_id", sa.Uuid(), sa.ForeignKey("schools.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "roster_sync_run_id",
+            sa.Uuid(),
+            sa.ForeignKey("roster_sync_runs.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "school_id", sa.Uuid(), sa.ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("external_reference", sa.String(length=255), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("status", roster_sync_issue_status_enum, nullable=False, server_default="open"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
     )
-    op.create_index("ix_roster_sync_issues_school_status", "roster_sync_issues", ["school_id", "status"])
+    op.create_index(
+        "ix_roster_sync_issues_school_status", "roster_sync_issues", ["school_id", "status"]
+    )
     op.create_index("ix_roster_sync_issues_run", "roster_sync_issues", ["roster_sync_run_id"])
 
     op.create_table(
         "ask_nevo_interactions",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("actor_user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False),
+        sa.Column(
+            "actor_user_id",
+            sa.Uuid(),
+            sa.ForeignKey("users.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
         sa.Column("role", ask_nevo_role_enum, nullable=False),
         sa.Column("current_page", sa.String(length=120), nullable=False),
-        sa.Column("context_ids", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "context_ids",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.Column("question_category", ask_nevo_question_category_enum, nullable=False),
-        sa.Column("ai_gateway_call_id", sa.Uuid(), sa.ForeignKey("ai_gateway_calls.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "ai_gateway_call_id",
+            sa.Uuid(),
+            sa.ForeignKey("ai_gateway_calls.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("response_helpful", sa.Boolean(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
     )
-    op.create_index("ix_ask_nevo_interactions_actor_created", "ask_nevo_interactions", ["actor_user_id", "created_at"])
-    op.create_index("ix_ask_nevo_interactions_role_created", "ask_nevo_interactions", ["role", "created_at"])
-    op.create_index("ix_ask_nevo_interactions_category_created", "ask_nevo_interactions", ["question_category", "created_at"])
+    op.create_index(
+        "ix_ask_nevo_interactions_actor_created",
+        "ask_nevo_interactions",
+        ["actor_user_id", "created_at"],
+    )
+    op.create_index(
+        "ix_ask_nevo_interactions_role_created", "ask_nevo_interactions", ["role", "created_at"]
+    )
+    op.create_index(
+        "ix_ask_nevo_interactions_category_created",
+        "ask_nevo_interactions",
+        ["question_category", "created_at"],
+    )
 
     op.execute(
         """
@@ -185,8 +239,12 @@ def downgrade() -> None:
     op.drop_index("ix_roster_sync_runs_provider_started", table_name="roster_sync_runs")
     op.drop_index("ix_roster_sync_runs_school_started", table_name="roster_sync_runs")
     op.drop_table("roster_sync_runs")
-    op.drop_index("ix_school_sso_configurations_slug_provider", table_name="school_sso_configurations")
-    op.drop_index("uq_school_sso_configurations_school_provider", table_name="school_sso_configurations")
+    op.drop_index(
+        "ix_school_sso_configurations_slug_provider", table_name="school_sso_configurations"
+    )
+    op.drop_index(
+        "uq_school_sso_configurations_school_provider", table_name="school_sso_configurations"
+    )
     op.drop_table("school_sso_configurations")
     ask_nevo_question_category_enum.drop(op.get_bind(), checkfirst=True)
     ask_nevo_role_enum.drop(op.get_bind(), checkfirst=True)

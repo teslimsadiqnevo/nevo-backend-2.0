@@ -105,4 +105,3 @@ def downgrade() -> None:
     )
     op.drop_table("lesson_sessions")
     lesson_completion_status_enum.drop(op.get_bind(), checkfirst=True)
-

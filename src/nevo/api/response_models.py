@@ -439,6 +439,8 @@ class LessonSegmentResponse(CamelResponse):
     content_type: LessonContentType
     title: str | None
     body: str
+    #: Which concept this segment teaches. SCRUM-177, ask B25.
+    concept_id: UUID | None = None
     available_modalities: list[str]
     comprehension_checkpoints: list[ComprehensionCheckpoint]
     text_variant: TextVariant | None = None
@@ -607,6 +609,14 @@ class RecentProgressResponse(CamelResponse):
     status: LessonCompletionStatus
     segment_position: int
     updated_at: datetime
+    #: Enough to draw the row without a second read per lesson. A lesson a
+    #: child started from the library could not appear at all without these.
+    #: Ask B52.
+    title: str = ""
+    subject: str | None = None
+    #: Segments the child plays, which is the denominator segmentPosition is
+    #: counted against. Ask B51.
+    segment_count: int = 0
 
 
 class StudentDashboardResponse(CamelResponse):

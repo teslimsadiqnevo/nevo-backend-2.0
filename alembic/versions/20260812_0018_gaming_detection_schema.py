@@ -83,8 +83,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "gaming_suspicion_level_matches_timestamp",
         "learner_profiles",
-        "(gaming_suspicion_level = 'none') = "
-        "(gaming_suspicion_updated_at IS NULL)",
+        "(gaming_suspicion_level = 'none') = (gaming_suspicion_updated_at IS NULL)",
     )
 
     op.create_table(

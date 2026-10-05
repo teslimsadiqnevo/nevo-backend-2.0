@@ -82,4 +82,3 @@ def downgrade() -> None:
             op.drop_column(table_name, dimension)
 
     channel_strength_enum.drop(op.get_bind(), checkfirst=True)
-

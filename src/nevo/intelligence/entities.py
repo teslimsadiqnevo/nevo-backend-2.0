@@ -128,6 +128,10 @@ class ProactiveAdjustment:
     #: cannot carry out.
     hint: str | None = None
     guided_questions: tuple[str, ...] = ()
+    #: The segment this adjustment is about - always the one the request
+    #: named. Carried so a client stops inferring it from the request it
+    #: happened to send. Ask B46.
+    segment_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

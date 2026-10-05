@@ -16,10 +16,10 @@ depends_on: str | Sequence[str] | None = None
 
 CONTINUITY = (
     " The context may include conversation_so_far: what has already been said "
-    "in this chat, oldest first, where \"them\" is the person you are talking "
-    "to and \"you\" is your own earlier reply. Read a short follow-up as "
-    "continuing that conversation rather than as a new question - \"explain "
-    "that again\" means the thing you just said. Do not repeat an earlier "
+    'in this chat, oldest first, where "them" is the person you are talking '
+    'to and "you" is your own earlier reply. Read a short follow-up as '
+    'continuing that conversation rather than as a new question - "explain '
+    'that again" means the thing you just said. Do not repeat an earlier '
     "answer back at them; answer what they have just asked."
 )
 

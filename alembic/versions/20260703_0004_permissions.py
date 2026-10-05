@@ -189,9 +189,7 @@ def upgrade() -> None:
         "admin_invitations",
         ["user_id"],
         unique=True,
-        postgresql_where=sa.text(
-            "accepted_at IS NULL AND revoked_at IS NULL"
-        ),
+        postgresql_where=sa.text("accepted_at IS NULL AND revoked_at IS NULL"),
     )
 
 

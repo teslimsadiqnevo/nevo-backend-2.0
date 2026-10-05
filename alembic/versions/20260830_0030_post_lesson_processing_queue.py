@@ -114,7 +114,7 @@ def upgrade() -> None:
         sa.Column(
             "action_targets",
             postgresql.JSONB(),
-            server_default=sa.text("'[\"view_student\", \"open_recommendation\"]'::jsonb"),
+            server_default=sa.text('\'["view_student", "open_recommendation"]\'::jsonb'),
             nullable=False,
         ),
     )
@@ -153,8 +153,7 @@ def upgrade() -> None:
         sa.Column("processed_at", sa.DateTime(timezone=True)),
     )
     op.execute(
-        "UPDATE post_lesson_processing SET processed_at = completed_at "
-        "WHERE status = 'completed'"
+        "UPDATE post_lesson_processing SET processed_at = completed_at WHERE status = 'completed'"
     )
     op.create_index(
         "ix_post_lesson_processing_due",
@@ -163,12 +162,8 @@ def upgrade() -> None:
     )
     op.alter_column("post_lesson_processing", "status", server_default="pending")
     op.alter_column("post_lesson_processing", "attempt_count", server_default="0")
-    op.alter_column(
-        "post_lesson_processing", "profile_updated", server_default=sa.text("false")
-    )
-    op.alter_column(
-        "post_lesson_processing", "flags_evaluated", server_default=sa.text("false")
-    )
+    op.alter_column("post_lesson_processing", "profile_updated", server_default=sa.text("false"))
+    op.alter_column("post_lesson_processing", "flags_evaluated", server_default=sa.text("false"))
 
 
 def downgrade() -> None:

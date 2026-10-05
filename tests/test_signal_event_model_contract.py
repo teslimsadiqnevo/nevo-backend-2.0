@@ -54,6 +54,8 @@ def test_signal_event_type_enum_is_exact() -> None:
         "exit_attempt",
         "break_suggested",
         "break_taken",
+        # "Not now", which nothing could report. Ask B40.
+        "break_declined",
         "break_start",
         "break_end",
         "feeling_checkin",

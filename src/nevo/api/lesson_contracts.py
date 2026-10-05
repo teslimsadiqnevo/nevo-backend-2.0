@@ -256,6 +256,10 @@ class CalculationVariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     type: Literal["co_construction"] = "co_construction"
+    #: The concept this calculation is an instance of. Without it the solver
+    #: cannot ask for help about the idea a child is stuck on - only about
+    #: the sum in front of them. SCRUM-177, ask B25.
+    concept_id: UUID | None = Field(default=None, alias="conceptId")
     full_equation: str = Field(alias="fullEquation")
     expression: str
     #: What the whole problem comes to. Sent rather than left to be inferred

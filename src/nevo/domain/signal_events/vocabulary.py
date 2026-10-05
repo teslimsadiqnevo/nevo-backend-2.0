@@ -15,6 +15,11 @@ class SignalEventType(StrEnum):
     #: naming which offer they accepted. Sent at the moment of acceptance;
     #: BREAK_START and BREAK_END below carry how long it actually lasted.
     BREAK_TAKEN = "break_taken"
+    #: "Not now." Without this the engine had no way to know an offer had
+    #: been refused, so it could offer again a minute later - which is the
+    #: one response guaranteed to annoy a child who is concentrating.
+    #: ``{"trigger": ...}``, naming the offer they turned down. Ask B40.
+    BREAK_DECLINED = "break_declined"
     #: A break actually started and ended. break_suggested and break_taken say
     #: Nevo offered one and the child accepted; these two say how long it
     #: lasted, which is the part that tells you whether it helped.

@@ -32,7 +32,9 @@ ADDITION = (
 def upgrade() -> None:
     op.add_column(
         "lesson_sessions",
-        sa.Column("delivery_depth", sa.String(length=16), nullable=False, server_default="standard"),
+        sa.Column(
+            "delivery_depth", sa.String(length=16), nullable=False, server_default="standard"
+        ),
     )
     op.add_column(
         "lesson_sessions",
@@ -61,7 +63,11 @@ def upgrade() -> None:
             """
         ).bindparams(addition=ADDITION, name=NAME)
     )
-    op.execute(sa.text("UPDATE ai_prompt_templates SET active = false WHERE name = :name").bindparams(name=NAME))
+    op.execute(
+        sa.text("UPDATE ai_prompt_templates SET active = false WHERE name = :name").bindparams(
+            name=NAME
+        )
+    )
     op.execute(
         sa.text(
             """

@@ -26,9 +26,7 @@ ROLES = ("teacher", "parent")
 
 def upgrade() -> None:
     for value in INTENTS:
-        op.execute(
-            f"ALTER TYPE partner_inquiry_intent ADD VALUE IF NOT EXISTS '{value}'"
-        )
+        op.execute(f"ALTER TYPE partner_inquiry_intent ADD VALUE IF NOT EXISTS '{value}'")
     for value in ROLES:
         op.execute(f"ALTER TYPE partner_inquiry_role ADD VALUE IF NOT EXISTS '{value}'")
 

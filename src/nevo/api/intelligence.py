@@ -282,6 +282,10 @@ class ProactiveAdjustmentResponse(BaseModel):
     #: replied to, which meant the guided dialogue could not be built at all.
     #: Derived from guidedQuestions, which stays for now. Ask B19.
     guided_prompts: list["GuidedPrompt"] = Field(default_factory=list, alias="guidedPrompts")
+    #: The segment this is about. Always the one the request named, so a
+    #: client can stop inferring it - and if the engine ever means a
+    #: different one, it will say so here rather than silently. Ask B46.
+    segment_id: str | None = Field(default=None, alias="segmentId")
 
     @model_validator(mode="after")
     def _carry_what_the_action_needs(self) -> "ProactiveAdjustmentResponse":
@@ -301,6 +305,7 @@ class ProactiveAdjustmentResponse(BaseModel):
     def from_adjustment(
         cls,
         adjustment: ProactiveAdjustment,
+        segment_id: str | None = None,
     ) -> "ProactiveAdjustmentResponse":
         return cls(
             action=ProactiveAction(adjustment.action),
@@ -311,6 +316,7 @@ class ProactiveAdjustmentResponse(BaseModel):
                 GuidedPrompt(id=f"gq-{index}", prompt=question)
                 for index, question in enumerate(adjustment.guided_questions)
             ],
+            segmentId=segment_id or adjustment.segment_id,
             confidence=adjustment.confidence,
             trigger_signals=[
                 TriggerSignalResponse.from_signal(signal) for signal in adjustment.trigger_signals
@@ -375,7 +381,10 @@ class AdaptResponse(BaseModel):
             segments=[SegmentAdaptationResponse.from_segment(segment) for segment in plan.segments],
             break_suggestion=BreakSuggestionResponse.from_result(plan.break_suggestion),
             proactive_adjustment=(
-                ProactiveAdjustmentResponse.from_adjustment(plan.proactive_adjustment)
+                ProactiveAdjustmentResponse.from_adjustment(
+                    plan.proactive_adjustment,
+                    segment_id=plan.proactive_adjustment.segment_id,
+                )
                 if plan.proactive_adjustment is not None
                 else None
             ),

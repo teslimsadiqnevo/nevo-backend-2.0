@@ -18,6 +18,7 @@ from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.ask_nevo import router as ask_nevo_router
 from nevo.api.auth import router as auth_router
 from nevo.api.billing import router as billing_router
+from nevo.api.client_errors import router as client_errors_router
 from nevo.api.consent import router as consent_router
 from nevo.api.content import router as content_router
 from nevo.api.docs import (
@@ -351,6 +352,7 @@ app.include_router(admin_router)
 app.include_router(ai_gateway_router)
 app.include_router(age_check_router)
 app.include_router(ask_nevo_router)
+app.include_router(client_errors_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
 app.include_router(consent_router)

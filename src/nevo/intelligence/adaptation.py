@@ -196,7 +196,11 @@ def rule_based_adaptation_plan(
         segments=segments,
         break_suggestion=break_suggestion,
         proactive_adjustment=_servable_adjustment(
-            _proactive_adjustment(signals=request.signals, profile=profile),
+            _proactive_adjustment(
+                signals=request.signals,
+                profile=profile,
+                segment=_current_segment(request),
+            ),
             request=request,
         ),
         modality_suggestion=_modality_suggestion(
@@ -574,15 +578,80 @@ def _current_segment(request: AdaptationRequest) -> ContentSegment | None:
     return next((item for item in request.segments if item.id == segment_id), None)
 
 
+#: Wrong answers in a row before the engine offers help on this segment.
+#: Two rather than one: one wrong answer is ordinary and being helped after it
+#: teaches a child that getting something wrong summons an adult.
+ERRORS_BEFORE_A_HINT = 2
+
+#: And before it steps them through instead. Reached when a child has gone
+#: wrong repeatedly *and* gone back over the segment - they have already tried
+#: the thing a hint would suggest, so the next rung is questions rather than
+#: another nudge.
+ERRORS_BEFORE_STEPPING_THROUGH = 3
+
+
+def _stuck_adjustment(
+    *,
+    signals: RuntimeSignals,
+    segment: ContentSegment | None,
+    confidence: float,
+    evidence: tuple[TriggerSignal, ...],
+) -> ProactiveAdjustment | None:
+    """Help a child who is stuck on this segment, where we have help to give.
+
+    offer_hint and show_socratic_panel were in the engine's list and nothing
+    ever returned them, so a struggling child got neither - and the one hint
+    the product does hold, on a calculation step, was rendered by the solver
+    and never offered by the engine. Ask B18.
+
+    Returns nothing where the segment carries no hints and no questions,
+    which is every explanatory segment today. An action with nothing behind
+    it is not an action.
+    """
+
+    if segment is None or signals.consecutive_errors < ERRORS_BEFORE_A_HINT:
+        return None
+    stepping_through = (
+        signals.consecutive_errors >= ERRORS_BEFORE_STEPPING_THROUGH
+        or signals.replay_count_on_segment >= 1
+    )
+    if stepping_through and segment.guided_questions:
+        return ProactiveAdjustment(
+            action="show_socratic_panel",
+            reason="Several wrong answers after going back over this part.",
+            confidence=confidence,
+            trigger_signals=evidence,
+            guided_questions=segment.guided_questions,
+        )
+    if segment.hints:
+        return ProactiveAdjustment(
+            action="offer_hint",
+            reason="Two wrong answers in a row on this part.",
+            confidence=confidence,
+            trigger_signals=evidence,
+            hint=segment.hints[0],
+        )
+    return None
+
+
 def _proactive_adjustment(
     *,
     signals: RuntimeSignals,
     profile: LearnerProfileSnapshot,
+    segment: ContentSegment | None = None,
 ) -> ProactiveAdjustment | None:
     evidence = _trigger_signals(signals=signals, profile=profile)
     confidence = _combined_confidence(evidence)
     if not _evidence_allows_adaptation(signals=signals, evidence=evidence):
         return None
+    # Help on this segment comes before anything that changes the lesson:
+    # a child stuck on one step wants the step explained, not the whole
+    # lesson simplified around them.
+    stuck = _stuck_adjustment(
+        signals=signals, segment=segment, confidence=confidence, evidence=evidence
+    )
+    if stuck is not None:
+        return stuck
     evidence_by_category = _evidence_by_category(evidence)
     if "comprehension" in evidence_by_category and {
         "engagement",

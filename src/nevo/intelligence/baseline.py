@@ -5,6 +5,8 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from statistics import fmean
 
+from nevo.domain.intelligence.vocabulary import ScaffoldingLevel
+
 
 def build_baseline_profile(
     *, session_id: str, features: Iterable[Mapping[str, object]]
@@ -62,7 +64,15 @@ def build_baseline_profile(
             "attentionWindowMinutes": round(attention_minutes),
         },
         "support": {
-            "initialScaffoldLevel": "partial" if accuracy >= 0.7 else "full",
+            # Real ScaffoldingLevel values. This emitted "partial" and
+            # "full", which are not in that enum and never have been - so the
+            # one setting that says how much help a child starts with could
+            # not be read against the ladder it belongs to. Ask B24.
+            "initialScaffoldLevel": (
+                ScaffoldingLevel.STANDARD.value
+                if accuracy >= 0.7
+                else ScaffoldingLevel.STRONG.value
+            ),
             "comprehensionCheckInterval": 2 if working_memory <= 2 else 3,
         },
         "generatedFromBaselineAt": now,
@@ -76,3 +86,64 @@ def _normalise_ratio(value: float) -> float:
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
+
+
+#: Conditions a baseline trial can belong to. Reported per trial so the
+#: breakdown is derived here rather than on the device, which is the whole
+#: point of taking trials instead of aggregates. SCRUM-175, ask B9.
+TRIAL_CONDITIONS = ("congruent", "incongruent", "dot_ratio", "reading_mode")
+
+
+def reduce_trials(
+    trials: Iterable[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Turn raw per-trial results into the aggregate features the engine wants.
+
+    The device was doing this: it marked each trial against an answer key it
+    held, averaged the results and sent a vector. That put a measure of a
+    child in the client's hands, and the architecture forbids it - so the
+    trials arrive as they happened and the arithmetic is done here.
+
+    One feature row per dimension, plus one per condition where trials carry
+    one, which is what makes a congruency or dot-ratio breakdown possible at
+    all. Trials themselves are not kept: the reduction is what the engine
+    reads, and holding sixty raw trials per child earns nothing.
+    """
+
+    from collections import defaultdict
+
+    buckets: dict[tuple[str, str | None], list[Mapping[str, object]]] = defaultdict(list)
+    for trial in trials:
+        dimension = str(trial.get("dimension") or "unknown").casefold()
+        condition = trial.get("condition")
+        buckets[(dimension, str(condition).casefold() if condition else None)].append(trial)
+
+    features: list[dict[str, object]] = []
+    for (dimension, condition), rows in sorted(
+        buckets.items(), key=lambda item: (item[0][0], item[0][1] or "")
+    ):
+        correct = [bool(row.get("correct")) for row in rows]
+        times = [
+            float(value)
+            for row in rows
+            if isinstance(value := row.get("responseTimeMs"), int | float)
+        ]
+        feature: dict[str, object] = {
+            "dimension": dimension,
+            f"{dimension}_accuracy": (sum(correct) / len(correct)) if correct else 0.0,
+            f"{dimension}_trials": len(rows),
+        }
+        if times:
+            ordered = sorted(times)
+            middle = len(ordered) // 2
+            feature[f"{dimension}_mean_response_ms"] = sum(times) / len(times)
+            # The median as well as the mean: one slow trial from a child who
+            # looked away drags a mean of twenty and says nothing true.
+            feature[f"{dimension}_median_response_ms"] = (
+                ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+            )
+        if condition:
+            feature["condition"] = condition
+            feature[f"{dimension}_{condition}_accuracy"] = feature[f"{dimension}_accuracy"]
+        features.append(feature)
+    return features

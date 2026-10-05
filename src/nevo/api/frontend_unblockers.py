@@ -88,6 +88,7 @@ from nevo.db.models.frontend_support import (
     PasswordResetToken,
 )
 from nevo.db.models.learner_profile import LearnerProfile
+from nevo.db.models.probe import ProbeItem
 from nevo.db.models.product import LessonModule
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
@@ -109,7 +110,7 @@ from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
     SignalEventType,
 )
-from nevo.intelligence.baseline import build_baseline_profile
+from nevo.intelligence.baseline import build_baseline_profile, reduce_trials
 from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.notifications.links import password_reset_url
@@ -377,6 +378,33 @@ class BaselineSubmitRequest(BaseModel):
 
     session_id: str = Field(alias="sessionId", min_length=1, max_length=120)
     features: list[dict[str, object]] = Field(default_factory=list, max_length=500)
+
+
+class BaselineTrial(BaseModel):
+    """One trial, as it happened. Not marked, not averaged. Ask B9."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    dimension: str = Field(min_length=1, max_length=60)
+    #: congruent, incongruent, a dot ratio, a reading mode - whatever this
+    #: trial varied. The breakdown by condition is derived from these rather
+    #: than computed on the device.
+    condition: str | None = Field(default=None, max_length=60)
+    #: What the child picked. Marked on this side.
+    response: str | None = Field(default=None, max_length=200)
+    #: Whether it was right. Accepted for now because some probe items are
+    #: generated on the device and we hold no key for them; where an item came
+    #: from the probe bank the server has the answer and marks it itself.
+    correct: bool | None = None
+    response_time_ms: int | None = Field(default=None, alias="responseTimeMs", ge=0, le=600_000)
+    probe_item_id: UUID | None = Field(default=None, alias="probeItemId")
+
+
+class BaselineTrialsRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(alias="sessionId", min_length=1, max_length=120)
+    trials: list[BaselineTrial] = Field(min_length=1, max_length=600)
 
 
 class BaselineSubmitResponse(BaseModel):
@@ -1596,6 +1624,77 @@ async def send_message(
         senderName=_display_name(user),
         content=message.content,
         createdAt=message.created_at,
+    )
+
+
+@router.post(
+    "/api/baseline/trials",
+    response_model=BaselineSubmitResponse,
+    tags=["intelligence"],
+)
+async def submit_baseline_trials(
+    payload: BaselineTrialsRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> BaselineSubmitResponse:
+    """Take the baseline as it happened and reduce it here. Ask B9.
+
+    ``/api/baseline/submit`` takes a vector the device has already computed:
+    accuracy, mean response time, spans, each marked against an answer key the
+    device held. That is a measure of a child decided on the child's own
+    tablet, and the architecture forbids it.
+
+    This takes the trials instead. Where a trial names an item from the probe
+    bank, it is marked here against the stored answer and whatever the client
+    said about correctness is ignored. The arithmetic - accuracy, mean and
+    median response time, and the per-condition breakdown - is done on this
+    side, which is also the only way a congruency or dot-ratio split can be
+    trusted.
+
+    The trials themselves are not kept. The reduction is what the engine
+    reads, and holding six hundred raw trials per child earns nothing.
+    """
+
+    marked: list[dict[str, object]] = []
+    item_ids = [trial.probe_item_id for trial in payload.trials if trial.probe_item_id]
+    answers: dict[UUID, str] = {}
+    if item_ids:
+        rows = await session.execute(
+            select(ProbeItem.id, ProbeItem.correct_option).where(ProbeItem.id.in_(item_ids))
+        )
+        answers = {row[0]: str(row[1]) for row in rows.all()}
+    for trial in payload.trials:
+        correct = trial.correct
+        expected = answers.get(trial.probe_item_id) if trial.probe_item_id else None
+        if expected is not None:
+            # We hold the answer, so the client's verdict is not consulted.
+            correct = (trial.response or "").strip().casefold() == expected.strip().casefold()
+        marked.append(
+            {
+                "dimension": trial.dimension,
+                "condition": trial.condition,
+                "correct": bool(correct),
+                "responseTimeMs": trial.response_time_ms,
+            }
+        )
+    features = reduce_trials(marked)
+    baseline_profile, engine_config = build_baseline_profile(
+        session_id=payload.session_id,
+        features=features,
+    )
+    await session.execute(
+        update(User)
+        .where(User.id == principal.user_id)
+        .values(baseline_profile=baseline_profile, engine_config=engine_config)
+    )
+    await session.commit()
+    return BaselineSubmitResponse(
+        status="stored",
+        # The number of reduced features, not the number of trials sent: the
+        # trials are the input and this is what the engine actually reads.
+        featureCount=len(features),
+        baselineProfile=baseline_profile,
+        engineConfig=engine_config,
     )
 
 

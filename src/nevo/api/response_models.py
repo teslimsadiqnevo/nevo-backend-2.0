@@ -27,11 +27,13 @@ from nevo.domain.accounts.vocabulary import (
 from nevo.domain.attention_flags.vocabulary import AttentionFlagType
 from nevo.domain.consent.vocabulary import ParentRightType
 from nevo.domain.intelligence.vocabulary import (
+    AccommodationType,
     AssignmentStatus,
     ClassInsightState,
     ContentParseStatus,
     LessonContentType,
     LessonSourceType,
+    ScaffoldingLevel,
     SegmentReviewReason,
     UploadStage,
     UploadStatus,
@@ -268,11 +270,31 @@ class StudentMoveResponse(CamelResponse):
     class_id: UUID
 
 
-class PinIssueResponse(CamelResponse):
+class PinClearedResponse(CamelResponse):
+    """A child's PIN was cleared. Nobody was told what it used to be.
+
+    This used to generate a four-digit PIN and return it, so an adult both
+    chose a child's credential and knew it. SCRUM-216 settles that nobody
+    except the child ever sets a PIN, and an adult already linked to the child
+    can only clear one: a reset needs proof the person asking owns the
+    account, and nothing available to a child supplies that - no email, no
+    phone, and every enrolment fact is known to the children sitting beside
+    them. So any self-service reset is also a route into a classmate's
+    account, and a child signed in as a classmate teaches the engine from
+    somebody else's behaviour.
+
+    The teacher is not choosing a credential. They are answering the one
+    question a machine cannot answer about a child with no email: whether
+    this is really her.
+    """
+
     student_id: UUID
-    pin: str
-    issued_at: datetime
-    must_share_securely: bool
+    cleared_at: datetime
+    #: True always, and stated rather than implied: the child sets their own
+    #: PIN at their next sign-in and cannot reach a lesson before they do.
+    child_sets_next: bool = True
+    #: How many digits the child will be asked for, so the length travels with
+    #: the PIN rather than being hardcoded in each screen. SCRUM-179.
     pin_length: Literal[4] = 4
 
 
@@ -530,6 +552,15 @@ class LessonRerouteResponse(CamelResponse):
     reason: Literal["nothing_landed", "not_attempted"]
 
 
+class ConceptOutcomeResponse(CamelResponse):
+    """One concept, and how the check-in went on it."""
+
+    concept_id: UUID | None = None
+    concept_name: str
+    asked: int
+    correct: int
+
+
 class LessonProgressResponse(CamelResponse):
     lesson_id: UUID
     status: LessonCompletionStatus
@@ -540,6 +571,14 @@ class LessonProgressResponse(CamelResponse):
         None
     )
     reroute: LessonRerouteResponse | None = None
+    #: What the check-in actually showed, per concept. Empty when the child
+    #: answered nothing, which is a different thing from getting nothing
+    #: right and is why these are lists rather than counts. Ask B26.
+    mastered_concepts: list[ConceptOutcomeResponse] = Field(default_factory=list)
+    revisit_concepts: list[ConceptOutcomeResponse] = Field(default_factory=list)
+    #: A sentence for the result screen, derived from the two lists above so
+    #: it cannot disagree with them. Empty when there is nothing to say.
+    result_note: str = ""
 
 
 class LessonQuestionAttemptResponse(CamelResponse):
@@ -955,11 +994,84 @@ class OutcomesResponse(CamelResponse):
     outcomes: list[OutcomePeriodResponse]
 
 
+class EngineReadingConfig(CamelResponse):
+    """How fast this child reads, and how much text to put in front of them."""
+
+    target_words_per_minute: int = 120
+    segment_word_target: int = 180
+
+
+class EnginePacingConfig(CamelResponse):
+    """How long to wait before reading a pause as a pause."""
+
+    response_time_target_ms: int = 2_500
+    attention_window_minutes: int = 12
+
+
+class EngineSupportConfig(CamelResponse):
+    """Where the support ladder starts for this child."""
+
+    initial_scaffold_level: ScaffoldingLevel = ScaffoldingLevel.STANDARD
+    #: Segments between comprehension checks. Closer together for a child the
+    #: baseline put at the lower end of working memory.
+    comprehension_check_interval: int = 3
+    #: True when the number accommodation is active for this child: every
+    #: calculation is worked a step at a time and a bare answer is never the
+    #: first thing shown. Ask B21.
+    #:
+    #: The accommodation was being inferred and reported and nothing acted on
+    #: it, while the staff-facing copy said "Nevo works through number
+    #: problems a step at a time" - which was not true of anything the engine
+    #: did. This is the directive that makes the sentence true.
+    number_problems_step_by_step: bool = False
+    #: True when the reading accommodation is active: text arrives in shorter
+    #: pieces and narration is offered rather than buried.
+    shorter_text_blocks: bool = False
+
+
+class EngineConfig(CamelResponse):
+    """The engine's settings for one child, typed rather than a loose bag.
+
+    It was ``dict[str, object]``, so a client could read it and had no way to
+    know what was in it or when a key disappeared. The shape has been stable
+    since it was written; this states it. Ask B24.
+    """
+
+    version: int = 1
+    reading: EngineReadingConfig = Field(default_factory=EngineReadingConfig)
+    pacing: EnginePacingConfig = Field(default_factory=EnginePacingConfig)
+    support: EngineSupportConfig = Field(default_factory=EngineSupportConfig)
+    generated_from_baseline_at: datetime | None = None
+
+
 class EngineConfigResponse(CamelResponse):
     student_id: UUID
     configured: bool
-    engine_config: dict[str, object]
+    engine_config: EngineConfig
     baseline_version: int | None
+
+
+class SessionStateResponse(CamelResponse):
+    """Everything a lesson needs at the moment it starts. Ask B24.
+
+    One read instead of three. Architecture v3.0 specifies this and it was
+    never built, so a client opening a lesson had to fetch the engine
+    configuration, the accommodations and the consent gate separately and
+    hope they agreed with each other.
+    """
+
+    student_id: UUID
+    #: False until a baseline has been taken. The engine still has defaults,
+    #: and they are returned rather than null, so a lesson can start.
+    configured: bool
+    engine_config: EngineConfig
+    baseline_version: int | None
+    #: What has been turned on for this child, by name. Empty is a real
+    #: answer and means no overrides, not that nobody looked.
+    accommodations: list[AccommodationType] = Field(default_factory=list)
+    #: Whether this child may learn at all right now, so the lesson does not
+    #: start and then stop.
+    consent_state: Literal["given", "pending", "withdrawn"] = "pending"
 
 
 class AdaptationResponse(CamelResponse):

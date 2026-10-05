@@ -147,7 +147,19 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
 }
 
 
-@router.post("/", response_model=AskResponse)
+@router.post(
+    "/",
+    response_model=AskResponse,
+    responses={
+        429: {
+            "description": (
+                "ask_nevo_daily_limit when the day's allowance is spent. The "
+                "body carries a message written for the reader and resetsAt, "
+                "so the screen can say when rather than only no."
+            ),
+        },
+    },
+)
 async def ask_nevo(
     payload: AskRequest,
     principal: PrincipalDependency,

@@ -3,9 +3,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.db.models.content import LessonSegment
 from nevo.domain.intelligence.vocabulary import (
     AccommodationType,
     AdaptationMode,
@@ -474,7 +476,26 @@ class ScaffoldAttemptRequest(BaseModel):
     student_id: UUID = Field(alias="studentId")
     concept_id: UUID = Field(alias="conceptId")
     problem_id: str = Field(alias="problemId", min_length=1, max_length=120)
-    response_correct: bool = Field(alias="responseCorrect")
+    #: Where the problem came from, so the server can find the answer rather
+    #: than being told the mark. Send these and leave responseCorrect out.
+    #: Ask B27.
+    lesson_id: UUID | None = Field(default=None, alias="lessonId")
+    segment_id: UUID | None = Field(default=None, alias="segmentId")
+    #: What the child actually picked or typed. Marked here against the stored
+    #: calculation, which is where the answer lives.
+    answer: str | None = Field(default=None, max_length=400)
+    #: The older shape. A client deciding whether a child was right is the
+    #: client deciding a measure, so it is accepted only where the server has
+    #: no answer of its own to mark against - a problem generated on the
+    #: device, which scaffolded practice still does for some concepts.
+    response_correct: bool | None = Field(default=None, alias="responseCorrect")
+
+    @model_validator(mode="after")
+    def _something_to_mark(self) -> "ScaffoldAttemptRequest":
+        if self.answer is None and self.response_correct is None:
+            raise ValueError("Send answer with lessonId and segmentId, or responseCorrect.")
+        return self
+
     scaffold_intensity: ScaffoldIntensity | None = Field(
         default=None,
         alias="scaffoldIntensity",
@@ -671,19 +692,68 @@ async def current_scaffold_state(
     return ScaffoldStateResponse.from_state(state)
 
 
+async def _mark_scaffold_answer(request: Request, payload: ScaffoldAttemptRequest) -> bool:
+    """Mark the child's answer against the stored calculation, if we hold one.
+
+    Falls back to the client's verdict only when there is nothing on this side
+    to mark against, which is the same rule the lesson attempts endpoint
+    follows.
+
+    The session is opened here rather than injected into the route, so that an
+    attempt needing no marking - and a caller with no business making one -
+    does not depend on the database being reachable. Injected, this route
+    answered 503 to a request it should have refused with 403.
+    """
+
+    if payload.answer is None or payload.lesson_id is None or payload.segment_id is None:
+        return bool(payload.response_correct)
+    sessions = getattr(request.app.state, "db_sessions", None)
+    if sessions is None:
+        return bool(payload.response_correct)
+    async with sessions() as session:
+        segment = await session.scalar(
+            select(LessonSegment).where(
+                LessonSegment.id == payload.segment_id,
+                LessonSegment.lesson_id == payload.lesson_id,
+            )
+        )
+    variant = (segment.calculation_variant or {}) if segment is not None else {}
+    expected = str(variant.get("answer") or "").strip()
+    if not expected:
+        return bool(payload.response_correct)
+    return payload.answer.strip().casefold() == expected.casefold()
+
+
 @router.post("/scaffolds/attempt", response_model=ScaffoldDecisionResponse)
 async def record_scaffold_attempt(
     payload: ScaffoldAttemptRequest,
+    request: Request,
     principal: PrincipalDependency,
     service: ScaffoldFadingDependency,
 ) -> ScaffoldDecisionResponse:
+    """Record one scaffolded practice attempt, and mark it here where we can.
+
+    The scaffold log took ``responseCorrect`` from the device, so for this one
+    surface the client decided whether a child had got it right - and that
+    decision feeds the scaffold ladder, which is a measure of the child. Ask
+    B27.
+
+    So the child's own answer is now accepted, and where the attempt names a
+    lesson segment we hold, it is marked against the answer stored on that
+    segment's calculation. Where it does not - scaffolded practice still
+    generates some problems on the device - ``responseCorrect`` is still
+    taken, because refusing it would be refusing the attempt rather than
+    marking it, and losing the evidence is worse than the client's verdict.
+    """
+
     _ensure_student_or_staff(principal=principal, student_id=payload.student_id)
+    correct = await _mark_scaffold_answer(request, payload)
     decision = await service.record_attempt(
         ScaffoldProblemAttempt(
             student_id=payload.student_id,
             concept_id=payload.concept_id,
             problem_id=payload.problem_id,
-            response_correct=payload.response_correct,
+            response_correct=correct,
             scaffold_intensity=payload.scaffold_intensity,
             response_time_ms=payload.response_time_ms,
             expected_response_time_ms=payload.expected_response_time_ms,

@@ -968,6 +968,7 @@ async def save_lesson_progress(
             )
         else:
             intelligence["status"] = "deferred"
+    mastered, revisit = await _check_in_outcome(session, lesson_session.id)
     return {
         "lessonId": str(lesson_id),
         "status": progress.status,
@@ -976,7 +977,89 @@ async def save_lesson_progress(
         "intelligence": intelligence,
         "resultState": payload.result_state,
         "reroute": reroute,
+        "masteredConcepts": mastered,
+        "revisitConcepts": revisit,
+        "resultNote": _result_note(mastered, revisit),
     }
+
+
+#: A concept counts as landed when the child got every question on it right.
+#: Anything less is a revisit: "mostly right" on the idea the lesson was about
+#: is not a reason to move on, and the child sees this sentence rather than a
+#: score, so a near miss reading as a pass would be a lie told kindly.
+async def _check_in_outcome(
+    session: DatabaseSession, session_id: UUID
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Group this session's check-in answers by concept. Ask B26.
+
+    These three fields were in the contract and nothing ever set them, so the
+    "From the check-in" part of the result screen has only ever shown sample
+    content. Mastery cannot be worked out on the client - it has neither the
+    answer key nor the other attempts - so it comes from here.
+    """
+
+    rows = list(
+        await session.scalars(
+            select(LessonQuestionAttempt).where(
+                LessonQuestionAttempt.session_id == session_id,
+                LessonQuestionAttempt.source == "checkpoint",
+            )
+        )
+    )
+    grouped: dict[tuple[str | None, str], dict[str, int]] = {}
+    for row in rows:
+        snapshot = row.question_snapshot or {}
+        concept_id = snapshot.get("conceptId")
+        name = str(snapshot.get("conceptName") or "").strip()
+        if not name:
+            # No concept on the question, so nothing to attribute the answer
+            # to. Counted nowhere rather than lumped under a made-up heading.
+            continue
+        key = (str(concept_id) if concept_id else None, name)
+        tally = grouped.setdefault(key, {"asked": 0, "correct": 0})
+        tally["asked"] += 1
+        if row.correct:
+            tally["correct"] += 1
+
+    mastered: list[dict[str, object]] = []
+    revisit: list[dict[str, object]] = []
+    for (concept_id, name), tally in sorted(grouped.items(), key=lambda item: item[0][1]):
+        outcome: dict[str, object] = {
+            "conceptId": concept_id,
+            "conceptName": name,
+            "asked": tally["asked"],
+            "correct": tally["correct"],
+        }
+        if tally["correct"] == tally["asked"]:
+            mastered.append(outcome)
+        else:
+            revisit.append(outcome)
+    return mastered, revisit
+
+
+def _result_note(mastered: list[dict[str, object]], revisit: list[dict[str, object]]) -> str:
+    """One sentence, derived from the lists so it cannot contradict them.
+
+    Written to a child. It names what they have rather than what they lack,
+    and where something needs another look it says so without ranking them
+    against anybody.
+    """
+
+    if not mastered and not revisit:
+        return ""
+    kept = [str(item["conceptName"]) for item in mastered]
+    again = [str(item["conceptName"]) for item in revisit]
+    if kept and not again:
+        return f"You had every question right on {_join(kept)}."
+    if again and not kept:
+        return f"{_join(again).capitalize()} is worth another look."
+    return f"You had {_join(kept)} right. {_join(again).capitalize()} is worth another look."
+
+
+def _join(names: list[str]) -> str:
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 @router.get("/students/me/dashboard", response_model=StudentDashboardResponse)

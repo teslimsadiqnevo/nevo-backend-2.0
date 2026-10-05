@@ -798,6 +798,25 @@ async def _send_email_confirmation(
     await send_confirmation(mailer, to=to, token=token, admin_name=admin_name)
 
 
+#: A role that is no longer invitable but may sit on a row created before
+#: SCRUM-215. Refused loudly wherever it is met, rather than accepted and
+#: quietly doing nothing: a stale caller should fail where it can be seen.
+def _refuse_student_invitation(role: str) -> None:
+    if role != UserRole.STUDENT.value:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "student_not_invitable",
+            "message": (
+                "A child is never sent a link. They appear on the roster when "
+                "the school uploads it and sign in with their Student ID, the "
+                "school code and a PIN."
+            ),
+        },
+    )
+
+
 async def _create_invitation(
     payload: InvitationRequest,
     actor: User,
@@ -937,6 +956,9 @@ async def resend_invite(
     record = await session.get(SchoolInvitation, invitation_id)
     if record is None or record.school_id != actor.school_id or record.status != "pending":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
+    # The role is a stored string, so a row created before SCRUM-215 can still
+    # be reached here even though none can be created now.
+    _refuse_student_invitation(record.role)
     token = secrets.token_urlsafe(32)
     record.token_digest = _digest(token)
     record.expires_at = datetime.now(UTC) + timedelta(days=14)
@@ -1020,14 +1042,15 @@ async def _join_record(token: str, session: DatabaseSession) -> SchoolInvitation
 @router.get("/join/{token}", response_model=JoinInspectionResponse)
 async def inspect_join(token: str, session: DatabaseSession) -> dict[str, object]:
     record = await _join_record(token, session)
+    _refuse_student_invitation(record.role)
     school = await session.get(School, record.school_id)
     return {
         "status": "valid",
         "role": record.role,
         "schoolName": school.name if school else None,
         "expiresAt": record.expires_at,
-        # The link already knows who it was sent to, so the screen greets them
-        # instead of asking a child to type a name we hold.
+        # The link already knows who it was sent to, so the screen greets an
+        # invited teacher by name instead of asking for one we hold.
         "firstName": record.first_name,
         "lastName": record.last_name,
     }
@@ -1047,6 +1070,11 @@ async def accept_join(
     auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
     record = await _join_record(token, session)
+    # The child branch below is unreachable now: no student invitation can be
+    # created, and the historical ones are reported in SCRUM-215 rather than
+    # resurrected. Refused rather than deleted, so a stale link fails with a
+    # reason instead of quietly creating a child account nobody asked for.
+    _refuse_student_invitation(record.role)
     if record.role == "teacher" and not (payload.password and record.email):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

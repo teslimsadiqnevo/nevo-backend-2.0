@@ -56,6 +56,16 @@ class ContentSegment:
     #: engine will not return an action it knows would arrive as an
     #: instruction the client cannot carry out.
     available_depths: tuple[str, ...] | None = None
+    #: Help this segment can actually offer, in the order it should be given.
+    #:
+    #: Today these come from a calculation's steps, which are the only place
+    #: in the product that holds hint text and a sequence of questions leading
+    #: to an answer. Empty for an ordinary explanatory segment, and the engine
+    #: will not return offer_hint or show_socratic_panel for one - an action
+    #: whose payload the client cannot render is an instruction it cannot
+    #: carry out. Ask B18.
+    hints: tuple[str, ...] = ()
+    guided_questions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

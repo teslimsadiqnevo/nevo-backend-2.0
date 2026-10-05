@@ -17,16 +17,18 @@ from nevo.api.response_models import (
     AdaptationResponse,
     ClassInsightsNarrativeResponse,
     ConversationEvidenceResponse,
+    EngineConfig,
     EngineConfigResponse,
     LessonClassProgressResponse,
     MisconceptionResponse,
+    SessionStateResponse,
     StudentProgressResponse,
     StudentSessionDetailResponse,
     StudentSessionListResponse,
     TeacherHomeResponse,
     TransformationMetricsResponse,
 )
-from nevo.db.models.account import Class, StudentClassEnrollment, User
+from nevo.db.models.account import Class, ConsentRecord, StudentClassEnrollment, User
 from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.db.models.attention_flag import AttentionFlag
 from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
@@ -35,8 +37,9 @@ from nevo.db.models.mastery import StudentConceptMastery
 from nevo.db.models.product import LessonProgress
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
-from nevo.domain.accounts.vocabulary import UserRole
-from nevo.domain.intelligence.vocabulary import ClassInsightState
+from nevo.domain.accounts.vocabulary import ConsentStatus, UserRole
+from nevo.domain.consent.vocabulary import REQUIRED_LEARNING_CONSENT
+from nevo.domain.intelligence.vocabulary import AccommodationType, ClassInsightState
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 
 #: What the engine needs before it will call a week settled rather than
@@ -440,6 +443,88 @@ async def class_insights_narrative(
         "lookingAhead": ahead,
         "generatedAt": datetime.now(UTC),
     }
+
+
+@router.get("/session/state/{student_id}", response_model=SessionStateResponse)
+async def session_state(
+    student_id: UUID, principal: PrincipalDependency, session: DatabaseSession
+) -> SessionStateResponse:
+    """Everything a lesson needs at the moment it starts. Ask B24.
+
+    Architecture v3.0 specifies this read and it was never built, so a client
+    opening a lesson fetched the engine configuration, the accommodations and
+    the consent gate separately and hoped the three agreed. One read now, from
+    one moment, so they cannot disagree.
+
+    A child with no baseline yet gets ``configured: false`` and the engine's
+    defaults rather than nulls, because a lesson has to be able to start.
+    """
+
+    if principal.role != UserRole.STUDENT or principal.user_id != student_id:
+        raise HTTPException(status_code=404, detail="Student configuration not found")
+    student = await session.get(User, student_id)
+    if student is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+    stored = dict(student.engine_config or {})
+    consent_status = await session.scalar(
+        select(ConsentRecord.status).where(
+            ConsentRecord.subject_user_id == student_id,
+            ConsentRecord.consent_type == REQUIRED_LEARNING_CONSENT,
+        )
+    )
+    if consent_status is ConsentStatus.CONFIRMED:
+        consent_state: Literal["given", "pending", "withdrawn"] = "given"
+    elif consent_status is ConsentStatus.WITHDRAWN:
+        consent_state = "withdrawn"
+    else:
+        consent_state = "pending"
+    active = sorted(
+        {
+            accommodation
+            for name in _stored_accommodations(stored)
+            if (accommodation := _known_accommodation(str(name))) is not None
+        }
+    )
+    engine_config = EngineConfig.model_validate(stored) if stored else EngineConfig()
+    # The accommodations decide these two, so a client never has to work out
+    # what an accommodation means - it reads the directive and follows it.
+    engine_config.support.number_problems_step_by_step = AccommodationType.NUMERICAL in active
+    engine_config.support.shorter_text_blocks = AccommodationType.READING in active
+    return SessionStateResponse(
+        student_id=student_id,
+        configured=bool(stored),
+        # Validated through the typed model, so a stored config written by an
+        # older build is read against today's shape rather than passed on raw.
+        engine_config=engine_config,
+        baseline_version=(
+            version
+            if isinstance(version := (student.baseline_profile or {}).get("version"), int)
+            else None
+        ),
+        accommodations=active,
+        consent_state=consent_state,
+    )
+
+
+def _stored_accommodations(engine_config: dict[str, object]) -> list[object]:
+    """Whatever the stored config lists, as a list we can walk safely."""
+
+    held = engine_config.get("accommodations")
+    return list(held) if isinstance(held, list) else []
+
+
+def _known_accommodation(name: str) -> AccommodationType | None:
+    """An accommodation we recognise, or nothing.
+
+    A name we do not know is dropped rather than guessed at: an unrecognised
+    override rendered as a real one would tell a teacher a child has support
+    that nothing is actually applying.
+    """
+
+    try:
+        return AccommodationType(name)
+    except ValueError:
+        return None
 
 
 @router.get("/engine-config/student/{student_id}", response_model=EngineConfigResponse)

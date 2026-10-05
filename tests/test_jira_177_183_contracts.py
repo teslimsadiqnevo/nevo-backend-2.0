@@ -12,7 +12,11 @@ from nevo.api.product_auth import (
     SHARED_DEVICE_SHAPES,
 )
 from nevo.api.product_learning import ProgressWrite, save_lesson_progress
-from nevo.api.response_models import LessonProgressResponse, LessonSessionResponse, PinIssueResponse
+from nevo.api.response_models import (
+    LessonProgressResponse,
+    LessonSessionResponse,
+    PinClearedResponse,
+)
 from nevo.content_parsing.service import _validated_calculation_variant
 from nevo.db.base import Base
 
@@ -105,7 +109,10 @@ def test_lower_depth_route_is_typed_without_a_score() -> None:
 
 
 def test_pin_delivery_responses_carry_the_length() -> None:
-    assert PinIssueResponse.model_fields["pin_length"].default == 4
+    # PinIssueResponse is gone with the endpoint that issued a PIN to an
+    # adult. The length still travels, now on the clear. SCRUM-216.
+    assert PinClearedResponse.model_fields["pin_length"].default == 4
+    assert "pin" not in PinClearedResponse.model_fields
     assert "pin_length" in SessionResponse.model_fields
     assert "pin_change_required" in SessionResponse.model_fields
 

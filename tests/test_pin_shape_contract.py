@@ -78,19 +78,24 @@ def test_what_is_refused_is_refused_everywhere(pin: str) -> None:
             model.model_validate({"pin": pin, "method": "pin"})
 
 
-def test_an_administrators_generated_reset_is_four_digits() -> None:
+def test_an_administrator_no_longer_generates_a_pin_at_all() -> None:
     import inspect
 
-    from nevo.api.product_admin import issue_student_pin
+    from nevo.api.product_admin import clear_student_pin
 
-    assert "04d" in inspect.getsource(issue_student_pin)
+    # This used to mint four random digits and hand them to the adult who
+    # asked, so an adult both chose a child's credential and knew it. Nobody
+    # except the child ever sets a PIN now. SCRUM-216.
+    source = inspect.getsource(clear_student_pin)
+    assert "04d" not in source
+    assert "randbelow" not in source
+    assert "pin_hash = None" in source
+    # Four digits is still the shape the child sets and the door accepts.
     PinLoginRequest.model_validate({"schoolCode": "ABC", "loginIdentifier": "ada", "pin": "0000"})
 
 
 def test_a_legacy_six_digit_pin_can_only_unlock_for_migration() -> None:
-    PinLoginRequest.model_validate(
-        {"schoolCode": "ABC", "loginIdentifier": "ada", "pin": "123456"}
-    )
+    PinLoginRequest.model_validate({"schoolCode": "ABC", "loginIdentifier": "ada", "pin": "123456"})
     UnifiedLoginRequest.model_validate({"method": "pin", "pin": "123456"})
     for model in CHOOSERS:
         with pytest.raises(ValidationError):

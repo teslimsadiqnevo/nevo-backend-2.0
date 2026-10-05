@@ -362,6 +362,111 @@ async def _record(
     await session.commit()
 
 
+class StudentPinSetup(BaseModel):
+    """A child setting their own PIN, after an adult cleared the old one."""
+
+    model_config = CAMEL_CONFIG
+
+    school_code: str = Field(min_length=2, max_length=50)
+    admission_number: str = Field(min_length=1, max_length=60)
+    #: Four digits. The child chooses them; nobody else ever does.
+    pin: StudentPin
+
+
+@router.post("/pin", response_model=StudentEntrySession)
+async def set_own_pin(
+    payload: StudentPinSetup,
+    request: Request,
+    response: Response,
+    session: DatabaseSession,
+    auth_service: AuthServiceDependency,
+) -> StudentEntrySession:
+    """Set a PIN for a child who has none. SCRUM-216.
+
+    The missing half of the clear. A teacher can clear a child's PIN but can
+    never set one, so without this door a cleared child could identify
+    themselves and then had nowhere to go.
+
+    **Only reachable while the PIN is already cleared.** A child who has a PIN
+    is refused here and signs in through the ordinary door, so this cannot be
+    used to overwrite somebody else's credential: the window exists because an
+    adult who recognised the child deliberately opened it, and it closes the
+    moment a PIN is set.
+
+    Identity only, as the ticket puts it - the school code and the child's own
+    Student ID. That is the same pair the entry screen takes, throttled the
+    same three ways, and it is deliberately not a credential: the
+    authorisation here is the teacher's clear, not anything the child knows.
+    """
+
+    code = payload.school_code.strip().upper()
+    admission = payload.admission_number.strip()
+    identity = _digest(f"entry-pin:{code.casefold()}:{admission.casefold()}")
+    ip = _digest(client_ip(request))
+    school = _digest(f"entry-school:{code.casefold()}")
+    await _throttle(session, identity, ip, school)
+    response.headers["Cache-Control"] = "no-store"
+    student = await session.scalar(
+        select(User)
+        .join(School, School.id == User.school_id)
+        .where(
+            func.upper(School.school_code) == code,
+            User.role == UserRole.STUDENT,
+            func.lower(User.admission_number) == admission.casefold(),
+            User.status != UserStatus.DEACTIVATED,
+        )
+        .limit(1)
+    )
+    if student is None:
+        await _record(session, identity, ip, school, succeeded=False)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_MATCH)
+    if student.pin_hash is not None:
+        # Not a miss, so it is not counted as one, and it says plainly what to
+        # do: this child has a PIN and should use it.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "pin_already_set",
+                "message": (
+                    "This account already has a PIN. Sign in with it, or ask "
+                    "your teacher to clear it."
+                ),
+            },
+        )
+    if await age_check_blocks(session, student.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "age_check_pending",
+                "message": (
+                    "Nevo is checking something with your school. Try again in a day or two."
+                ),
+            },
+        )
+    if not await _has_consent(session, student.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "consent_pending",
+                "message": (
+                    "Nevo is waiting for a grown-up at home to say yes. Come back once they have."
+                ),
+            },
+        )
+    from nevo.api.product_auth import credential_hasher
+
+    student.pin_hash = credential_hasher().hash_pin(payload.pin)
+    student.auth_method = AuthMethod.PIN
+    student.status = UserStatus.ACTIVE
+    await _record(session, identity, ip, school, succeeded=True)
+    issued = await auth_service.issue_for_provisioned_user(student.id)
+    return StudentEntrySession(
+        user_id=student.id,
+        login_identifier=student.login_identifier,
+        session=SessionResponse.from_issued(issued),
+    )
+
+
 @router.post("/lookup", response_model=StudentEntryState)
 async def lookup_entry(
     payload: StudentEntryLookup,

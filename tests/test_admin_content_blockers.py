@@ -101,7 +101,10 @@ def test_the_parent_surface_is_in_the_contract() -> None:
 
     # The declared invite roles are the ones the flow actually creates. It
     # used to advertise five and accept two.
-    assert schemas["InvitableRole"]["enum"] == ["student", "teacher"]
+    # Teacher only. A child has no address and is never sent a link, so an
+    # endpoint accepting a student invitation could only mail nobody or mail a
+    # parent a child's join link. SCRUM-215.
+    assert schemas["InvitableRole"]["enum"] == ["teacher"]
 
     growth = schemas["GrowthNarrativeResponse"]["properties"]
     assert schemas["GrowthDimension"]["enum"] == [
@@ -125,9 +128,9 @@ def test_the_parent_surface_is_in_the_contract() -> None:
 
 
 def test_consent_completion_reports_the_copy_it_sent() -> None:
-    completion = app.openapi()["components"]["schemas"][
-        "ParentConsentCompletionResponse"
-    ]["properties"]
+    completion = app.openapi()["components"]["schemas"]["ParentConsentCompletionResponse"][
+        "properties"
+    ]
 
     assert "receiptSentTo" in completion
 
@@ -262,9 +265,9 @@ def test_requesting_a_code_never_says_whether_the_contact_is_known() -> None:
 
 
 def test_the_setup_screen_can_prefill_the_contact_the_school_holds() -> None:
-    invitation = app.openapi()["components"]["schemas"][
-        "ParentConsentInvitationResponse"
-    ]["properties"]
+    invitation = app.openapi()["components"]["schemas"]["ParentConsentInvitationResponse"][
+        "properties"
+    ]
 
     assert "parentContact" in invitation
     assert "parentContactMethod" in invitation

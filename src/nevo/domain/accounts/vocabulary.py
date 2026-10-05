@@ -7,9 +7,22 @@ class InvitableRole(StrEnum):
     A subset of UserRole on purpose. Administrators are created by school
     registration, and parents by the consent link - the only place the child
     they belong to is known.
+
+    A child is not invitable, and never was in practice. SCRUM-215.
+
+    A child has no email address: they are identified by their Student ID,
+    scoped by their school's four-character code, and authenticated by a PIN.
+    They appear on the roster when the school uploads it and they join through
+    their teacher, who reads the code out. Nothing is ever sent to a child.
+
+    So an endpoint accepting an invitation for a student could only do one of
+    two things - send mail to nobody, or send a child's join link to a
+    parent's address - and neither is a path anybody designed. The parent
+    consent link is unaffected: that is a parent path, tokenised per
+    parent-and-child pair, and it is the only link that goes out on a child's
+    behalf.
     """
 
-    STUDENT = "student"
     TEACHER = "teacher"
 
 

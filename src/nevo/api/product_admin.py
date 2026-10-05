@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -30,7 +30,7 @@ from nevo.api.response_models import (
     OpsFeedbackResponse,
     OpsOverviewResponse,
     PersonalSettingsResponse,
-    PinIssueResponse,
+    PinClearedResponse,
     SchoolOverviewResponse,
     SchoolResponse,
     StudentDetailResponse,
@@ -40,10 +40,10 @@ from nevo.api.response_models import (
     TeacherDetailResponse,
     TeacherSummaryResponse,
 )
-from nevo.auth.security import Argon2idCredentialHasher
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.auth import AuthSession
 from nevo.db.models.consent import ParentLink
+from nevo.db.models.export import StudentRecordEvent
 from nevo.db.models.frontend_support import Notification
 from nevo.db.models.product import (
     DpaAcceptance,
@@ -1182,39 +1182,59 @@ async def anonymize_student(
     await session.commit()
 
 
-@router.post("/students/{student_id}/pin/reset", response_model=PinIssueResponse)
-async def issue_student_pin(
+@router.post("/students/{student_id}/pin/clear", response_model=PinClearedResponse)
+async def clear_student_pin(
     student_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
-    request: Request,
 ) -> dict[str, object]:
-    actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
-    student = await session.get(User, student_id)
-    if (
-        student is None
-        or student.school_id != actor.school_id
-        or student.role is not UserRole.STUDENT
-    ):
+    """Clear a child's PIN so the child can set a new one. SCRUM-216.
+
+    A clear, not a reset. It never accepts a PIN, never returns one and never
+    generates one, so there is no code path by which an adult can learn or
+    choose a child's PIN.
+
+    Open to a teacher who takes one of that child's classes, as well as to an
+    administrator - it used to be administrators only, which meant the person
+    who can actually recognise the child could not help them. Scoped to that
+    teacher's own classes and not the whole school.
+
+    The residual risk in this model is a teacher clearing a PIN and setting
+    one themselves on the tablet before the child reaches it. Nothing in the
+    API can prevent that, so it is logged against the teacher who did it, with
+    the child and the time, which is what makes it visible rather than silent.
+    """
+
+    # Teachers included, and scoped by this helper to the classes they take.
+    student = await require_student_access(session, principal, student_id)
+    if student.role is not UserRole.STUDENT:
         raise HTTPException(status_code=404, detail="Student not found")
-    hasher = getattr(request.app.state, "credential_hasher", None)
-    if not isinstance(hasher, Argon2idCredentialHasher):
-        raise HTTPException(status_code=503, detail="Credential service unavailable")
-    pin = f"{secrets.randbelow(10_000):04d}"
-    student.pin_hash = hasher.hash_pin(pin)
-    student.auth_method = AuthMethod.PIN
+    actor = await actor_user(session, principal)
     now = datetime.now(UTC)
+    student.pin_hash = None
+    student.auth_method = AuthMethod.PIN
     await session.execute(
         update(AuthSession)
         .where(AuthSession.user_id == student.id, AuthSession.revoked_at.is_(None))
-        .values(revoked_at=now, revocation_reason="pin_reset")
+        .values(revoked_at=now, revocation_reason="pin_cleared")
+    )
+    session.add(
+        StudentRecordEvent(
+            student_id=student.id,
+            event_type="pin_cleared",
+            actor_user_id=actor.id,
+            payload={
+                "clearedBy": str(actor.id),
+                "clearedByRole": actor.role.value,
+                "clearedAt": now.isoformat(),
+            },
+        )
     )
     await session.commit()
     return {
         "studentId": str(student.id),
-        "pin": pin,
-        "issuedAt": now,
-        "mustShareSecurely": True,
+        "clearedAt": now,
+        "childSetsNext": True,
         "pinLength": 4,
     }
 

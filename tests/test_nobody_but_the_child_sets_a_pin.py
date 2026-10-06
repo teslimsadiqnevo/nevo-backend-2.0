@@ -86,8 +86,17 @@ def test_the_clear_is_logged_against_whoever_did_it() -> None:
     # The residual risk is a teacher clearing a PIN and setting one themselves
     # on the tablet before the child reaches it. Nothing in an API can prevent
     # that, so the log is what makes it visible rather than silent.
-    assert "StudentRecordEvent" in source
     assert "pin_cleared" in source
+    # In the auth audit log, with the logins. The student record events table
+    # is the IEP export trail - it has a foreign key to iep_exports and a
+    # native enum of four export values, so writing "pin_cleared" there was
+    # refused by the database and the whole call 500'd. The test that passed
+    # against that only checked the table name appeared in the source.
+    assert "AuthAuditEvent" in source
+    assert "StudentRecordEvent" not in source
+    # And it carries the class, which the ticket asks for alongside the child
+    # and the time.
+    assert "classIds" in source
 
 
 def test_the_child_has_a_door_to_set_their_own() -> None:

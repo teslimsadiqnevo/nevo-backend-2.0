@@ -41,9 +41,8 @@ from nevo.api.response_models import (
     TeacherSummaryResponse,
 )
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
-from nevo.db.models.auth import AuthSession
+from nevo.db.models.auth import AuthAuditEvent, AuthSession
 from nevo.db.models.consent import ParentLink
-from nevo.db.models.export import StudentRecordEvent
 from nevo.db.models.frontend_support import Notification
 from nevo.db.models.product import (
     DpaAcceptance,
@@ -1216,6 +1215,15 @@ async def clear_student_pin(
         raise HTTPException(status_code=404, detail="Student not found")
     actor = await actor_user(session, principal)
     now = datetime.now(UTC)
+    # SCRUM-216 asks the log to carry the class as well as the child and the
+    # time, so a clear can be read back against the teacher who takes them.
+    class_ids = list(
+        await session.scalars(
+            select(StudentClassEnrollment.class_id).where(
+                StudentClassEnrollment.student_id == student.id
+            )
+        )
+    )
     student.pin_hash = None
     student.auth_method = AuthMethod.PIN
     await session.execute(
@@ -1223,15 +1231,23 @@ async def clear_student_pin(
         .where(AuthSession.user_id == student.id, AuthSession.revoked_at.is_(None))
         .values(revoked_at=now, revocation_reason="pin_cleared")
     )
+    # The auth audit log, not the student record events table - that one is
+    # the IEP export trail, with a foreign key to iep_exports and a native
+    # enum of four export values, so "pin_cleared" was refused by the
+    # database and the whole call 500'd. A credential being cleared is an
+    # authentication event and belongs here with the logins.
     session.add(
-        StudentRecordEvent(
-            student_id=student.id,
+        AuthAuditEvent(
             event_type="pin_cleared",
-            actor_user_id=actor.id,
-            payload={
+            occurred_at=now,
+            # The child whose credential it was. The adult who did it is in
+            # the details, because this column is the account the event
+            # happened *to*, which is how every other row here reads.
+            user_id=student.id,
+            details={
                 "clearedBy": str(actor.id),
                 "clearedByRole": actor.role.value,
-                "clearedAt": now.isoformat(),
+                "classIds": [str(item) for item in class_ids],
             },
         )
     )

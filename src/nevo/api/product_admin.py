@@ -1205,9 +1205,14 @@ async def clear_student_pin(
     the child and the time, which is what makes it visible rather than silent.
     """
 
-    # Teachers included, and scoped by this helper to the classes they take.
-    student = await require_student_access(session, principal, student_id)
-    if student.role is not UserRole.STUDENT:
+    # A guard, not a lookup. require_student_access returns the *actor* - it
+    # answers "may this person touch that child", not "who is that child" -
+    # so reading its result as the student made role is not STUDENT true for
+    # every adult, and this endpoint 404'd for exactly the people it exists
+    # for. Caught by Olayinka, 6 October.
+    await require_student_access(session, principal, student_id)
+    student = await session.get(User, student_id)
+    if student is None or student.role is not UserRole.STUDENT:
         raise HTTPException(status_code=404, detail="Student not found")
     actor = await actor_user(session, principal)
     now = datetime.now(UTC)

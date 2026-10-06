@@ -58,6 +58,28 @@ def test_a_teacher_can_clear_for_their_own_class_only() -> None:
     assert "require_student_access" in source
 
 
+def test_the_access_check_is_a_guard_and_not_a_lookup() -> None:
+    """The child is fetched, not taken from the guard's return value.
+
+    require_student_access answers "may this person touch that child" and
+    returns the *actor*. Read as the student, ``role is not STUDENT`` was true
+    for every adult, so this endpoint 404'd for exactly the people it exists
+    for - no teacher or administrator in production could clear a PIN.
+
+    The original version of this test asserted only that the helper was
+    called, which it was, so it passed against a completely broken endpoint.
+    This asserts the shape that was actually wrong.
+    """
+
+    source = inspect.getsource(clear_student_pin)
+
+    assert "await require_student_access(session, principal, student_id)" in source
+    assert "= await require_student_access" not in source
+    # The student comes from the database, by the id in the path.
+    assert "student = await session.get(User, student_id)" in source
+    assert "student is None or student.role is not UserRole.STUDENT" in source
+
+
 def test_the_clear_is_logged_against_whoever_did_it() -> None:
     source = inspect.getsource(clear_student_pin)
 

@@ -279,6 +279,10 @@ class User(TimestampMixin, Base):
     admission_number: Mapped[str | None] = mapped_column(String(60), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Set only when a class teacher deliberately opens the replacement-PIN
+    #: window. A null PIN alone also describes a child who has never onboarded,
+    #: so it cannot authorize the clear-only recovery route by itself.
+    pin_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sso_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     baseline_profile: Mapped[dict[str, object]] = mapped_column(
         JSONB,

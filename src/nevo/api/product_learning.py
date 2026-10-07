@@ -20,7 +20,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -102,6 +102,14 @@ from nevo.sso.service import SsoService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
+CONSENT_WITHDRAWN_RESPONSE = {
+    403: {
+        "description": (
+            "consent_withdrawn: the learner's consent was withdrawn and this "
+            "processing operation is suspended"
+        )
+    }
+}
 ParsingService = Annotated[ContentParsingService, Depends(get_content_parsing_service)]
 LessonUpload = Annotated[UploadFile, File()]
 BatchLessonUpload = Annotated[list[UploadFile], File()]
@@ -181,7 +189,13 @@ class LessonQuestionAttemptWrite(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     session_id: UUID = Field(alias="sessionId")
-    question_id: str = Field(alias="questionId", min_length=1, max_length=160)
+    question_id: str = Field(
+        validation_alias=AliasChoices("problemId", "questionId", "question_id"),
+        serialization_alias="problemId",
+        min_length=1,
+        max_length=160,
+        description="The server-issued question/problem id. The server marks the answer.",
+    )
     segment_id: UUID | None = Field(default=None, alias="segmentId")
     source: Literal["checkpoint", "assessment"] = "checkpoint"
     answer: JsonValue
@@ -727,6 +741,7 @@ async def cancel_assignment(
     "/lessons/{lesson_id}/session",
     response_model=LessonSessionResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=CONSENT_WITHDRAWN_RESPONSE,
 )
 async def start_lesson_session(
     lesson_id: UUID,
@@ -738,6 +753,12 @@ async def start_lesson_session(
     actor, _ = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
+    progress = await session.scalar(
+        select(LessonProgress).where(
+            LessonProgress.student_id == actor.id,
+            LessonProgress.lesson_id == lesson_id,
+        )
+    )
     existing = await session.scalar(
         select(LessonSession)
         .where(
@@ -753,7 +774,26 @@ async def start_lesson_session(
             "resumed": True,
             "depth": existing.delivery_depth,
             "reroutedFromSessionId": existing.rerouted_from_session_id,
+            "checkPosition": progress.check_position if progress else None,
+            "checkResumableUntil": progress.check_resumable_until if progress else None,
         }
+    if (
+        progress is not None
+        and progress.session_id is not None
+        and progress.check_position is not None
+        and progress.check_resumable_until is not None
+        and progress.check_resumable_until >= datetime.now(UTC)
+    ):
+        check_session = await session.get(LessonSession, progress.session_id)
+        if check_session is not None:
+            return {
+                "sessionId": str(check_session.id),
+                "resumed": True,
+                "depth": check_session.delivery_depth,
+                "reroutedFromSessionId": check_session.rerouted_from_session_id,
+                "checkPosition": progress.check_position,
+                "checkResumableUntil": progress.check_resumable_until,
+            }
     record = LessonSession(
         id=uuid4(),
         student_id=actor.id,
@@ -775,6 +815,7 @@ async def start_lesson_session(
     "/lessons/{lesson_id}/attempts",
     response_model=LessonQuestionAttemptResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=CONSENT_WITHDRAWN_RESPONSE,
 )
 async def save_lesson_question_attempt(
     lesson_id: UUID,
@@ -877,7 +918,11 @@ async def lesson_question_attempts(
     return [_attempt_payload(item) for item in records]
 
 
-@router.put("/lessons/{lesson_id}/progress", response_model=LessonProgressResponse)
+@router.put(
+    "/lessons/{lesson_id}/progress",
+    response_model=LessonProgressResponse,
+    responses=CONSENT_WITHDRAWN_RESPONSE,
+)
 async def save_lesson_progress(
     lesson_id: UUID,
     payload: ProgressWrite,
@@ -906,6 +951,11 @@ async def save_lesson_progress(
     progress.assignment_id = payload.assignment_id
     progress.module_position = payload.module_position
     progress.segment_position = payload.segment_position
+    if "check_position" in payload.model_fields_set:
+        progress.check_position = payload.check_position
+        progress.check_resumable_until = (
+            _end_of_day() if payload.check_position is not None else None
+        )
     progress.status = payload.status
     progress.started_at = progress.started_at or lesson_session.started_at
     lesson_session.exit_position = str(payload.segment_position)
@@ -991,11 +1041,11 @@ async def save_lesson_progress(
         "masteredConcepts": mastered,
         "revisitConcepts": revisit,
         "resultNote": _result_note(mastered, revisit),
-        "checkPosition": payload.check_position,
+        "checkPosition": progress.check_position,
         # A half-finished check is resumable for the rest of the day and no
         # longer. Stated rather than left to the client, so two tablets agree
         # on when it has lapsed. Ask B49.
-        "checkResumableUntil": _end_of_day(),
+        "checkResumableUntil": progress.check_resumable_until,
     }
 
 
@@ -1116,6 +1166,10 @@ async def student_dashboard(
         if recent
         else {}
     )
+    outcomes: dict[UUID, tuple[list[dict[str, object]], list[dict[str, object]]]] = {}
+    for item in recent:
+        if item.session_id is not None:
+            outcomes[item.session_id] = await _check_in_outcome(session, item.session_id)
     return {
         "student": {"id": str(actor.id), "firstName": actor.first_name},
         "assignments": due,
@@ -1130,6 +1184,11 @@ async def student_dashboard(
                 # The denominator segmentPosition is counted against, so a
                 # client can draw a fraction without inventing a total.
                 "segmentCount": lesson.segment_count or 0 if lesson else 0,
+                "checkPosition": item.check_position,
+                "checkResumableUntil": item.check_resumable_until,
+                "masteredConcepts": outcomes.get(item.session_id, ([], []))[0],
+                "revisitConcepts": outcomes.get(item.session_id, ([], []))[1],
+                "resultNote": _result_note(*outcomes.get(item.session_id, ([], []))),
             }
             for item in recent
         ],
@@ -1280,6 +1339,7 @@ async def connect_by_class_code(
 @router.get(
     "/lessons/{lesson_id}/offline-manifest",
     response_model=OfflineManifestResponse,
+    responses=CONSENT_WITHDRAWN_RESPONSE,
 )
 async def read_offline_manifest(
     lesson_id: UUID,
@@ -1318,6 +1378,7 @@ async def read_offline_manifest(
 @router.get(
     "/lessons/{lesson_id}/offline-package.json",
     response_model=OfflinePackage,
+    responses=CONSENT_WITHDRAWN_RESPONSE,
 )
 async def read_offline_package_json(
     lesson_id: UUID,
@@ -1341,7 +1402,11 @@ async def read_offline_package_json(
     return await _offline_package_payload(session, lesson_id)
 
 
-@router.post("/lessons/{lesson_id}/download", response_model=OfflineDownloadResponse)
+@router.post(
+    "/lessons/{lesson_id}/download",
+    response_model=OfflineDownloadResponse,
+    responses=CONSENT_WITHDRAWN_RESPONSE,
+)
 async def create_offline_download(
     lesson_id: UUID,
     principal: PrincipalDependency,
@@ -1977,6 +2042,13 @@ async def _names_for(session: DatabaseSession, user_ids: set[UUID | None]) -> di
 
 async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) -> dict[str, object]:
     lesson = await session.get(Lesson, lesson_id)
+    modules = list(
+        await session.scalars(
+            select(LessonModule)
+            .where(LessonModule.lesson_id == lesson_id)
+            .order_by(LessonModule.sequence_order)
+        )
+    )
     segments = (
         await session.scalars(
             select(LessonSegment)
@@ -1992,6 +2064,19 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
         "id": str(lesson.id),
         "title": lesson.title,
         "version": lesson.parser_version,
+        "modules": [
+            {
+                "id": str(module.id),
+                "title": module.title,
+                "sequenceOrder": module.sequence_order,
+                "segmentIds": module.segment_ids,
+                "recap": module.recap,
+                "preview": module.preview,
+            }
+            for module in modules
+        ],
+        "recap": lesson.recap,
+        "assessment": checkpoint_payloads(lesson.assessment or [], segment_key="lesson-assessment"),
         "segments": [
             {
                 "id": str(item.id),

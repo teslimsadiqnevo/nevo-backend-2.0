@@ -301,7 +301,14 @@ async def read_parse_run(
     return ParseRunResponse.from_state(state)
 
 
-@router.post("/media/url", response_model=MediaUrlResponse)
+@router.post(
+    "/media/url",
+    response_model=MediaUrlResponse,
+    responses={
+        400: {"description": "invalid_storage_path"},
+        502: {"description": "storage_unavailable"},
+    },
+)
 async def refresh_media_url(
     payload: MediaUrlRequest,
     principal: PrincipalDependency,

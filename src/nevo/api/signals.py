@@ -81,7 +81,9 @@ class LessonSessionRequest(BaseModel):
         description=(
             "Adaptations the child actually saw applied during this session - "
             "simplify, expand, slower, a modality change, a hint. Not offers, "
-            "and not decisions the engine made and held back. Used to review "
+            "and not decisions the engine made and held back. A Socratic panel "
+            "counts when rendered. Initial density spacing does not; a density "
+            "change applied mid-session does. Used to review "
             "afterwards how much a session was rearranged; leave it 0 if you "
             "are not counting, which reads as 'not reported' rather than "
             "'none happened'."
@@ -138,8 +140,23 @@ class SignalEventRequest(BaseModel):
         if self.model_extra:
             self.event_data = {**self.model_extra, **self.event_data}
         self._validate_ask_nevo_signal_payload()
+        self._validate_modality_outcome()
         self._settle_break_trigger()
         return self
+
+    def _validate_modality_outcome(self) -> None:
+        if self.event_type is not SignalEventType.MODALITY_SWITCH_OUTCOME:
+            return
+        _require_keys(self.event_data, {"segmentId"})
+        outcome = self.event_data.get("outcome")
+        if outcome is None:
+            _require_keys(
+                self.event_data,
+                {"modality", "comprehensionScore", "engagementScore", "timeOnSegment"},
+            )
+            return
+        if outcome not in {"better", "worse", "no_change"}:
+            raise ValueError("Modality switch outcome must be better, worse, or no_change.")
 
     def _validate_ask_nevo_signal_payload(self) -> None:
         if self.event_type not in {

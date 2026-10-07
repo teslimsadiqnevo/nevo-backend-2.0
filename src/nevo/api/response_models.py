@@ -296,6 +296,9 @@ class PinClearedResponse(CamelResponse):
     #: How many digits the child will be asked for, so the length travels with
     #: the PIN rather than being hardcoded in each screen. SCRUM-179.
     pin_length: Literal[4] = 4
+    #: Repeating a clear is an idempotent success. No second audit event is
+    #: written and the original clear window remains in place.
+    already_cleared: bool = False
 
 
 class NotificationPreferenceResponse(CamelResponse):
@@ -544,6 +547,8 @@ class LessonSessionResponse(CamelResponse):
     resumed: bool
     depth: Literal["standard", "lower"] = "standard"
     rerouted_from_session_id: UUID | None = None
+    check_position: int | None = None
+    check_resumable_until: datetime | None = None
 
 
 class LessonRerouteResponse(CamelResponse):
@@ -624,6 +629,11 @@ class RecentProgressResponse(CamelResponse):
     #: Segments the child plays, which is the denominator segmentPosition is
     #: counted against. Ask B51.
     segment_count: int = 0
+    check_position: int | None = None
+    check_resumable_until: datetime | None = None
+    mastered_concepts: list[ConceptOutcomeResponse] = Field(default_factory=list)
+    revisit_concepts: list[ConceptOutcomeResponse] = Field(default_factory=list)
+    result_note: str = ""
 
 
 class StudentDashboardResponse(CamelResponse):
@@ -847,6 +857,9 @@ class OfflinePackage(CamelResponse):
     #: The parser version the lesson was built by, so a client can tell a
     #: cached package from a newer parse of the same lesson.
     version: str | None = None
+    modules: list[LessonModuleResponse] = Field(default_factory=list)
+    recap: str | None = None
+    assessment: list[ComprehensionCheckpoint] = Field(default_factory=list)
     segments: list[OfflinePackageSegment] = Field(default_factory=list)
 
 

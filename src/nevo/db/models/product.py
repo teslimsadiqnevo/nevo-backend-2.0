@@ -252,6 +252,10 @@ class LessonProgress(Base):
     __tablename__ = "lesson_progress"
     __table_args__ = (
         UniqueConstraint("student_id", "lesson_id", name="uq_lesson_progress_student_lesson"),
+        CheckConstraint(
+            "check_position IS NULL OR check_position >= 0",
+            name="ck_lesson_progress_check_position_non_negative",
+        ),
         Index("ix_lesson_progress_student_updated", "student_id", "updated_at"),
     )
 
@@ -273,6 +277,10 @@ class LessonProgress(Base):
     )
     segment_position: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    check_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    check_resumable_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="not_started", server_default="not_started"

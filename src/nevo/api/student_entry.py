@@ -67,6 +67,10 @@ class StudentEntryState(CamelResponse):
     age: int | None
     #: True once the child has a PIN and can sign in normally.
     account_ready: bool
+    #: True only when a class teacher cleared an existing PIN. This separates
+    #: recovery from a first-use child, whose pin is also null but whose
+    #: baseline must still run.
+    pin_cleared: bool = False
     #: True while the school and the parent disagree about the child's date
     #: of birth. The child cannot start, and there is nothing for them to do
     #: about it, so the screen says the school is checking something.
@@ -167,6 +171,7 @@ async def _state(session: AsyncSession, grant: StudentOnboardingGrant) -> Studen
         age_check_pending=await age_check_blocks(session, student.id),
         age=age_on(student.date_of_birth),
         account_ready=student.pin_hash is not None,
+        pin_cleared=student.pin_cleared_at is not None,
     )
 
 
@@ -232,6 +237,7 @@ async def set_pin_and_start(
 
         student.login_identifier = f"NV-{secrets.token_hex(3).upper()}"
     student.pin_hash = credential_hasher().hash_pin(payload.pin)
+    student.pin_cleared_at = None
     student.auth_method = AuthMethod.PIN
     student.status = UserStatus.ACTIVE
     enrolled = await session.scalar(
@@ -373,7 +379,16 @@ class StudentPinSetup(BaseModel):
     pin: StudentPin
 
 
-@router.post("/pin", response_model=StudentEntrySession)
+@router.post(
+    "/pin",
+    response_model=StudentEntrySession,
+    responses={
+        403: {"description": "age_check_pending or consent_pending"},
+        404: {"description": "entry_not_found"},
+        409: {"description": "pin_not_cleared or pin_already_set"},
+        429: {"description": "too_many_attempts"},
+    },
+)
 async def set_own_pin(
     payload: StudentPinSetup,
     request: Request,
@@ -433,6 +448,14 @@ async def set_own_pin(
                 ),
             },
         )
+    if student.pin_cleared_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "pin_not_cleared",
+                "message": "Ask your teacher to clear your PIN before choosing a new one.",
+            },
+        )
     if await age_check_blocks(session, student.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -456,6 +479,7 @@ async def set_own_pin(
     from nevo.api.product_auth import credential_hasher
 
     student.pin_hash = credential_hasher().hash_pin(payload.pin)
+    student.pin_cleared_at = None
     student.auth_method = AuthMethod.PIN
     student.status = UserStatus.ACTIVE
     await _record(session, identity, ip, school, succeeded=True)
@@ -527,4 +551,5 @@ async def lookup_entry(
         age_check_pending=await age_check_blocks(session, student.id),
         age=age_on(student.date_of_birth),
         account_ready=student.pin_hash is not None,
+        pin_cleared=student.pin_cleared_at is not None,
     )

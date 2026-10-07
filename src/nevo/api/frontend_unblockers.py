@@ -3,7 +3,7 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 from xml.sax.saxutils import unescape
 from zipfile import ZipFile
@@ -92,6 +92,7 @@ from nevo.db.models.probe import ProbeItem
 from nevo.db.models.product import LessonModule
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
+from nevo.domain.accounts.age_bands import AgeBand
 from nevo.domain.accounts.vocabulary import (
     MessageRecipientType,
     NotificationCategory,
@@ -380,12 +381,24 @@ class BaselineSubmitRequest(BaseModel):
     features: list[dict[str, object]] = Field(default_factory=list, max_length=500)
 
 
+BaselineDimension = Literal[
+    "wmc",
+    "ps",
+    "reading",
+    "ans",
+    "attention",
+    "domain",
+    "motor_speed",
+]
+BaselineFormFactor = Literal["tablet_touch", "desktop_cursor", "mobile_touch"]
+
+
 class BaselineTrial(BaseModel):
     """One trial, as it happened. Not marked, not averaged. Ask B9."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    dimension: str = Field(min_length=1, max_length=60)
+    dimension: BaselineDimension
     #: congruent, incongruent, a dot ratio, a reading mode - whatever this
     #: trial varied. The breakdown by condition is derived from these rather
     #: than computed on the device.
@@ -398,12 +411,18 @@ class BaselineTrial(BaseModel):
     correct: bool | None = None
     response_time_ms: int | None = Field(default=None, alias="responseTimeMs", ge=0, le=600_000)
     probe_item_id: UUID | None = Field(default=None, alias="probeItemId")
+    #: One tile-memory trial is one completed recall, not one tap. A skipped
+    #: motor step is recorded but excluded from accuracy and latency.
+    skipped: bool = False
 
 
 class BaselineTrialsRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     session_id: str = Field(alias="sessionId", min_length=1, max_length=120)
+    age_band: AgeBand | None = Field(default=None, alias="ageBand")
+    form_factor: BaselineFormFactor | None = Field(default=None, alias="formFactor")
+    motor_step_skipped: bool = Field(default=False, alias="motorStepSkipped")
     trials: list[BaselineTrial] = Field(min_length=1, max_length=600)
 
 
@@ -419,7 +438,7 @@ class BaselineSubmitResponse(BaseModel):
 class BaselinePromptResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    dimension: str
+    dimension: BaselineDimension
     item_id: str = Field(alias="itemId")
     #: Empty on the five days the warm-up runs a task on the device rather
     #: than asking anything. Only the domain task has a question, and
@@ -470,7 +489,7 @@ class BaselinePromptResult(BaseModel):
     #: file holds, and the client has no use for the verdict - it is a
     #: judgement about a child that the device has no reason to hold, and the
     #: warm-up shows the same encouragement either way. Asks B8 and B55.
-    dimension: str
+    dimension: BaselineDimension
     done_today: bool = Field(default=True, alias="doneToday")
     answered_at: datetime = Field(alias="answeredAt")
 
@@ -480,92 +499,15 @@ class BaselinePromptOption(BaseModel):
     label: str
 
 
-_BASELINE_ITEMS: dict[str, tuple[dict[str, object], ...]] = {
-    "working_memory": (
-        {
-            "id": "wm-1",
-            "question": "Remember 4, 7, 2. Which list is in the same order?",
-            "options": (("472", "4, 7, 2"), ("427", "4, 2, 7"), ("742", "7, 4, 2")),
-            "answer": "472",
-        },
-        {
-            "id": "wm-2",
-            "question": "Remember blue, sun, book. Which word came second?",
-            "options": (("blue", "Blue"), ("sun", "Sun"), ("book", "Book")),
-            "answer": "sun",
-        },
-        {
-            "id": "wm-3",
-            "question": "Keep 6 and 3 in mind. What is their total?",
-            "options": (("8", "8"), ("9", "9"), ("10", "10")),
-            "answer": "9",
-        },
-    ),
-    "attention": (
-        {
-            "id": "at-1",
-            "question": "Which word is different?",
-            "options": (("calm", "calm"), ("calm-2", "calm"), ("clam", "clam")),
-            "answer": "clam",
-        },
-        {
-            "id": "at-2",
-            "question": "Which number appears twice in 3, 8, 5, 8?",
-            "options": (("3", "3"), ("5", "5"), ("8", "8")),
-            "answer": "8",
-        },
-        {
-            "id": "at-3",
-            "question": "Choose the arrow pointing left.",
-            "options": (("left", "Left"), ("up", "Up"), ("right", "Right")),
-            "answer": "left",
-        },
-    ),
-    "reading_fluency": (
-        {
-            "id": "rf-1",
-            "question": "The rain stopped, so Ada closed her umbrella. Why did she close it?",
-            "options": (
-                ("stopped", "The rain stopped"),
-                ("lost", "She lost it"),
-                ("wind", "The wind blew"),
-            ),
-            "answer": "stopped",
-        },
-        {
-            "id": "rf-2",
-            "question": "Which word completes this sentence: The bird ___ over the tree?",
-            "options": (("flew", "flew"), ("blue", "blue"), ("floor", "floor")),
-            "answer": "flew",
-        },
-        {
-            "id": "rf-3",
-            "question": "Musa packed water because the day was hot. What did Musa pack?",
-            "options": (("water", "Water"), ("coat", "A coat"), ("lamp", "A lamp")),
-            "answer": "water",
-        },
-    ),
-    "number_sense": (
-        {
-            "id": "ns-1",
-            "question": "Which number is closest to 50?",
-            "options": (("29", "29"), ("48", "48"), ("71", "71")),
-            "answer": "48",
-        },
-        {
-            "id": "ns-2",
-            "question": "Which is greater?",
-            "options": (("34", "34"), ("43", "43"), ("equal", "They are equal")),
-            "answer": "43",
-        },
-        {
-            "id": "ns-3",
-            "question": "What is half of 12?",
-            "options": (("5", "5"), ("6", "6"), ("7", "7")),
-            "answer": "6",
-        },
-    ),
-}
+BASELINE_DIMENSIONS: tuple[BaselineDimension, ...] = (
+    "wmc",
+    "ps",
+    "reading",
+    "ans",
+    "attention",
+    "domain",
+    "motor_speed",
+)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -1686,6 +1628,12 @@ async def submit_baseline_trials(
         )
         answers = {row[0]: str(row[1]) for row in rows.all()}
     for trial in payload.trials:
+        if trial.skipped or (
+            (trial.response or "").strip().casefold() == "not_sure" and trial.correct is None
+        ):
+            # A skipped step and an explicit "not sure" are declines. Neither
+            # is evidence that the child answered incorrectly.
+            continue
         correct = trial.correct
         expected = answers.get(trial.probe_item_id) if trial.probe_item_id else None
         if expected is not None:
@@ -1704,6 +1652,11 @@ async def submit_baseline_trials(
         session_id=payload.session_id,
         features=features,
     )
+    baseline_profile["motor_step_skipped"] = payload.motor_step_skipped
+    if payload.age_band is not None:
+        baseline_profile["age_band"] = payload.age_band.value
+    if payload.form_factor is not None:
+        baseline_profile["form_factor"] = payload.form_factor
     await session.execute(
         update(User)
         .where(User.id == principal.user_id)
@@ -1776,20 +1729,17 @@ async def recalibrate_prompt(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Students can view only their own warm-up prompt",
         )
-    dimension, item = _todays_item(student_id)
+    dimension, item, served = await _todays_prompt(session, student_id)
     done, answered_at = await _warm_up_state(session, student_id)
     return BaselinePromptResponse(
         dimension=dimension,
         itemId=str(item["id"]),
-        question=str(item["question"]),
+        question=str(item.get("question", "")),
         options=[
             BaselinePromptOption(value=value, label=label)
-            for value, label in cast(list[tuple[str, str]], item["options"])
+            for value, label in cast(list[tuple[str, str]], item.get("options", []))
         ],
-        # Every dimension in _BASELINE_ITEMS is served; a device task would
-        # arrive here with no item and say so. Stated rather than inferred
-        # from an empty question. Ask B65.
-        served=True,
+        served=served,
         doneToday=done,
         answeredAt=answered_at,
     )
@@ -1823,7 +1773,17 @@ async def record_recalibrate_answer(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Students can answer only their own warm-up",
         )
-    dimension, item = _todays_item(student_id)
+    dimension, item, served = await _todays_prompt(session, student_id)
+    if served and payload.item_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "warm_up_answer_required", "message": "Choose an answer."},
+        )
+    if not served and payload.item_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "warm_up_device_task", "message": "This warm-up runs on the device."},
+        )
     if payload.item_id is not None and payload.item_id != str(item["id"]):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1839,7 +1799,7 @@ async def record_recalibrate_answer(
     # warm-up, and the point of recording it is that the next tablet knows.
     correct = (
         payload.value.strip().casefold() == str(item["answer"]).strip().casefold()
-        if payload.item_id is not None and payload.value is not None
+        if served and payload.item_id is not None and payload.value is not None
         else None
     )
     done, answered_at = await _warm_up_state(session, student_id)
@@ -1851,7 +1811,7 @@ async def record_recalibrate_answer(
                 "date": answered_at.date().isoformat(),
                 "itemId": payload.item_id,
                 "dimension": dimension,
-                "served": payload.item_id is not None,
+                "served": served,
                 "correct": correct,
                 "answeredAt": answered_at.isoformat(),
             },
@@ -1867,15 +1827,54 @@ async def record_recalibrate_answer(
 _WARM_UP_KEY = "warmUp"
 
 
-def _todays_item(student_id: UUID) -> tuple[str, dict[str, object]]:
-    """Today's dimension and item for this child. Same answer all day."""
+def _today_dimension(student_id: UUID) -> BaselineDimension:
+    """Today's canonical dimension for this child. Stable for the UTC day."""
 
-    dimensions = ("working_memory", "attention", "reading_fluency", "number_sense")
     day_number = datetime.now(UTC).date().toordinal()
     student_seed = int.from_bytes(hashlib.sha256(str(student_id).encode()).digest()[:8], "big")
-    dimension = dimensions[(day_number + student_seed) % len(dimensions)]
-    items = _BASELINE_ITEMS[dimension]
-    return dimension, items[(day_number // len(dimensions) + student_seed) % len(items)]
+    return BASELINE_DIMENSIONS[(day_number + student_seed) % len(BASELINE_DIMENSIONS)]
+
+
+async def _todays_prompt(
+    session: DatabaseSession, student_id: UUID
+) -> tuple[BaselineDimension, dict[str, object], bool]:
+    """Return a server-owned domain probe or an explicit device task."""
+
+    dimension = _today_dimension(student_id)
+    if dimension != "domain":
+        return dimension, {"id": f"device:{dimension}", "options": []}, False
+
+    student = await session.get(User, student_id)
+    if student is None or student.school_id is None:
+        return dimension, {"id": "device:domain-unavailable", "options": []}, False
+    probes = list(
+        await session.scalars(
+            select(ProbeItem)
+            .where(
+                ProbeItem.school_id == student.school_id,
+                ProbeItem.retired.is_(False),
+            )
+            .order_by(ProbeItem.id)
+        )
+    )
+    if not probes:
+        return dimension, {"id": "device:domain-unavailable", "options": []}, False
+    day_number = datetime.now(UTC).date().toordinal()
+    student_seed = int.from_bytes(hashlib.sha256(str(student_id).encode()).digest()[:8], "big")
+    probe = probes[(day_number + student_seed) % len(probes)]
+    options = [
+        (str(option.get("value", "")), str(option.get("label", ""))) for option in probe.options
+    ]
+    return (
+        dimension,
+        {
+            "id": str(probe.id),
+            "question": probe.question,
+            "options": options,
+            "answer": probe.correct_option,
+        },
+        True,
+    )
 
 
 async def _warm_up_state(

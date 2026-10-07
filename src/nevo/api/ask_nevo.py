@@ -151,6 +151,12 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
     "/",
     response_model=AskResponse,
     responses={
+        403: {
+            "description": (
+                "ask_role_forbidden, or consent_withdrawn when learner processing "
+                "has been suspended"
+            ),
+        },
         429: {
             "description": (
                 "ask_nevo_daily_limit when the day's allowance is spent. The "

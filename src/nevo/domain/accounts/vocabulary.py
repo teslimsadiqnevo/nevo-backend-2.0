@@ -250,10 +250,8 @@ STUDENT_NOTIFICATION_SHAPES: dict[str, StudentNotificationShape] = {
     "lesson_assigned": StudentNotificationShape(
         "/student/lessons", "A new lesson is ready for you"
     ),
-    "review_due": StudentNotificationShape("/student/review", "Time to go over something again"),
-    "teacher_replied": StudentNotificationShape(
-        "/student/messages", "{teacher} sent you a message"
-    ),
+    "review_due": StudentNotificationShape("/student/progress", "Time to go over something again"),
+    "teacher_replied": StudentNotificationShape("/student/connect", "{teacher} sent you a message"),
     "sign_in_changed": StudentNotificationShape("/student/profile", "Your PIN has changed"),
 }
 

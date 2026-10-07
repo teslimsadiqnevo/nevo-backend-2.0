@@ -1,6 +1,6 @@
 """Contracts requested by the student console on 27 September."""
 
-from nevo.api.frontend_unblockers import _BASELINE_ITEMS
+from nevo.api.frontend_unblockers import BASELINE_DIMENSIONS
 from nevo.api.response_models import LessonQuestionAttemptResponse
 from nevo.ask_nevo.service import interpret_help_state
 from nevo.content_parsing.entities import ParsedLessonSegment
@@ -28,17 +28,19 @@ def test_answer_attempts_have_a_write_and_a_read_contract() -> None:
     }
 
 
-def test_every_warm_up_dimension_has_rotating_server_owned_items() -> None:
-    assert set(_BASELINE_ITEMS) == {
-        "working_memory",
+def test_warm_up_dimensions_and_server_owned_domain_items_are_explicit() -> None:
+    assert set(BASELINE_DIMENSIONS) == {
+        "wmc",
+        "ps",
+        "reading",
+        "ans",
         "attention",
-        "reading_fluency",
-        "number_sense",
+        "domain",
+        "motor_speed",
     }
-    assert all(len(items) >= 3 for items in _BASELINE_ITEMS.values())
     spec = app.openapi()
     schema = spec["components"]["schemas"]["BaselinePromptResponse"]["properties"]
-    assert {"dimension", "itemId", "question", "options"} <= set(schema)
+    assert {"dimension", "itemId", "question", "options", "served"} <= set(schema)
     # The answer key must NOT be here. It was, which put the key on the device
     # and left the child's pick to be marked there - and the architecture
     # forbids the client deciding correctness. Ask B8.

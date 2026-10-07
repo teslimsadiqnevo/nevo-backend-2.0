@@ -516,7 +516,8 @@ SESSION_FAILURE_CODES = (
     "session_expired when the session has simply run out, "
     "session_revoked when somebody signed this device out, "
     "session_replaced when the same account signed in somewhere else, "
-    "account_paused when the account itself has been closed or suspended. "
+    "account_paused when the account has been suspended, "
+    "account_closed when the account has been closed. "
     "invalid_session covers a token that was never valid."
 )
 

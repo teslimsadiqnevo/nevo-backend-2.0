@@ -112,10 +112,19 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
         ("segmentId", "suggested"),
     ),
     SignalEventType.MODALITY_SWITCH_OUTCOME: SignalContract(
-        "Sent once the child has spent a full segment in the new modality, "
-        "so there is something to compare. One per switch, from the client "
-        "that made the switch. Ask B38.",
-        ("from", "to", "outcome"),
+        "Sent once when the next segment entered in the new modality is left "
+        "or completed. That entry-to-exit interval is a full segment; it has "
+        "no minimum number of seconds. One per switch. Ask B38.",
+        (
+            "segmentId",
+            "[from]",
+            "[to]",
+            "[outcome: better|worse|no_change]",
+            "[modality]",
+            "[comprehensionScore]",
+            "[engagementScore]",
+            "[timeOnSegment]",
+        ),
     ),
     SignalEventType.MODALITY_MANUAL_SWITCH: SignalContract(
         "The child changed modality themselves, with nothing offered.",

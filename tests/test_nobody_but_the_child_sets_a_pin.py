@@ -53,31 +53,25 @@ def test_the_old_issuing_endpoint_is_gone() -> None:
 def test_a_teacher_can_clear_for_their_own_class_only() -> None:
     source = inspect.getsource(clear_student_pin)
 
-    # require_student_access is what scopes a teacher to the classes they
-    # take. Administrators pass it too; the whole school does not.
-    assert "require_student_access" in source
+    assert "actor.role is not UserRole.TEACHER" in source
+    assert "TeacherClassAssignment.teacher_id == actor.id" in source
+    assert "TeacherClassAssignment.removed_at.is_(None)" in source
 
 
-def test_the_access_check_is_a_guard_and_not_a_lookup() -> None:
-    """The child is fetched, not taken from the guard's return value.
-
-    require_student_access answers "may this person touch that child" and
-    returns the *actor*. Read as the student, ``role is not STUDENT`` was true
-    for every adult, so this endpoint 404'd for exactly the people it exists
-    for - no teacher or administrator in production could clear a PIN.
-
-    The original version of this test asserted only that the helper was
-    called, which it was, so it passed against a completely broken endpoint.
-    This asserts the shape that was actually wrong.
-    """
+def test_the_access_check_fetches_the_child_and_refuses_school_wide_clear() -> None:
 
     source = inspect.getsource(clear_student_pin)
 
-    assert "await require_student_access(session, principal, student_id)" in source
-    assert "= await require_student_access" not in source
-    # The student comes from the database, by the id in the path.
     assert "student = await session.get(User, student_id)" in source
-    assert "student is None or student.role is not UserRole.STUDENT" in source
+    assert "student.role is not UserRole.STUDENT" in source
+    assert "if not class_ids" in source
+
+
+def test_repeated_clear_is_idempotent_and_explicit() -> None:
+    source = inspect.getsource(clear_student_pin)
+
+    assert "student.pin_cleared_at is not None" in source
+    assert '"alreadyCleared": True' in source
 
 
 def test_the_clear_is_logged_against_whoever_did_it() -> None:

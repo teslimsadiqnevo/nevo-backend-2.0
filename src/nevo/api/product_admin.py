@@ -1181,7 +1181,14 @@ async def anonymize_student(
     await session.commit()
 
 
-@router.post("/students/{student_id}/pin/clear", response_model=PinClearedResponse)
+@router.post(
+    "/students/{student_id}/pin/clear",
+    response_model=PinClearedResponse,
+    responses={
+        403: {"description": "teacher_required: only a class teacher may clear a PIN"},
+        404: {"description": "Student not found in one of this teacher's active classes"},
+    },
+)
 async def clear_student_pin(
     student_id: UUID,
     principal: PrincipalDependency,
@@ -1193,10 +1200,9 @@ async def clear_student_pin(
     generates one, so there is no code path by which an adult can learn or
     choose a child's PIN.
 
-    Open to a teacher who takes one of that child's classes, as well as to an
-    administrator - it used to be administrators only, which meant the person
-    who can actually recognise the child could not help them. Scoped to that
-    teacher's own classes and not the whole school.
+    Open only to a teacher who takes one of that child's classes. An
+    administrator, including a SENCo administrator, cannot use this route and
+    there is no school-wide clear.
 
     The residual risk in this model is a teacher clearing a PIN and setting
     one themselves on the tablet before the child reaches it. Nothing in the
@@ -1204,27 +1210,50 @@ async def clear_student_pin(
     the child and the time, which is what makes it visible rather than silent.
     """
 
-    # A guard, not a lookup. require_student_access returns the *actor* - it
-    # answers "may this person touch that child", not "who is that child" -
-    # so reading its result as the student made role is not STUDENT true for
-    # every adult, and this endpoint 404'd for exactly the people it exists
-    # for. Caught by Olayinka, 6 October.
-    await require_student_access(session, principal, student_id)
-    student = await session.get(User, student_id)
-    if student is None or student.role is not UserRole.STUDENT:
-        raise HTTPException(status_code=404, detail="Student not found")
     actor = await actor_user(session, principal)
-    now = datetime.now(UTC)
-    # SCRUM-216 asks the log to carry the class as well as the child and the
-    # time, so a clear can be read back against the teacher who takes them.
+    if actor.role is not UserRole.TEACHER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "teacher_required",
+                "message": "Only a teacher of this child's class can clear their PIN.",
+            },
+        )
+    student = await session.get(User, student_id)
+    if (
+        student is None
+        or student.role is not UserRole.STUDENT
+        or student.school_id != actor.school_id
+    ):
+        raise HTTPException(status_code=404, detail="Student not found")
     class_ids = list(
         await session.scalars(
-            select(StudentClassEnrollment.class_id).where(
-                StudentClassEnrollment.student_id == student.id
+            select(StudentClassEnrollment.class_id)
+            .join(
+                TeacherClassAssignment,
+                TeacherClassAssignment.class_id == StudentClassEnrollment.class_id,
+            )
+            .where(
+                StudentClassEnrollment.student_id == student.id,
+                TeacherClassAssignment.teacher_id == actor.id,
+                TeacherClassAssignment.removed_at.is_(None),
             )
         )
     )
+    if not class_ids:
+        # A 404 does not reveal that the child exists elsewhere in the school.
+        raise HTTPException(status_code=404, detail="Student not found")
+    if student.pin_hash is None and student.pin_cleared_at is not None:
+        return {
+            "studentId": str(student.id),
+            "clearedAt": student.pin_cleared_at,
+            "childSetsNext": True,
+            "pinLength": 4,
+            "alreadyCleared": True,
+        }
+    now = datetime.now(UTC)
     student.pin_hash = None
+    student.pin_cleared_at = now
     student.auth_method = AuthMethod.PIN
     await session.execute(
         update(AuthSession)
@@ -1257,6 +1286,7 @@ async def clear_student_pin(
         "clearedAt": now,
         "childSetsNext": True,
         "pinLength": 4,
+        "alreadyCleared": False,
     }
 
 

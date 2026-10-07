@@ -14,6 +14,7 @@ from nevo.auth.errors import (
     RateLimitExceededError,
     SchoolCodeRequiredError,
 )
+from nevo.auth.policies import absolute_lifetime_for_role
 from nevo.auth.service import AuthService
 from nevo.domain.accounts.vocabulary import UserRole
 
@@ -92,6 +93,7 @@ class SessionResponse(BaseModel):
     replaced_session: bool
     pin_length: int | None = None
     pin_change_required: bool = False
+    absolute_lifetime_hours: int
 
     @classmethod
     def from_issued(
@@ -103,13 +105,16 @@ class SessionResponse(BaseModel):
     ) -> "SessionResponse":
         return cls(
             access_token=issued.access_token,
-            token_type=issued.token_type,
+            token_type="bearer",
             expires_at=issued.expires_at,
             user_id=issued.user_id,
-            role=issued.role,
+            role=UserRole(issued.role),
             replaced_session=issued.replaced_session,
             pin_length=pin_length,
             pin_change_required=pin_change_required,
+            absolute_lifetime_hours=int(
+                absolute_lifetime_for_role(issued.role).total_seconds() // 3600
+            ),
         )
 
 

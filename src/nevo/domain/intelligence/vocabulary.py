@@ -251,10 +251,9 @@ class ProactiveAction(StrEnum):
     Typed because a bare string put the vocabulary in a document instead of
     the contract, and a client had no way to know which values it must handle.
 
-    The first three are the only ones the engine produces today. The last two
-    are declared because the shapes that carry them exist and a client renders
-    them; nothing emits them yet, and a value that is never sent is honest in
-    a way an undocumented string was not.
+    All five are produced today. The engine offers a hint after two aligned
+    errors and opens the guided Socratic panel after three, or after the replay
+    threshold where the segment carries guided questions.
     """
 
     SIMPLIFY = "simplify"

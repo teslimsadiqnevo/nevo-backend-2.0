@@ -16,6 +16,7 @@ from nevo.permissions.entities import (
     PermissionSnapshot,
 )
 from nevo.permissions.errors import (
+    AdminSeatLimitReachedError,
     InvalidAdminRoleError,
     InvalidInvitationError,
     LastOversightAdminError,
@@ -76,6 +77,15 @@ class TeamMemberResponse(BaseModel):
             status=member.status,
             scopes=sorted(member.scopes, key=lambda scope: scope.value),
         )
+
+
+class AdminTeamResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    members: list[TeamMemberResponse]
+    seat_limit: int = Field(alias="seatLimit", ge=1)
+    seats_used: int = Field(alias="seatsUsed", ge=0)
+    seats_remaining: int = Field(alias="seatsRemaining", ge=0)
 
 
 class InviteAdminRequest(BaseModel):
@@ -214,16 +224,23 @@ async def my_permissions(
     return PermissionResponse.from_snapshot(snapshot)
 
 
-@router.get("/admin/team", response_model=list[TeamMemberResponse])
+@router.get("/admin/team", response_model=AdminTeamResponse)
 async def list_admin_team(
     principal: PrincipalDependency,
     service: PermissionServiceDependency,
-) -> list[TeamMemberResponse]:
+) -> AdminTeamResponse:
     try:
         members = await service.list_team(principal)
+        seat_limit = await service.team_seat_limit(principal)
     except PermissionError as error:
         raise public_permission_error(error) from error
-    return [TeamMemberResponse.from_member(member) for member in members]
+    seats_used = sum(member.status in {"active", "invited"} for member in members)
+    return AdminTeamResponse(
+        members=[TeamMemberResponse.from_member(member) for member in members],
+        seatLimit=seat_limit,
+        seatsUsed=seats_used,
+        seatsRemaining=max(0, seat_limit - seats_used),
+    )
 
 
 @router.post(
@@ -306,6 +323,7 @@ def public_permission_error(error: PermissionError) -> HTTPException:
             LastOversightAdminError,
             SelfScopeRemovalError,
             SsoManagedTeamError,
+            AdminSeatLimitReachedError,
         ),
     ):
         status_code = status.HTTP_409_CONFLICT

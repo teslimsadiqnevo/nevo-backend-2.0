@@ -128,6 +128,45 @@ def test_parent_request_is_queued_without_exposing_token() -> None:
     assert "consent_url" not in response.json()
 
 
+def test_bulk_parent_requests_report_each_child_separately() -> None:
+    client, _, _ = client_for(
+        role="senco_admin",
+        scopes=frozenset(),
+    )
+    first_student = uuid4()
+    second_student = uuid4()
+
+    response = client.post(
+        "/api/v1/consents/parent-consent-requests/bulk",
+        json={
+            "requests": [
+                {
+                    "studentId": str(first_student),
+                    "parentName": "Ada Parent",
+                    "parentContact": "ada@example.com",
+                    "contactMethod": "email",
+                    "consentTypes": ["data_processing"],
+                },
+                {
+                    "studentId": str(second_student),
+                    "parentName": "Tunde Parent",
+                    "parentContact": "tunde@example.com",
+                    "contactMethod": "email",
+                    "consentTypes": ["data_processing"],
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 207
+    assert [row["studentId"] for row in response.json()] == [
+        str(first_student),
+        str(second_student),
+    ]
+    assert all(row["queued"] for row in response.json())
+    assert all("token" not in row["request"] for row in response.json())
+
+
 def test_public_parent_completion_consumes_invitation() -> None:
     client, _, _ = client_for(
         role="senco_admin",

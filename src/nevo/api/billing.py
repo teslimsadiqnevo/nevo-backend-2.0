@@ -28,7 +28,7 @@ from nevo.billing.errors import (
     BillingPaymentMethodError,
     BillingSchoolContextError,
 )
-from nevo.billing.service import BillingService
+from nevo.billing.service import ACCESS_WINDOWS, PUBLISHED_RATES_NGN, BillingService
 from nevo.db.models.account import School
 from nevo.db.models.billing import Invoice
 from nevo.domain.billing.vocabulary import (
@@ -160,6 +160,23 @@ class PricingResponse(BaseModel):
             totalWithVat=quote.total_with_vat,
             currency=quote.currency,
         )
+
+
+class BillingPlanOptionResponse(BaseModel):
+    """One published plan and the commercial path for changing to it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    plan: PricingPlan
+    name: str
+    per_student_rate: Decimal = Field(alias="perStudentRate")
+    billing_period: Literal["year", "term"] = Field(alias="billingPeriod")
+    access_window: AccessWindow = Field(alias="accessWindow")
+    currency: PricingCurrency = PricingCurrency.NGN
+    switch_method: Literal["relationship_manager"] = Field(
+        default="relationship_manager",
+        alias="switchMethod",
+    )
 
 
 class SubscriptionResponse(BaseModel):
@@ -447,6 +464,31 @@ async def current_subscription(
         return SubscriptionResponse.from_record(await service.subscription(_school_id(actor)))
     except BillingError as error:
         raise public_billing_error(error) from error
+
+
+@router.get("/plan-options", response_model=list[BillingPlanOptionResponse])
+async def billing_plan_options(
+    actor: BillingScopeDependency,
+) -> list[BillingPlanOptionResponse]:
+    """Published rates; switching is confirmed through the relationship manager."""
+
+    _school_id(actor)
+    return [
+        BillingPlanOptionResponse(
+            plan=PricingPlan.ANNUAL,
+            name="Annual",
+            perStudentRate=PUBLISHED_RATES_NGN[PricingPlan.ANNUAL],
+            billingPeriod="year",
+            accessWindow=ACCESS_WINDOWS[PricingPlan.ANNUAL],
+        ),
+        BillingPlanOptionResponse(
+            plan=PricingPlan.PER_TERM,
+            name="Per term",
+            perStudentRate=PUBLISHED_RATES_NGN[PricingPlan.PER_TERM],
+            billingPeriod="term",
+            accessWindow=ACCESS_WINDOWS[PricingPlan.PER_TERM],
+        ),
+    ]
 
 
 @router.get("/invoices", response_model=list[InvoiceResponse])

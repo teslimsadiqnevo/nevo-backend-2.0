@@ -168,6 +168,34 @@ def test_subscription_endpoint_returns_contract_and_masked_payment_details() -> 
     assert "processor" not in body["paymentMethod"]
 
 
+def test_plan_options_publish_prices_and_relationship_manager_switching() -> None:
+    client, _ = client_for()
+
+    response = client.get("/api/billing/plan-options")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "plan": "annual",
+            "name": "Annual",
+            "perStudentRate": "150000.00",
+            "currency": "NGN",
+            "billingPeriod": "year",
+            "accessWindow": "year_round",
+            "switchMethod": "relationship_manager",
+        },
+        {
+            "plan": "per_term",
+            "name": "Per term",
+            "perStudentRate": "55000.00",
+            "currency": "NGN",
+            "billingPeriod": "term",
+            "accessWindow": "school_session",
+            "switchMethod": "relationship_manager",
+        },
+    ]
+
+
 def test_invoice_history_endpoint_filters_by_status() -> None:
     client, _ = client_for()
 

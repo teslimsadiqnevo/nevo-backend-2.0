@@ -50,6 +50,22 @@ def test_team_endpoint_requires_oversight_scope() -> None:
     assert response.json()["detail"]["code"] == "permission_denied"
 
 
+def test_team_endpoint_reports_the_school_seat_allowance() -> None:
+    client, actor, repository = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
+    assert actor.school_id is not None
+    repository.seat_limits[actor.school_id] = 7
+
+    response = client.get("/api/v1/admin/team")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "members": [],
+        "seatLimit": 7,
+        "seatsUsed": 0,
+        "seatsRemaining": 7,
+    }
+
+
 def test_invite_and_accept_flow() -> None:
     client, _, _ = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
 
@@ -91,6 +107,32 @@ def test_student_role_cannot_be_invited() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "invalid_admin_role"
+
+
+def test_sixth_admin_invitation_has_its_own_refusal_code() -> None:
+    client, _, _ = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
+    for index in range(5):
+        response = client.post(
+            "/api/v1/admin/team/invitations",
+            json={
+                "email": f"admin-{index}@example.com",
+                "role": "other_admin",
+                "scopes": ["billing"],
+            },
+        )
+        assert response.status_code == 201
+
+    refused = client.post(
+        "/api/v1/admin/team/invitations",
+        json={
+            "email": "admin-six@example.com",
+            "role": "other_admin",
+            "scopes": ["billing"],
+        },
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "admin_seat_limit_reached"
 
 
 def test_scope_payload_rejects_unknown_scope() -> None:

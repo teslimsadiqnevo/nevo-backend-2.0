@@ -22,7 +22,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nevo.api.age_checks import age_check_blocks
 from nevo.api.auth import AuthServiceDependency, SessionResponse, StudentPin, client_ip
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
@@ -168,7 +167,7 @@ async def _state(session: AsyncSession, grant: StudentOnboardingGrant) -> Studen
         first_name=student.first_name or "",
         class_name=await _class_name(session, grant),
         consent_state=await _consent_state(session, student.id),
-        age_check_pending=await age_check_blocks(session, student.id),
+        age_check_pending=False,
         age=age_on(student.date_of_birth),
         account_ready=student.pin_hash is not None,
         pin_cleared=student.pin_cleared_at is not None,
@@ -205,20 +204,6 @@ async def set_pin_and_start(
 
     grant = await _grant(session, token)
     student = await _student(session, grant)
-    if await age_check_blocks(session, student.id):
-        # Two sources disagree about how old this child is, so nobody is sure
-        # they should be offered the product. A person settles that with the
-        # school and the parent; it is never resolved by asking the child.
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "age_check_pending",
-                "message": (
-                    "Nevo is checking something with your school. "
-                    "Open this link again in a day or two."
-                ),
-            },
-        )
     if not await _has_consent(session, student.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -383,7 +368,7 @@ class StudentPinSetup(BaseModel):
     "/pin",
     response_model=StudentEntrySession,
     responses={
-        403: {"description": "age_check_pending or consent_pending"},
+        403: {"description": "consent_pending"},
         404: {"description": "entry_not_found"},
         409: {"description": "pin_not_cleared or pin_already_set"},
         429: {"description": "too_many_attempts"},
@@ -454,16 +439,6 @@ async def set_own_pin(
             detail={
                 "code": "pin_not_cleared",
                 "message": "Ask your teacher to clear your PIN before choosing a new one.",
-            },
-        )
-    if await age_check_blocks(session, student.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "age_check_pending",
-                "message": (
-                    "Nevo is checking something with your school. Try again in a day or two."
-                ),
             },
         )
     if not await _has_consent(session, student.id):
@@ -548,7 +523,7 @@ async def lookup_entry(
         first_name=student.first_name or "",
         class_name=enrolled_class.name if enrolled_class else None,
         consent_state=await _consent_state(session, student.id),
-        age_check_pending=await age_check_blocks(session, student.id),
+        age_check_pending=False,
         age=age_on(student.date_of_birth),
         account_ready=student.pin_hash is not None,
         pin_cleared=student.pin_cleared_at is not None,

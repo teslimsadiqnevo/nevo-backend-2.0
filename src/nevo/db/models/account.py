@@ -122,6 +122,10 @@ class School(TimestampMixin, Base):
             name="data_retention_days_positive",
         ),
         CheckConstraint(
+            "admin_seat_limit > 0",
+            name="admin_seat_limit_positive",
+        ),
+        CheckConstraint(
             "contract_value IS NULL OR contract_value >= 0",
             name="contract_value_nonnegative",
         ),
@@ -164,6 +168,15 @@ class School(TimestampMixin, Base):
         nullable=False,
         default=365,
         server_default="365",
+    )
+    #: Admin-console seats. Five is the standard allowance; a commercial
+    #: exception changes this value for one school without changing product
+    #: behaviour for every tenant.
+    admin_seat_limit: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=5,
+        server_default="5",
     )
     profile: Mapped[dict[str, object]] = mapped_column(
         JSONB,

@@ -16,6 +16,8 @@ class PermissionRepository(Protocol):
 
     async def list_team(self, school_id: UUID) -> list[AdminTeamMember]: ...
 
+    async def admin_seat_limit(self, school_id: UUID) -> int: ...
+
     async def create_invitation(
         self,
         draft: InvitationDraft,

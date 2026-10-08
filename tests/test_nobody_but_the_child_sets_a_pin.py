@@ -112,10 +112,10 @@ def test_the_child_door_only_opens_while_the_pin_is_cleared() -> None:
     # overwrite a classmate's credential.
     assert "pin_already_set" in source
     assert "student.pin_hash is not None" in source
-    # And it is gated on consent and the age check, like every other door a
-    # child can reach.
+    # Consent is a gate. A date-of-birth mismatch is only a roster note and
+    # never prevents the child choosing their PIN.
     assert "consent_pending" in source
-    assert "age_check_pending" in source
+    assert "age_check_pending" not in source
 
 
 def test_four_digits_is_the_length_and_it_travels_with_the_pin() -> None:

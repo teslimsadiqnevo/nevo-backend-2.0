@@ -1,14 +1,13 @@
-"""Two dates of birth, compared, and the exceptions a person has to settle.
+"""Two dates of birth, compared, and recorded as roster notes.
 
 A date of birth decides whether a child should be offered this product at
 all, and it came from one place — a line somebody typed into a roster — with
 nothing to check it against. The parent is now asked for it too, on the
 consent screen, and the two are compared.
 
-A disagreement is an exception, not a rule for software to apply. Nevo does
-not prefer the school's date over the parent's or the other way round, and it
-never asks the child. It blocks access, tells the school, and waits for a
-person to settle it with both sides.
+A disagreement is an exception, not a rule for software to apply. The school
+record remains authoritative for delivery, the mismatch is visible to staff,
+and no child is blocked while adults correct either source.
 """
 
 from __future__ import annotations
@@ -51,7 +50,7 @@ class AgeCheckResponse(CamelResponse):
     resolution_note: str | None
     resolved_by: UUID | None
     resolved_at: datetime | None
-    #: True while this keeps the child out of the product.
+    #: Always false. Kept for contract compatibility with older clients.
     blocks_access: bool
 
 
@@ -64,7 +63,7 @@ class AgeCheckResolution(BaseModel):
 
     model_config = CAMEL_CONFIG
 
-    agreed_date_of_birth: Annotated[date, Field(alias="agreedDateOfBirth")]
+    agreed_date_of_birth: Annotated[date | None, Field(alias="agreedDateOfBirth")] = None
     #: How it was settled and with whom. Short, and for the school's own
     #: record of having done it.
     note: Annotated[str | None, Field(default=None, max_length=500)] = None
@@ -92,7 +91,7 @@ async def list_age_checks(
     session: DatabaseSession,
     state: AgeCheckState | None = None,
 ) -> list[AgeCheckResponse]:
-    """The exception queue. Mismatches first, because they block children."""
+    """The exception queue. Mismatches first so staff can correct the roster note."""
 
     actor = await require_school_actor(session, principal, roles=SCHOOL_ROLES)
     query = select(AgeCheck).where(AgeCheck.school_id == actor.school_id)
@@ -117,19 +116,16 @@ async def resolve_age_check(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> AgeCheckResponse:
-    """Close an exception with the date both sides agreed.
-
-    The agreed date is written back to the roster, so the record the product
-    uses from here on is the one two people settled on rather than the one
-    that was typed. Who closed it and when is kept, because a school has to
-    be able to show that the disagreement was dealt with and not overridden.
-    """
+    """Close the note while retaining the school's date as authoritative."""
 
     actor = await require_school_actor(session, principal, roles=SCHOOL_ROLES)
     check = await session.get(AgeCheck, age_check_id)
     if check is None or check.school_id != actor.school_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Age check not found")
-    if payload.agreed_date_of_birth > datetime.now(UTC).date():
+    if (
+        payload.agreed_date_of_birth is not None
+        and payload.agreed_date_of_birth > datetime.now(UTC).date()
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -138,25 +134,42 @@ async def resolve_age_check(
             },
         )
     now = datetime.now(UTC)
-    check.agreed_date_of_birth = payload.agreed_date_of_birth
+    check.agreed_date_of_birth = check.school_date_of_birth
     check.resolution_note = payload.note
     check.resolved_by_user_id = actor.id
     check.resolved_at = now
     check.state = AgeCheckState.RESOLVED
     student = await session.get(User, check.student_id)
-    if student is not None:
-        student.date_of_birth = payload.agreed_date_of_birth
     await session.commit()
     return _view(check, student)
 
 
 async def age_check_blocks(session: AsyncSession, student_id: UUID) -> bool:
-    """Whether an unsettled disagreement keeps this child out.
+    """Compatibility hook: Lydia's 7 October ruling makes this always false."""
 
-    Asked by the entry flow, so the block is the API's. A child whose two
-    dates of birth disagree is a child nobody is sure is old enough to be
-    here, and that is settled before they start rather than after.
-    """
+    del session, student_id
+    return False
 
-    state = await session.scalar(select(AgeCheck.state).where(AgeCheck.student_id == student_id))
-    return state is AgeCheckState.MISMATCH
+
+async def reconcile_school_date(
+    session: AsyncSession,
+    student_id: UUID,
+    school_date_of_birth: date | None,
+) -> None:
+    """Close a mismatch automatically when the corrected school date agrees."""
+
+    check = await session.scalar(select(AgeCheck).where(AgeCheck.student_id == student_id))
+    if check is None:
+        return
+    check.school_date_of_birth = school_date_of_birth
+    if check.parent_date_of_birth is None:
+        check.state = AgeCheckState.AWAITING_PARENT
+    elif school_date_of_birth == check.parent_date_of_birth:
+        check.state = AgeCheckState.MATCHED
+        check.agreed_date_of_birth = school_date_of_birth
+        check.resolved_at = datetime.now(UTC)
+    else:
+        check.state = AgeCheckState.MISMATCH
+        check.agreed_date_of_birth = None
+        check.resolved_at = None
+        check.resolved_by_user_id = None

@@ -1177,9 +1177,9 @@ async def create_lesson_assignments(
 async def create_escalation(
     payload: EscalationCreateRequest,
     principal: PrincipalDependency,
+    actor: TeacherScope,
     session: DatabaseSession,
 ) -> EscalationResponse:
-    teacher = await require_school_actor(session, principal, roles={UserRole.TEACHER})
     await require_student_access(session, principal, payload.student_id)
     student = await session.get(User, payload.student_id)
     if payload.attention_flag_id is not None:
@@ -1189,7 +1189,7 @@ async def create_escalation(
     record = Escalation(
         attention_flag_id=payload.attention_flag_id,
         student_id=payload.student_id,
-        teacher_id=teacher.id,
+        teacher_id=actor.user_id,
         teacher_note=payload.note.strip(),
     )
     session.add(record)

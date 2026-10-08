@@ -127,8 +127,8 @@ def test_the_two_sources_are_kept_apart() -> None:
     assert {"school_date_of_birth", "parent_date_of_birth", "agreed_date_of_birth"} <= columns
 
 
-def test_a_mismatch_blocks_and_a_match_does_not() -> None:
-    assert AgeCheck(state=AgeCheckState.MISMATCH).blocks_access
+def test_age_check_notes_never_block_a_child() -> None:
+    assert not AgeCheck(state=AgeCheckState.MISMATCH).blocks_access
     assert not AgeCheck(state=AgeCheckState.MATCHED).blocks_access
     assert not AgeCheck(state=AgeCheckState.RESOLVED).blocks_access
 
@@ -141,16 +141,15 @@ def test_a_roster_with_no_date_of_birth_is_not_treated_as_agreement() -> None:
     assert "school_date is None or school_date != parent_date_of_birth" in source
 
 
-def test_the_child_is_never_asked_and_the_school_settles_it(spec: dict) -> None:
+def test_the_child_is_never_asked_or_blocked_over_the_note(spec: dict) -> None:
     assert "get" in spec["paths"]["/api/v1/age-checks"]
     assert "post" in spec["paths"]["/api/v1/age-checks/{age_check_id}/resolve"]
 
     from nevo.api.student_entry import set_pin_and_start
 
     entry = inspect.getsource(set_pin_and_start)
-    # The child is told the school is checking something, and asked nothing.
-    assert "age_check_blocks" in entry
-    assert "age_check_pending" in entry
+    assert "age_check_blocks" not in entry
+    assert "age_check_pending" not in entry
 
 
 def test_resolving_records_who_closed_it() -> None:

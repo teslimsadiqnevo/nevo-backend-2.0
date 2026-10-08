@@ -41,3 +41,11 @@ class SsoManagedTeamError(PermissionError):
 class InvalidAdminRoleError(PermissionError):
     code = "invalid_admin_role"
     public_message = "Student accounts cannot be added to the admin team."
+
+
+class AdminSeatLimitReachedError(PermissionError):
+    code = "admin_seat_limit_reached"
+    public_message = (
+        "This school has used all of its admin seats. Contact your relationship "
+        "manager if the school needs a higher allowance."
+    )

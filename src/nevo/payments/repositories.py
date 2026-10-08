@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.db.models.account import User
 from nevo.db.models.billing import (
     BillingContact,
     BillingPaymentMethod,
@@ -16,12 +17,16 @@ from nevo.db.models.billing import (
     PaymentTransaction,
     PaymentWebhookEvent,
 )
+from nevo.db.models.permission import Admin, AdminScopeAssignment
+from nevo.domain.accounts.vocabulary import NotificationType, UserStatus
 from nevo.domain.billing.vocabulary import (
     InvoiceStatus,
     PaymentTransactionStatus,
     PricingCurrency,
     WebhookEventStatus,
 )
+from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.notifications.dispatch import notify_each
 from nevo.payments.entities import ProviderAuthorization
 
 MANUAL_PROVIDER = "manual_transfer"
@@ -181,6 +186,34 @@ class SqlAlchemyPaymentRepository:
                     invoice.status = InvoiceStatus.PAID
                     invoice.paid_at = record.paid_at
                     invoice_paid = True
+                    recipients = list(
+                        (
+                            await session.execute(
+                                select(User.id, User.role)
+                                .join(Admin, Admin.user_id == User.id)
+                                .join(
+                                    AdminScopeAssignment,
+                                    AdminScopeAssignment.admin_id == Admin.id,
+                                )
+                                .where(
+                                    Admin.school_id == record.school_id,
+                                    User.status == UserStatus.ACTIVE,
+                                    AdminScopeAssignment.scope == PermissionScope.BILLING,
+                                    AdminScopeAssignment.revoked_at.is_(None),
+                                )
+                            )
+                        ).all()
+                    )
+                    await notify_each(
+                        session,
+                        recipients=recipients,
+                        notification_type=NotificationType.PAYMENT_CLEARED,
+                        title="Payment received",
+                        description=(
+                            f"Payment for invoice {invoice.invoice_number} has been confirmed."
+                        ),
+                        navigates_to="/admin/billing",
+                    )
 
             method_saved = False
             if authorization is not None and authorization.reusable:

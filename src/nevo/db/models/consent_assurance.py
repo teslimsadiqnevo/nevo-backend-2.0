@@ -117,9 +117,9 @@ class AgeCheck(Base):
 
     @property
     def blocks_access(self) -> bool:
-        """A disagreement nobody has settled keeps the child out."""
+        """Age-check differences are roster notes and never access gates."""
 
-        return self.state is AgeCheckState.MISMATCH
+        return False
 
 
 class ConsentRefusal(Base):

@@ -21,6 +21,7 @@ from nevo.permissions.entities import (
     PermissionSnapshot,
 )
 from nevo.permissions.errors import (
+    AdminSeatLimitReachedError,
     LastOversightAdminError,
     TeamMemberAlreadyExistsError,
 )
@@ -77,15 +78,37 @@ class SqlAlchemyPermissionRepository:
             for admin, user in rows
         ]
 
+    async def admin_seat_limit(self, school_id: UUID) -> int:
+        async with self._sessions() as session:
+            limit = await session.scalar(
+                select(School.admin_seat_limit).where(School.id == school_id)
+            )
+        return int(limit or 5)
+
     async def create_invitation(self, draft: InvitationDraft) -> InvitationDraft:
         try:
             async with self._sessions.begin() as session:
+                school = await session.scalar(
+                    select(School).where(School.id == draft.school_id).with_for_update()
+                )
                 existing = await session.scalar(
                     select(User)
                     .where(func.lower(User.email) == draft.email)
                     .with_for_update()
                     .limit(1)
                 )
+                if school is None:
+                    raise TeamMemberAlreadyExistsError
+                seats_used = await session.scalar(
+                    select(func.count(Admin.id))
+                    .join(User, User.id == Admin.user_id)
+                    .where(
+                        Admin.school_id == draft.school_id,
+                        User.status.in_((UserStatus.ACTIVE, UserStatus.INVITED)),
+                    )
+                )
+                if existing is None and int(seats_used or 0) >= school.admin_seat_limit:
+                    raise AdminSeatLimitReachedError
                 if existing is not None:
                     if (
                         existing.status is not UserStatus.INVITED

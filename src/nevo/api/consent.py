@@ -88,6 +88,24 @@ class ParentConsentRequest(BaseModel):
     )
 
 
+class BulkParentConsentItem(ParentConsentRequest):
+    student_id: UUID = Field(alias="studentId")
+
+
+class BulkParentConsentRequest(BaseModel):
+    requests: list[BulkParentConsentItem] = Field(min_length=1, max_length=500)
+
+
+class BulkParentConsentResult(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    student_id: UUID
+    queued: bool
+    request: "QueuedParentConsentResponse | None" = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
 class QueuedParentConsentResponse(BaseModel):
     model_config = CAMEL_CONFIG
 
@@ -342,6 +360,48 @@ async def request_parent_consent(
     except ConsentError as error:
         raise public_consent_error(error) from error
     return QueuedParentConsentResponse.from_request(queued)
+
+
+@router.post(
+    "/consents/parent-consent-requests/bulk",
+    response_model=list[BulkParentConsentResult],
+    status_code=status.HTTP_207_MULTI_STATUS,
+)
+async def request_parent_consent_bulk(
+    payload: BulkParentConsentRequest,
+    actor: ConsentRequesterDependency,
+    service: ConsentServiceDependency,
+) -> list[BulkParentConsentResult]:
+    """Queue many consent requests, preserving each child's own outcome."""
+
+    results: list[BulkParentConsentResult] = []
+    for item in payload.requests:
+        try:
+            queued = await service.request_parent_consent(
+                consent_actor(actor),
+                student_id=item.student_id,
+                parent_name=item.parent_name,
+                parent_contact=item.parent_contact,
+                contact_method=item.contact_method,
+                consent_types=frozenset(item.consent_types),
+            )
+            results.append(
+                BulkParentConsentResult(
+                    studentId=item.student_id,
+                    queued=True,
+                    request=QueuedParentConsentResponse.from_request(queued),
+                )
+            )
+        except ConsentError as error:
+            results.append(
+                BulkParentConsentResult(
+                    studentId=item.student_id,
+                    queued=False,
+                    errorCode=error.code,
+                    errorMessage=error.public_message,
+                )
+            )
+    return results
 
 
 @router.post(

@@ -181,6 +181,7 @@ class NotificationType(StrEnum):
     ROSTER_SYNC_COMPLETED = "roster_sync_completed"
     ROSTER_SYNC_NEEDS_ATTENTION = "roster_sync_needs_attention"
     INVOICE_ISSUED = "invoice_issued"
+    PAYMENT_CLEARED = "payment_cleared"
     SSO_NEEDS_ATTENTION = "sso_needs_attention"
     #: A child's own bell, which was always empty: every type above addresses
     #: a teacher or an administrator, so nothing could ever be addressed to a
@@ -217,6 +218,7 @@ NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {
     NotificationType.ROSTER_SYNC_COMPLETED: NotificationCategory.REPORTS,
     NotificationType.ROSTER_SYNC_NEEDS_ATTENTION: NotificationCategory.REPORTS,
     NotificationType.INVOICE_ISSUED: NotificationCategory.BILLING,
+    NotificationType.PAYMENT_CLEARED: NotificationCategory.BILLING,
     NotificationType.SSO_NEEDS_ATTENTION: NotificationCategory.ACCOUNT,
     NotificationType.LESSON_ASSIGNED: NotificationCategory.ASSIGNMENTS,
     NotificationType.REVIEW_DUE: NotificationCategory.ASSIGNMENTS,
@@ -324,5 +326,6 @@ NOTIFICATION_CATEGORY_BY_TYPE.update(
         NotificationType.ROSTER_SYNC_NEEDS_ATTENTION: NotificationCategory.REPORTS,
         NotificationType.SSO_NEEDS_ATTENTION: NotificationCategory.ACCOUNT,
         NotificationType.INVOICE_ISSUED: NotificationCategory.BILLING,
+        NotificationType.PAYMENT_CLEARED: NotificationCategory.BILLING,
     }
 )

@@ -19,12 +19,16 @@ class MemoryPermissionRepository:
         self.invitations: dict[str, InvitationDraft] = {}
         self.password_hashes: dict[UUID, str] = {}
         self.raise_last_oversight = False
+        self.seat_limits: dict[UUID, int] = {}
 
     async def snapshot(self, user_id: UUID) -> PermissionSnapshot | None:
         return self.snapshots.get(user_id)
 
     async def list_team(self, school_id: UUID) -> list[AdminTeamMember]:
         return list(self.team.get(school_id, []))
+
+    async def admin_seat_limit(self, school_id: UUID) -> int:
+        return self.seat_limits.get(school_id, 5)
 
     async def create_invitation(self, draft: InvitationDraft) -> InvitationDraft:
         existing_member = next(

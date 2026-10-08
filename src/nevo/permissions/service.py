@@ -17,6 +17,7 @@ from nevo.permissions.entities import (
     PermissionSnapshot,
 )
 from nevo.permissions.errors import (
+    AdminSeatLimitReachedError,
     InvalidAdminRoleError,
     InvalidInvitationError,
     PermissionDeniedError,
@@ -92,6 +93,12 @@ class PermissionService:
         members = await self._repository.list_team(actor.school_id)
         return [self._with_effective_scopes(member) for member in members]
 
+    async def team_seat_limit(self, principal: AuthPrincipal) -> int:
+        actor = await self.require(principal, PermissionScope.OVERSIGHT)
+        if actor.school_id is None:
+            raise PermissionDeniedError
+        return await self._repository.admin_seat_limit(actor.school_id)
+
     async def invite(
         self,
         principal: AuthPrincipal,
@@ -109,6 +116,16 @@ class PermissionService:
             raise InvalidAdminRoleError
         if not scopes and role == "other_admin":
             raise PermissionDeniedError
+
+        members = await self._repository.list_team(actor.school_id)
+        seat_limit = await self._repository.admin_seat_limit(actor.school_id)
+        existing = next(
+            (member for member in members if (member.email or "").casefold() == email.casefold()),
+            None,
+        )
+        seats_used = sum(member.status in {"active", "invited"} for member in members)
+        if existing is None and seats_used >= seat_limit:
+            raise AdminSeatLimitReachedError
 
         normalized_email = email.casefold().strip()
         token, token_digest = self._invitation_tokens.issue()

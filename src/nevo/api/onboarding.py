@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nevo.api.age_checks import reconcile_school_date
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
@@ -1208,6 +1209,7 @@ async def _create_person(
         user.first_name = first_name or user.first_name
         user.last_name = last_name or user.last_name
         user.date_of_birth = _parse_date(values.get("date_of_birth", "")) or user.date_of_birth
+        await reconcile_school_date(session, user.id, user.date_of_birth)
     else:
         user = User(
             school_id=school.id,

@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 
 from nevo.api.auth import (
     AuthServiceDependency,
+    LoginPin,
     OptionalPrincipalDependency,
     PrincipalDependency,
     SessionResponse,
@@ -128,7 +129,7 @@ class PinUpdateRequest(BaseModel):
     #:
     #: Without it, anyone who found a signed-in tablet could change the PIN on
     #: it, which in a classroom is a shared device and a locked-out child.
-    current_pin: StudentPin | None = Field(default=None, alias="currentPin")
+    current_pin: LoginPin | None = Field(default=None, alias="currentPin")
     onboarding_token: str | None = Field(default=None, alias="onboardingToken", min_length=32)
     first_name: str | None = Field(default=None, alias="firstName", min_length=1, max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
@@ -149,7 +150,7 @@ class PinResetRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     school_code: str = Field(alias="schoolCode", min_length=2, max_length=50)
-    login_identifier: str = Field(alias="loginIdentifier", min_length=1, max_length=50)
+    login_identifier: str = Field(alias="loginIdentifier", min_length=1, max_length=60)
 
 
 class PasswordResetCompleteRequest(BaseModel):

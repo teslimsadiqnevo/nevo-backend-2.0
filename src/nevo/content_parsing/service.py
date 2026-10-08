@@ -1144,6 +1144,28 @@ def _validated_calculation_variant(
             if isinstance(raw_targets, list)
             else [option["value"] for option in options]
         )
+        tap_count = step.get("tapCount")
+        if tap_count is not None and (
+            not isinstance(tap_count, int) or isinstance(tap_count, bool) or tap_count < 1
+        ):
+            return None, "calculation_tap_count_not_whole_number"
+        raw_highlights = step.get("highlights")
+        highlights = (
+            [
+                {
+                    "target": str(item.get("target") or "").strip(),
+                    "role": (
+                        str(item.get("role"))
+                        if item.get("role") in {"active", "source", "result"}
+                        else "active"
+                    ),
+                }
+                for item in raw_highlights
+                if isinstance(item, dict) and str(item.get("target") or "").strip()
+            ]
+            if isinstance(raw_highlights, list)
+            else [{"target": str(target), "role": "active"} for target in targets]
+        )
         normalized_steps.append(
             {
                 "stepId": step_id,
@@ -1164,7 +1186,9 @@ def _validated_calculation_variant(
                 ),
                 "input": input_kind,
                 "targets": targets,
+                "tapCount": tap_count,
                 "assembles": str(step.get("assembles") or step.get("equationState") or "").strip(),
+                "highlights": highlights,
                 # Every form that counts as correct for this step, generated
                 # from this lesson at upload. One half, 0.5 and 50 percent are
                 # all here; so are x+1 and 1+x. Nothing is judged at runtime
@@ -1288,7 +1312,35 @@ def _text_variant(value: object, body: str) -> dict[str, object]:
         stripped = point.strip()
         if stripped and stripped.casefold() != body.casefold():
             points.append(stripped)
-    return {"body": body, "keyPoints": points[:6]}
+    key_terms = []
+    raw_terms = source.get("keyTerms")
+    if isinstance(raw_terms, list):
+        for raw in raw_terms:
+            if not isinstance(raw, dict):
+                continue
+            term = str(raw.get("term") or "").strip()
+            definition = str(raw.get("definition") or "").strip()
+            if term and definition:
+                key_terms.append({"term": term[:120], "definition": definition[:500]})
+
+    equations = []
+    raw_equations = source.get("equationCallouts")
+    if isinstance(raw_equations, list):
+        for raw in raw_equations:
+            if not isinstance(raw, dict):
+                continue
+            equation = str(raw.get("equation") or "").strip()
+            if not equation:
+                continue
+            label = str(raw.get("label") or "").strip() or None
+            equations.append({"equation": equation[:500], "label": label[:160] if label else None})
+
+    return {
+        "body": body,
+        "keyPoints": points[:6],
+        "keyTerms": key_terms[:12],
+        "equationCallouts": equations[:8],
+    }
 
 
 def _interactive_variant(value: object, body: str) -> dict[str, object] | None:

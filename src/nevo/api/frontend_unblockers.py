@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import insert
 from nevo.access import accessible_lessons
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.api.consent import StudentLearningConsent
 from nevo.api.consent_summary import empty_consent_summary, student_consent_summaries
 from nevo.api.content import (
     ParseAcceptedResponse,
@@ -37,6 +38,7 @@ from nevo.api.dependencies import DatabaseSession
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     checkpoint_payloads,
+    reading_chunks,
 )
 from nevo.api.pagination import (
     DEFAULT_LIMIT,
@@ -331,6 +333,14 @@ class MessageThreadResponse(BaseModel):
     thread_id: UUID = Field(alias="threadId")
     recipient_type: MessageRecipientType = Field(alias="recipientType")
     recipient_id: UUID | None = Field(alias="recipientId")
+    teacher_id: UUID | None = Field(
+        default=None,
+        alias="teacherId",
+        description=(
+            "The active teacher this student conversation routes to. Null only when "
+            "the school has not assigned a teacher to the student's class."
+        ),
+    )
     title: str
     latest_preview: str | None = Field(alias="latestPreview")
     last_message_at: datetime = Field(alias="lastMessageAt")
@@ -993,6 +1003,7 @@ async def lesson_detail(
                 sequenceOrder=item.sequence_order,
                 title=item.title,
                 body=item.body,
+                readingChunks=reading_chunks(item.segment_key, item.body),
                 availableModalities=list(item.available_modalities),
                 comprehensionCheckpoints=checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
@@ -1723,7 +1734,9 @@ async def recalibrate_prompt(
     student_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> BaselinePromptResponse:
+    del consent
     if principal.role == "student" and principal.user_id != student_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1755,6 +1768,7 @@ async def record_recalibrate_answer(
     payload: BaselinePromptAnswer,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> BaselinePromptResult:
     """Take the child's warm-up pick and mark it here.
 
@@ -1768,6 +1782,7 @@ async def record_recalibrate_answer(
     ask B10, and punishing the child for it would be a worse one.
     """
 
+    del consent
     if principal.role == "student" and principal.user_id != student_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2471,15 +2486,43 @@ async def _thread_response(
     title = "Conversation"
     recipient_id = None
     class_name = None
+    teacher_id = None
     if thread.recipient_type == "student" and thread.student_id:
         student = await session.get(User, thread.student_id)
         title = _display_name(student) if student else "Student conversation"
         recipient_id = thread.student_id
+        teacher_id = await session.scalar(
+            select(TeacherClassAssignment.teacher_id)
+            .join(
+                StudentClassEnrollment,
+                StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
+            )
+            .join(User, User.id == TeacherClassAssignment.teacher_id)
+            .where(
+                StudentClassEnrollment.student_id == thread.student_id,
+                StudentClassEnrollment.removed_at.is_(None),
+                TeacherClassAssignment.removed_at.is_(None),
+                User.status == UserStatus.ACTIVE,
+            )
+            .order_by(TeacherClassAssignment.assigned_at, TeacherClassAssignment.id)
+            .limit(1)
+        )
     elif thread.recipient_type == "class" and thread.class_id:
         school_class = await session.get(Class, thread.class_id)
         title = school_class.name if school_class else "Class conversation"
         class_name = school_class.name if school_class else None
         recipient_id = thread.class_id
+        teacher_id = await session.scalar(
+            select(TeacherClassAssignment.teacher_id)
+            .join(User, User.id == TeacherClassAssignment.teacher_id)
+            .where(
+                TeacherClassAssignment.class_id == thread.class_id,
+                TeacherClassAssignment.removed_at.is_(None),
+                User.status == UserStatus.ACTIVE,
+            )
+            .order_by(TeacherClassAssignment.assigned_at, TeacherClassAssignment.id)
+            .limit(1)
+        )
     last_read_at = await session.scalar(
         select(MessageThreadRead.last_read_at).where(
             MessageThreadRead.thread_id == thread.id,
@@ -2497,6 +2540,7 @@ async def _thread_response(
         threadId=thread.id,
         recipientType=thread.recipient_type,
         recipientId=recipient_id,
+        teacherId=teacher_id,
         title=title,
         latestPreview=thread.latest_preview,
         lastMessageAt=thread.last_message_at,

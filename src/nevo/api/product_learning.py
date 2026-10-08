@@ -37,7 +37,7 @@ from nevo.api.frontend_unblockers import (
     _title_from_filename,
 )
 from nevo.api.learning_support import require_learning_support_if_admin
-from nevo.api.lesson_contracts import checkpoint_payloads
+from nevo.api.lesson_contracts import checkpoint_payloads, reading_chunks
 from nevo.api.product_common import (
     actor_user,
     require_approved_lessons,
@@ -75,8 +75,9 @@ from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag
 from nevo.db.models.content import Lesson, LessonSegment
-from nevo.db.models.frontend_support import LessonAssignment
+from nevo.db.models.frontend_support import Concept, LessonAssignment
 from nevo.db.models.learner_profile import LearnerProfile
+from nevo.db.models.mastery import StudentConceptScheduling
 from nevo.db.models.product import (
     LessonModule,
     LessonProgress,
@@ -148,6 +149,18 @@ class AssignmentCreate(BaseModel):
     note: str | None = Field(default=None, max_length=2_000)
 
 
+class AssignmentCancelRequest(BaseModel):
+    reason: Literal[
+        "finished_with",
+        "superseded",
+        "duplicate",
+        "housekeeping",
+        "wrong_content",
+        "wrong_class",
+        "assigned_in_error",
+    ]
+
+
 class ProgressWrite(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -172,18 +185,11 @@ class ProgressWrite(BaseModel):
     #: Ask B49.
     check_position: int | None = Field(default=None, alias="checkPosition", ge=0)
     status: LessonCompletionStatus
-    #: A named result, never a score. It is supplied only when the result
-    #: screen closes a lesson; a lesson with no attempt resumes instead.
+    #: Deprecated compatibility input. The server derives the actual state
+    #: from the latest marked attempt for every problem.
     result_state: Literal["landed", "partly_landed", "nothing_landed", "not_attempted"] | None = (
         Field(default=None, alias="resultState")
     )
-
-    @model_validator(mode="after")
-    def result_belongs_to_a_close(self) -> "ProgressWrite":
-        if self.result_state is not None and self.status is not LessonCompletionStatus.COMPLETED:
-            raise ValueError("resultState is only accepted when a lesson is completed")
-        return self
-
 
 class LessonQuestionAttemptWrite(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -321,6 +327,77 @@ def _attempt_payload(item: LessonQuestionAttempt) -> dict[str, object]:
         "correct": item.correct,
         "submittedAt": item.submitted_at,
     }
+
+
+async def _attempt_payload_with_outcome(
+    session: DatabaseSession, item: LessonQuestionAttempt
+) -> dict[str, object]:
+    payload = _attempt_payload(item)
+    payload["resultState"] = await _derive_result_state(session, item.session_id)
+    prompts = await _socratic_handoff(session, item)
+    payload["handoffTo"] = "socratic_panel" if prompts else None
+    payload["guidedPrompts"] = prompts
+    payload["advanceAfterHandoff"] = bool(prompts)
+    return payload
+
+
+async def _derive_result_state(
+    session: DatabaseSession, session_id: UUID
+) -> Literal["landed", "partly_landed", "nothing_landed", "not_attempted"]:
+    """Judge a sitting from the latest server-marked answer per problem."""
+
+    attempts = list(
+        await session.scalars(
+            select(LessonQuestionAttempt)
+            .where(LessonQuestionAttempt.session_id == session_id)
+            .order_by(
+                LessonQuestionAttempt.question_id,
+                LessonQuestionAttempt.attempt_number.desc(),
+                LessonQuestionAttempt.submitted_at.desc(),
+            )
+        )
+    )
+    latest: dict[str, bool | None] = {}
+    for attempt in attempts:
+        latest.setdefault(attempt.question_id, attempt.correct)
+    marked = [value for value in latest.values() if value is not None]
+    if not marked:
+        return "not_attempted"
+    right = sum(value is True for value in marked)
+    if right == len(marked):
+        return "landed"
+    if right == 0:
+        return "nothing_landed"
+    return "partly_landed"
+
+
+async def _socratic_handoff(
+    session: DatabaseSession, item: LessonQuestionAttempt
+) -> list[dict[str, str]]:
+    """Return the server-owned SCRUM-241 hand-off after three misses."""
+
+    recent = list(
+        await session.scalars(
+            select(LessonQuestionAttempt)
+            .where(
+                LessonQuestionAttempt.session_id == item.session_id,
+                LessonQuestionAttempt.question_id == item.question_id,
+            )
+            .order_by(LessonQuestionAttempt.attempt_number.desc())
+            .limit(3)
+        )
+    )
+    if len(recent) < 3 or any(attempt.correct is not False for attempt in recent):
+        return []
+    concept = str(item.question_snapshot.get("conceptName") or "this idea").strip()
+    return [
+        {"id": f"{item.question_id}-notice", "prompt": "What is the question asking you to find?"},
+        {
+            "id": f"{item.question_id}-connect",
+            "prompt": f"What do you already know about {concept} that could help here?",
+        },
+        {"id": f"{item.question_id}-try", "prompt": "What is one small step you could try first?"},
+    ]
 
 
 async def _question_for_attempt(
@@ -513,6 +590,7 @@ async def lesson_detail(
                 "contentType": item.content_type.value,
                 "title": item.title,
                 "body": item.body,
+                "readingChunks": reading_chunks(item.segment_key, item.body),
                 "availableModalities": item.available_modalities,
                 "comprehensionCheckpoints": checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
@@ -589,6 +667,8 @@ async def assignments(
             "dueAt": item.due_at,
             "availableFrom": item.available_from,
             "note": item.note,
+            "cancellationReason": item.cancellation_reason,
+            "recallWithdrawn": item.recall_withdrawn,
             "assignedById": str(item.teacher_id) if item.teacher_id else None,
             "assignedByName": assigners.get(item.teacher_id),
             "assignedAt": item.assigned_at,
@@ -726,15 +806,30 @@ async def update_assignment(
 @router.delete("/assignments/{assignment_id}", status_code=204)
 async def cancel_assignment(
     assignment_id: UUID,
+    payload: AssignmentCancelRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> None:
-    await update_assignment(
-        assignment_id,
-        AssignmentPatch(status="cancelled"),
-        principal,
-        session,
+    actor = await require_school_actor(
+        session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
     )
+    record = await session.get(LessonAssignment, assignment_id)
+    lesson = await session.get(Lesson, record.lesson_id) if record else None
+    if record is None or lesson is None or lesson.school_id != actor.school_id:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    retraction = payload.reason in {"wrong_content", "wrong_class", "assigned_in_error"}
+    record.status = AssignmentStatus.CANCELLED
+    record.cancellation_reason = payload.reason
+    record.recall_withdrawn = retraction
+    if retraction:
+        concept_ids = select(Concept.id).where(Concept.lesson_id == record.lesson_id)
+        await session.execute(
+            delete(StudentConceptScheduling).where(
+                StudentConceptScheduling.student_id == record.student_id,
+                StudentConceptScheduling.concept_id.in_(concept_ids),
+            )
+        )
+    await session.commit()
 
 
 @router.post(
@@ -849,7 +944,7 @@ async def save_lesson_question_attempt(
             )
         )
         if existing is not None:
-            return _attempt_payload(existing)
+            return await _attempt_payload_with_outcome(session, existing)
     question, segment_id = await _question_for_attempt(session, lesson, payload)
     attempt_number = int(
         await session.scalar(
@@ -885,7 +980,7 @@ async def save_lesson_question_attempt(
     session.add(record)
     await session.commit()
     await session.refresh(record)
-    return _attempt_payload(record)
+    return await _attempt_payload_with_outcome(session, record)
 
 
 @router.get(
@@ -915,7 +1010,7 @@ async def lesson_question_attempts(
             )
         )
     ).all()
-    return [_attempt_payload(item) for item in records]
+    return [await _attempt_payload_with_outcome(session, item) for item in records]
 
 
 @router.put(
@@ -959,11 +1054,12 @@ async def save_lesson_progress(
     progress.status = payload.status
     progress.started_at = progress.started_at or lesson_session.started_at
     lesson_session.exit_position = str(payload.segment_position)
+    derived_result = await _derive_result_state(session, lesson_session.id)
     # A lesson that was never attempted is not the "nothing landed" result.
     # Keep its sitting open at the saved cursor so the next launch resumes it.
     not_attempted = (
         payload.status is LessonCompletionStatus.COMPLETED
-        and payload.result_state == "not_attempted"
+        and derived_result == "not_attempted"
     )
     if not_attempted:
         progress.status = LessonCompletionStatus.IN_PROGRESS
@@ -973,7 +1069,7 @@ async def save_lesson_progress(
     reroute: dict[str, object] | None = None
     nothing_landed = (
         payload.status is LessonCompletionStatus.COMPLETED
-        and payload.result_state == "nothing_landed"
+        and derived_result == "nothing_landed"
     )
     if payload.status == "completed" and not not_attempted:
         progress.completed_at = datetime.now(UTC)
@@ -1036,7 +1132,7 @@ async def save_lesson_progress(
         "modulePosition": progress.module_position,
         "segmentPosition": progress.segment_position,
         "intelligence": intelligence,
-        "resultState": payload.result_state,
+        "resultState": derived_result,
         "reroute": reroute,
         "masteredConcepts": mastered,
         "revisitConcepts": revisit,

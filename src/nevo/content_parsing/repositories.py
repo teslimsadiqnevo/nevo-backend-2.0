@@ -22,6 +22,8 @@ from nevo.db.models.content import (
     LessonSegment,
 )
 from nevo.db.models.frontend_support import Concept
+from nevo.db.models.probe import ProbeItem
+from nevo.db.models.subject import SchoolSubject
 from nevo.domain.accounts.vocabulary import UserStatus
 from nevo.domain.intelligence.vocabulary import (
     ContentModality,
@@ -30,6 +32,7 @@ from nevo.domain.intelligence.vocabulary import (
     KeyPointReviewState,
     LessonContentType,
 )
+from nevo.subjects.resolution import normalise
 
 
 class SqlAlchemyContentParsingRepository:
@@ -345,6 +348,22 @@ class SqlAlchemyContentParsingRepository:
             run.tts_call_count = tts_call_count
             run.review_notes = list(parsed.review_notes)
             await session.flush()
+            subject_name = str(request.source_metadata.get("subject") or "").strip()
+            school_subject = (
+                await session.scalar(
+                    select(SchoolSubject).where(
+                        SchoolSubject.school_id == school_id,
+                        SchoolSubject.normalised_name == normalise(subject_name),
+                    )
+                )
+                if subject_name
+                else None
+            )
+            await session.execute(
+                ProbeItem.__table__.update()
+                .where(ProbeItem.lesson_id == lesson_id)
+                .values(retired=True)
+            )
             for segment in parsed.segments:
                 checkpoints: list[dict[str, object]] = []
                 for index, checkpoint in enumerate(segment.comprehension_checkpoints, start=1):
@@ -385,6 +404,27 @@ class SqlAlchemyContentParsingRepository:
                         concept_id=concept.id,
                     )
                     checkpoints.extend(normalized)
+                    if school_subject is not None and normalized:
+                        probe = normalized[0]
+                        answer = probe.get("answerKey")
+                        options = probe.get("options")
+                        if (
+                            answer is not None
+                            and not isinstance(answer, list)
+                            and isinstance(options, list)
+                        ):
+                            session.add(
+                                ProbeItem(
+                                    school_id=school_id,
+                                    school_subject_id=school_subject.id,
+                                    question=str(probe.get("prompt") or "").strip(),
+                                    options=options,
+                                    correct_option=str(answer),
+                                    concept_id=concept.id,
+                                    lesson_id=lesson_id,
+                                    difficulty=0.5,
+                                )
+                            )
                 row = LessonSegment(
                     lesson_id=lesson_id,
                     parse_run_id=parse_run_id,

@@ -1,3 +1,5 @@
+import hashlib
+import re
 from typing import Literal
 from uuid import UUID
 
@@ -6,6 +8,61 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from nevo.domain.intelligence.vocabulary import ManipulativeKind
 
 ScalarAnswer = str | int | float | bool
+
+
+class ReadingChunk(BaseModel):
+    """A stable, ordered reading boundary generated from approved lesson text."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    sequence_order: int = Field(alias="sequenceOrder", ge=1)
+    text: str
+    start_offset: int = Field(alias="startOffset", ge=0)
+    end_offset: int = Field(alias="endOffset", ge=0)
+
+
+def reading_chunks(
+    segment_key: str,
+    body: str,
+    *,
+    target_chars: int = 420,
+) -> list[dict[str, object]]:
+    """Split prose deterministically; unchanged text keeps the same chunk IDs."""
+
+    text = body.strip()
+    if not text:
+        return []
+    pieces = [piece.strip() for piece in re.split(r"(?<=[.!?])\s+|\n+", text) if piece.strip()]
+    grouped: list[str] = []
+    current = ""
+    for piece in pieces:
+        candidate = f"{current} {piece}".strip()
+        if current and len(candidate) > target_chars:
+            grouped.append(current)
+            current = piece
+        else:
+            current = candidate
+    if current:
+        grouped.append(current)
+    chunks: list[dict[str, object]] = []
+    cursor = 0
+    for position, chunk_text in enumerate(grouped, start=1):
+        start = text.find(chunk_text, cursor)
+        start = cursor if start < 0 else start
+        end = start + len(chunk_text)
+        digest = hashlib.sha256(f"{segment_key}:{chunk_text}".encode()).hexdigest()[:20]
+        chunks.append(
+            {
+                "id": f"chunk-{digest}",
+                "sequenceOrder": position,
+                "text": chunk_text,
+                "startOffset": start,
+                "endOffset": end,
+            }
+        )
+        cursor = end
+    return chunks
 
 
 class CheckpointOption(BaseModel):
@@ -94,6 +151,26 @@ class TextVariant(BaseModel):
             "time rather than shown twice."
         ),
     )
+    key_terms: list["KeyTerm"] = Field(default_factory=list, alias="keyTerms", max_length=12)
+    equation_callouts: list["EquationCallout"] = Field(
+        default_factory=list,
+        alias="equationCallouts",
+        max_length=8,
+    )
+
+
+class KeyTerm(BaseModel):
+    """A term the child can inspect without leaving the segment."""
+
+    term: str = Field(min_length=1, max_length=120)
+    definition: str = Field(min_length=1, max_length=500)
+
+
+class EquationCallout(BaseModel):
+    """An equation kept separate from prose so it can be rendered accessibly."""
+
+    equation: str = Field(min_length=1, max_length=500)
+    label: str | None = Field(default=None, max_length=160)
 
 
 class VisualVariant(BaseModel):
@@ -154,6 +231,11 @@ class InteractiveVariant(BaseModel):
     instructions: str | None = None
 
 
+class CalculationHighlight(BaseModel):
+    target: str
+    role: Literal["active", "source", "result"] = "active"
+
+
 class CalculationStep(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -183,7 +265,12 @@ class CalculationStep(BaseModel):
     #: derives either from the answer.
     input: Literal["tap", "choice", "number"]
     targets: list[ScalarAnswer] = Field(default_factory=list)
+    tap_count: int | None = Field(default=None, alias="tapCount", ge=1)
     assembles: str
+    #: Structured renderer targets for the active-step emphasis. ``target``
+    #: names an equation token, scaffold mark, or manipulative piece id;
+    #: ``role`` says why it is highlighted.
+    highlights: list[CalculationHighlight] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -206,6 +293,18 @@ class CalculationStep(BaseModel):
             else [],
         )
         item.setdefault("assembles", item.get("equationState") or item.get("equation_state") or "")
+        if item.get("input") == "tap" and "tapCount" not in item:
+            numeric = [
+                target
+                for target in item.get("targets", [])
+                if isinstance(target, int) and not isinstance(target, bool) and target > 0
+            ]
+            item["tapCount"] = numeric[0] if numeric else None
+        if "highlights" not in item:
+            item["highlights"] = [
+                {"target": str(target), "role": "active"}
+                for target in item.get("targets", [])
+            ]
         return item
 
 
@@ -248,8 +347,16 @@ class CalculationScaffold(BaseModel):
     kind: Literal["bar", "number_line", "dots", "array", "place_value"]
     parts: int = Field(ge=1, le=100)
     rows: int = Field(default=1, ge=1, le=20)
-    marks: list[ScalarAnswer] = Field(default_factory=list, max_length=100)
-    labels: list[str] = Field(default_factory=list, max_length=100)
+    marks: list[ScalarAnswer] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Positions or values drawn on the scaffold, in renderer order.",
+    )
+    labels: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Visible labels paired with marks or scaffold parts in renderer order.",
+    )
 
 
 class CalculationVariant(BaseModel):
@@ -260,7 +367,10 @@ class CalculationVariant(BaseModel):
     #: cannot ask for help about the idea a child is stuck on - only about
     #: the sum in front of them. SCRUM-177, ask B25.
     concept_id: UUID | None = Field(default=None, alias="conceptId")
-    full_equation: str = Field(alias="fullEquation")
+    full_equation: str = Field(
+        alias="fullEquation",
+        description="The complete solved equation revealed when all co-construction steps finish.",
+    )
     expression: str
     #: What the whole problem comes to. Sent rather than left to be inferred
     #: from the last step: this is what a child is marked against, and a

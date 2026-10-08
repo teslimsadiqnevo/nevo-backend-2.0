@@ -5,6 +5,7 @@ class SignalEventType(StrEnum):
     TIME_ON_SEGMENT = "time_on_segment"
     REPLAY = "replay"
     SCROLL = "scroll"
+    READING_CHUNK_VIEWED = "reading_chunk_viewed"
     SIMPLIFY_TRIGGER = "simplify_trigger"
     EXPAND_TRIGGER = "expand_trigger"
     SLOWER_TRIGGER = "slower_trigger"

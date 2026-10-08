@@ -38,7 +38,7 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
         "says which text version was actually on screen - standard, "
         "simplified or expanded - on every segment, not only the ones an "
         "adaptation touched. Design D23, ask B45.",
-        ("segmentId", "durationMs", "depthShown"),
+        ("segmentId", "durationMs", "depthShown", "[depthRatio]"),
     ),
     SignalEventType.REPLAY: SignalContract(
         "The child plays a finished piece of media again from the start. "
@@ -62,25 +62,31 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
     SignalEventType.COMPREHENSION_RESPONSE: SignalContract(
         "The child answers a comprehension checkpoint. Correctness is not "
         "sent: it is decided on the server against the stored answer.",
-        ("segmentId", "questionId"),
+        ("segmentId", "questionId", "source: checkpoint|assessment"),
     ),
     SignalEventType.EXIT_ATTEMPT: SignalContract(
         "The child tries to leave mid-lesson.", ("segmentId",)
     ),
-    SignalEventType.BREAK_SUGGESTED: SignalContract("Nevo offered a break.", ("trigger",)),
+    SignalEventType.BREAK_SUGGESTED: SignalContract(
+        "Nevo offered a break.", ("breakType: micro|movement|consolidation|full", "trigger")
+    ),
     SignalEventType.BREAK_TAKEN: SignalContract(
-        "The child accepted an offered break.", ("trigger",)
+        "The child accepted an offered break.",
+        ("breakType: micro|movement|consolidation|full", "trigger"),
     ),
     SignalEventType.BREAK_DECLINED: SignalContract(
         "The child refused an offered break. Without this the engine cannot "
         'tell "not now" from no answer and may offer again a minute later.',
-        ("trigger",),
+        ("breakType: micro|movement|consolidation|full", "trigger"),
     ),
-    SignalEventType.BREAK_START: SignalContract("A break actually began.", ("trigger",)),
+    SignalEventType.BREAK_START: SignalContract(
+        "A break actually began.",
+        ("breakType: micro|movement|consolidation|full", "trigger"),
+    ),
     SignalEventType.BREAK_END: SignalContract(
         "A break ended. With break_start this is how long it lasted, which is "
         "the part that says whether it helped.",
-        ("trigger", "durationMs"),
+        ("breakType: micro|movement|consolidation|full", "trigger", "durationMs"),
     ),
     SignalEventType.FEELING_CHECKIN: SignalContract(
         "The child answers the consolidation break's question about how they are getting on.",
@@ -96,7 +102,13 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
         "A reading the named types do not already cover. The type of last "
         "resort: the engine can reason about a named type and can only count "
         "these.",
-        ("indicator", "value"),
+        (
+            (
+                "indicator: focus_drop|task_switch|navigation_fragmentation|"
+                "rapid_guessing|steady_progress|return_after_pause"
+            ),
+            "value",
+        ),
     ),
     SignalEventType.MODALITY_SUGGESTION_SHOWN: SignalContract(
         "Nevo offered a different modality.", ("segmentId", "suggested")
@@ -190,6 +202,11 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
         "on a desktop, and a child with reduced motion on is not a child "
         "ignoring an animation.",
         ("formFactor", "reducedMotion"),
+    ),
+    SignalEventType.READING_CHUNK_VIEWED: SignalContract(
+        "A stable reading chunk entered view or was passed. A later entered "
+        "event after passed is a reread; formFactor keeps scrolling patterns comparable.",
+        ("segmentId", "chunkId", "action: entered|passed", "formFactor"),
     ),
     SignalEventType.BASELINE_MODULE_START: SignalContract(
         "A baseline module begins.", ("moduleId",)

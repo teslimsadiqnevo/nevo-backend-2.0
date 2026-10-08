@@ -77,7 +77,7 @@ class UnifiedLoginRequest(BaseModel):
     login_identifier: str | None = Field(
         default=None,
         alias="loginIdentifier",
-        max_length=50,
+        max_length=60,
     )
     pin: LoginPin | None = None
 

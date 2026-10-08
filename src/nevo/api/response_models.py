@@ -11,6 +11,7 @@ from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     DepthVariants,
     InteractiveVariant,
+    ReadingChunk,
     TextVariant,
     VisualVariant,
 )
@@ -442,6 +443,7 @@ class LessonSegmentResponse(CamelResponse):
     content_type: LessonContentType
     title: str | None
     body: str
+    reading_chunks: list[ReadingChunk] = Field(default_factory=list)
     #: Which concept this segment teaches. SCRUM-177, ask B25.
     concept_id: UUID | None = None
     available_modalities: list[str]
@@ -516,6 +518,8 @@ class AssignmentResponse(CamelResponse):
     due_at: datetime | None
     available_from: datetime | None
     note: str | None = None
+    cancellation_reason: str | None = None
+    recall_withdrawn: bool = False
     #: The teacher who set this, by name. The note reaches the child
     #: attributed to a person, and the only names available were the lesson's
     #: author - a different teacher whenever somebody assigns a colleague's
@@ -595,6 +599,11 @@ class LessonProgressResponse(CamelResponse):
     check_resumable_until: datetime | None = None
 
 
+class SocraticHandoffPrompt(CamelResponse):
+    id: str
+    prompt: str
+
+
 class LessonQuestionAttemptResponse(CamelResponse):
     id: UUID
     lesson_id: UUID
@@ -607,6 +616,10 @@ class LessonQuestionAttemptResponse(CamelResponse):
     answer: JsonValue
     correct: bool | None
     submitted_at: datetime
+    result_state: Literal["landed", "partly_landed", "nothing_landed", "not_attempted"]
+    handoff_to: Literal["socratic_panel"] | None = None
+    guided_prompts: list[SocraticHandoffPrompt] = Field(default_factory=list)
+    advance_after_handoff: bool = False
 
 
 class PersonReferenceResponse(CamelResponse):
@@ -828,6 +841,7 @@ class OfflinePackageSegment(CamelResponse):
     key: str
     title: str | None = None
     body: str
+    reading_chunks: list[ReadingChunk] = Field(default_factory=list)
     content_type: LessonContentType
     sequence_order: int
     available_modalities: list[str] = Field(default_factory=list)

@@ -49,6 +49,15 @@ FORBIDDEN_ASK_NEVO_TEXT_KEYS = {
     "message",
     "text",
 }
+BREAK_TYPES = {"micro", "movement", "consolidation", "full"}
+ENGAGEMENT_INDICATORS = {
+    "focus_drop",
+    "task_switch",
+    "navigation_fragmentation",
+    "rapid_guessing",
+    "steady_progress",
+    "return_after_pause",
+}
 
 
 class LessonSessionRequest(BaseModel):
@@ -141,8 +150,47 @@ class SignalEventRequest(BaseModel):
             self.event_data = {**self.model_extra, **self.event_data}
         self._validate_ask_nevo_signal_payload()
         self._validate_modality_outcome()
+        self._validate_learning_signal_payload()
         self._settle_break_trigger()
         return self
+
+    def _validate_learning_signal_payload(self) -> None:
+        break_events = {
+            SignalEventType.BREAK_SUGGESTED,
+            SignalEventType.BREAK_TAKEN,
+            SignalEventType.BREAK_DECLINED,
+            SignalEventType.BREAK_START,
+            SignalEventType.BREAK_END,
+        }
+        if self.event_type in break_events:
+            break_type = self.event_data.get("breakType")
+            if break_type is not None and break_type not in BREAK_TYPES:
+                raise ValueError("breakType must be micro, movement, consolidation, or full.")
+        if self.event_type in {
+            SignalEventType.SCROLL,
+            SignalEventType.TIME_ON_SEGMENT,
+        } and "depthRatio" in self.event_data:
+            ratio = self.event_data.get("depthRatio")
+            if not isinstance(ratio, int | float) or not 0 <= float(ratio) <= 1:
+                raise ValueError("depthRatio must be a number from 0 to 1.")
+        if self.event_type is SignalEventType.COMPREHENSION_RESPONSE:
+            _require_keys(self.event_data, {"questionId"})
+            self.event_data.setdefault("source", "checkpoint")
+            if self.event_data.get("source") not in {"checkpoint", "assessment"}:
+                raise ValueError("comprehension_response source must be checkpoint or assessment.")
+            if "correct" in self.event_data:
+                raise ValueError("Correctness is marked on the server and must not be sent.")
+        if self.event_type is SignalEventType.ENGAGEMENT_SIGNAL:
+            _require_keys(self.event_data, {"indicator", "value"})
+            if self.event_data.get("indicator") not in ENGAGEMENT_INDICATORS:
+                allowed = ", ".join(sorted(ENGAGEMENT_INDICATORS))
+                raise ValueError(f"engagement_signal indicator must be one of: {allowed}.")
+        if self.event_type is SignalEventType.READING_CHUNK_VIEWED:
+            _require_keys(self.event_data, {"segmentId", "chunkId", "action", "formFactor"})
+            if self.event_data.get("action") not in {"entered", "passed"}:
+                raise ValueError("reading_chunk_viewed action must be entered or passed.")
+            if self.event_data.get("formFactor") not in {"phone", "tablet", "desktop"}:
+                raise ValueError("formFactor must be phone, tablet, or desktop.")
 
     def _validate_modality_outcome(self) -> None:
         if self.event_type is not SignalEventType.MODALITY_SWITCH_OUTCOME:
@@ -211,8 +259,11 @@ class SignalEventRequest(BaseModel):
         """Close the break trigger to the four, folding the old name in."""
 
         if self.event_type not in {
+            SignalEventType.BREAK_SUGGESTED,
             SignalEventType.BREAK_START,
             SignalEventType.BREAK_TAKEN,
+            SignalEventType.BREAK_DECLINED,
+            SignalEventType.BREAK_END,
         }:
             return
         raw = self.event_data.get("trigger")

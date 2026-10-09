@@ -38,7 +38,7 @@ from nevo.billing.service import quote_per_student
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.billing import Invoice
 from nevo.db.models.onboarding import OnboardingRow, SchoolOnboarding
-from nevo.db.models.subject import ClassSubject, TeacherSubject
+from nevo.db.models.subject import ClassSubject, SubjectSpellingQuestion, TeacherSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.classes import (
     academic_session,
@@ -49,6 +49,7 @@ from nevo.domain.accounts.classes import (
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.billing.vocabulary import InvoiceStatus, RateType
 from nevo.domain.onboarding.vocabulary import OnboardingRowKind, OnboardingStage
+from nevo.domain.subjects.vocabulary import SpellingAnswer
 from nevo.domain.teacher_assignments.vocabulary import (
     TeacherAssignmentRole,
     TeacherAssignmentSource,
@@ -179,11 +180,13 @@ class OnboardingState(CamelResponse):
     stage: OnboardingStage
     classes: list[DerivedClass]
     teacher_count: int
+    teachers_found: list[str] = Field(default_factory=list)
     student_count: int
     rejected: list[RejectedRow]
     #: Spellings that look like one class, each needing a yes or no before the
     #: headcount can be confirmed. Empty once every one is settled.
     class_merges: list[ClassMergeProposal] = Field(default_factory=list)
+    subject_spelling_questions: int = 0
     #: Null until the headcount is confirmed and priced.
     invoice_id: UUID | None = None
     amount_due: Decimal | None = None
@@ -449,11 +452,23 @@ def _state(
     merges = _merge_proposals(classes, record.class_merge_decisions or {})
     students = sum(1 for row in rows if row.countable and row.kind is OnboardingRowKind.STUDENT)
     teachers = sum(1 for row in rows if row.countable and row.kind is OnboardingRowKind.TEACHER)
+    teachers_found = sorted(
+        {
+            " ".join(
+                str(row.values.get(key) or "").strip()
+                for key in ("first_name", "last_name")
+            ).strip()
+            or str(row.values.get("email") or "Teacher")
+            for row in rows
+            if row.countable and row.kind is OnboardingRowKind.TEACHER
+        }
+    )
     paid = invoice is not None and invoice.status is InvoiceStatus.PAID
     return OnboardingState(
         stage=record.stage,
         classes=classes,
         teacher_count=teachers,
+        teachers_found=teachers_found,
         student_count=students,
         rejected=[
             RejectedRow(
@@ -486,7 +501,17 @@ async def _invoice(session: AsyncSession, record: SchoolOnboarding) -> Invoice |
 
 
 async def _state_for(session: AsyncSession, record: SchoolOnboarding) -> OnboardingState:
-    return _state(record, await _rows(session, record.id), await _invoice(session, record))
+    state = _state(record, await _rows(session, record.id), await _invoice(session, record))
+    questions = int(
+        await session.scalar(
+            select(func.count(SubjectSpellingQuestion.id)).where(
+                SubjectSpellingQuestion.school_id == record.school_id,
+                SubjectSpellingQuestion.answer == SpellingAnswer.UNANSWERED,
+            )
+        )
+        or 0
+    )
+    return state.model_copy(update={"subject_spelling_questions": questions})
 
 
 def _read_rows(raw: bytes, kind: OnboardingRowKind) -> list[OnboardingRow]:

@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import School, User
+from nevo.db.models.auth import AuthSession
 from nevo.db.models.permission import (
     Admin,
     AdminInvitation,
@@ -68,12 +69,22 @@ class SqlAlchemyPermissionRepository:
             ).all()
             admin_ids = [admin.id for admin, _ in rows]
             scopes_by_admin = await self._scopes_for_admins(session, admin_ids)
+            user_ids = [user.id for _, user in rows]
+            last_active_rows = (
+                await session.execute(
+                    select(AuthSession.user_id, func.max(AuthSession.last_seen_at))
+                    .where(AuthSession.user_id.in_(user_ids))
+                    .group_by(AuthSession.user_id)
+                )
+            ).all()
+            last_active = dict(last_active_rows)
 
         return [
             self._team_member(
                 admin,
                 user,
                 scopes_by_admin.get(admin.id, frozenset()),
+                last_active_at=last_active.get(user.id),
             )
             for admin, user in rows
         ]
@@ -291,6 +302,68 @@ class SqlAlchemyPermissionRepository:
             await session.flush()
             return self._team_member(admin, user, scopes)
 
+    async def set_team_member_active(
+        self,
+        *,
+        school_id: UUID,
+        target_user_id: UUID,
+        active: bool,
+        changed_at: datetime,
+    ) -> AdminTeamMember | None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                select(School.id).where(School.id == school_id).with_for_update()
+            )
+            row = (
+                await session.execute(
+                    select(Admin, User)
+                    .join(User, User.id == Admin.user_id)
+                    .where(Admin.school_id == school_id, User.id == target_user_id)
+                    .with_for_update()
+                )
+            ).one_or_none()
+            if row is None:
+                return None
+            admin, user = row
+            scopes = await self._active_scopes_for_update(session, admin.id)
+            if active and user.status is UserStatus.ACTIVE:
+                return self._team_member(admin, user, scopes)
+            if not active and user.status is UserStatus.DEACTIVATED:
+                return self._team_member(admin, user, scopes)
+            if user.status not in {UserStatus.ACTIVE, UserStatus.DEACTIVATED}:
+                return None
+            if not active and PermissionScope.OVERSIGHT in scopes:
+                oversight_count = await session.scalar(
+                    select(func.count())
+                    .select_from(AdminScopeAssignment)
+                    .join(Admin, Admin.id == AdminScopeAssignment.admin_id)
+                    .join(User, User.id == Admin.user_id)
+                    .where(
+                        Admin.school_id == school_id,
+                        User.status == UserStatus.ACTIVE,
+                        AdminScopeAssignment.scope == PermissionScope.OVERSIGHT,
+                        AdminScopeAssignment.revoked_at.is_(None),
+                    )
+                )
+                if int(oversight_count or 0) <= 1:
+                    raise LastOversightAdminError
+            user.status = UserStatus.ACTIVE if active else UserStatus.DEACTIVATED
+            user.deactivated_at = None if active else changed_at
+            if not active:
+                await session.execute(
+                    update(AuthSession)
+                    .where(
+                        AuthSession.user_id == user.id,
+                        AuthSession.revoked_at.is_(None),
+                    )
+                    .values(
+                        revoked_at=changed_at,
+                        revocation_reason="admin_revoked",
+                    )
+                )
+            await session.flush()
+            return self._team_member(admin, user, scopes)
+
     @staticmethod
     async def _active_scopes_for_update(
         session: AsyncSession,
@@ -399,6 +472,8 @@ class SqlAlchemyPermissionRepository:
         admin: Admin,
         user: User,
         scopes: frozenset[PermissionScope],
+        *,
+        last_active_at: datetime | None = None,
     ) -> AdminTeamMember:
         return AdminTeamMember(
             user_id=user.id,
@@ -410,4 +485,6 @@ class SqlAlchemyPermissionRepository:
             role=user.role.value,
             status=user.status.value,
             scopes=scopes,
+            founding=admin.created_by_user_id is None,
+            last_active_at=last_active_at,
         )

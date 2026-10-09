@@ -43,6 +43,7 @@ from nevo.db.models.billing import (
     Invoice,
 )
 from nevo.db.models.content import Lesson
+from nevo.db.models.product import DpaAcceptance
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.sso import RosterSyncIssue, RosterSyncRun, SchoolSsoConfiguration
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
@@ -665,6 +666,17 @@ class Seeder:
         self.note("invoices", len(invoices))
         self.note("payment methods", 1)
 
+    async def dpa_acceptance(self, school: School, actor: User) -> None:
+        await self.upsert(
+            DpaAcceptance,
+            self.id_for("dpa-acceptance"),
+            school_id=school.id,
+            version="2026-10",
+            accepted_by_user_id=actor.id,
+            accepted_at=NOW,
+        )
+        self.note("DPA acceptances", 1)
+
 
 async def seed(
     school_code: str,
@@ -695,6 +707,7 @@ async def seed(
             await seeder.adaptations(school, students, teachers[0])
             await seeder.sso(school, teachers)
             await seeder.billing(school, admin)
+            await seeder.dpa_acceptance(school, admin)
             if dry_run:
                 # Everything above ran against the real schema and is about to
                 # be thrown away. This is how the script is checked without

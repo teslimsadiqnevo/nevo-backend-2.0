@@ -26,6 +26,8 @@ class AdminTeamMember:
     role: str
     status: str
     scopes: frozenset[PermissionScope]
+    founding: bool = False
+    last_active_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

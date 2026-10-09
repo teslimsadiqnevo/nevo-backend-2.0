@@ -112,6 +112,25 @@ class MemoryPermissionRepository:
                 return updated
         return None
 
+    async def set_team_member_active(
+        self,
+        *,
+        school_id: UUID,
+        target_user_id: UUID,
+        active: bool,
+        changed_at: datetime,
+    ) -> AdminTeamMember | None:
+        del changed_at
+        if self.raise_last_oversight:
+            raise LastOversightAdminError
+        members = self.team.get(school_id, [])
+        for index, member in enumerate(members):
+            if member.user_id == target_user_id:
+                updated = replace(member, status="active" if active else "deactivated")
+                members[index] = updated
+                return updated
+        return None
+
 
 class DeterministicInvitationTokens:
     def __init__(self) -> None:

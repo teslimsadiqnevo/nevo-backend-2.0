@@ -60,6 +60,8 @@ class AdaptationEventLogRow(BaseModel):
     trigger: str
     adaptation: str
     event_type: str = Field(alias="eventType")
+    before: str | None = None
+    after: str | None = None
 
     @classmethod
     def from_record(cls, record: AdaptationEventLogRecord) -> "AdaptationEventLogRow":
@@ -73,6 +75,8 @@ class AdaptationEventLogRow(BaseModel):
             trigger=record.trigger,
             adaptation=record.adaptation,
             eventType=record.event_type,
+            before=record.before,
+            after=record.after,
         )
 
 

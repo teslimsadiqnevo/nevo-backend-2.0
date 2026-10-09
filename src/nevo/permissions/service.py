@@ -21,6 +21,7 @@ from nevo.permissions.errors import (
     InvalidAdminRoleError,
     InvalidInvitationError,
     PermissionDeniedError,
+    SelfDeactivationError,
     SelfScopeRemovalError,
     SsoManagedTeamError,
     TeamMemberNotFoundError,
@@ -189,6 +190,28 @@ class PermissionService:
             target_user_id=target_user_id,
             scopes=scopes,
             changed_by_user_id=actor.user_id,
+            changed_at=self._now(),
+        )
+        if member is None:
+            raise TeamMemberNotFoundError
+        return self._with_effective_scopes(member)
+
+    async def set_team_member_active(
+        self,
+        principal: AuthPrincipal,
+        *,
+        target_user_id: UUID,
+        active: bool,
+    ) -> AdminTeamMember:
+        actor = await self.require(principal, PermissionScope.OVERSIGHT)
+        if actor.school_id is None:
+            raise PermissionDeniedError
+        if not active and target_user_id == actor.user_id:
+            raise SelfDeactivationError
+        member = await self._repository.set_team_member_active(
+            school_id=actor.school_id,
+            target_user_id=target_user_id,
+            active=active,
             changed_at=self._now(),
         )
         if member is None:

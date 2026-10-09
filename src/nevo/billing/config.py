@@ -1,6 +1,6 @@
 from typing import ClassVar
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from nevo.billing.entities import BankTransferDetails
@@ -50,6 +50,10 @@ class BankTransferSettings(BaseSettings):
     currency: PricingCurrency = Field(
         default=PricingCurrency.NGN,
         validation_alias="BILLING_BANK_CURRENCY",
+    )
+    finance_confirmation_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="BILLING_FINANCE_CONFIRMATION_KEY",
     )
 
     def details(self) -> BankTransferDetails:

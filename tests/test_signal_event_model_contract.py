@@ -47,6 +47,7 @@ def test_signal_event_type_enum_is_exact() -> None:
         "time_on_segment",
         "replay",
         "scroll",
+        "reading_chunk_viewed",
         "simplify_trigger",
         "expand_trigger",
         "slower_trigger",

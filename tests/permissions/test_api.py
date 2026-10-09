@@ -1,9 +1,12 @@
+from uuid import uuid4
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from nevo.api.auth import authenticated_principal
 from nevo.api.permissions import router
 from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.permissions.entities import AdminTeamMember
 
 from .test_service import principal_for, service_for, snapshot
 
@@ -160,6 +163,33 @@ def test_unknown_team_member_returns_404() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "team_member_not_found"
+
+
+def test_admin_can_deactivate_and_restore_another_team_member() -> None:
+    client, actor, repository = client_for_actor(
+        scopes=frozenset({PermissionScope.OVERSIGHT})
+    )
+    assert actor.school_id is not None
+    member = AdminTeamMember(
+        user_id=uuid4(),
+        admin_id=uuid4(),
+        school_id=actor.school_id,
+        email="leaver@example.com",
+        first_name="Ada",
+        last_name="Okafor",
+        role="other_admin",
+        status="active",
+        scopes=frozenset({PermissionScope.BILLING}),
+    )
+    repository.team[actor.school_id] = [member]
+
+    paused = client.post(f"/api/v1/admin/team/{member.user_id}/deactivate")
+    restored = client.post(f"/api/v1/admin/team/{member.user_id}/restore")
+
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "deactivated"
+    assert restored.status_code == 200
+    assert restored.json()["status"] == "active"
 
 
 def test_invitation_token_is_one_time_use() -> None:

@@ -137,6 +137,7 @@ SchoolIdQuery = Annotated[UUID | None, Query(alias="schoolId")]
 StudentIdQuery = Annotated[UUID | None, Query(alias="studentId")]
 ClassIdQuery = Annotated[UUID | None, Query(alias="classId")]
 ArchivedFilter = Annotated[bool, Query(alias="archived")]
+NotificationSearch = Annotated[str | None, Query(alias="q", max_length=100)]
 
 
 class SchoolSummary(BaseModel):
@@ -196,6 +197,7 @@ class ClassStudentResponse(BaseModel):
     last_name: str | None
     display_name: str
     login_identifier: str | None
+    admission_number: str | None = Field(default=None, alias="admissionNumber")
     status: UserStatus
     profile_status: str = Field(alias="profileStatus")
     latest_session_at: datetime | None = Field(alias="latestSessionAt")
@@ -736,6 +738,7 @@ async def class_students(
             last_name=user.last_name,
             display_name=_display_name(user),
             login_identifier=user.login_identifier,
+            admission_number=user.admission_number,
             status=user.status.value,
             profileStatus="observed" if profile_id else "not_observed_yet",
             latestSessionAt=latest_session_at,
@@ -1380,6 +1383,7 @@ async def list_notifications(
     principal: PrincipalDependency,
     session: DatabaseSession,
     archived: ArchivedFilter = False,
+    q: NotificationSearch = None,
     limit: LimitQuery = DEFAULT_LIMIT,
     offset: OffsetQuery = 0,
 ) -> NotificationListResponse:
@@ -1402,6 +1406,11 @@ async def list_notifications(
         )
         .order_by(Notification.created_at.desc())
     )
+    if q:
+        pattern = f"%{q.strip()}%"
+        query = query.where(
+            or_(Notification.title.ilike(pattern), Notification.description.ilike(pattern))
+        )
     records, total = await paginate(session, query, limit=limit, offset=offset)
     # The badge counts every unread notification in the active inbox, not just
     # the ones on this page — a count that changed as you paged would be wrong.

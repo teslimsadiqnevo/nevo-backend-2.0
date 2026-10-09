@@ -103,6 +103,8 @@ class AssignedClassResponse(BaseModel):
     class_code: str | None
     role: TeacherAssignmentRole
     assigned_at: datetime
+    subject_id: UUID | None = None
+    subject: str | None = None
 
     @classmethod
     def from_assigned_class(cls, item: AssignedClass) -> "AssignedClassResponse":
@@ -119,6 +121,8 @@ class AssignedTeacherResponse(BaseModel):
     email: str | None
     role: TeacherAssignmentRole
     assigned_at: datetime
+    subject_id: UUID | None = None
+    subject: str | None = None
 
     @classmethod
     def from_assigned_teacher(

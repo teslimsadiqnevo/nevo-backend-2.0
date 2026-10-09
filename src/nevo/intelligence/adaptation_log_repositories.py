@@ -10,6 +10,7 @@ from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.domain.signal_events.vocabulary import SignalEventType
 from nevo.intelligence.adaptation_log import (
     ADAPTATION_EVENT_TYPES,
+    adaptation_before_after,
     adaptation_plain_language,
     trigger_plain_language,
 )
@@ -127,6 +128,7 @@ def _base_query(
 def _record_from_row(row) -> AdaptationEventLogRecord:
     event, student, lesson = row
     event_data = event.event_data or {}
+    before, after = adaptation_before_after(event.event_type, event_data)
     return AdaptationEventLogRecord(
         id=event.id,
         student_id=student.id,
@@ -137,4 +139,6 @@ def _record_from_row(row) -> AdaptationEventLogRecord:
         trigger=trigger_plain_language(event.event_type, event_data),
         adaptation=adaptation_plain_language(event.event_type, event_data),
         event_type=event.event_type.value,
+        before=before,
+        after=after,
     )

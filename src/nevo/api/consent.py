@@ -182,6 +182,15 @@ class ParentConsentCompletionResponse(BaseModel):
     age_check: AgeCheckState = AgeCheckState.AWAITING_PARENT
     completed_at: datetime
     receipt_sent_to: ParentContactMethod | None = None
+    parent_account_created: bool = Field(default=True, alias="parentAccountCreated")
+    parent_account_ready: bool = Field(
+        default=False,
+        alias="parentAccountReady",
+        description=(
+            "Consent creates the linked parent identity, but sign-in is enabled only "
+            "after the parent verifies their one-time code or sets a password."
+        ),
+    )
 
     @classmethod
     def from_completion(

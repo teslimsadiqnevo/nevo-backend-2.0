@@ -27,6 +27,7 @@ TRIGGERED: dict[NotificationType, str] = {
     NotificationType.CONSENT_ACTION_REQUIRED: "a consent request goes out to a parent",
     NotificationType.ATTENTION_SUMMARY: "the weekly digest job runs",
     NotificationType.MODALITY_SHIFT: "a lesson finishes in which delivery changed",
+    NotificationType.PAYMENT_CLEARED: "a payment settles an invoice",
 }
 
 #: The four a child can receive, declared ahead of the code that raises them.

@@ -194,7 +194,7 @@ class InvitationRequest(BaseModel):
     #: parent_guardian and 422 at runtime. Parents are not invited here:
     #: they arrive through the consent link, which is the only place the
     #: child they belong to is known.
-    role: InvitableRole
+    role: InvitableRole = InvitableRole.TEACHER
     first_name: str | None = Field(default=None, alias="firstName", max_length=100)
     last_name: str | None = Field(default=None, alias="lastName", max_length=100)
     email: EmailStr | None = None
@@ -389,6 +389,35 @@ async def verify_school_code(
         "authMethod": school.auth_method.value,
         "classes": [
             {"id": str(item.id), "name": item.name, "yearGroup": item.year_group}
+            for item in classes
+        ],
+    }
+
+
+@router.get("/schools/by-slug/{school_slug}", response_model=SchoolCodeResponse)
+async def school_by_sign_in_slug(
+    school_slug: str,
+    session: DatabaseSession,
+) -> dict[str, object]:
+    school = await session.scalar(
+        select(School).where(func.lower(School.school_url_slug) == school_slug.casefold())
+    )
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    classes = list(
+        await session.scalars(
+            select(Class)
+            .where(Class.school_id == school.id, Class.archived_at.is_(None))
+            .order_by(Class.name)
+        )
+    )
+    return {
+        "schoolId": school.id,
+        "schoolName": school.name,
+        "slug": school.school_url_slug,
+        "authMethod": school.auth_method,
+        "classes": [
+            {"id": item.id, "name": item.name, "yearGroup": item.year_group}
             for item in classes
         ],
     }
@@ -636,7 +665,10 @@ async def change_password(
     if not hasher.verify_password(user.password_hash, payload.current_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Current password did not match",
+            detail={
+                "code": "current_password_incorrect",
+                "message": "The current password did not match.",
+            },
         )
     user.password_hash = hasher.hash_password(payload.new_password)
     if payload.end_other_sessions:
@@ -875,6 +907,8 @@ async def _create_invitation(
         "id": str(record.id),
         "token": token,
         "status": record.status,
+        "classId": record.class_id,
+        "createdAt": record.created_at,
         "expiresAt": record.expires_at,
         "deliveryStatus": delivery_status,
         "consentStatus": record.consent_request_status,
@@ -917,7 +951,13 @@ async def create_bulk_invites(
                 )
             )
         except HTTPException as error:
-            rejected.append({"row": index + 1, "reason": str(error.detail)})
+            rejected.append(
+                {
+                    "row": index + 1,
+                    "reason": str(error.detail),
+                    "value": str(payload.email or payload.class_id or payload.role),
+                }
+            )
     return {"created": created, "rejected": rejected}
 
 
@@ -939,6 +979,8 @@ async def list_invites(
             "email": item.email,
             "name": " ".join(filter(None, (item.first_name, item.last_name))),
             "status": item.status,
+            "classId": item.class_id,
+            "createdAt": item.created_at,
             "expiresAt": item.expires_at,
             "consentStatus": item.consent_request_status,
         }
@@ -977,6 +1019,8 @@ async def resend_invite(
         "expiresAt": record.expires_at,
         "deliveryStatus": delivery_status,
         "consentStatus": record.consent_request_status,
+        "classId": record.class_id,
+        "createdAt": record.created_at,
     }
 
 
@@ -1032,10 +1076,25 @@ async def _join_record(token: str, session: DatabaseSession) -> SchoolInvitation
     record = await session.scalar(
         select(SchoolInvitation).where(SchoolInvitation.token_digest == _digest(token))
     )
-    if record is None or record.status != "pending" or record.expires_at <= datetime.now(UTC):
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Join link is invalid or expired",
+            detail={"code": "join_link_invalid", "message": "Join link is invalid."},
+        )
+    if record.status == "revoked" or record.revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={"code": "join_link_revoked", "message": "This join link was revoked."},
+        )
+    if record.expires_at <= datetime.now(UTC):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={"code": "join_link_expired", "message": "This join link has expired."},
+        )
+    if record.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "join_link_used", "message": "This join link was already used."},
         )
     return record
 

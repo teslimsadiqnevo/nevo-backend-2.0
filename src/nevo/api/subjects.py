@@ -430,6 +430,79 @@ async def set_teacher_subjects(
     ]
 
 
+@router.get("/teachers/{teacher_id}/subjects", response_model=list[SchoolSubjectResponse])
+async def get_teacher_subjects(
+    teacher_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> list[SchoolSubjectResponse]:
+    actor = await require_school_actor(session, principal)
+    teacher = await session.get(User, teacher_id)
+    if (
+        teacher is None
+        or teacher.school_id != actor.school_id
+        or teacher.role is not UserRole.TEACHER
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
+    rows = list(
+        await session.scalars(
+            select(SchoolSubject)
+            .join(TeacherSubject, TeacherSubject.school_subject_id == SchoolSubject.id)
+            .where(TeacherSubject.teacher_id == teacher_id)
+            .order_by(SchoolSubject.name)
+        )
+    )
+    names = await display_names(session, [row.id for row in rows])
+    return [
+        SchoolSubjectResponse(
+            id=row.id,
+            name=row.name,
+            display_name=names.get(row.id, row.name),
+            origin=row.origin,
+            review_state=row.review_state,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/teachers/{teacher_id}/subjects",
+    response_model=list[SchoolSubjectResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_teacher_subject(
+    teacher_id: UUID,
+    payload: AddSubjectRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> list[SchoolSubjectResponse]:
+    """Append one subject without replacing the teacher's existing list."""
+    actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
+    teacher = await session.get(User, teacher_id)
+    if (
+        teacher is None
+        or teacher.school_id != actor.school_id
+        or teacher.role is not UserRole.TEACHER
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
+    subject = await ensure(
+        session,
+        school_id=_school_of(actor),
+        typed=payload.name,
+        created_by_user_id=actor.id,
+    )
+    existing = await session.scalar(
+        select(TeacherSubject).where(
+            TeacherSubject.teacher_id == teacher_id,
+            TeacherSubject.school_subject_id == subject.id,
+        )
+    )
+    if existing is None:
+        session.add(TeacherSubject(teacher_id=teacher_id, school_subject_id=subject.id))
+        await session.commit()
+    return await get_teacher_subjects(teacher_id, principal, session)
+
+
 async def _referenced(session: DatabaseSession, subject_ids: list[UUID]) -> set[UUID]:
     """Subjects something already points at, so a screen does not offer to remove them."""
 

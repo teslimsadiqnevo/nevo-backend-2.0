@@ -107,10 +107,13 @@ def render_ndpa_compliance_pdf(audit: NdpaComplianceAudit) -> bytes:
             else "Diagnostic terminology was found and should be reviewed before filing."
         ),
     ]
+    # The filed report is evidence of the scan, not a disclosure of student
+    # rows. Finding terms and record ids remain in the restricted remediation
+    # response and never enter the downloadable PDF.
     if audit.findings:
-        lines.append("Findings:")
-        lines.extend(
-            f"{finding.table}.{finding.field}: {finding.term}" for finding in audit.findings[:12]
+        lines.append(
+            f"Restricted remediation findings: {len(audit.findings)}. "
+            "No record identifiers or matched terms are included in this report."
         )
     return _simple_pdf(lines)
 

@@ -33,6 +33,11 @@ class SelfScopeRemovalError(PermissionError):
     public_message = "You cannot remove your own oversight permission."
 
 
+class SelfDeactivationError(PermissionError):
+    code = "cannot_deactivate_self"
+    public_message = "You cannot deactivate your own administrator account."
+
+
 class SsoManagedTeamError(PermissionError):
     code = "sso_managed_team"
     public_message = "This school's team is managed through its SSO provider."

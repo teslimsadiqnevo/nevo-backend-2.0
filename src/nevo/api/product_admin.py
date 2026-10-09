@@ -51,6 +51,7 @@ from nevo.db.models.product import (
     NotificationPreference,
 )
 from nevo.db.models.signal_event import LessonSession
+from nevo.db.models.subject import SchoolSubject, TeacherSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.age_bands import (
     AgeBand,
@@ -71,6 +72,7 @@ from nevo.domain.accounts.vocabulary import (
 from nevo.domain.consent.vocabulary import ParentContactMethod
 from nevo.retention.anonymisation import anonymise_student
 from nevo.subjects.resolution import (
+    display_names,
     set_class_subjects,
     subjects_for_class,
     subjects_for_classes,
@@ -80,6 +82,16 @@ router = APIRouter(prefix="/api/v1", tags=["school administration"])
 SearchQuery = Annotated[str | None, Query(max_length=100)]
 ClassFilter = Annotated[UUID | None, Query(alias="classId")]
 InactiveFilter = Annotated[bool, Query(alias="includeInactive")]
+
+
+class StudentSignInDetailResponse(CamelResponse):
+    student_id: UUID
+    first_name: str | None
+    last_name: str | None
+    admission_number: str
+    school_code: str
+    class_id: UUID | None = None
+    class_name: str | None = None
 
 
 class SchoolPatch(BaseModel):
@@ -258,6 +270,23 @@ class DpaAcceptanceResponse(BaseModel):
     accepted_at: datetime = Field(alias="acceptedAt")
 
 
+DPA_CURRENT_VERSION = "2026-10"
+
+
+class DpaAgreementResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: str
+    school_id: UUID = Field(alias="schoolId")
+    school_name: str = Field(alias="schoolName")
+    school_address: str | None = Field(alias="schoolAddress")
+    contract_start: datetime | None = Field(alias="contractStart")
+    contract_end: datetime | None = Field(alias="contractEnd")
+    controller: str = "The school"
+    processor: str = "Nevo Learning Limited"
+    summary: list[str]
+
+
 def _name(user: User) -> str:
     return " ".join(part for part in (user.first_name, user.last_name) if part) or "Nevo user"
 
@@ -272,6 +301,13 @@ def _school_payload(school: School) -> dict[str, object]:
         "academicConfig": school.academic_config,
         "retentionPolicy": school.retention_policy,
         "retentionDays": school.data_retention_days,
+        "schoolType": (
+            str(school.profile.get("schoolType"))
+            if isinstance(school.profile, dict) and school.profile.get("schoolType")
+            else None
+        ),
+        "foundingPartner": school.is_founding_partner,
+        "adminSeatLimit": school.admin_seat_limit,
     }
 
 
@@ -367,6 +403,16 @@ async def school_overview(
         )
         or 0
     )
+    class_activity_rows = (
+        await session.execute(
+            select(Class.id, Class.name, func.max(LessonSession.started_at))
+            .outerjoin(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)
+            .outerjoin(LessonSession, LessonSession.student_id == StudentClassEnrollment.student_id)
+            .where(Class.school_id == school_id, Class.archived_at.is_(None))
+            .group_by(Class.id, Class.name)
+            .order_by(Class.name)
+        )
+    ).all()
     return {
         "schoolId": str(school_id),
         "counts": {
@@ -377,6 +423,15 @@ async def school_overview(
             "otherAdmins": await staff(UserRole.OTHER_ADMIN),
             "classes": classes,
         },
+        "period": "current",
+        "classActivity": [
+            {
+                "classId": class_id,
+                "className": class_name,
+                "lastActivityAt": last_activity_at,
+            }
+            for class_id, class_name, last_activity_at in class_activity_rows
+        ],
     }
 
 
@@ -466,6 +521,45 @@ async def current_dpa_acceptance(
         .limit(1)
     )
     return await _dpa_response(session, acceptance) if acceptance else None
+
+
+@router.get("/school/dpa-agreement", response_model=DpaAgreementResponse)
+async def current_dpa_agreement(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> DpaAgreementResponse:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    school = await session.get(School, actor.school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    profile = school.profile if isinstance(school.profile, dict) else {}
+    raw_address = profile.get("address")
+    if isinstance(raw_address, dict):
+        address = ", ".join(
+            str(value).strip() for value in raw_address.values() if str(value).strip()
+        ) or None
+    else:
+        address = str(raw_address).strip() if raw_address else None
+    return DpaAgreementResponse(
+        version=DPA_CURRENT_VERSION,
+        schoolId=school.id,
+        schoolName=school.name,
+        schoolAddress=address,
+        contractStart=school.contract_start,
+        contractEnd=school.contract_end,
+        summary=[
+            "The school remains the data controller for its learners and staff.",
+            "Nevo processes school data only to provide the contracted learning service.",
+            (
+                "Access, retention, deletion and subprocessors follow the "
+                "school's configured agreement."
+            ),
+        ],
+    )
 
 
 @router.post(
@@ -866,24 +960,40 @@ async def list_teachers(
     search: SearchQuery = None,
 ) -> list[dict[str, object]]:
     actor = await require_school_actor(session, principal)
-    query = select(User).where(
-        User.school_id == actor.school_id,
-        User.role == UserRole.TEACHER,
+    query = (
+        select(
+            User,
+            func.count(func.distinct(TeacherClassAssignment.class_id)),
+            func.max(AuthSession.last_seen_at),
+        )
+        .outerjoin(
+            TeacherClassAssignment,
+            (TeacherClassAssignment.teacher_id == User.id)
+            & (TeacherClassAssignment.removed_at.is_(None)),
+        )
+        .outerjoin(AuthSession, AuthSession.user_id == User.id)
+        .where(
+            User.school_id == actor.school_id,
+            User.role == UserRole.TEACHER,
+        )
+        .group_by(User.id)
     )
     if search:
         value = f"%{search.casefold()}%"
         query = query.where(
             func.lower(func.concat(User.first_name, " ", User.last_name)).like(value)
         )
-    teachers = (await session.scalars(query.order_by(User.first_name))).all()
+    teachers = (await session.execute(query.order_by(User.first_name))).all()
     return [
         {
             "id": str(item.id),
             "name": _name(item),
             "email": item.email,
             "status": item.status.value,
+            "classCount": class_count,
+            "lastActiveAt": last_active_at,
         }
-        for item in teachers
+        for item, class_count, last_active_at in teachers
     ]
 
 
@@ -905,12 +1015,27 @@ async def teacher_detail(
             )
         )
     ).all()
+    subject_rows = list(
+        await session.scalars(
+            select(SchoolSubject)
+            .join(TeacherSubject, TeacherSubject.school_subject_id == SchoolSubject.id)
+            .where(TeacherSubject.teacher_id == teacher.id)
+            .order_by(SchoolSubject.name)
+        )
+    )
+    subject_names = await display_names(session, [item.id for item in subject_rows])
+    last_active_at = await session.scalar(
+        select(func.max(AuthSession.last_seen_at)).where(AuthSession.user_id == teacher.id)
+    )
     return {
         "id": str(teacher.id),
         "name": _name(teacher),
         "email": teacher.email,
         "status": teacher.status.value,
         "classIds": [str(item.class_id) for item in assignments],
+        "classCount": len({item.class_id for item in assignments}),
+        "lastActiveAt": last_active_at,
+        "subjects": [subject_names.get(item.id, item.name) for item in subject_rows],
     }
 
 
@@ -928,6 +1053,32 @@ async def revoke_teacher(
         raise HTTPException(status_code=404, detail="Teacher not found")
     teacher.status = UserStatus.DEACTIVATED
     teacher.deactivated_at = datetime.now(UTC)
+    await session.execute(
+        update(AuthSession)
+        .where(AuthSession.user_id == teacher.id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC), revocation_reason="admin_revoked")
+    )
+    await session.commit()
+
+
+@router.post("/teachers/{teacher_id}/restore", status_code=204)
+async def restore_teacher(
+    teacher_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> None:
+    actor = await require_school_actor(
+        session, principal, roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
+    )
+    teacher = await session.get(User, teacher_id)
+    if (
+        teacher is None
+        or teacher.school_id != actor.school_id
+        or teacher.role is not UserRole.TEACHER
+    ):
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    teacher.status = UserStatus.ACTIVE
+    teacher.deactivated_at = None
     await session.commit()
 
 
@@ -957,6 +1108,7 @@ async def list_students(
             "id": str(item.id),
             "name": _name(item),
             "loginIdentifier": item.login_identifier,
+            "admissionNumber": item.admission_number,
             "status": item.status.value,
             "ageBand": coerce_band(item.age_band, item.date_of_birth),
             "consent": consent.get(item.id, empty_consent_summary()),
@@ -1059,6 +1211,49 @@ async def enroll_student(
     return {"id": str(student.id), "loginIdentifier": identifier}
 
 
+@router.get(
+    "/students/sign-in-details",
+    response_model=list[StudentSignInDetailResponse],
+)
+async def student_sign_in_details(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    class_id: ClassFilter = None,
+) -> list[StudentSignInDetailResponse]:
+    """Printable school code and Student IDs for active children."""
+    actor = await require_school_actor(session, principal)
+    school = await session.get(School, actor.school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    query = (
+        select(User, Class)
+        .outerjoin(StudentClassEnrollment, StudentClassEnrollment.student_id == User.id)
+        .outerjoin(Class, Class.id == StudentClassEnrollment.class_id)
+        .where(
+            User.school_id == actor.school_id,
+            User.role == UserRole.STUDENT,
+            User.status == UserStatus.ACTIVE,
+            User.admission_number.is_not(None),
+        )
+    )
+    if class_id is not None:
+        await require_class_access(session, actor, class_id)
+        query = query.where(Class.id == class_id)
+    rows = (await session.execute(query.order_by(Class.name, User.first_name))).all()
+    return [
+        StudentSignInDetailResponse(
+            student_id=student.id,
+            first_name=student.first_name,
+            last_name=student.last_name,
+            admission_number=student.admission_number or "",
+            school_code=school.school_code,
+            class_id=school_class.id if school_class else None,
+            class_name=school_class.name if school_class else None,
+        )
+        for student, school_class in rows
+    ]
+
+
 @router.get("/students/{student_id}", response_model=StudentDetailResponse)
 async def student_detail(
     student_id: UUID,
@@ -1082,6 +1277,7 @@ async def student_detail(
         "firstName": student.first_name,
         "lastName": student.last_name,
         "loginIdentifier": student.login_identifier,
+        "admissionNumber": student.admission_number,
         "email": student.email,
         "status": student.status.value,
         "ageBand": coerce_band(student.age_band, student.date_of_birth),

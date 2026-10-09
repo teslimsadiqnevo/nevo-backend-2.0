@@ -133,6 +133,9 @@ class SchoolResponse(CamelResponse):
     academic_config: AcademicConfig
     retention_policy: str
     retention_days: int
+    school_type: str | None = None
+    founding_partner: bool = False
+    admin_seat_limit: int = 5
 
 
 class SchoolRosterCounts(CamelResponse):
@@ -163,6 +166,14 @@ class SchoolRosterCounts(CamelResponse):
 class SchoolOverviewResponse(CamelResponse):
     school_id: UUID
     counts: SchoolRosterCounts
+    period: Literal["current"] = "current"
+    class_activity: list["ClassActivityRecency"] = Field(default_factory=list)
+
+
+class ClassActivityRecency(CamelResponse):
+    class_id: UUID
+    class_name: str
+    last_activity_at: datetime | None
 
 
 class ClassTeacherResponse(CamelResponse):
@@ -222,10 +233,13 @@ class TeacherSummaryResponse(CamelResponse):
     name: str
     email: str | None
     status: UserStatus
+    class_count: int = 0
+    last_active_at: datetime | None = None
 
 
 class TeacherDetailResponse(TeacherSummaryResponse):
     class_ids: list[UUID]
+    subjects: list[str] = Field(default_factory=list)
 
 
 class StudentConsentSummaryResponse(CamelResponse):
@@ -240,6 +254,7 @@ class StudentSummaryResponse(CamelResponse):
     id: UUID
     name: str
     login_identifier: str | None
+    admission_number: str | None
     status: UserStatus
     #: A closed set, derived from the date of birth. Free text until now, and
     #: in practice the string form of an age, which nothing could match.
@@ -253,6 +268,7 @@ class StudentDetailResponse(CamelResponse):
     first_name: str | None
     last_name: str | None
     login_identifier: str | None
+    admission_number: str | None
     email: str | None
     status: UserStatus
     age_band: AgeBand | None
@@ -354,7 +370,9 @@ class InvitationResponse(CamelResponse):
     role: str | None = None
     email: str | None = None
     name: str | None = None
-    status: str | None = None
+    status: Literal["pending", "accepted", "revoked", "expired"] | None = None
+    class_id: UUID | None = None
+    created_at: datetime | None = None
     expires_at: datetime
     delivery_status: InvitationDeliveryStatus | None = None
     consent_status: ConsentStatus | None = None
@@ -363,11 +381,13 @@ class InvitationResponse(CamelResponse):
 class RejectedInvitationResponse(CamelResponse):
     row: int
     reason: str
+    value: str | None = None
 
 
 class BulkInvitationResponse(CamelResponse):
     created: list[InvitationResponse]
     rejected: list[RejectedInvitationResponse]
+    row_number_base: Literal[1] = 1
 
 
 class JoinInspectionResponse(CamelResponse):

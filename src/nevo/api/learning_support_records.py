@@ -141,6 +141,72 @@ class AccommodationHistory(CamelResponse):
     series: list[DimensionSeries]
 
 
+class StudentAccommodationSummary(CamelResponse):
+    student_id: UUID
+    student_name: str
+    active: list[AccommodationType]
+    last_changed_at: datetime | None
+
+
+@router.get(
+    "/accommodations",
+    response_model=list[StudentAccommodationSummary],
+)
+async def list_active_accommodations(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> list[StudentAccommodationSummary]:
+    """Current inferred delivery adjustments across the caller's school."""
+    actor = await require_school_actor(session, principal, roles=STAFF_ROLES)
+    await require_learning_support_if_admin(session, actor)
+    students = list(
+        await session.scalars(
+            select(User)
+            .where(User.school_id == actor.school_id, User.role == "student")
+            .order_by(User.first_name, User.last_name)
+        )
+    )
+    if not students:
+        return []
+    changes = list(
+        await session.scalars(
+            select(AccommodationChange)
+            .where(AccommodationChange.student_id.in_([student.id for student in students]))
+            .order_by(AccommodationChange.occurred_at.desc())
+        )
+    )
+    latest: dict[tuple[UUID, AccommodationType], AccommodationChange] = {}
+    for change in changes:
+        latest.setdefault((change.student_id, change.accommodation), change)
+    return [
+        StudentAccommodationSummary(
+            student_id=student.id,
+            student_name=" ".join(
+                part for part in (student.first_name, student.last_name) if part
+            )
+            or "Student",
+            active=sorted(
+                [
+                    accommodation
+                    for (student_id, accommodation), change in latest.items()
+                    if student_id == student.id
+                    and change.action is AccommodationChangeAction.ADDED
+                ],
+                key=lambda item: item.value,
+            ),
+            last_changed_at=max(
+                (
+                    change.occurred_at
+                    for (student_id, _), change in latest.items()
+                    if student_id == student.id
+                ),
+                default=None,
+            ),
+        )
+        for student in students
+    ]
+
+
 async def _student(session: AsyncSession, actor: User, student_id: UUID) -> User:
     if not await can_access_student(session, actor, student_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")

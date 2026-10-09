@@ -269,3 +269,5 @@ class AdaptationEventLogRecord:
     trigger: str
     adaptation: str
     event_type: str
+    before: str | None = None
+    after: str | None = None

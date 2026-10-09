@@ -32,6 +32,8 @@ class AssignedClass:
     class_code: str | None
     role: TeacherAssignmentRole
     assigned_at: datetime
+    subject_id: UUID | None = None
+    subject: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,8 @@ class AssignedTeacher:
     email: str | None
     role: TeacherAssignmentRole
     assigned_at: datetime
+    subject_id: UUID | None = None
+    subject: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

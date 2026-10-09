@@ -144,6 +144,34 @@ def adaptation_plain_language(
     return "Content delivery adjusted"
 
 
+def adaptation_before_after(
+    event_type: SignalEventType,
+    event_data: dict[str, object],
+) -> tuple[str | None, str | None]:
+    if event_type in {
+        SignalEventType.MODALITY_SUGGESTION_SHOWN,
+        SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
+        SignalEventType.MODALITY_SWITCH_OUTCOME,
+        SignalEventType.MODALITY_MANUAL_SWITCH,
+    }:
+        before = _modality_label(
+            event_data.get("fromModality") or event_data.get("currentModality")
+        )
+        after = _modality_label(
+            event_data.get("toModality")
+            or event_data.get("suggestedModality")
+            or event_data.get("modality")
+        )
+        return before, after
+    values = {
+        SignalEventType.SIMPLIFY_TRIGGER: ("Original", "Simplified"),
+        SignalEventType.EXPAND_TRIGGER: ("Core", "Expanded"),
+        SignalEventType.SLOWER_TRIGGER: ("Standard pace", "Slower pace"),
+        SignalEventType.BREAK_SUGGESTED: ("Lesson flow", "Break suggested"),
+    }
+    return values.get(event_type, (None, None))
+
+
 def _reason_label(reason: str) -> str:
     labels = {
         "combined": "Comprehension declining + engagement drop",

@@ -22,6 +22,7 @@ from nevo.permissions.errors import (
     LastOversightAdminError,
     PermissionDeniedError,
     PermissionError,
+    SelfDeactivationError,
     SelfScopeRemovalError,
     SsoManagedTeamError,
     TeamMemberAlreadyExistsError,
@@ -64,6 +65,8 @@ class TeamMemberResponse(BaseModel):
     role: UserRole
     status: UserStatus
     scopes: list[PermissionScope] = Field(max_length=50)
+    founding: bool = False
+    last_active_at: datetime | None = Field(default=None, alias="lastActiveAt")
 
     @classmethod
     def from_member(cls, member: AdminTeamMember) -> "TeamMemberResponse":
@@ -76,6 +79,8 @@ class TeamMemberResponse(BaseModel):
             role=member.role,
             status=member.status,
             scopes=sorted(member.scopes, key=lambda scope: scope.value),
+            founding=member.founding,
+            lastActiveAt=member.last_active_at,
         )
 
 
@@ -310,6 +315,42 @@ async def replace_admin_scopes(
     return TeamMemberResponse.from_member(member)
 
 
+@router.post(
+    "/admin/team/{target_user_id}/deactivate",
+    response_model=TeamMemberResponse,
+)
+async def deactivate_admin_team_member(
+    target_user_id: UUID,
+    principal: PrincipalDependency,
+    service: PermissionServiceDependency,
+) -> TeamMemberResponse:
+    try:
+        member = await service.set_team_member_active(
+            principal, target_user_id=target_user_id, active=False
+        )
+    except PermissionError as error:
+        raise public_permission_error(error) from error
+    return TeamMemberResponse.from_member(member)
+
+
+@router.post(
+    "/admin/team/{target_user_id}/restore",
+    response_model=TeamMemberResponse,
+)
+async def restore_admin_team_member(
+    target_user_id: UUID,
+    principal: PrincipalDependency,
+    service: PermissionServiceDependency,
+) -> TeamMemberResponse:
+    try:
+        member = await service.set_team_member_active(
+            principal, target_user_id=target_user_id, active=True
+        )
+    except PermissionError as error:
+        raise public_permission_error(error) from error
+    return TeamMemberResponse.from_member(member)
+
+
 def public_permission_error(error: PermissionError) -> HTTPException:
     status_code = status.HTTP_400_BAD_REQUEST
     if isinstance(error, PermissionDeniedError):
@@ -322,6 +363,7 @@ def public_permission_error(error: PermissionError) -> HTTPException:
             TeamMemberAlreadyExistsError,
             LastOversightAdminError,
             SelfScopeRemovalError,
+            SelfDeactivationError,
             SsoManagedTeamError,
             AdminSeatLimitReachedError,
         ),

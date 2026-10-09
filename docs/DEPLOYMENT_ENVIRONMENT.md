@@ -71,6 +71,12 @@ card charging, invoice issuance, and daily collection.
 - `PAYSTACK_CURRENCY=NGN`: currency invoices are charged in.
 - `PAYSTACK_AUTO_CHARGE_ENABLED=true`: allows the daily job to charge a stored
   authorization for a due invoice.
+- `BILLING_BANK_NAME`, `BILLING_BANK_ACCOUNT_NUMBER`, and
+  `BILLING_BANK_ACCOUNT_NAME`: the receiving account shown to schools.
+- `BILLING_FINANCE_CONFIRMATION_KEY`: a long random secret used only by Nevo
+  finance to confirm a reported bank transfer after matching the bank
+  statement. School clients must call `payments/transfer-report`, not the
+  settlement endpoint.
 
 In the Paystack dashboard, set the webhook URL to
 `POST {backend}/api/billing/payments/webhook`. The endpoint is unauthenticated

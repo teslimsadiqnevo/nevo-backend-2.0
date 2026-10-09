@@ -41,6 +41,15 @@ class PermissionRepository(Protocol):
         changed_at: datetime,
     ) -> AdminTeamMember | None: ...
 
+    async def set_team_member_active(
+        self,
+        *,
+        school_id: UUID,
+        target_user_id: UUID,
+        active: bool,
+        changed_at: datetime,
+    ) -> AdminTeamMember | None: ...
+
 
 class InvitationTokenService(Protocol):
     def issue(self) -> tuple[str, str]: ...

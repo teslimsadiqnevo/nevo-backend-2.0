@@ -5,7 +5,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import Class, User
-from nevo.db.models.subject import ClassSubject, TeacherSubject
+from nevo.db.models.subject import ClassSubject, SchoolSubject, TeacherSubject
 from nevo.db.models.teacher_assignment import (
     TeacherClassAssignment as TeacherClassAssignmentModel,
 )
@@ -250,10 +250,14 @@ class SqlAlchemyTeacherAssignmentRepository:
         async with self._sessions() as session:
             rows = (
                 await session.execute(
-                    select(TeacherClassAssignmentModel, Class)
+                    select(TeacherClassAssignmentModel, Class, SchoolSubject)
                     .join(
                         Class,
                         Class.id == TeacherClassAssignmentModel.class_id,
+                    )
+                    .outerjoin(
+                        SchoolSubject,
+                        SchoolSubject.id == TeacherClassAssignmentModel.school_subject_id,
                     )
                     .where(
                         TeacherClassAssignmentModel.school_id == school_id,
@@ -271,8 +275,10 @@ class SqlAlchemyTeacherAssignmentRepository:
                 class_code=school_class.class_code,
                 role=assignment.role,
                 assigned_at=assignment.assigned_at,
+                subject_id=assignment.school_subject_id,
+                subject=subject.name if subject else None,
             )
-            for assignment, school_class in rows
+            for assignment, school_class, subject in rows
         ]
 
     async def class_teachers(
@@ -284,10 +290,14 @@ class SqlAlchemyTeacherAssignmentRepository:
         async with self._sessions() as session:
             rows = (
                 await session.execute(
-                    select(TeacherClassAssignmentModel, User)
+                    select(TeacherClassAssignmentModel, User, SchoolSubject)
                     .join(
                         User,
                         User.id == TeacherClassAssignmentModel.teacher_id,
+                    )
+                    .outerjoin(
+                        SchoolSubject,
+                        SchoolSubject.id == TeacherClassAssignmentModel.school_subject_id,
                     )
                     .where(
                         TeacherClassAssignmentModel.school_id == school_id,
@@ -310,8 +320,10 @@ class SqlAlchemyTeacherAssignmentRepository:
                 email=teacher.email,
                 role=assignment.role,
                 assigned_at=assignment.assigned_at,
+                subject_id=assignment.school_subject_id,
+                subject=subject.name if subject else None,
             )
-            for assignment, teacher in rows
+            for assignment, teacher, subject in rows
         ]
 
     async def is_teacher_assigned(

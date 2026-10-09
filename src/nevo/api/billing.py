@@ -1,12 +1,15 @@
-from datetime import date, datetime
+import hashlib
+import secrets
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from functools import lru_cache
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.permissions import RequireScope
@@ -30,7 +33,7 @@ from nevo.billing.errors import (
 )
 from nevo.billing.service import ACCESS_WINDOWS, PUBLISHED_RATES_NGN, BillingService
 from nevo.db.models.account import School
-from nevo.db.models.billing import Invoice
+from nevo.db.models.billing import Invoice, PaymentTransaction
 from nevo.domain.billing.vocabulary import (
     AccessWindow,
     InvoiceStatus,
@@ -226,13 +229,26 @@ class BankTransferDetailsResponse(BaseModel):
     currency: PricingCurrency
 
     @classmethod
-    def from_record(cls, record: BankTransferDetails) -> "BankTransferDetailsResponse":
+    def from_record(
+        cls,
+        record: BankTransferDetails,
+    ) -> "BankTransferDetailsResponse":
         return cls(
             bankName=record.bank_name,
             accountNumber=record.account_number,
             accountName=record.account_name,
             currency=record.currency,
         )
+
+
+class InvoiceBankTransferDetailsResponse(BankTransferDetailsResponse):
+    invoice_id: UUID = Field(alias="invoiceId")
+    reference: str = Field(
+        description="Write this invoice number as the bank-transfer reference."
+    )
+    confirmation_authority: Literal["nevo_finance"] = Field(
+        default="nevo_finance", alias="confirmationAuthority"
+    )
 
 
 class InvoiceResponse(BaseModel):
@@ -295,6 +311,10 @@ class UpcomingChargeResponse(BaseModel):
     status: InvoiceStatus | None
     renewal_banner_visible: bool = Field(alias="renewalBannerVisible")
     renewal_message: str | None = Field(alias="renewalMessage")
+    days_overdue: int = Field(alias="daysOverdue", ge=0)
+    line_items: list["UpcomingChargeLineItemResponse"] = Field(
+        default_factory=list, alias="lineItems"
+    )
 
     @classmethod
     def from_record(cls, record: UpcomingCharge) -> "UpcomingChargeResponse":
@@ -306,7 +326,29 @@ class UpcomingChargeResponse(BaseModel):
             status=record.status,
             renewal_banner_visible=record.renewal_banner_visible,
             renewal_message=record.renewal_message,
+            daysOverdue=(
+                max(0, (date.today() - record.due_at).days)
+                if record.due_at and record.status is InvoiceStatus.OVERDUE
+                else 0
+            ),
+            lineItems=(
+                [
+                    UpcomingChargeLineItemResponse(
+                        description="Nevo school subscription",
+                        amount=record.amount,
+                        currency=PricingCurrency.NGN,
+                    )
+                ]
+                if record.amount is not None
+                else []
+            ),
         )
+
+
+class UpcomingChargeLineItemResponse(BaseModel):
+    description: str
+    amount: Decimal
+    currency: PricingCurrency
 
 
 class PaymentMethodRequest(BaseModel):
@@ -536,6 +578,38 @@ async def bank_transfer_details(
     return BankTransferDetailsResponse.from_record(bank_transfer_settings().details())
 
 
+@router.get(
+    "/invoices/{invoice_id}/bank-transfer-details",
+    response_model=InvoiceBankTransferDetailsResponse,
+)
+async def invoice_bank_transfer_details(
+    invoice_id: UUID,
+    actor: BillingScopeDependency,
+    session: DatabaseSession,
+) -> InvoiceBankTransferDetailsResponse:
+    """Bank details plus the exact reference for any unpaid invoice."""
+    invoice = await session.scalar(
+        select(Invoice).where(
+            Invoice.id == invoice_id,
+            Invoice.school_id == _school_id(actor),
+        )
+    )
+    if invoice is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "invoice_not_found", "message": "Invoice not found."},
+        )
+    details = bank_transfer_settings().details()
+    return InvoiceBankTransferDetailsResponse(
+        bankName=details.bank_name,
+        accountNumber=details.account_number,
+        accountName=details.account_name,
+        currency=details.currency,
+        invoiceId=invoice.id,
+        reference=invoice.invoice_number,
+    )
+
+
 @router.put("/payment-method", response_model=PaymentMethodResponse)
 async def update_payment_method(
     payload: PaymentMethodRequest,
@@ -665,6 +739,19 @@ def get_payment_service(request: Request) -> PaymentService:
 PaymentDependency = Annotated[PaymentService, Depends(get_payment_service)]
 
 
+def get_manual_payment_service(request: Request) -> PaymentService:
+    service = getattr(request.app.state, "payment_service", None)
+    if not isinstance(service, PaymentService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "service_unavailable", "message": "Billing is unavailable."},
+        )
+    return service
+
+
+ManualPaymentDependency = Annotated[PaymentService, Depends(get_manual_payment_service)]
+
+
 @router.post("/payments/checkout", response_model=CheckoutSessionResponse)
 async def start_payment(
     payload: StartPaymentRequest,
@@ -707,11 +794,130 @@ class ManualTransferRequest(BaseModel):
     bank_reference: str = Field(alias="bankReference", min_length=3, max_length=120)
 
 
+class TransferReportResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    transaction_id: UUID = Field(alias="transactionId")
+    invoice_id: UUID = Field(alias="invoiceId")
+    bank_reference: str = Field(alias="bankReference")
+    status: Literal["awaiting_confirmation", "confirmed"] = "awaiting_confirmation"
+    message: str
+
+
+@router.post("/payments/transfer-report", response_model=TransferReportResponse)
+async def report_manual_transfer(
+    payload: ManualTransferRequest,
+    actor: BillingScopeDependency,
+    session: DatabaseSession,
+) -> TransferReportResponse:
+    """Record a payer's claim without marking the invoice paid."""
+    school_id = _school_id(actor)
+    invoice = await session.scalar(
+        select(Invoice).where(Invoice.id == payload.invoice_id, Invoice.school_id == school_id)
+    )
+    if invoice is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "invoice_not_found", "message": "Invoice not found."},
+        )
+    if invoice.status is InvoiceStatus.PAID:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "invoice_already_paid", "message": "This invoice is already paid."},
+        )
+    bank_reference = payload.bank_reference.strip()
+    existing = await session.scalar(
+        select(PaymentTransaction).where(
+            PaymentTransaction.school_id == school_id,
+            PaymentTransaction.invoice_id == invoice.id,
+            PaymentTransaction.provider == "bank_transfer_report",
+            PaymentTransaction.provider_reference == bank_reference,
+        )
+    )
+    if existing is None:
+        digest = hashlib.sha256(
+            f"{school_id}:{invoice.id}:{bank_reference}".encode()
+        ).hexdigest()[:24]
+        existing = PaymentTransaction(
+            school_id=school_id,
+            invoice_id=invoice.id,
+            reference=f"transfer-report-{digest}",
+            provider="bank_transfer_report",
+            provider_reference=bank_reference,
+            status=PaymentTransactionStatus.PENDING,
+            amount=invoice.amount,
+            amount_minor=int(invoice.amount * 100),
+            currency=invoice.currency,
+            initiated_by_user_id=actor.user_id,
+        )
+        session.add(existing)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            existing = await session.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.reference == f"transfer-report-{digest}"
+                )
+            )
+            if existing is None:
+                raise
+    return TransferReportResponse(
+        transactionId=existing.id,
+        invoiceId=invoice.id,
+        bankReference=bank_reference,
+        status=(
+            "confirmed"
+            if existing.status is PaymentTransactionStatus.SUCCESS
+            else "awaiting_confirmation"
+        ),
+        message="Transfer reported. Nevo finance will confirm it against the bank statement.",
+    )
+
+
+@router.get("/payments/transfer-reports", response_model=list[TransferReportResponse])
+async def list_transfer_reports(
+    actor: BillingScopeDependency,
+    session: DatabaseSession,
+) -> list[TransferReportResponse]:
+    rows = list(
+        await session.scalars(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.school_id == _school_id(actor),
+                PaymentTransaction.provider == "bank_transfer_report",
+            )
+            .order_by(PaymentTransaction.created_at.desc())
+        )
+    )
+    return [
+        TransferReportResponse(
+            transactionId=row.id,
+            invoiceId=row.invoice_id,
+            bankReference=row.provider_reference or "",
+            status=(
+                "confirmed"
+                if row.status is PaymentTransactionStatus.SUCCESS
+                else "awaiting_confirmation"
+            ),
+            message=(
+                "Transfer confirmed."
+                if row.status is PaymentTransactionStatus.SUCCESS
+                else "Transfer reported. Nevo finance has not confirmed it yet."
+            ),
+        )
+        for row in rows
+        if row.invoice_id is not None
+    ]
+
+
 @router.post("/payments/manual-transfer", response_model=PaymentOutcomeResponse)
 async def confirm_manual_transfer(
     payload: ManualTransferRequest,
     actor: BillingScopeDependency,
-    service: PaymentDependency,
+    service: ManualPaymentDependency,
+    session: DatabaseSession,
+    finance_key: Annotated[str | None, Header(alias="X-Nevo-Finance-Key")] = None,
 ) -> PaymentOutcomeResponse:
     """Record a bank transfer this school has been confirmed as sending.
 
@@ -720,6 +926,25 @@ async def confirm_manual_transfer(
     thing that can confirm it is a person with the billing scope looking at a
     bank statement - never the payer asserting it in the UI.
     """
+    expected = bank_transfer_settings().finance_confirmation_key
+    if expected is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "finance_confirmation_unavailable",
+                "message": "Manual settlement confirmation is not configured.",
+            },
+        )
+    if finance_key is None or not secrets.compare_digest(
+        finance_key, expected.get_secret_value()
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "nevo_finance_required",
+                "message": "Only Nevo finance can confirm a bank transfer.",
+            },
+        )
     try:
         outcome = await service.confirm_manual_transfer(
             school_id=_school_id(actor),
@@ -729,6 +954,19 @@ async def confirm_manual_transfer(
         )
     except PaymentError as error:
         raise public_payment_error(error) from error
+    if outcome.status is PaymentTransactionStatus.SUCCESS:
+        await session.execute(
+            update(PaymentTransaction)
+            .where(
+                PaymentTransaction.school_id == _school_id(actor),
+                PaymentTransaction.invoice_id == payload.invoice_id,
+                PaymentTransaction.provider == "bank_transfer_report",
+                PaymentTransaction.provider_reference == payload.bank_reference.strip(),
+                PaymentTransaction.status == PaymentTransactionStatus.PENDING,
+            )
+            .values(status=PaymentTransactionStatus.SUCCESS, paid_at=datetime.now(UTC))
+        )
+        await session.commit()
     return PaymentOutcomeResponse.from_record(outcome)
 
 

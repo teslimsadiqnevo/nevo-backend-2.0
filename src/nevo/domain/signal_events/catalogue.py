@@ -61,8 +61,9 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
     ),
     SignalEventType.COMPREHENSION_RESPONSE: SignalContract(
         "The child answers a comprehension checkpoint. Correctness is not "
-        "sent: it is decided on the server against the stored answer.",
-        ("segmentId", "questionId", "source: checkpoint|assessment"),
+        "sent: it is decided on the server against the stored answer. segmentId "
+        "is omitted for an after-lesson assessment item that is not owned by one segment.",
+        ("[segmentId]", "questionId", "source: checkpoint|assessment"),
     ),
     SignalEventType.EXIT_ATTEMPT: SignalContract(
         "The child tries to leave mid-lesson.", ("segmentId",)
@@ -99,9 +100,11 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
         "What they chose there.", ("moduleId", "action")
     ),
     SignalEventType.ENGAGEMENT_SIGNAL: SignalContract(
-        "A reading the named types do not already cover. The type of last "
-        "resort: the engine can reason about a named type and can only count "
-        "these.",
+        "A reading the named types do not already cover. value is a non-negative "
+        "number: focus_drop and steady_progress use milliseconds; task_switch, "
+        "navigation_fragmentation and rapid_guessing use a count; "
+        "return_after_pause uses the pause duration in milliseconds. The type "
+        "is a last resort: use a named event where one exists.",
         (
             (
                 "indicator: focus_drop|task_switch|navigation_fragmentation|"
@@ -126,7 +129,10 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
     SignalEventType.MODALITY_SWITCH_OUTCOME: SignalContract(
         "Sent once when the next segment entered in the new modality is left "
         "or completed. That entry-to-exit interval is a full segment; it has "
-        "no minimum number of seconds. One per switch. Ask B38.",
+        "no minimum number of seconds. timeOnSegment is milliseconds. The "
+        "comprehension and engagement scores are supplied aggregates: either "
+        "0-1 ratios or 0-100 scores, normalised on the server; raw interaction "
+        "data is never sent. One per switch. Ask B38.",
         (
             "segmentId",
             "[from]",

@@ -1094,14 +1094,14 @@ class OutcomesResponse(CamelResponse):
 
 
 class EngineReadingConfig(CamelResponse):
-    """How fast this child reads, and how much text to put in front of them."""
+    """Server inference parameters, returned for transparency rather than direct UI control."""
 
     target_words_per_minute: int = 120
     segment_word_target: int = 180
 
 
 class EnginePacingConfig(CamelResponse):
-    """How long to wait before reading a pause as a pause."""
+    """Server inference parameters; the client reports timing and does not apply these."""
 
     response_time_target_ms: int = 2_500
     attention_window_minutes: int = 12
@@ -1110,10 +1110,16 @@ class EnginePacingConfig(CamelResponse):
 class EngineSupportConfig(CamelResponse):
     """Where the support ladder starts for this child."""
 
-    initial_scaffold_level: ScaffoldingLevel = ScaffoldingLevel.STANDARD
+    initial_scaffold_level: ScaffoldingLevel = Field(
+        default=ScaffoldingLevel.STANDARD,
+        description="Client-applied starting level for calculation scaffolds.",
+    )
     #: Segments between comprehension checks. Closer together for a child the
     #: baseline put at the lower end of working memory.
-    comprehension_check_interval: int = 3
+    comprehension_check_interval: int = Field(
+        default=3,
+        description="Client-applied maximum segments between available comprehension checks.",
+    )
     #: True when the number accommodation is active for this child: every
     #: calculation is worked a step at a time and a bare answer is never the
     #: first thing shown. Ask B21.

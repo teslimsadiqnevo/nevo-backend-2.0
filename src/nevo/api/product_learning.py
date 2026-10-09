@@ -88,7 +88,7 @@ from nevo.db.models.product import (
     UploadSourceBlob,
 )
 from nevo.db.models.signal_event import LessonSession
-from nevo.domain.accounts.age_bands import coerce_band
+from nevo.domain.accounts.age_bands import band_for_year_group, coerce_band
 from nevo.domain.accounts.vocabulary import SsoProvider, UserRole
 from nevo.domain.intelligence.vocabulary import (
     AssignmentStatus,
@@ -1239,6 +1239,19 @@ async def student_dashboard(
     actor = await actor_user(session, principal)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
+    enrolled_class = await session.scalar(
+        select(Class)
+        .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)
+        .where(
+            StudentClassEnrollment.student_id == actor.id,
+            StudentClassEnrollment.removed_at.is_(None),
+        )
+        .order_by(StudentClassEnrollment.created_at)
+        .limit(1)
+    )
+    age_band = coerce_band(actor.age_band, actor.date_of_birth) or band_for_year_group(
+        enrolled_class.year_group if enrolled_class else None
+    )
     items = await assignments(principal, session)
     due = [item for item in items if item["status"] != "completed"]
     progress = (
@@ -1267,7 +1280,11 @@ async def student_dashboard(
         if item.session_id is not None:
             outcomes[item.session_id] = await _check_in_outcome(session, item.session_id)
     return {
-        "student": {"id": str(actor.id), "firstName": actor.first_name},
+        "student": {
+            "id": str(actor.id),
+            "firstName": actor.first_name,
+            "ageBand": age_band,
+        },
         "assignments": due,
         "recentProgress": [
             {

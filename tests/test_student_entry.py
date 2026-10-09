@@ -16,6 +16,7 @@ from nevo.api.onboarding import STUDENT_COLUMNS, _read_rows
 from nevo.api.student_entry import age_on, set_pin_and_start
 from nevo.db.models.account import User
 from nevo.db.models.product import StudentOnboardingGrant
+from nevo.domain.accounts.age_bands import AgeBand, band_for_year_group
 from nevo.domain.onboarding.vocabulary import OnboardingRowKind
 from nevo.main import app
 
@@ -75,7 +76,27 @@ def test_a_date_written_the_way_a_school_writes_it_is_read() -> None:
 def test_the_link_resolves_to_the_child_rather_than_asking_them(spec: dict) -> None:
     fields = spec["components"]["schemas"]["StudentEntryState"]["properties"]
 
-    assert {"firstName", "className", "consentState", "age"} <= set(fields)
+    assert {
+        "firstName",
+        "className",
+        "consentState",
+        "age",
+        "ageBand",
+        "yearGroup",
+    } <= set(fields)
+
+
+@pytest.mark.parametrize(
+    ("year_group", "band"),
+    [
+        ("Primary 2", AgeBand.EARLY_PRIMARY),
+        ("P5", AgeBand.UPPER_PRIMARY),
+        ("JSS 2", AgeBand.JUNIOR_SECONDARY),
+        ("SS 1", AgeBand.SENIOR_SECONDARY),
+    ],
+)
+def test_class_year_is_the_band_fallback(year_group: str, band: AgeBand) -> None:
+    assert band_for_year_group(year_group) is band
 
 
 def test_consent_is_enforced_by_the_api_not_by_routing() -> None:

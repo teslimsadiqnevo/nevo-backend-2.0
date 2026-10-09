@@ -15,6 +15,7 @@ nothing can produce is not a value.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime
 from enum import StrEnum
 
@@ -84,3 +85,25 @@ def coerce_band(stored: str | None, born: date | None = None) -> AgeBand | None:
         if value.isdigit():
             return band_for_age(int(value))
     return band_for_date_of_birth(born, None)
+
+
+def band_for_year_group(year_group: str | None) -> AgeBand | None:
+    """Use the school's class year when a roster carries no date of birth.
+
+    This is a presentation fallback, not a second stored age. Nigerian schools
+    commonly write Primary/P and JSS/JS/SSS/SS with or without spaces, so the
+    class name is normalised before matching.
+    """
+
+    value = re.sub(r"[^a-z0-9]", "", (year_group or "").casefold())
+    match = re.search(r"(\d+)", value)
+    year = int(match.group(1)) if match else None
+    if value.startswith(("nursery", "reception")):
+        return AgeBand.EARLY_PRIMARY
+    if value.startswith(("primary", "pry", "p")) and year is not None:
+        return AgeBand.EARLY_PRIMARY if year <= 3 else AgeBand.UPPER_PRIMARY
+    if value.startswith(("jss", "js", "juniorsecondary")):
+        return AgeBand.JUNIOR_SECONDARY
+    if value.startswith(("sss", "ss", "seniorsecondary")):
+        return AgeBand.SENIOR_SECONDARY
+    return None

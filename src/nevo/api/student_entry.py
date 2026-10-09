@@ -35,6 +35,7 @@ from nevo.db.models.account import (
 )
 from nevo.db.models.auth import AuthLoginAttempt
 from nevo.db.models.product import StudentOnboardingGrant
+from nevo.domain.accounts.age_bands import AgeBand, band_for_date_of_birth, band_for_year_group
 from nevo.domain.accounts.vocabulary import AuthMethod, ConsentStatus, UserRole, UserStatus
 from nevo.domain.consent.vocabulary import REQUIRED_LEARNING_CONSENT
 
@@ -64,6 +65,10 @@ class StudentEntryState(CamelResponse):
     #: stored twice. Null where the roster has no date of birth, which the
     #: import is supposed to have refused.
     age: int | None
+    #: Derived from the roster DOB, then from the enrolled class year when the
+    #: DOB is absent. It is not guessed from a default primary band.
+    age_band: AgeBand | None = None
+    year_group: str | None = None
     #: True once the child has a PIN and can sign in normally.
     account_ready: bool
     #: True only when a class teacher cleared an existing PIN. This separates
@@ -156,19 +161,20 @@ async def _has_consent(session: AsyncSession, student_id: UUID) -> bool:
     return await _consent_state(session, student_id) == "given"
 
 
-async def _class_name(session: AsyncSession, grant: StudentOnboardingGrant) -> str | None:
-    school_class = await session.get(Class, grant.class_id)
-    return school_class.name if school_class else None
-
-
 async def _state(session: AsyncSession, grant: StudentOnboardingGrant) -> StudentEntryState:
     student = await _student(session, grant)
+    school_class = await session.get(Class, grant.class_id)
     return StudentEntryState(
         first_name=student.first_name or "",
-        class_name=await _class_name(session, grant),
+        class_name=school_class.name if school_class else None,
         consent_state=await _consent_state(session, student.id),
         age_check_pending=False,
         age=age_on(student.date_of_birth),
+        age_band=(
+            band_for_date_of_birth(student.date_of_birth)
+            or band_for_year_group(school_class.year_group if school_class else None)
+        ),
+        year_group=school_class.year_group if school_class else None,
         account_ready=student.pin_hash is not None,
         pin_cleared=student.pin_cleared_at is not None,
     )
@@ -525,6 +531,11 @@ async def lookup_entry(
         consent_state=await _consent_state(session, student.id),
         age_check_pending=False,
         age=age_on(student.date_of_birth),
+        age_band=(
+            band_for_date_of_birth(student.date_of_birth)
+            or band_for_year_group(enrolled_class.year_group if enrolled_class else None)
+        ),
+        year_group=enrolled_class.year_group if enrolled_class else None,
         account_ready=student.pin_hash is not None,
         pin_cleared=student.pin_cleared_at is not None,
     )

@@ -1470,6 +1470,23 @@ async def message_threads(
     user = await session.get(User, principal.user_id)
     if user is None or user.school_id is None:
         return MessageThreadListResponse(threads=[], total=0)
+    if user.role is UserRole.STUDENT:
+        # A child's first message needs a thread id but, before this, the list
+        # was empty and creating one required the child to know their own user
+        # id as the recipient. Materialise the one empty teacher conversation
+        # once an active class teacher exists.
+        teacher_id = await _routing_teacher_id(session, user.id)
+        if teacher_id is not None:
+            await _find_or_create_thread(
+                session,
+                user,
+                SendMessageRequest(
+                    recipientId=user.id,
+                    recipientType=MessageRecipientType.STUDENT,
+                    content="thread setup",
+                ),
+            )
+            await session.commit()
     query = select(MessageThread).where(MessageThread.school_id == user.school_id)
     query = query.where(_thread_access_clause(user))
     records = (await session.scalars(query.order_by(MessageThread.last_message_at.desc()))).all()
@@ -2491,22 +2508,11 @@ async def _thread_response(
         student = await session.get(User, thread.student_id)
         title = _display_name(student) if student else "Student conversation"
         recipient_id = thread.student_id
-        teacher_id = await session.scalar(
-            select(TeacherClassAssignment.teacher_id)
-            .join(
-                StudentClassEnrollment,
-                StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
-            )
-            .join(User, User.id == TeacherClassAssignment.teacher_id)
-            .where(
-                StudentClassEnrollment.student_id == thread.student_id,
-                StudentClassEnrollment.removed_at.is_(None),
-                TeacherClassAssignment.removed_at.is_(None),
-                User.status == UserStatus.ACTIVE,
-            )
-            .order_by(TeacherClassAssignment.assigned_at, TeacherClassAssignment.id)
-            .limit(1)
-        )
+        teacher_id = await _routing_teacher_id(session, thread.student_id)
+        viewer = await session.get(User, viewer_id)
+        if viewer is not None and viewer.role is UserRole.STUDENT and teacher_id is not None:
+            teacher = await session.get(User, teacher_id)
+            title = _display_name(teacher) if teacher else "Your teacher"
     elif thread.recipient_type == "class" and thread.class_id:
         school_class = await session.get(Class, thread.class_id)
         title = school_class.name if school_class else "Class conversation"
@@ -2547,6 +2553,25 @@ async def _thread_response(
         className=class_name,
         unread=bool(unread_count),
         unreadCount=int(unread_count or 0),
+    )
+
+
+async def _routing_teacher_id(session, student_id: UUID) -> UUID | None:
+    return await session.scalar(
+        select(TeacherClassAssignment.teacher_id)
+        .join(
+            StudentClassEnrollment,
+            StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
+        )
+        .join(User, User.id == TeacherClassAssignment.teacher_id)
+        .where(
+            StudentClassEnrollment.student_id == student_id,
+            StudentClassEnrollment.removed_at.is_(None),
+            TeacherClassAssignment.removed_at.is_(None),
+            User.status == UserStatus.ACTIVE,
+        )
+        .order_by(TeacherClassAssignment.assigned_at, TeacherClassAssignment.id)
+        .limit(1)
     )
 
 

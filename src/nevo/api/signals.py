@@ -185,6 +185,9 @@ class SignalEventRequest(BaseModel):
             if self.event_data.get("indicator") not in ENGAGEMENT_INDICATORS:
                 allowed = ", ".join(sorted(ENGAGEMENT_INDICATORS))
                 raise ValueError(f"engagement_signal indicator must be one of: {allowed}.")
+            value = self.event_data.get("value")
+            if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
+                raise ValueError("engagement_signal value must be a non-negative number.")
         if self.event_type is SignalEventType.READING_CHUNK_VIEWED:
             _require_keys(self.event_data, {"segmentId", "chunkId", "action", "formFactor"})
             if self.event_data.get("action") not in {"entered", "passed"}:
@@ -202,6 +205,22 @@ class SignalEventRequest(BaseModel):
                 self.event_data,
                 {"modality", "comprehensionScore", "engagementScore", "timeOnSegment"},
             )
+        for key in ("comprehensionScore", "engagementScore"):
+            score = self.event_data.get(key)
+            if score is not None and (
+                not isinstance(score, int | float)
+                or isinstance(score, bool)
+                or not 0 <= float(score) <= 100
+            ):
+                raise ValueError(f"{key} must be a number from 0 to 100.")
+        elapsed = self.event_data.get("timeOnSegment")
+        if elapsed is not None and (
+            not isinstance(elapsed, int | float)
+            or isinstance(elapsed, bool)
+            or elapsed < 0
+        ):
+            raise ValueError("timeOnSegment must be milliseconds as a non-negative number.")
+        if outcome is None:
             return
         if outcome not in {"better", "worse", "no_change"}:
             raise ValueError("Modality switch outcome must be better, worse, or no_change.")

@@ -167,7 +167,11 @@ class KeyTerm(BaseModel):
 
 
 class EquationCallout(BaseModel):
-    """An equation kept separate from prose so it can be rendered accessibly."""
+    """An equation kept separate from prose so it can be rendered accessibly.
+
+    It is not guaranteed to be repeated in ``body``. Render this collection as
+    its own accessible callout rather than searching the prose for a duplicate.
+    """
 
     equation: str = Field(min_length=1, max_length=500)
     label: str | None = Field(default=None, max_length=160)
@@ -232,7 +236,13 @@ class InteractiveVariant(BaseModel):
 
 
 class CalculationHighlight(BaseModel):
-    target: str
+    target: str = Field(
+        description=(
+            "Opaque renderer target emitted by the lesson, such as an equation token, "
+            "scaffold mark or manipulative piece id. Match it only to an id carried by "
+            "the same calculation; an unknown target is ignored rather than guessed."
+        )
+    )
     role: Literal["active", "source", "result"] = "active"
 
 
@@ -267,9 +277,9 @@ class CalculationStep(BaseModel):
     targets: list[ScalarAnswer] = Field(default_factory=list)
     tap_count: int | None = Field(default=None, alias="tapCount", ge=1)
     assembles: str
-    #: Structured renderer targets for the active-step emphasis. ``target``
-    #: names an equation token, scaffold mark, or manipulative piece id;
-    #: ``role`` says why it is highlighted.
+    #: Applied while this step is being asked. Once the answer is accepted,
+    #: render ``assembles`` and move to the next step's highlights. ``target``
+    #: is local to this calculation; an unknown one is ignored.
     highlights: list[CalculationHighlight] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -345,17 +355,38 @@ class CalculationScaffold(BaseModel):
     """A calculation drawing described as data, never as a generated image."""
 
     kind: Literal["bar", "number_line", "dots", "array", "place_value"]
-    parts: int = Field(ge=1, le=100)
-    rows: int = Field(default=1, ge=1, le=20)
+    parts: int = Field(
+        ge=1,
+        le=100,
+        description=(
+            "Cells or positions in one row. For an array this is the column count; "
+            "total cells are parts multiplied by rows."
+        ),
+    )
+    rows: int = Field(
+        default=1,
+        ge=1,
+        le=20,
+        description=(
+            "Rendered rows. Marks are overlays/values and do not create rows, so their "
+            "count may be greater than rows."
+        ),
+    )
     marks: list[ScalarAnswer] = Field(
         default_factory=list,
         max_length=100,
-        description="Positions or values drawn on the scaffold, in renderer order.",
+        description=(
+            "Positions or values drawn in renderer order. For place_value, marks are "
+            "the piece counts for the columns named by labels."
+        ),
     )
     labels: list[str] = Field(
         default_factory=list,
         max_length=100,
-        description="Visible labels paired with marks or scaffold parts in renderer order.",
+        description=(
+            "Visible labels in renderer order: label[i] belongs to mark[i] when marks "
+            "are present, otherwise to scaffold part i."
+        ),
     )
 
 

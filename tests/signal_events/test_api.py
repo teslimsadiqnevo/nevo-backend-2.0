@@ -128,7 +128,7 @@ def test_accepts_completion_snapshot() -> None:
                     "modality": "visual",
                     "comprehensionScore": 0.8,
                     "engagementScore": 0.9,
-                    "timeOnSegment": 75,
+                    "timeOnSegment": 75_000,
                 }
             ],
         },

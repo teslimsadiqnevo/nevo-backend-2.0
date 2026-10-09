@@ -1139,11 +1139,7 @@ def _segment_progress_rows(
             seconds
             for event in matching
             if (
-                seconds := _time_seconds(
-                    event.event_data.get("timeOnSegment")
-                    or event.event_data.get("durationSeconds")
-                    or event.event_data.get("durationMs")
-                )
+                seconds := _event_elapsed_seconds(event.event_data)
             )
             is not None
         ]
@@ -1209,11 +1205,7 @@ def _student_session_sections(
             seconds
             for event in matching
             if (
-                seconds := _time_seconds(
-                    event.event_data.get("timeOnSegment")
-                    or event.event_data.get("durationSeconds")
-                    or event.event_data.get("durationMs")
-                )
+                seconds := _event_elapsed_seconds(event.event_data)
             )
             is not None
         ]
@@ -1249,10 +1241,20 @@ def _event_score(data: dict[str, object], *keys: str) -> float | None:
     return None
 
 
-def _time_seconds(value: object) -> float | None:
+def _event_elapsed_seconds(data: dict[str, object]) -> float | None:
+    """Read explicitly named units; timeOnSegment is milliseconds."""
+
+    if "timeOnSegment" in data:
+        return _time_seconds(data.get("timeOnSegment"), milliseconds=True)
+    if "durationMs" in data:
+        return _time_seconds(data.get("durationMs"), milliseconds=True)
+    return _time_seconds(data.get("durationSeconds"), milliseconds=False)
+
+
+def _time_seconds(value: object, *, milliseconds: bool = False) -> float | None:
     if not isinstance(value, int | float):
         return None
     seconds = float(value)
-    if seconds > 1_000:
+    if milliseconds:
         seconds /= 1_000
     return max(0.0, seconds)

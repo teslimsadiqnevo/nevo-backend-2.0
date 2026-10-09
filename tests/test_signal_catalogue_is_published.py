@@ -61,3 +61,11 @@ def test_a_narration_restart_has_one_home() -> None:
     # counted under two types. Ask B39.
     assert "replay" in SIGNAL_CONTRACTS[SignalEventType.NARRATION_REPLAYED].trigger
     assert "restart" in SIGNAL_CONTRACTS[SignalEventType.REPLAY].trigger
+
+
+def test_time_and_after_lesson_units_are_unambiguous() -> None:
+    outcome = SIGNAL_CONTRACTS[SignalEventType.MODALITY_SWITCH_OUTCOME]
+    comprehension = SIGNAL_CONTRACTS[SignalEventType.COMPREHENSION_RESPONSE]
+
+    assert "milliseconds" in outcome.trigger
+    assert comprehension.payload[0] == "[segmentId]"

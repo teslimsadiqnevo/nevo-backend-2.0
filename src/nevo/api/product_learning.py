@@ -1244,7 +1244,6 @@ async def student_dashboard(
         .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)
         .where(
             StudentClassEnrollment.student_id == actor.id,
-            StudentClassEnrollment.removed_at.is_(None),
         )
         .order_by(StudentClassEnrollment.created_at)
         .limit(1)

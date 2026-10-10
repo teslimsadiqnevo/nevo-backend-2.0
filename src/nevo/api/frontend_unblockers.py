@@ -2575,7 +2575,6 @@ async def _routing_teacher_id(session, student_id: UUID) -> UUID | None:
         .join(User, User.id == TeacherClassAssignment.teacher_id)
         .where(
             StudentClassEnrollment.student_id == student_id,
-            StudentClassEnrollment.removed_at.is_(None),
             TeacherClassAssignment.removed_at.is_(None),
             User.status == UserStatus.ACTIVE,
         )

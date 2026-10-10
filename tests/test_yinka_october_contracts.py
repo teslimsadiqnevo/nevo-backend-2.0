@@ -1,9 +1,12 @@
 """Backend contracts clarified for the student console on 8 October."""
 
+import inspect
+
 from nevo.api.auth import UnifiedLoginRequest
-from nevo.api.frontend_unblockers import MessageThreadResponse
+from nevo.api.frontend_unblockers import MessageThreadResponse, _routing_teacher_id
 from nevo.api.lesson_contracts import CalculationStep, TextVariant, reading_chunks
 from nevo.api.product_auth import PinResetRequest
+from nevo.api.product_learning import student_dashboard
 from nevo.api.response_models import LessonQuestionAttemptResponse
 from nevo.db.base import Base
 from nevo.domain.signal_events.catalogue import SIGNAL_CONTRACTS
@@ -73,3 +76,10 @@ def test_assignment_cancellation_is_persisted() -> None:
     assert {"cancellation_reason", "recall_withdrawn"} <= {column.name for column in columns}
     request = app.openapi()["paths"]["/api/v1/assignments/{assignment_id}"]["delete"]
     assert "requestBody" in request
+
+
+def test_student_reads_use_the_enrollment_model_that_exists() -> None:
+    """Enrollment moves delete and replace rows; they have no removed_at column."""
+
+    for function in (student_dashboard, _routing_teacher_id):
+        assert "StudentClassEnrollment.removed_at" not in inspect.getsource(function)

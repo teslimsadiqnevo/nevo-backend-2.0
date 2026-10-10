@@ -31,7 +31,7 @@ from nevo.db.models.account import (
     StudentClassEnrollment,
     User,
 )
-from nevo.db.models.permission import Admin
+from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.domain.accounts.age_bands import band_for_date_of_birth
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
@@ -40,6 +40,7 @@ from nevo.domain.accounts.vocabulary import (
     UserStatus,
 )
 from nevo.domain.consent.vocabulary import REQUIRED_LEARNING_CONSENT
+from nevo.domain.permissions.vocabulary import PermissionScope
 
 #: The handle CI signs in with. Fixed by agreement, not generated.
 LOGIN_IDENTIFIER = "NV-E2E000"
@@ -70,6 +71,28 @@ async def main() -> None:
         school = await session.scalar(select(School).where(School.name.ilike("E2E Test Academy%")))
         if school is None:
             raise SystemExit("No E2E tenant. Run seed_e2e_tenant.py first.")
+        admin = await session.scalar(
+            select(Admin).where(Admin.school_id == school.id).order_by(Admin.id)
+        )
+        if admin is None:
+            raise SystemExit("No administrator on the E2E tenant.")
+        active_scopes = set(
+            await session.scalars(
+                select(AdminScopeAssignment.scope).where(
+                    AdminScopeAssignment.admin_id == admin.id,
+                    AdminScopeAssignment.revoked_at.is_(None),
+                )
+            )
+        )
+        for scope in PermissionScope:
+            if scope not in active_scopes:
+                session.add(
+                    AdminScopeAssignment(
+                        admin_id=admin.id,
+                        scope=scope,
+                        granted_by_user_id=admin.user_id,
+                    )
+                )
         existing = await session.scalar(
             select(User).where(User.login_identifier == LOGIN_IDENTIFIER)
         )
@@ -101,11 +124,6 @@ async def main() -> None:
         now = datetime.now(UTC)
         # The table insists a school confirmation names the administrator who
         # made it, which is the point of recording one at all.
-        admin = await session.scalar(
-            select(Admin).where(Admin.school_id == school.id).order_by(Admin.id)
-        )
-        if admin is None:
-            raise SystemExit("No administrator on the E2E tenant to confirm consent.")
         session.add(
             ConsentRecord(
                 subject_user_id=student.id,

@@ -986,14 +986,15 @@ async def confirm_and_price(
     session_label = academic_session(datetime.now(UTC).date())
     await _commit_classes(session, school, rows, session_label)
     quote = _quote(school, len(students))
+    invoice_number = f"NEVO-ONB-{secrets.token_hex(4).upper()}"
     invoice = Invoice(
-        invoice_number=f"NEVO-ONB-{secrets.token_hex(4).upper()}",
+        invoice_number=invoice_number,
         school_id=school.id,
         issued_at=date.today(),
         amount=quote.total_with_vat,
         status=InvoiceStatus.PENDING,
         due_at=date.today() + timedelta(days=14),
-        pdf_url="",
+        pdf_url=f"/api/billing/invoices/{school.id}/{invoice_number}.pdf",
         student_count=quote.student_count,
         per_student_rate=quote.per_student_rate,
         total_before_vat=quote.total_before_vat,

@@ -463,15 +463,16 @@ async def seed(session: AsyncSession) -> dict[str, object]:
     before_vat = per_student * len(STUDENTS)
     vat_rate = Decimal("0.075")
     vat = (before_vat * vat_rate).quantize(Decimal("0.01"))
+    invoice_number = f"NEVO-SEED-{secrets.token_hex(3).upper()}"
     invoice = Invoice(
-        invoice_number=f"NEVO-SEED-{secrets.token_hex(3).upper()}",
+        invoice_number=invoice_number,
         school_id=school.id,
         issued_at=today,
         amount=before_vat + vat,
         status=InvoiceStatus.PAID,
         due_at=today + timedelta(days=14),
         paid_at=now,
-        pdf_url="",
+        pdf_url=f"/api/billing/invoices/{school.id}/{invoice_number}.pdf",
         student_count=len(STUDENTS),
         per_student_rate=per_student,
         total_before_vat=before_vat,

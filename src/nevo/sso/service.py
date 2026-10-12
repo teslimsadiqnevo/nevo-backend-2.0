@@ -19,6 +19,7 @@ from nevo.sso.entities import (
     RosterSyncResult,
     RosterSyncRunView,
     SsoCloudFile,
+    SsoCloudFileItem,
     SsoConnectionHealth,
     SsoDataFlowCategory,
     SsoDisconnection,
@@ -83,6 +84,7 @@ class SsoRepository(Protocol):
     async def config_for_school(
         self,
         school_id: UUID,
+        provider: SsoProvider | None = None,
     ) -> SsoSchoolConfig | None: ...
 
     async def connection_health(
@@ -188,6 +190,8 @@ class SsoRepository(Protocol):
 
 
 class SsoProviderClient(Protocol):
+    def cloud_files_ready(self, *, config: SsoSchoolConfig) -> bool: ...
+
     def authorization_url(
         self,
         *,
@@ -217,6 +221,15 @@ class SsoProviderClient(Protocol):
         file_id: str,
         drive_id: str | None = None,
     ) -> SsoCloudFile: ...
+
+    async def list_files(
+        self,
+        *,
+        config: SsoSchoolConfig,
+        query: str | None = None,
+        drive_id: str | None = None,
+        limit: int = 50,
+    ) -> tuple[SsoCloudFileItem, ...]: ...
 
 
 STALE_SYNC_AFTER = timedelta(minutes=30)
@@ -351,13 +364,41 @@ class SsoService:
         file_id: str,
         drive_id: str | None = None,
     ) -> SsoCloudFile:
-        config = await self._require_school_config(school_id)
+        config = await self._require_school_config(school_id, provider=provider)
         if config.provider is not provider:
             raise LookupError("That cloud provider is not configured for this school")
         return await self._provider(provider).download_file(
             config=self._provider_config(config),
             file_id=file_id,
             drive_id=drive_id,
+        )
+
+    async def list_files(
+        self,
+        *,
+        school_id: UUID,
+        provider: SsoProvider,
+        query: str | None = None,
+        drive_id: str | None = None,
+        limit: int = 50,
+    ) -> tuple[SsoCloudFileItem, ...]:
+        config = await self._require_school_config(school_id, provider=provider)
+        if config.provider is not provider:
+            raise LookupError("That cloud provider is not configured for this school")
+        return await self._provider(provider).list_files(
+            config=self._provider_config(config),
+            query=query,
+            drive_id=drive_id,
+            limit=limit,
+        )
+
+    async def cloud_files_ready(self, *, school_id: UUID, provider: SsoProvider) -> bool:
+        try:
+            config = await self._require_school_config(school_id, provider=provider)
+        except LookupError:
+            return False
+        return self._provider(provider).cloud_files_ready(
+            config=self._provider_config(config)
         )
 
     async def sync_history(
@@ -535,8 +576,17 @@ class SsoService:
     def school_entry_url(self, school_slug: str) -> str:
         return f"{self._school_base_url}/{school_slug}"
 
-    async def _require_school_config(self, school_id: UUID) -> SsoSchoolConfig:
-        config = await self._repository.config_for_school(school_id)
+    async def _require_school_config(
+        self,
+        school_id: UUID,
+        *,
+        provider: SsoProvider | None = None,
+    ) -> SsoSchoolConfig:
+        config = (
+            await self._repository.config_for_school(school_id)
+            if provider is None
+            else await self._repository.config_for_school(school_id, provider)
+        )
         if config is None:
             raise LookupError("SSO is not configured for this school")
         return config
@@ -609,6 +659,10 @@ class SsoService:
 
 
 class UnavailableSsoProviderClient:
+    def cloud_files_ready(self, *, config: SsoSchoolConfig) -> bool:
+        del config
+        return False
+
     def authorization_url(
         self,
         *,
@@ -645,4 +699,15 @@ class UnavailableSsoProviderClient:
         drive_id: str | None = None,
     ) -> SsoCloudFile:
         del config, file_id, drive_id
+        raise LookupError("Cloud file provider is not configured")
+
+    async def list_files(
+        self,
+        *,
+        config: SsoSchoolConfig,
+        query: str | None = None,
+        drive_id: str | None = None,
+        limit: int = 50,
+    ) -> tuple[SsoCloudFileItem, ...]:
+        del config, query, drive_id, limit
         raise LookupError("Cloud file provider is not configured")

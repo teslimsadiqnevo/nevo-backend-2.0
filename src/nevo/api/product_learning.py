@@ -5,7 +5,7 @@ import secrets
 from datetime import UTC, datetime, time, timedelta
 from io import BytesIO
 from typing import Annotated, Literal, cast
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import (
@@ -74,9 +74,9 @@ from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.failures import failure_reason, new_incident
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
-from nevo.db.models.attention_flag import AttentionFlag
+from nevo.db.models.attention_flag import AttentionFlag, InterventionRecommendation
 from nevo.db.models.content import Lesson, LessonSegment
-from nevo.db.models.frontend_support import Concept, LessonAssignment
+from nevo.db.models.frontend_support import Concept, LessonAssignment, Message
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.mastery import StudentConceptScheduling
 from nevo.db.models.product import (
@@ -94,6 +94,7 @@ from nevo.domain.accounts.age_bands import band_for_year_group, coerce_band
 from nevo.domain.accounts.vocabulary import SsoConnectionStatus, SsoProvider, UserRole
 from nevo.domain.intelligence.vocabulary import (
     AssignmentStatus,
+    ContentParseStatus,
     LessonScope,
     LessonSourceType,
     UploadStage,
@@ -266,10 +267,148 @@ class CloudImportConfigResponse(BaseModel):
     providers: list[CloudImportProviderConfig]
 
 
+class CloudFileItemResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    file_id: str
+    name: str
+    content_type: str
+    drive_id: str | None = None
+    size_bytes: int | None = None
+    modified_at: datetime | None = None
+
+
+class CloudFileListResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    source_type: Literal["google_drive", "onedrive"]
+    files: list[CloudFileItemResponse]
+
+
+class E2eWriteFixturesResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    student_id: UUID
+    class_id: UUID
+    assignment_id: UUID
+    assignable_lesson_id: UUID
+    review_lesson_id: UUID
+    review_segment_id: UUID
+    thread_id: UUID
+    flag_id: UUID
+    recommendation_id: UUID
+    reset: bool = False
+
+
 class RetryPagesRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     page_numbers: list[int] = Field(alias="pageNumbers", min_length=1, max_length=100)
+
+
+def _e2e_fixture_id(name: str) -> UUID:
+    return uuid5(NAMESPACE_DNS, f"nevo-e2e-write:{name}")
+
+
+async def _e2e_write_fixtures(
+    *,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    reset: bool,
+) -> E2eWriteFixturesResponse:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    school = await session.get(School, actor.school_id)
+    if school is None or not school.name.casefold().startswith("e2e test academy"):
+        raise HTTPException(status_code=404, detail="E2E fixtures are not available")
+    student = await session.scalar(
+        select(User).where(
+            User.school_id == school.id,
+            User.login_identifier == "NV-E2E000",
+        )
+    )
+    if student is None:
+        raise HTTPException(status_code=409, detail="Run the E2E fixture seed first")
+    class_id = await session.scalar(
+        select(StudentClassEnrollment.class_id)
+        .where(StudentClassEnrollment.student_id == student.id)
+        .order_by(StudentClassEnrollment.class_id)
+    )
+    if class_id is None:
+        raise HTTPException(status_code=409, detail="The E2E learner has no class")
+
+    ids = {
+        "assignment": _e2e_fixture_id("assignment:cancel"),
+        "assignable_lesson": _e2e_fixture_id("lesson:new-assignment"),
+        "review_lesson": _e2e_fixture_id("lesson:review"),
+        "review_segment": _e2e_fixture_id("segment:review"),
+        "thread": _e2e_fixture_id("message-thread"),
+        "flag": _e2e_fixture_id("attention-flag"),
+        "recommendation": _e2e_fixture_id("recommendation"),
+    }
+    required = (
+        await session.get(LessonAssignment, ids["assignment"]),
+        await session.get(Lesson, ids["assignable_lesson"]),
+        await session.get(Lesson, ids["review_lesson"]),
+        await session.get(LessonSegment, ids["review_segment"]),
+        await session.get(AttentionFlag, ids["flag"]),
+        await session.get(InterventionRecommendation, ids["recommendation"]),
+    )
+    if any(item is None for item in required):
+        raise HTTPException(status_code=409, detail="Run the E2E fixture seed first")
+    if reset:
+        assignment, _, review_lesson, review_segment, flag, recommendation = required
+        assignment.status = AssignmentStatus.ASSIGNED.value
+        assignment.cancellation_reason = None
+        assignment.recall_withdrawn = False
+        review_segment.needs_review = True
+        review_segment.review_reasons = ["e2e approval fixture"]
+        review_segment.approved_at = None
+        review_segment.approved_by = None
+        review_lesson.status = ContentParseStatus.COMPLETED_WITH_REVIEW
+        review_lesson.review_segment_count = 1
+        flag.acknowledged_at = None
+        flag.acknowledged_by = None
+        recommendation.lesson_id = _e2e_fixture_id("lesson:assignable")
+        await session.execute(delete(Message).where(Message.thread_id == ids["thread"]))
+        await session.execute(
+            delete(LessonAssignment).where(
+                LessonAssignment.lesson_id == ids["assignable_lesson"],
+                LessonAssignment.student_id == student.id,
+            )
+        )
+        await session.commit()
+    return E2eWriteFixturesResponse(
+        student_id=student.id,
+        class_id=class_id,
+        assignment_id=ids["assignment"],
+        assignable_lesson_id=ids["assignable_lesson"],
+        review_lesson_id=ids["review_lesson"],
+        review_segment_id=ids["review_segment"],
+        thread_id=ids["thread"],
+        flag_id=ids["flag"],
+        recommendation_id=ids["recommendation"],
+        reset=reset,
+    )
+
+
+@router.get("/e2e/write-fixtures", response_model=E2eWriteFixturesResponse)
+async def e2e_write_fixtures(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> E2eWriteFixturesResponse:
+    return await _e2e_write_fixtures(principal=principal, session=session, reset=False)
+
+
+@router.post("/e2e/write-fixtures/reset", response_model=E2eWriteFixturesResponse)
+async def reset_e2e_write_fixtures(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> E2eWriteFixturesResponse:
+    return await _e2e_write_fixtures(principal=principal, session=session, reset=True)
 
 
 async def _unapproved_counts(session: DatabaseSession, lesson_ids: list[UUID]) -> dict[UUID, int]:
@@ -699,6 +838,7 @@ async def assignments(
 async def cloud_import_config(
     principal: PrincipalDependency,
     session: DatabaseSession,
+    request: Request,
 ) -> CloudImportConfigResponse:
     """Describe provider setup without pretending a browser picker exists."""
     actor = await require_school_actor(
@@ -715,6 +855,7 @@ async def cloud_import_config(
         )
     }
     providers: list[CloudImportProviderConfig] = []
+    sso = getattr(request.app.state, "sso_service", None)
     for provider, source_type in (
         (SsoProvider.GOOGLE, "google_drive"),
         (SsoProvider.MICROSOFT, "onedrive"),
@@ -725,23 +866,76 @@ async def cloud_import_config(
             and record.enabled
             and record.connection_status is SsoConnectionStatus.CONNECTED
         )
+        picker_ready = bool(
+            configured
+            and isinstance(sso, SsoService)
+            and await sso.cloud_files_ready(school_id=actor.school_id, provider=provider)
+        )
         providers.append(
             CloudImportProviderConfig(
                 source_type=source_type,
                 configured=configured,
-                # The server can download a known file id. A browser picker is
-                # a separate provider-side OAuth setup and is not represented
-                # by the school SSO credential.
-                picker_ready=False,
+                # Selection is served through /uploads/cloud-files, so the
+                # browser never receives a provider token or client secret.
+                picker_ready=picker_ready,
                 client_id=record.client_id if record else None,
                 reason=(
-                    "Browser picker authorization is not configured"
-                    if configured
-                    else "This provider is not connected for the school"
+                    None
+                    if picker_ready
+                    else (
+                        "Provider file access needs attention"
+                        if configured
+                        else "This provider is not connected for the school"
+                    )
                 ),
             )
         )
     return CloudImportConfigResponse(providers=providers)
+
+
+@router.get("/uploads/cloud-files", response_model=CloudFileListResponse)
+async def list_cloud_files(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    request: Request,
+    source_type: Literal["google_drive", "onedrive"] = Query(alias="sourceType"),
+    query: str | None = Query(default=None, max_length=120),
+    drive_id: str | None = Query(default=None, alias="driveId", max_length=500),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> CloudFileListResponse:
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    sso = getattr(request.app.state, "sso_service", None)
+    if not isinstance(sso, SsoService):
+        raise HTTPException(status_code=503, detail="Cloud import is unavailable")
+    provider = SsoProvider.GOOGLE if source_type == "google_drive" else SsoProvider.MICROSOFT
+    try:
+        files = await sso.list_files(
+            school_id=actor.school_id,
+            provider=provider,
+            query=query,
+            drive_id=drive_id,
+            limit=limit,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return CloudFileListResponse(
+        source_type=source_type,
+        files=[
+            CloudFileItemResponse(
+                file_id=item.file_id,
+                name=item.name,
+                content_type=item.content_type,
+                drive_id=item.drive_id,
+                size_bytes=item.size_bytes,
+                modified_at=item.modified_at,
+            )
+            for item in files
+        ],
+    )
 
 
 @router.post(

@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
-from urllib.parse import urlencode
+from datetime import datetime
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -8,6 +9,7 @@ from nevo.sso.entities import (
     RosterAccount,
     RosterSyncBatch,
     SsoCloudFile,
+    SsoCloudFileItem,
     SsoProviderIdentity,
     SsoSchoolConfig,
 )
@@ -16,6 +18,9 @@ from nevo.sso.entities import (
 class MicrosoftSsoProviderClient:
     def __init__(self, *, client_secret: str | None = None) -> None:
         self._client_secret = client_secret
+
+    def cloud_files_ready(self, *, config: SsoSchoolConfig) -> bool:
+        return bool(self._client_secret and config.tenant_id)
 
     def authorization_url(
         self,
@@ -193,6 +198,68 @@ class MicrosoftSsoProviderClient:
             content=content.content,
         )
 
+    async def list_files(
+        self,
+        *,
+        config: SsoSchoolConfig,
+        query: str | None = None,
+        drive_id: str | None = None,
+        limit: int = 50,
+    ) -> tuple[SsoCloudFileItem, ...]:
+        if self._client_secret is None or not config.tenant_id:
+            raise LookupError("Microsoft cloud file credentials need attention")
+        async with httpx.AsyncClient(timeout=30) as client:
+            token = await client.post(
+                f"https://login.microsoftonline.com/{config.tenant_id}/oauth2/v2.0/token",
+                data={
+                    "client_id": config.client_id,
+                    "client_secret": self._client_secret,
+                    "grant_type": "client_credentials",
+                    "scope": "https://graph.microsoft.com/.default",
+                },
+            )
+            _provider_response(token, "Microsoft file authorization failed")
+            headers = {"Authorization": f"Bearer {token.json()['access_token']}"}
+            if not drive_id:
+                drive = await client.get(
+                    "https://graph.microsoft.com/v1.0/sites/root/drive",
+                    headers=headers,
+                    params={"$select": "id"},
+                )
+                _provider_response(drive, "Microsoft school drive was not found")
+                drive_id = str(drive.json().get("id") or "")
+            if not drive_id:
+                raise LookupError("Microsoft school drive was not found")
+            if query:
+                escaped = quote(query.replace("'", "''"), safe="")
+                url = (
+                    f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/"
+                    f"search(q='{escaped}')"
+                )
+            else:
+                url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/children"
+            response = await client.get(
+                url,
+                headers=headers,
+                params={
+                    "$top": str(limit),
+                    "$select": "id,name,size,lastModifiedDateTime,file,parentReference",
+                },
+            )
+            _provider_response(response, "OneDrive files could not be listed")
+        return tuple(
+            SsoCloudFileItem(
+                file_id=str(item["id"]),
+                name=str(item.get("name") or "Untitled file"),
+                content_type=str((item.get("file") or {}).get("mimeType") or ""),
+                drive_id=str((item.get("parentReference") or {}).get("driveId") or drive_id),
+                size_bytes=_optional_int(item.get("size")),
+                modified_at=_optional_datetime(item.get("lastModifiedDateTime")),
+            )
+            for item in response.json().get("value", [])
+            if isinstance(item, dict) and item.get("id") and item.get("file")
+        )[:limit]
+
 
 class GoogleSsoProviderClient:
     def __init__(
@@ -203,6 +270,11 @@ class GoogleSsoProviderClient:
     ) -> None:
         self._client_secret = client_secret
         self._refresh_token = refresh_token
+
+    def cloud_files_ready(self, *, config: SsoSchoolConfig) -> bool:
+        return bool(
+            self._client_secret and (config.provider_credential or self._refresh_token)
+        )
 
     def authorization_url(
         self,
@@ -400,6 +472,62 @@ class GoogleSsoProviderClient:
             content=download.content,
         )
 
+    async def list_files(
+        self,
+        *,
+        config: SsoSchoolConfig,
+        query: str | None = None,
+        drive_id: str | None = None,
+        limit: int = 50,
+    ) -> tuple[SsoCloudFileItem, ...]:
+        refresh_token = config.provider_credential or self._refresh_token
+        if self._client_secret is None or refresh_token is None:
+            raise LookupError("Google Drive credentials need attention")
+        async with httpx.AsyncClient(timeout=30) as client:
+            token = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": config.client_id,
+                    "client_secret": self._client_secret,
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+            _provider_response(token, "Google Drive authorization failed")
+            clauses = ["trashed = false", "mimeType != 'application/vnd.google-apps.folder'"]
+            if query:
+                clauses.append(f"name contains '{_google_query_text(query)}'")
+            params = {
+                "q": " and ".join(clauses),
+                "pageSize": str(limit),
+                "orderBy": "modifiedTime desc",
+                "fields": (
+                    "files(id,name,mimeType,size,modifiedTime,driveId),nextPageToken"
+                ),
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            }
+            if drive_id:
+                params.update({"corpora": "drive", "driveId": drive_id})
+            response = await client.get(
+                "https://www.googleapis.com/drive/v3/files",
+                headers={"Authorization": f"Bearer {token.json()['access_token']}"},
+                params=params,
+            )
+            _provider_response(response, "Google Drive files could not be listed")
+        return tuple(
+            SsoCloudFileItem(
+                file_id=str(item["id"]),
+                name=str(item.get("name") or "Untitled file"),
+                content_type=str(item.get("mimeType") or ""),
+                drive_id=_text(item.get("driveId")),
+                size_bytes=_optional_int(item.get("size")),
+                modified_at=_optional_datetime(item.get("modifiedTime")),
+            )
+            for item in response.json().get("files", [])
+            if isinstance(item, dict) and item.get("id")
+        )[:limit]
+
 
 async def _microsoft_pages(
     client: httpx.AsyncClient,
@@ -442,6 +570,26 @@ def _provider_response(response: httpx.Response, message: str) -> None:
         response.raise_for_status()
     except httpx.HTTPStatusError as error:
         raise LookupError(message) from error
+
+
+def _optional_int(value: object) -> int | None:
+    try:
+        return int(str(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+
+
+def _google_query_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _roster_account(

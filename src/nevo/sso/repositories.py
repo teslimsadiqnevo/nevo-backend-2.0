@@ -75,13 +75,15 @@ class SqlAlchemySsoRepository:
     async def config_for_school(
         self,
         school_id: UUID,
+        provider: SsoProvider | None = None,
     ) -> SsoSchoolConfig | None:
         async with self._sessions() as session:
-            record = await session.scalar(
-                select(SchoolSsoConfiguration)
-                .where(SchoolSsoConfiguration.school_id == school_id)
-                .order_by(SchoolSsoConfiguration.created_at)
+            query = select(SchoolSsoConfiguration).where(
+                SchoolSsoConfiguration.school_id == school_id
             )
+            if provider is not None:
+                query = query.where(SchoolSsoConfiguration.provider == provider)
+            record = await session.scalar(query.order_by(SchoolSsoConfiguration.created_at))
         if record is None:
             return None
         return _school_config(record)

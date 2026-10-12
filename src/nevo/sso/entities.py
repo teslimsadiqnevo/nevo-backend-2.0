@@ -70,6 +70,16 @@ class SsoCloudFile:
 
 
 @dataclass(frozen=True, slots=True)
+class SsoCloudFileItem:
+    file_id: str
+    name: str
+    content_type: str
+    drive_id: str | None = None
+    size_bytes: int | None = None
+    modified_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RosterSyncResult:
     status: RosterSyncStatus
     imported_students: int

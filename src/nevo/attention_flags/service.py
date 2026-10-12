@@ -34,6 +34,7 @@ class SessionEngagementSnapshot:
     started_at: datetime
     engagement_score: float
     event_count: int = 0
+    lesson_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,7 @@ class InterventionRecommendationRecord:
     student_id: UUID
     recommendation_text: str
     ai_gateway_call_id: UUID | None
+    lesson_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +99,7 @@ class AttentionFlagRepository(Protocol):
         student_id: UUID,
         recommendation_text: str,
         ai_gateway_call_id: UUID | None,
+        lesson_id: UUID | None,
     ) -> InterventionRecommendationRecord: ...
 
     async def create_escalation(
@@ -146,11 +149,21 @@ class AttentionFlagDetectionService:
             draft=draft,
             requested_by_user_id=requested_by_user_id,
         )
+        implicated = set(draft.session_ids)
+        lesson_id = next(
+            (
+                item.lesson_id
+                for item in reversed(context.sessions)
+                if item.session_id in implicated and item.lesson_id is not None
+            ),
+            None,
+        )
         recommendation = await self._repository.create_intervention_recommendation(
             attention_flag_id=flag.id,
             student_id=student_id,
             recommendation_text=recommendation_text,
             ai_gateway_call_id=call_id,
+            lesson_id=lesson_id,
         )
         return AttentionFlagOutcome(
             attention_flag_id=flag.id,
@@ -288,6 +301,7 @@ class SqlAlchemyAttentionFlagRepository:
                             events_by_session.get(lesson_session.id, ())
                         ),
                         event_count=len(events_by_session.get(lesson_session.id, ())),
+                        lesson_id=lesson_session.lesson_id,
                     )
                     for lesson_session in ordered_sessions
                 ),
@@ -327,6 +341,7 @@ class SqlAlchemyAttentionFlagRepository:
         student_id: UUID,
         recommendation_text: str,
         ai_gateway_call_id: UUID | None,
+        lesson_id: UUID | None,
     ) -> InterventionRecommendationRecord:
         async with self._sessions.begin() as session:
             record = InterventionRecommendation(
@@ -335,6 +350,7 @@ class SqlAlchemyAttentionFlagRepository:
                 student_id=student_id,
                 recommendation_text=recommendation_text,
                 ai_gateway_call_id=ai_gateway_call_id,
+                lesson_id=lesson_id,
             )
             session.add(record)
             await session.flush()
@@ -344,6 +360,7 @@ class SqlAlchemyAttentionFlagRepository:
                 student_id=record.student_id,
                 recommendation_text=record.recommendation_text,
                 ai_gateway_call_id=record.ai_gateway_call_id,
+                lesson_id=record.lesson_id,
             )
 
     async def create_escalation(

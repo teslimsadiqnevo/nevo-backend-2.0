@@ -176,6 +176,7 @@ class NotificationType(StrEnum):
     ATTENTION_SUMMARY = "attention_summary"
     MODALITY_SHIFT = "modality_shift"
     PIN_RESET_REQUESTED = "pin_reset_requested"
+    DEACTIVATED_STUDENT_SUPPORT_REQUESTED = "deactivated_student_support_requested"
     ADMIN_WELCOME = "admin_welcome"
     CONSENT_ACTION_REQUIRED = "consent_action_required"
     ROSTER_SYNC_COMPLETED = "roster_sync_completed"
@@ -213,6 +214,7 @@ NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {
     NotificationType.ATTENTION_SUMMARY: NotificationCategory.ATTENTION,
     NotificationType.MODALITY_SHIFT: NotificationCategory.ATTENTION,
     NotificationType.PIN_RESET_REQUESTED: NotificationCategory.ACCOUNT,
+    NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: NotificationCategory.ACCOUNT,
     NotificationType.ADMIN_WELCOME: NotificationCategory.ACCOUNT,
     NotificationType.CONSENT_ACTION_REQUIRED: NotificationCategory.CONSENT,
     NotificationType.ROSTER_SYNC_COMPLETED: NotificationCategory.REPORTS,
@@ -320,6 +322,7 @@ NOTIFICATION_CATEGORY_BY_TYPE.update(
         NotificationType.ATTENTION_SUMMARY: NotificationCategory.ATTENTION,
         NotificationType.MODALITY_SHIFT: NotificationCategory.ATTENTION,
         NotificationType.PIN_RESET_REQUESTED: NotificationCategory.ACCOUNT,
+        NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: NotificationCategory.ACCOUNT,
         NotificationType.ADMIN_WELCOME: NotificationCategory.ACCOUNT,
         NotificationType.CONSENT_ACTION_REQUIRED: NotificationCategory.CONSENT,
         NotificationType.ROSTER_SYNC_COMPLETED: NotificationCategory.REPORTS,

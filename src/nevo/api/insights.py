@@ -38,6 +38,7 @@ from nevo.db.models.product import LessonProgress
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import ConsentStatus, UserRole
+from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory
 from nevo.domain.consent.vocabulary import REQUIRED_LEARNING_CONSENT
 from nevo.domain.intelligence.vocabulary import AccommodationType, ClassInsightState
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
@@ -50,6 +51,15 @@ SESSIONS_FOR_A_PATTERN = 3
 LEARNERS_FOR_A_PATTERN = 2
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
+
+HELP_SEEKING_CATEGORY_LABELS = {
+    AskNevoQuestionCategory.LESSON_HELP.value: "Lesson help",
+    AskNevoQuestionCategory.PROFILE_PATTERN.value: "Learning patterns",
+    AskNevoQuestionCategory.CLASS_PLANNING.value: "Class planning",
+    AskNevoQuestionCategory.FAMILY_MESSAGE.value: "Family communication",
+    AskNevoQuestionCategory.FLAG_REVIEW.value: "Recent changes",
+    AskNevoQuestionCategory.GENERAL.value: "General help",
+}
 
 ADAPTATION_EVENTS = {
     SignalEventType.SIMPLIFY_TRIGGER,
@@ -620,6 +630,7 @@ async def conversation_evidence(
             "periodDays": days,
             "interactionCount": 0,
             "categories": {},
+            "categoryLabels": HELP_SEEKING_CATEGORY_LABELS,
             "helpfulResponseRate": None,
             "privacy": "withheld_below_minimum",
             "minimumInteractions": 3,
@@ -629,6 +640,7 @@ async def conversation_evidence(
         "periodDays": days,
         "interactionCount": len(interactions),
         "categories": category_counts,
+        "categoryLabels": HELP_SEEKING_CATEGORY_LABELS,
         "helpfulResponseRate": round(helpful / rated, 4) if rated else None,
         "privacy": "aggregate_only",
         "minimumInteractions": 3,

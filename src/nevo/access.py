@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.db.models.account import Class, StudentClassEnrollment, User
@@ -74,13 +74,11 @@ async def accessible_classes(session: AsyncSession, actor: User) -> list[Class]:
     return list((await session.scalars(query.order_by(Class.name))).all())
 
 
-async def accessible_lessons(
-    session: AsyncSession,
+def accessible_lessons_query(
     actor: User,
     *,
     scope: LessonScope | None = None,
-    limit: int | None = None,
-) -> list[Lesson]:
+) -> Select[tuple[Lesson]] | None:
     """The lessons this actor should be shown, by the same rule everywhere.
 
     A learner sees what has been assigned to them. A teacher's own view is
@@ -104,7 +102,7 @@ async def accessible_lessons(
         )
     else:
         if actor.school_id is None:
-            return []
+            return None
         query = select(Lesson).where(Lesson.school_id == actor.school_id)
         if (scope or default_lesson_scope(actor)) is LessonScope.MINE:
             taught = (
@@ -132,10 +130,43 @@ async def accessible_lessons(
                     Lesson.id.in_(assigned),
                 )
             )
-    query = query.order_by(Lesson.created_at.desc())
+    return query.order_by(Lesson.created_at.desc())
+
+
+async def accessible_lessons(
+    session: AsyncSession,
+    actor: User,
+    *,
+    scope: LessonScope | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[Lesson]:
+    query = accessible_lessons_query(actor, scope=scope)
+    if query is None:
+        return []
     if limit is not None:
         query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
     return list((await session.scalars(query)).all())
+
+
+async def accessible_lessons_page(
+    session: AsyncSession,
+    actor: User,
+    *,
+    scope: LessonScope | None = None,
+    limit: int,
+    offset: int,
+) -> tuple[list[Lesson], int]:
+    query = accessible_lessons_query(actor, scope=scope)
+    if query is None:
+        return [], 0
+    total = await session.scalar(
+        select(func.count()).select_from(query.order_by(None).subquery())
+    )
+    lessons = list((await session.scalars(query.limit(limit).offset(offset))).all())
+    return lessons, int(total or 0)
 
 
 def default_lesson_scope(actor: User) -> LessonScope:

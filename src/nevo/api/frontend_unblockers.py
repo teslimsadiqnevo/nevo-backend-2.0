@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from nevo.access import accessible_lessons
+from nevo.access import accessible_lessons_page
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
@@ -198,6 +198,9 @@ class ClassStudentResponse(BaseModel):
     display_name: str
     login_identifier: str | None
     admission_number: str | None = Field(default=None, alias="admissionNumber")
+    pin_reset_requested: bool = Field(default=False, alias="pinResetRequested")
+    pin_cleared: bool = Field(default=False, alias="pinCleared")
+    pin_cleared_at: datetime | None = Field(default=None, alias="pinClearedAt")
     status: UserStatus
     profile_status: str = Field(alias="profileStatus")
     latest_session_at: datetime | None = Field(alias="latestSessionAt")
@@ -529,6 +532,15 @@ class ForgotPasswordRequest(BaseModel):
 class ResetReceipt(BaseModel):
     status: str
     message: str
+    expires_in_minutes: Literal[60] = Field(default=60, alias="expiresInMinutes")
+
+
+class AdminSupportRequestResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    student_id: UUID
+    status: Literal["notified", "already_notified"]
+    notified_admin_count: int
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -719,7 +731,6 @@ async def class_students(
             .where(
                 StudentClassEnrollment.class_id == class_id,
                 User.role == UserRole.STUDENT,
-                User.status != UserStatus.DEACTIVATED,
             )
             .group_by(User.id, LearnerProfile.id)
             .order_by(User.first_name, User.last_name, User.login_identifier)
@@ -731,6 +742,16 @@ async def class_students(
         school_class=school_class,
     )
     consent = await student_consent_summaries(session, (user.id for user, _, _ in rows))
+    reset_targets = {f"/admin/students/{user.id}" for user, _, _ in rows}
+    requested_targets = set(
+        await session.scalars(
+            select(Notification.navigates_to).where(
+                Notification.type == NotificationType.PIN_RESET_REQUESTED.value,
+                Notification.navigates_to.in_(reset_targets),
+                Notification.archived_at.is_(None),
+            )
+        )
+    ) if reset_targets else set()
     return [
         ClassStudentResponse(
             student_id=user.id,
@@ -739,6 +760,12 @@ async def class_students(
             display_name=_display_name(user),
             login_identifier=user.login_identifier,
             admission_number=user.admission_number,
+            pinResetRequested=(
+                user.pin_cleared_at is None
+                and f"/admin/students/{user.id}" in requested_targets
+            ),
+            pinCleared=user.pin_hash is None and user.pin_cleared_at is not None,
+            pinClearedAt=user.pin_cleared_at,
             status=user.status.value,
             profileStatus="observed" if profile_id else "not_observed_yet",
             latestSessionAt=latest_session_at,
@@ -748,6 +775,90 @@ async def class_students(
         )
         for user, profile_id, latest_session_at in rows
     ]
+
+
+@router.post(
+    "/api/v1/students/{student_id}/admin-support-request",
+    response_model=AdminSupportRequestResponse,
+    tags=["school administration"],
+)
+async def request_admin_support_for_student(
+    student_id: UUID,
+    actor: TeacherScope,
+    session: DatabaseSession,
+) -> AdminSupportRequestResponse:
+    """Notify school administrators about a deactivated learner account."""
+    student = await session.get(User, student_id)
+    if (
+        student is None
+        or student.school_id != actor.school_id
+        or student.role is not UserRole.STUDENT
+        or student.status is not UserStatus.DEACTIVATED
+    ):
+        raise HTTPException(status_code=404, detail="Deactivated student not found")
+    if actor.role is UserRole.TEACHER:
+        assigned = await session.scalar(
+            select(TeacherClassAssignment.id)
+            .join(
+                StudentClassEnrollment,
+                StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
+            )
+            .where(
+                TeacherClassAssignment.teacher_id == actor.user_id,
+                TeacherClassAssignment.removed_at.is_(None),
+                StudentClassEnrollment.student_id == student_id,
+            )
+        )
+        if assigned is None:
+            raise HTTPException(status_code=404, detail="Deactivated student not found")
+
+    admins = list(
+        await session.scalars(
+            select(User).where(
+                User.school_id == actor.school_id,
+                User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+    )
+    if not admins:
+        raise HTTPException(status_code=409, detail="No active school administrator is available")
+    target = f"/admin/students/{student_id}"
+    existing = set(
+        await session.scalars(
+            select(Notification.recipient_id).where(
+                Notification.recipient_id.in_([admin.id for admin in admins]),
+                Notification.type
+                == NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED.value,
+                Notification.navigates_to == target,
+                Notification.read.is_(False),
+                Notification.archived_at.is_(None),
+            )
+        )
+    ) if admins else set()
+    pending = [admin for admin in admins if admin.id not in existing]
+    student_name = _display_name(student)
+    for admin in pending:
+        session.add(
+            Notification(
+                recipient_id=admin.id,
+                recipient_role=admin.role.value,
+                type=NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED.value,
+                title="A teacher needs help with a learner account",
+                description=(
+                    f"{student_name}'s deactivated account needs an administrator's review."
+                ),
+                navigates_to=target,
+                category=NotificationCategory.ACCOUNT.value,
+            )
+        )
+    if pending:
+        await session.commit()
+    return AdminSupportRequestResponse(
+        student_id=student_id,
+        status="notified" if pending else "already_notified",
+        notified_admin_count=len(admins),
+    )
 
 
 async def _student_observations(
@@ -901,9 +1012,11 @@ async def concept(concept_id: UUID, session: DatabaseSession) -> ConceptResponse
     tags=["content"],
 )
 async def list_lessons(
+    response: Response,
     principal: PrincipalDependency,
     session: DatabaseSession,
     limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     scope: LessonScope | None = None,
 ) -> list[LessonSummaryResponse]:
     """The same lessons GET /api/v1/lessons returns.
@@ -915,7 +1028,10 @@ async def list_lessons(
     user = await session.get(User, principal.user_id)
     if user is None:
         return []
-    lessons = await accessible_lessons(session, user, scope=scope, limit=limit)
+    lessons, total = await accessible_lessons_page(
+        session, user, scope=scope, limit=limit, offset=offset
+    )
+    set_page_headers(response, total=total, limit=limit, offset=offset)
     counts = dict(
         (
             await session.execute(
@@ -2158,6 +2274,7 @@ async def recommendations_alias(
         {
             "id": str(item.id),
             "studentId": str(item.student_id),
+            "lessonId": str(item.lesson_id) if item.lesson_id else None,
             "recommendationText": item.recommendation_text,
             "generatedAt": item.generated_at.isoformat(),
         }

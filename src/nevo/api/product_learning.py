@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.access import accessible_lessons
 from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
+from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
 from nevo.api.content import get_content_parsing_service
 from nevo.api.dependencies import DatabaseSession, SessionFactory
@@ -88,8 +89,9 @@ from nevo.db.models.product import (
     UploadSourceBlob,
 )
 from nevo.db.models.signal_event import LessonSession
+from nevo.db.models.sso import SchoolSsoConfiguration
 from nevo.domain.accounts.age_bands import band_for_year_group, coerce_band
-from nevo.domain.accounts.vocabulary import SsoProvider, UserRole
+from nevo.domain.accounts.vocabulary import SsoConnectionStatus, SsoProvider, UserRole
 from nevo.domain.intelligence.vocabulary import (
     AssignmentStatus,
     LessonScope,
@@ -246,6 +248,22 @@ class CloudImportRequest(BaseModel):
     title: str | None = Field(default=None, max_length=255)
     scope: str = Field(default="lesson", pattern="^(lesson|unit|term)$")
     subject: str | None = Field(default=None, max_length=120)
+
+
+class CloudImportProviderConfig(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    source_type: Literal["google_drive", "onedrive"]
+    configured: bool
+    picker_ready: bool
+    client_id: str | None = None
+    reason: str | None = None
+
+
+class CloudImportConfigResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    providers: list[CloudImportProviderConfig]
 
 
 class RetryPagesRequest(BaseModel):
@@ -675,6 +693,55 @@ async def assignments(
         }
         for item, lesson in rows
     ]
+
+
+@router.get("/uploads/import-config", response_model=CloudImportConfigResponse)
+async def cloud_import_config(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> CloudImportConfigResponse:
+    """Describe provider setup without pretending a browser picker exists."""
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    records = {
+        item.provider: item
+        for item in await session.scalars(
+            select(SchoolSsoConfiguration).where(
+                SchoolSsoConfiguration.school_id == actor.school_id
+            )
+        )
+    }
+    providers: list[CloudImportProviderConfig] = []
+    for provider, source_type in (
+        (SsoProvider.GOOGLE, "google_drive"),
+        (SsoProvider.MICROSOFT, "onedrive"),
+    ):
+        record = records.get(provider)
+        configured = bool(
+            record
+            and record.enabled
+            and record.connection_status is SsoConnectionStatus.CONNECTED
+        )
+        providers.append(
+            CloudImportProviderConfig(
+                source_type=source_type,
+                configured=configured,
+                # The server can download a known file id. A browser picker is
+                # a separate provider-side OAuth setup and is not represented
+                # by the school SSO credential.
+                picker_ready=False,
+                client_id=record.client_id if record else None,
+                reason=(
+                    "Browser picker authorization is not configured"
+                    if configured
+                    else "This provider is not connected for the school"
+                ),
+            )
+        )
+    return CloudImportConfigResponse(providers=providers)
 
 
 @router.post(
@@ -2245,7 +2312,20 @@ def _upload_structure(parsed) -> dict[str, object]:
             "modules": modules,
         }
     ]
+    segment_rows = [
+        {
+            "segmentKey": str(item.segment_key),
+            "title": item.title,
+            "contentType": item.content_type.value,
+            "sequenceOrder": item.sequence_order,
+            "estimatedMinutes": item.estimated_minutes,
+            "needsReview": item.needs_review,
+        }
+        for item in parsed.segments
+    ]
     return {
+        "title": parsed.title,
+        "segments": segment_rows,
         "lessons": lessons,
         "lessonId": str(parsed.lesson_id),
         "modules": modules,
@@ -2318,6 +2398,15 @@ async def confirm_upload(
             await session.scalars(select(LessonSegment).where(LessonSegment.lesson_id == root_id))
         ).all()
     }
+    edited_segments = job.structure.get("segments")
+    if isinstance(edited_segments, list):
+        for edited in edited_segments:
+            if not isinstance(edited, dict):
+                continue
+            segment = segments.get(str(edited.get("segmentKey") or ""))
+            title = edited.get("title")
+            if segment is not None and isinstance(title, str) and title.strip():
+                segment.title = title.strip()
     await session.execute(delete(LessonModule).where(LessonModule.lesson_id == root_id))
 
     lesson_ids: list[UUID] = []
@@ -2340,6 +2429,11 @@ async def confirm_upload(
             )
             session.add(lesson)
             await session.flush()
+        edited_title = entry.get("title")
+        if not edited_title and index == 0:
+            edited_title = job.structure.get("title")
+        if isinstance(edited_title, str) and edited_title.strip():
+            lesson.title = edited_title.strip()
         lesson_ids.append(lesson.id)
 
         claimed = [

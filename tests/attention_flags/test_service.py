@@ -67,6 +67,7 @@ class FakeRepository:
         student_id: UUID,
         recommendation_text: str,
         ai_gateway_call_id: UUID | None,
+        lesson_id: UUID | None,
     ) -> InterventionRecommendationRecord:
         assert attention_flag_id == FLAG_ID
         assert student_id == STUDENT_ID
@@ -78,6 +79,7 @@ class FakeRepository:
             student_id=student_id,
             recommendation_text=recommendation_text,
             ai_gateway_call_id=ai_gateway_call_id,
+            lesson_id=lesson_id,
         )
 
     async def create_escalation(

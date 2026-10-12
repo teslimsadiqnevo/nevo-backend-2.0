@@ -817,8 +817,15 @@ class SegmentCompletionResponse(CamelResponse):
     completion_count: int
     completion_rate: float
     average_time_seconds: float | None
-    slowdown_count: int
-    note: str | None
+    slowdown_count: int = Field(
+        description="Number of learner section timings above the class slowdown threshold."
+    )
+    note: str | None = Field(
+        description=(
+            "Server-authored, non-scoring prose. Present for each section where a "
+            "slowdown was observed, or where started work has low completion."
+        )
+    )
 
 
 class LessonClassProgressResponse(CamelResponse):
@@ -1029,6 +1036,10 @@ class UploadStructureDocument(CamelResponse):
     on the way out rather than on the way in.
     """
 
+    #: The editable title of the uploaded unit or lesson.
+    title: str | None = None
+    #: Editable segment rows. Modules continue to reference them by key.
+    segments: list[UploadSegmentDocument] = Field(default_factory=list)
     #: The full set of lessons this upload produced. A `lesson` scope yields
     #: one; a `unit` or `term` scope can yield several. Empty while parsing.
     lessons: list[UploadLessonDocument] = Field(default_factory=list)
@@ -1082,6 +1093,7 @@ class AttentionFlagResponse(CamelResponse):
 class InterventionResponse(CamelResponse):
     id: UUID
     student_id: UUID
+    lesson_id: UUID | None = None
     recommendation_text: str
     generated_at: datetime
 
@@ -1216,6 +1228,7 @@ class ConversationEvidenceResponse(CamelResponse):
     period_days: int
     interaction_count: int
     categories: dict[str, int]
+    category_labels: dict[str, str] = Field(default_factory=dict)
     helpful_response_rate: float | None
     privacy: Literal["aggregate_only", "withheld_below_minimum"]
     minimum_interactions: int = 3

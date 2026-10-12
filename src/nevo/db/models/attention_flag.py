@@ -146,6 +146,12 @@ class InterventionRecommendation(Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    lesson_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("lessons.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     recommendation_text: Mapped[str] = mapped_column(Text, nullable=False)
     ai_gateway_call_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,

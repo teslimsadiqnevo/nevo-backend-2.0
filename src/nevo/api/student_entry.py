@@ -20,6 +20,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.auth import AuthServiceDependency, SessionResponse, StudentPin, client_ip
@@ -75,7 +76,9 @@ class StudentEntryState(CamelResponse):
     #: recovery from a first-use child, whose pin is also null but whose
     #: baseline must still run.
     pin_cleared: bool = False
-    #: Complete routing state: first use, teacher-authorised recovery, or sign-in.
+    #: The complete routing answer. Kept alongside the two older booleans so
+    #: existing clients do not have to guess whether a null PIN is first use
+    #: or teacher-authorised recovery.
     pin_state: Literal["not_set", "cleared", "set"]
     #: True while the school and the parent disagree about the child's date
     #: of birth. The child cannot start, and there is nothing for them to do
@@ -154,12 +157,16 @@ async def _consent_state(
 ) -> Literal["given", "pending", "withdrawn"]:
     """Where this child's learning consent stands, in the three real states."""
 
-    status_value = await session.scalar(
-        select(ConsentRecord.status).where(
-            ConsentRecord.subject_user_id == student_id,
-            ConsentRecord.consent_type == REQUIRED_LEARNING_CONSENT,
+    try:
+        status_value = await session.scalar(
+            select(ConsentRecord.status).where(
+                ConsentRecord.subject_user_id == student_id,
+                ConsentRecord.consent_type == REQUIRED_LEARNING_CONSENT,
+            )
         )
-    )
+    except SQLAlchemyError as error:
+        await session.rollback()
+        raise _entry_check_failed() from error
     if status_value is ConsentStatus.CONFIRMED:
         return "given"
     if status_value is ConsentStatus.WITHDRAWN:
@@ -330,6 +337,16 @@ def _too_many() -> HTTPException:
     )
 
 
+def _entry_check_failed() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "entry_check_failed",
+            "message": "We couldn't set things up just now. Please try again in a moment.",
+        },
+    )
+
+
 async def _throttle(session: AsyncSession, identity: str, ip: str, school: str) -> None:
     """Three buckets, because no one of them holds on its own.
 
@@ -408,10 +425,8 @@ async def set_own_pin(
     teacher cleared the previous PIN. A child who currently has a PIN is
     refused, so this route cannot overwrite an existing credential.
 
-    Identity only, as the ticket puts it - the school code and the child's own
-    Student ID. That is the same pair the entry screen takes, throttled the
-    same three ways, and it is deliberately not a credential: the
-    authorisation here is the teacher's clear, not anything the child knows.
+    Identity is the school code and the child's admission number, the same pair
+    printed on the school's sign-in details and used by the throttled lookup.
     """
 
     code = payload.school_code.strip().upper()
@@ -473,7 +488,15 @@ async def set_own_pin(
     )
 
 
-@router.post("/lookup", response_model=StudentEntryState)
+@router.post(
+    "/lookup",
+    response_model=StudentEntryState,
+    responses={
+        404: {"description": "entry_not_found"},
+        429: {"description": "too_many_attempts"},
+        503: {"description": "entry_check_failed"},
+    },
+)
 async def lookup_entry(
     payload: StudentEntryLookup,
     request: Request,
@@ -502,34 +525,43 @@ async def lookup_entry(
     school = _digest(f"entry-school:{code.casefold()}")
     await _throttle(session, identity, ip, school)
     response.headers["Cache-Control"] = "no-store"
-    student = await session.scalar(
-        select(User)
-        .join(School, School.id == User.school_id)
-        .where(
-            func.upper(School.school_code) == code,
-            User.role == UserRole.STUDENT,
-            func.lower(User.admission_number) == admission.casefold(),
-            User.status != UserStatus.DEACTIVATED,
+    try:
+        student = await session.scalar(
+            select(User)
+            .join(School, School.id == User.school_id)
+            .where(
+                func.upper(School.school_code) == code,
+                User.role == UserRole.STUDENT,
+                func.lower(User.admission_number) == admission.casefold(),
+                User.status != UserStatus.DEACTIVATED,
+            )
+            .limit(1)
         )
-        .limit(1)
-    )
+    except SQLAlchemyError as error:
+        await session.rollback()
+        raise _entry_check_failed() from error
     if student is None:
         await _record(session, identity, ip, school, succeeded=False)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_MATCH)
     await _record(session, identity, ip, school, succeeded=True)
-    enrolled_class = await session.scalar(
-        select(Class)
-        .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)
-        .where(StudentClassEnrollment.student_id == student.id)
-        .limit(1)
-    )
+    try:
+        enrolled_class = await session.scalar(
+            select(Class)
+            .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)
+            .where(StudentClassEnrollment.student_id == student.id)
+            .limit(1)
+        )
+        consent_state = await _consent_state(session, student.id)
+    except SQLAlchemyError as error:
+        await session.rollback()
+        raise _entry_check_failed() from error
     # Routed on consent state and on nothing the child did. A child whose
     # parent has not answered gets the waiting screen; when consent arrives
     # the same two fields go straight on by themselves.
     return StudentEntryState(
         first_name=student.first_name or "",
         class_name=enrolled_class.name if enrolled_class else None,
-        consent_state=await _consent_state(session, student.id),
+        consent_state=consent_state,
         age_check_pending=False,
         age=age_on(student.date_of_birth),
         age_band=(

@@ -136,20 +136,13 @@ class UploadStatus(StrEnum):
 
 
 class UploadStage(StrEnum):
-    """Which step of the review flow an upload has reached.
+    """The five real processing phases shown by the upload console."""
 
-    Ordered as a teacher meets them. ``adaptations`` is the longest wait of
-    the four by a wide margin - a generated picture alone can take ten
-    minutes - and it had no value of its own, so the processing screen could
-    only say "structure" through the part people actually wait through.
-    """
-
-    LESSONS = "lessons"
-    STRUCTURE = "structure"
-    #: Pictures, narration and the simpler and fuller rewrites. Named by the
-    #: console, which draws it as "Preparing the adaptations".
-    ADAPTATIONS = "adaptations"
-    COMPLETE = "complete"
+    RECEIVING_FILE = "receiving_file"
+    READING_DOCUMENT = "reading_document"
+    FINDING_SECTIONS = "finding_sections"
+    PREPARING_ADAPTATIONS = "preparing_adaptations"
+    READY_TO_ASSIGN = "ready_to_assign"
 
 
 class AssignmentStatus(StrEnum):

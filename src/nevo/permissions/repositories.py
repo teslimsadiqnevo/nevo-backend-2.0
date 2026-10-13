@@ -15,7 +15,7 @@ from nevo.db.models.permission import (
     LearningSupportGrant,
 )
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
-from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
 from nevo.permissions.entities import (
     AcceptedInvitation,
     AdminTeamMember,
@@ -38,7 +38,7 @@ class SqlAlchemyPermissionRepository:
         async with self._sessions() as session:
             row = (
                 await session.execute(
-                    select(User, School.auth_method, Admin.id)
+                    select(User, School.auth_method, Admin.id, Admin.access_level)
                     .outerjoin(School, School.id == User.school_id)
                     .outerjoin(Admin, Admin.user_id == User.id)
                     .where(User.id == user_id)
@@ -46,7 +46,7 @@ class SqlAlchemyPermissionRepository:
             ).one_or_none()
             if row is None:
                 return None
-            user, school_auth_method, admin_id = row
+            user, school_auth_method, admin_id, admin_access_level = row
             scopes = await self._active_scopes(session, admin_id)
         return PermissionSnapshot(
             user_id=user.id,
@@ -57,6 +57,7 @@ class SqlAlchemyPermissionRepository:
             if school_auth_method is not None
             else None,
             assigned_scopes=scopes,
+            admin_access_level=admin_access_level,
         )
 
     async def list_team(self, school_id: UUID) -> list[AdminTeamMember]:
@@ -401,6 +402,30 @@ class SqlAlchemyPermissionRepository:
             await session.flush()
             return self._team_member(admin, user, scopes)
 
+    async def set_admin_access_level(
+        self,
+        *,
+        school_id: UUID,
+        target_user_id: UUID,
+        access_level: AdminAccessLevel,
+    ) -> AdminTeamMember | None:
+        async with self._sessions.begin() as session:
+            row = (
+                await session.execute(
+                    select(Admin, User)
+                    .join(User, User.id == Admin.user_id)
+                    .where(Admin.school_id == school_id, User.id == target_user_id)
+                    .with_for_update(of=Admin)
+                )
+            ).one_or_none()
+            if row is None:
+                return None
+            admin, user = row
+            admin.access_level = access_level
+            scopes = await self._active_scopes_for_update(session, admin.id)
+            await session.flush()
+            return self._team_member(admin, user, scopes)
+
     @staticmethod
     async def _active_scopes_for_update(
         session: AsyncSession,
@@ -526,6 +551,7 @@ class SqlAlchemyPermissionRepository:
             scopes=scopes,
             founding=admin.created_by_user_id is None,
             last_active_at=last_active_at,
+            access_level=admin.access_level,
             learning_support=grant is not None,
             learning_support_granted_at=grant.granted_at if grant else None,
             learning_support_granted_by=grant.granted_by_user_id if grant else None,

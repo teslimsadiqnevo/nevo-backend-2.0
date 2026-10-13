@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from nevo.auth.entities import AuthPrincipal
 from nevo.domain.permissions.vocabulary import (
+    AdminAccessLevel,
     PermissionScope,
     effective_scopes,
     navigation_for,
@@ -74,6 +75,15 @@ class PermissionService:
     ) -> PermissionSnapshot:
         snapshot = await self.permissions_for(principal)
         if scope not in snapshot.assigned_scopes:
+            raise PermissionDeniedError
+        return snapshot
+
+    async def require_senior_admin(
+        self,
+        principal: AuthPrincipal,
+    ) -> PermissionSnapshot:
+        snapshot = await self.permissions_for(principal)
+        if snapshot.admin_access_level is not AdminAccessLevel.SENIOR:
             raise PermissionDeniedError
         return snapshot
 
@@ -191,6 +201,24 @@ class PermissionService:
             scopes=scopes,
             changed_by_user_id=actor.user_id,
             changed_at=self._now(),
+        )
+        if member is None:
+            raise TeamMemberNotFoundError
+        return self._with_effective_scopes(member)
+
+    async def promote_to_senior(
+        self,
+        principal: AuthPrincipal,
+        *,
+        target_user_id: UUID,
+    ) -> AdminTeamMember:
+        actor = await self.require_senior_admin(principal)
+        if actor.school_id is None:
+            raise PermissionDeniedError
+        member = await self._repository.set_admin_access_level(
+            school_id=actor.school_id,
+            target_user_id=target_user_id,
+            access_level=AdminAccessLevel.SENIOR,
         )
         if member is None:
             raise TeamMemberNotFoundError

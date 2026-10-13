@@ -173,6 +173,8 @@ class SignalEventRequest(BaseModel):
             ratio = self.event_data.get("depthRatio")
             if not isinstance(ratio, int | float) or not 0 <= float(ratio) <= 1:
                 raise ValueError("depthRatio must be a number from 0 to 1.")
+        if self.event_type is SignalEventType.TIME_ON_SEGMENT:
+            _require_keys(self.event_data, {"segmentId", "durationMs", "depthShown"})
         if self.event_type is SignalEventType.COMPREHENSION_RESPONSE:
             _require_keys(self.event_data, {"questionId"})
             self.event_data.setdefault("source", "checkpoint")
@@ -194,6 +196,13 @@ class SignalEventRequest(BaseModel):
                 raise ValueError("reading_chunk_viewed action must be entered or passed.")
             if self.event_data.get("formFactor") not in {"phone", "tablet", "desktop"}:
                 raise ValueError("formFactor must be phone, tablet, or desktop.")
+            duration = self.event_data.get("durationMs")
+            if duration is not None and (
+                not isinstance(duration, int | float)
+                or isinstance(duration, bool)
+                or duration < 0
+            ):
+                raise ValueError("durationMs must be a non-negative number.")
 
     def _validate_modality_outcome(self) -> None:
         if self.event_type is not SignalEventType.MODALITY_SWITCH_OUTCOME:

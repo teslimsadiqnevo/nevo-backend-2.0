@@ -239,12 +239,13 @@ class LearnerProfileInferenceEngine:
                 if str(data.get("modality", "")) == "text":
                     accuracy = self._number(data, "comprehensionAccuracy", -1)
                     time_ratio = self._number(data, "timeOnSegmentRatio", 1.0)
+                    depth_shown = str(data.get("depthShown") or "unknown")
                     if accuracy >= 0.75 and (time_ratio >= 1.1 or time_ratio <= 0.8):
                         channel_evidence["reading_writing_preference"].append(
                             _Evidence(
                                 ChannelPreferenceStrength.STRONG,
                                 session_id,
-                                "text segment completed with strong comprehension",
+                                f"{depth_shown} text completed with strong comprehension",
                             )
                         )
 
@@ -397,4 +398,3 @@ class LearnerProfileInferenceEngine:
         if total_steps <= 0:
             return 0
         return cls._number(data, "stepsWithHint", 0) / total_steps
-

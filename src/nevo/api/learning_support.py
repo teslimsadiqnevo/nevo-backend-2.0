@@ -263,6 +263,7 @@ async def refuse_last_holder_change(
     user_id: UUID,
     operation: str,
 ) -> None:
+    """Refuse an operation that would leave an active school with no holder."""
     grants = await _holders(session, school_id)
     if len(grants) == 1 and grants[0].holder_user_id == user_id:
         raise HTTPException(

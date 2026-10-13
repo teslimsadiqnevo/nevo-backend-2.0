@@ -46,7 +46,11 @@ def test_ingests_batched_signal_events_for_authenticated_student() -> None:
                     "sessionId": str(session_id),
                     "eventType": "time_on_segment",
                     "timestamp": "2026-07-13T12:00:05Z",
-                    "eventData": {"segmentId": "intro", "seconds": 5},
+                    "eventData": {
+                        "segmentId": "intro",
+                        "durationMs": 5_000,
+                        "depthShown": "standard",
+                    },
                 },
                 {
                     "sessionId": str(session_id),

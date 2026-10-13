@@ -19,11 +19,16 @@ from sqlalchemy.orm import Mapped, mapped_column
 from nevo.db.base import Base
 from nevo.db.models.account import TimestampMixin, user_role_enum
 from nevo.domain.accounts.vocabulary import UserRole
-from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
 
 permission_scope_enum = Enum(
     PermissionScope,
     name="permission_scope",
+    values_callable=lambda enum: [item.value for item in enum],
+)
+admin_access_level_enum = Enum(
+    AdminAccessLevel,
+    name="admin_access_level",
     values_callable=lambda enum: [item.value for item in enum],
 )
 
@@ -54,6 +59,12 @@ class Admin(TimestampMixin, Base):
         Uuid,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    access_level: Mapped[AdminAccessLevel] = mapped_column(
+        admin_access_level_enum,
+        nullable=False,
+        default=AdminAccessLevel.STANDARD,
+        server_default=AdminAccessLevel.STANDARD.value,
     )
 
 

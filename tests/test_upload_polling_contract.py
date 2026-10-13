@@ -28,7 +28,7 @@ from nevo.main import app
 FRESH_JOB = {
     "id": str(uuid4()),
     "status": "processing",
-    "stage": "lessons",
+    "stage": "receiving_file",
     "lessonTitle": None,
     "segments": [],
     "failedPages": [],
@@ -69,7 +69,7 @@ def test_a_finished_job_still_carries_the_lesson() -> None:
         {
             **FRESH_JOB,
             "status": "ready",
-            "stage": "structure",
+            "stage": "ready_to_assign",
             "structure": {"lessonId": lesson_id, "modules": [], "lessons": []},
         }
     )
@@ -94,19 +94,21 @@ def test_the_fields_that_are_always_true_stay_required(missing: str) -> None:
 def test_the_longest_wait_has_a_stage_of_its_own() -> None:
     """Named by the console: "Preparing the adaptations"."""
 
-    assert UploadStage.ADAPTATIONS == "adaptations"
+    assert UploadStage.PREPARING_ADAPTATIONS == "preparing_adaptations"
     # Ordered as a teacher meets them.
     assert list(UploadStage) == [
-        UploadStage.LESSONS,
-        UploadStage.STRUCTURE,
-        UploadStage.ADAPTATIONS,
-        UploadStage.COMPLETE,
+        UploadStage.RECEIVING_FILE,
+        UploadStage.READING_DOCUMENT,
+        UploadStage.FINDING_SECTIONS,
+        UploadStage.PREPARING_ADAPTATIONS,
+        UploadStage.READY_TO_ASSIGN,
     ]
     assert app.openapi()["components"]["schemas"]["UploadStage"]["enum"] == [
-        "lessons",
-        "structure",
-        "adaptations",
-        "complete",
+        "receiving_file",
+        "reading_document",
+        "finding_sections",
+        "preparing_adaptations",
+        "ready_to_assign",
     ]
 
 
@@ -117,8 +119,10 @@ def test_the_parser_reports_that_stage_before_it_makes_the_media() -> None:
 
     source = inspect.getsource(ContentParsingService.parse)
 
-    assert "UploadStage.ADAPTATIONS" in source
-    assert source.index("UploadStage.ADAPTATIONS") < source.index("_generate_media")
+    assert "UploadStage.PREPARING_ADAPTATIONS" in source
+    assert source.index("UploadStage.PREPARING_ADAPTATIONS") < source.index(
+        "_generate_media"
+    )
 
 
 def test_a_progress_report_that_fails_does_not_cost_the_lesson() -> None:

@@ -643,7 +643,14 @@ class LessonQuestionAttemptResponse(CamelResponse):
     result_state: Literal["landed", "partly_landed", "nothing_landed", "not_attempted"]
     handoff_to: Literal["socratic_panel"] | None = None
     guided_prompts: list[SocraticHandoffPrompt] = Field(default_factory=list)
-    advance_after_handoff: bool = False
+    advance_after_handoff: bool = Field(
+        default=False,
+        description=(
+            "True whenever handoffTo is socratic_panel, so the player moves forward "
+            "into the panel and never returns the child to the failed question. False "
+            "only when there is no handoff."
+        ),
+    )
 
 
 class PersonReferenceResponse(CamelResponse):
@@ -812,6 +819,12 @@ class StudentSessionListResponse(CamelResponse):
     offset: int
 
 
+class ChunkRereadResponse(CamelResponse):
+    chunk_id: str
+    reread_count: int
+    time_in_chunk_ms: int | None = None
+
+
 class SegmentCompletionResponse(CamelResponse):
     segment_id: UUID
     segment_key: str
@@ -829,6 +842,14 @@ class SegmentCompletionResponse(CamelResponse):
             "Server-authored, non-scoring prose. Present for each section where a "
             "slowdown was observed, or where started work has low completion."
         )
+    )
+    chunk_rereads: list[ChunkRereadResponse] = Field(
+        default_factory=list,
+        alias="chunkRereads",
+        description=(
+            "Backend-derived returns to chunks already passed. Empty means no "
+            "chunk evidence exists; it is not a reported zero."
+        ),
     )
 
 
@@ -903,7 +924,13 @@ class OfflinePackage(CamelResponse):
     #: cached package from a newer parse of the same lesson.
     version: str | None = None
     modules: list[LessonModuleResponse] = Field(default_factory=list)
-    recap: str | None = None
+    recap: str | None = Field(
+        default=None,
+        description=(
+            "Always present in JSON. Null means this lesson has no recap and does not "
+            "prevent offline completion."
+        ),
+    )
     assessment: list[ComprehensionCheckpoint] = Field(default_factory=list)
     segments: list[OfflinePackageSegment] = Field(default_factory=list)
 
@@ -1151,13 +1178,23 @@ class EngineSupportConfig(CamelResponse):
 
     initial_scaffold_level: ScaffoldingLevel = Field(
         default=ScaffoldingLevel.STANDARD,
-        description="Client-applied starting level for calculation scaffolds.",
+        description=(
+            "Client-applied starting level for calculation scaffolds. A child with "
+            "configured=false receives standard. strong shows scaffold, prompt and "
+            "available hint; standard shows scaffold and prompt; light shows prompt "
+            "and equation without the scaffold; none shows the authored problem with "
+            "no added support. Support dots only reflect this state."
+        ),
     )
     #: Segments between comprehension checks. Closer together for a child the
     #: baseline put at the lower end of working memory.
     comprehension_check_interval: int = Field(
         default=3,
-        description="Client-applied maximum segments between available comprehension checks.",
+        description=(
+            "Maximum desired gap between authored checks. The client never invents a "
+            "question; it presents the next checkpoint carried by the lesson. Parsing "
+            "and teacher review are responsible for supplying sufficient checkpoints."
+        ),
     )
     #: True when the number accommodation is active for this child: every
     #: calculation is worked a step at a time and a bare answer is never the
@@ -1167,10 +1204,23 @@ class EngineSupportConfig(CamelResponse):
     #: it, while the staff-facing copy said "Nevo works through number
     #: problems a step at a time" - which was not true of anything the engine
     #: did. This is the directive that makes the sentence true.
-    number_problems_step_by_step: bool = False
+    number_problems_step_by_step: bool = Field(
+        default=False,
+        description=(
+            "When true, force authored calculation steps to be shown one at a time. "
+            "When false, do not add that override; a co-construction variant may still "
+            "be stepwise because that is how the lesson itself was authored."
+        ),
+    )
     #: True when the reading accommodation is active: text arrives in shorter
     #: pieces and narration is offered rather than buried.
-    shorter_text_blocks: bool = False
+    shorter_text_blocks: bool = Field(
+        default=False,
+        description=(
+            "When true, use the readingChunks supplied by the server. The client must "
+            "not split prose itself. A lesson without chunks falls back to its body."
+        ),
+    )
 
 
 class EngineConfig(CamelResponse):

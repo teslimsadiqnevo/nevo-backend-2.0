@@ -119,6 +119,7 @@ class SqlAlchemyUserRepository:
             login_identifier=user.login_identifier,
             school_auth_method=school_auth_method.value if school_auth_method is not None else None,
             deactivated_at=user.deactivated_at,
+            preferences=dict(user.preferences or {}),
         )
 
 

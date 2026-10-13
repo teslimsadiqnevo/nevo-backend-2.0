@@ -1,6 +1,13 @@
 from enum import StrEnum
 
 
+class AdminAccessLevel(StrEnum):
+    """The deliberately small v1 distinction for school administration."""
+
+    SENIOR = "senior"
+    STANDARD = "standard"
+
+
 class PermissionScope(StrEnum):
     BILLING = "billing"
     ROSTER = "roster"

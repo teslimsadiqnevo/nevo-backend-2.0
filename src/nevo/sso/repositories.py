@@ -731,6 +731,7 @@ def _auth_user(user: User) -> AuthUser:
         pin_hash=user.pin_hash,
         login_identifier=user.login_identifier,
         deactivated_at=user.deactivated_at,
+        preferences=dict(user.preferences or {}),
     )
 
 

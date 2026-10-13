@@ -9,7 +9,11 @@ from pydantic import BaseModel, EmailStr, Field
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
-from nevo.domain.permissions.vocabulary import PermissionScope, navigation_for
+from nevo.domain.permissions.vocabulary import (
+    AdminAccessLevel,
+    PermissionScope,
+    navigation_for,
+)
 from nevo.permissions.entities import (
     AdminTeamMember,
     IssuedInvitation,
@@ -42,6 +46,9 @@ class PermissionResponse(BaseModel):
     role: UserRole
     scopes: list[PermissionScope] = Field(max_length=50)
     navigation: list[str]
+    admin_access_level: AdminAccessLevel | None = Field(
+        default=None, alias="adminAccessLevel"
+    )
 
     @classmethod
     def from_snapshot(cls, snapshot: PermissionSnapshot) -> "PermissionResponse":
@@ -52,6 +59,7 @@ class PermissionResponse(BaseModel):
             role=snapshot.role,
             scopes=scopes,
             navigation=list(navigation_for(snapshot.assigned_scopes)),
+            adminAccessLevel=snapshot.admin_access_level,
         )
 
 
@@ -68,6 +76,7 @@ class TeamMemberResponse(BaseModel):
     scopes: list[PermissionScope] = Field(max_length=50)
     founding: bool = False
     last_active_at: datetime | None = Field(default=None, alias="lastActiveAt")
+    access_level: AdminAccessLevel = Field(alias="accessLevel")
     learning_support: bool = Field(default=False, alias="learningSupport")
     learning_support_granted_at: datetime | None = Field(
         default=None, alias="learningSupportGrantedAt"
@@ -92,6 +101,7 @@ class TeamMemberResponse(BaseModel):
             scopes=sorted(member.scopes, key=lambda scope: scope.value),
             founding=member.founding,
             lastActiveAt=member.last_active_at,
+            accessLevel=member.access_level,
             learningSupport=member.learning_support,
             learningSupportGrantedAt=member.learning_support_granted_at,
             learningSupportGrantedBy=member.learning_support_granted_by,
@@ -324,6 +334,27 @@ async def replace_admin_scopes(
             principal,
             target_user_id=target_user_id,
             scopes=frozenset(payload.scopes),
+        )
+    except PermissionError as error:
+        raise public_permission_error(error) from error
+    return TeamMemberResponse.from_member(member)
+
+
+@router.post(
+    "/admin/team/{target_user_id}/promote-senior",
+    response_model=TeamMemberResponse,
+)
+async def promote_admin_to_senior(
+    target_user_id: UUID,
+    principal: PrincipalDependency,
+    service: PermissionServiceDependency,
+) -> TeamMemberResponse:
+    """Promote one school admin; intentionally no general access-level editor."""
+
+    try:
+        member = await service.promote_to_senior(
+            principal,
+            target_user_id=target_user_id,
         )
     except PermissionError as error:
         raise public_permission_error(error) from error

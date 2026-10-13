@@ -623,6 +623,7 @@ class SsoService:
             user_id=user.id,
             role=user.role,
             replaced_session=replaced is not None,
+            preferences=dict(user.preferences),
         )
 
     async def _require_config(

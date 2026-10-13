@@ -94,6 +94,7 @@ class SessionResponse(BaseModel):
     pin_length: int | None = None
     pin_change_required: bool = False
     absolute_lifetime_hours: int
+    preferences: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
     def from_issued(
@@ -115,6 +116,7 @@ class SessionResponse(BaseModel):
             absolute_lifetime_hours=int(
                 absolute_lifetime_for_role(issued.role).total_seconds() // 3600
             ),
+            preferences=dict(issued.preferences),
         )
 
 

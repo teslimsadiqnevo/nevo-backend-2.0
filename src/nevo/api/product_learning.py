@@ -38,7 +38,7 @@ from nevo.api.frontend_unblockers import (
     _title_from_filename,
 )
 from nevo.api.learning_support import require_learning_support_if_admin
-from nevo.api.lesson_contracts import checkpoint_payloads, reading_chunks
+from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.api.product_common import (
     actor_user,
     require_approved_lessons,
@@ -70,6 +70,7 @@ from nevo.api.response_models import (
     UploadStructureDocument,
     UploadStructureResponse,
 )
+from nevo.content_parsing.chunks import reading_chunks
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.failures import failure_reason, new_incident
 from nevo.content_parsing.service import ContentParsingService
@@ -747,7 +748,8 @@ async def lesson_detail(
                 "contentType": item.content_type.value,
                 "title": item.title,
                 "body": item.body,
-                "readingChunks": reading_chunks(item.segment_key, item.body),
+                "readingChunks": item.reading_chunks
+                or reading_chunks(item.segment_key, item.body),
                 "availableModalities": item.available_modalities,
                 "comprehensionCheckpoints": checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
@@ -1914,7 +1916,7 @@ async def staged_upload(
         scope=payload.scope,
         filename=payload.filename,
         status="processing",
-        stage="lessons",
+        stage=UploadStage.RECEIVING_FILE.value,
     )
     session.add(job)
     await session.commit()
@@ -2009,7 +2011,7 @@ def _parse_into_job(
             if job is None:
                 return
             job.status = "ready"
-            job.stage = "structure"
+            job.stage = UploadStage.READY_TO_ASSIGN.value
             job.structure = _upload_structure(parsed)
             job.completed_at = datetime.now(UTC)
 
@@ -2218,7 +2220,7 @@ async def retry_upload_pages(
     # work, so the job records that it is running and the client polls.
     job.undo_stack = [*job.undo_stack, job.structure][-20:]
     job.status = "processing"
-    job.stage = "lessons"
+    job.stage = UploadStage.RECEIVING_FILE.value
     job.error_message = None
     await session.commit()
     _parse_into_job(
@@ -2662,7 +2664,7 @@ async def confirm_upload(
             )
 
     job.status = "confirmed"
-    job.stage = "complete"
+    job.stage = UploadStage.READY_TO_ASSIGN.value
     await session.commit()
     return {
         "lessonId": str(lesson_ids[0]),

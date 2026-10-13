@@ -12,17 +12,14 @@ and no child is blocked while adults correct either source.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
-from typing import Annotated
+from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.auth import PrincipalDependency
-from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
@@ -36,37 +33,16 @@ SCHOOL_ROLES = {"senco_admin", "other_admin", "teacher"}
 
 
 class AgeCheckResponse(CamelResponse):
-    """One child's two dates, and where the disagreement stands."""
+    """A roster note that never discloses the parent's submitted date."""
 
     id: UUID
     student_id: UUID
     student_first_name: str | None
     #: What the school uploaded, as it was when the check ran.
     school_date_of_birth: date | None
-    #: What the parent confirmed.
-    parent_date_of_birth: date | None
     state: AgeCheckState
-    agreed_date_of_birth: date | None
-    resolution_note: str | None
-    resolved_by: UUID | None
-    resolved_at: datetime | None
-    #: Always false. Kept for contract compatibility with older clients.
-    blocks_access: bool
-
-
-class AgeCheckResolution(BaseModel):
-    """What the school agreed with the parent.
-
-    The date is required: closing an exception without saying what the answer
-    is leaves the roster holding a figure two people already disagreed about.
-    """
-
-    model_config = CAMEL_CONFIG
-
-    agreed_date_of_birth: Annotated[date | None, Field(alias="agreedDateOfBirth")] = None
-    #: How it was settled and with whom. Short, and for the school's own
-    #: record of having done it.
-    note: Annotated[str | None, Field(default=None, max_length=500)] = None
+    differs: bool
+    blocks_access: bool = False
 
 
 def _view(check: AgeCheck, student: User | None) -> AgeCheckResponse:
@@ -75,13 +51,8 @@ def _view(check: AgeCheck, student: User | None) -> AgeCheckResponse:
         student_id=check.student_id,
         student_first_name=student.first_name if student else None,
         school_date_of_birth=check.school_date_of_birth,
-        parent_date_of_birth=check.parent_date_of_birth,
         state=check.state,
-        agreed_date_of_birth=check.agreed_date_of_birth,
-        resolution_note=check.resolution_note,
-        resolved_by=check.resolved_by_user_id,
-        resolved_at=check.resolved_at,
-        blocks_access=check.blocks_access,
+        differs=check.state is AgeCheckState.MISMATCH,
     )
 
 
@@ -105,43 +76,8 @@ async def list_age_checks(
         )
     }
     views = [_view(check, students.get(check.student_id)) for check in checks]
-    views.sort(key=lambda item: (not item.blocks_access, item.student_first_name or ""))
+    views.sort(key=lambda item: (not item.differs, item.student_first_name or ""))
     return views
-
-
-@router.post("/{age_check_id}/resolve", response_model=AgeCheckResponse)
-async def resolve_age_check(
-    age_check_id: UUID,
-    payload: AgeCheckResolution,
-    principal: PrincipalDependency,
-    session: DatabaseSession,
-) -> AgeCheckResponse:
-    """Close the note while retaining the school's date as authoritative."""
-
-    actor = await require_school_actor(session, principal, roles=SCHOOL_ROLES)
-    check = await session.get(AgeCheck, age_check_id)
-    if check is None or check.school_id != actor.school_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Age check not found")
-    if (
-        payload.agreed_date_of_birth is not None
-        and payload.agreed_date_of_birth > datetime.now(UTC).date()
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "date_in_the_future",
-                "message": "That date has not happened yet. Check it with the parent.",
-            },
-        )
-    now = datetime.now(UTC)
-    check.agreed_date_of_birth = check.school_date_of_birth
-    check.resolution_note = payload.note
-    check.resolved_by_user_id = actor.id
-    check.resolved_at = now
-    check.state = AgeCheckState.RESOLVED
-    student = await session.get(User, check.student_id)
-    await session.commit()
-    return _view(check, student)
 
 
 async def age_check_blocks(session: AsyncSession, student_id: UUID) -> bool:
@@ -167,7 +103,10 @@ async def reconcile_school_date(
     elif school_date_of_birth == check.parent_date_of_birth:
         check.state = AgeCheckState.MATCHED
         check.agreed_date_of_birth = school_date_of_birth
-        check.resolved_at = datetime.now(UTC)
+        # The school's corrected roster value is the only thing that clears
+        # the note. This is reconciliation, not a staff resolution workflow.
+        check.resolved_at = None
+        check.resolved_by_user_id = None
     else:
         check.state = AgeCheckState.MISMATCH
         check.agreed_date_of_birth = None

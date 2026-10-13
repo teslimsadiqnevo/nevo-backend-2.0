@@ -232,7 +232,9 @@ class ContentParsingService:
         lose a lesson.
         """
         source = _source_for_prompt(request)
+        await _report(on_stage, UploadStage.READING_DOCUMENT)
         chunks = _chunks(source)
+        await _report(on_stage, UploadStage.FINDING_SECTIONS)
         segments: list[ParsedLessonSegment] = []
         review_notes: list[dict[str, object]] = []
         ai_call_count = 0
@@ -310,7 +312,7 @@ class ContentParsingService:
         # per segment. The providers rate limit, and a dropped image is a
         # segment the learner never sees, which is why each has a cap.
         media_notes: list[dict[str, object]] = []
-        await _report(on_stage, UploadStage.ADAPTATIONS)
+        await _report(on_stage, UploadStage.PREPARING_ADAPTATIONS)
         prepared_segments = await self._generate_media(
             segments,
             media_notes,
@@ -1003,6 +1005,7 @@ def _manipulative(value: object) -> dict[str, object] | None:
         return None
     kinds = {kind.value for kind in ManipulativeKind}
     kind = str(value.get("kind") or "").strip()
+    kind = {"bar": "fraction_bar", "dots": "counters"}.get(kind, kind)
     if kind not in kinds:
         return None
     try:
@@ -1012,11 +1015,18 @@ def _manipulative(value: object) -> dict[str, object] | None:
         return None
     if not 1 <= parts <= 100 or not 1 <= rows <= 20:
         return None
+    piece_ids = [
+        str(item).strip()
+        for item in (value.get("pieceIds") if isinstance(value.get("pieceIds"), list) else [])
+        if str(item).strip()
+    ]
     return {
         "kind": kind,
         "parts": parts,
         "rows": rows,
         "labels": [str(item).strip() for item in _string_list(value.get("labels"))][:100],
+        "pieceIds": piece_ids[: parts * rows]
+        or [f"piece-{index}" for index in range(1, parts * rows + 1)],
     }
 
 
@@ -1043,12 +1053,36 @@ def _calculation_scaffold(value: object) -> dict[str, object] | None:
         if isinstance(raw_marks, list)
         else []
     )
+    labels = [str(item).strip() for item in _string_list(value.get("labels"))][:100]
+    mark_ids = [
+        str(item).strip()
+        for item in (value.get("markIds") if isinstance(value.get("markIds"), list) else [])
+        if str(item).strip()
+    ]
+    label_ids = [
+        str(item).strip()
+        for item in (value.get("labelIds") if isinstance(value.get("labelIds"), list) else [])
+        if str(item).strip()
+    ]
+    piece_ids = [
+        str(item).strip()
+        for item in (value.get("pieceIds") if isinstance(value.get("pieceIds"), list) else [])
+        if str(item).strip()
+    ]
+    start = _step_answer(value.get("start"))
     return {
         "kind": kind,
         "parts": parts,
         "rows": rows,
+        "start": (0 if kind == "number_line" and start is None else start),
         "marks": marks[:100],
-        "labels": [str(item).strip() for item in _string_list(value.get("labels"))][:100],
+        "labels": labels,
+        "markIds": mark_ids[: len(marks)]
+        or [f"mark-{index}" for index in range(1, len(marks) + 1)],
+        "labelIds": label_ids[: len(labels)]
+        or [f"label-{index}" for index in range(1, len(labels) + 1)],
+        "pieceIds": piece_ids[: parts * rows]
+        or [f"piece-{index}" for index in range(1, parts * rows + 1)],
     }
 
 
@@ -1166,6 +1200,29 @@ def _validated_calculation_variant(
             if isinstance(raw_highlights, list)
             else [{"target": str(target), "role": "active"} for target in targets]
         )
+        result_target_id = str(step.get("resultTargetId") or f"{step_id}-result").strip()
+        if not any(
+            highlight["target"] == result_target_id and highlight["role"] == "result"
+            for highlight in highlights
+        ):
+            highlights.append({"target": result_target_id, "role": "result"})
+        required_characters = [
+            str(item)
+            for item in (
+                step.get("requiredCharacters")
+                if isinstance(step.get("requiredCharacters"), list)
+                else []
+            )
+            if len(str(item)) == 1 and not str(item).isspace()
+        ]
+        if not required_characters:
+            required_characters = list(
+                dict.fromkeys(
+                    character
+                    for character in str(step_answer)
+                    if not character.isalnum() and not character.isspace()
+                )
+            )
         normalized_steps.append(
             {
                 "stepId": step_id,
@@ -1188,6 +1245,15 @@ def _validated_calculation_variant(
                 "targets": targets,
                 "tapCount": tap_count,
                 "assembles": str(step.get("assembles") or step.get("equationState") or "").strip(),
+                "requiredCharacters": required_characters,
+                "equationTokens": [
+                    {
+                        "id": result_target_id,
+                        "text": str(step_answer),
+                        "hiddenUntilAccepted": True,
+                    }
+                ],
+                "resultTargetId": result_target_id,
                 "highlights": highlights,
                 # Every form that counts as correct for this step, generated
                 # from this lesson at upload. One half, 0.5 and 50 percent are
@@ -1203,6 +1269,17 @@ def _validated_calculation_variant(
         # A drag step with nothing to drag cannot be rendered, which is why
         # drag was being refused on generated content altogether.
         return None, "calculation_variant_missing_manipulative"
+    if scaffold is not None:
+        for step in normalized_steps:
+            for index, mark in enumerate(scaffold["marks"]):
+                if str(mark).strip().casefold() != str(step["answer"]).strip().casefold():
+                    continue
+                target = scaffold["markIds"][index]
+                if not any(
+                    highlight["target"] == target and highlight["role"] == "result"
+                    for highlight in step["highlights"]
+                ):
+                    step["highlights"].append({"target": target, "role": "result"})
     answer = str(variant.get("answer") or "").strip()
     if not answer:
         # The contract carries an answer so a client never has to infer one
@@ -1321,7 +1398,13 @@ def _text_variant(value: object, body: str) -> dict[str, object]:
             term = str(raw.get("term") or "").strip()
             definition = str(raw.get("definition") or "").strip()
             if term and definition:
-                key_terms.append({"term": term[:120], "definition": definition[:500]})
+                key_terms.append(
+                    {
+                        "term": term[:120],
+                        "definition": definition[:500],
+                        "authoredBy": str(raw.get("authoredBy") or "nevo"),
+                    }
+                )
 
     equations = []
     raw_equations = source.get("equationCallouts")
@@ -1333,47 +1416,54 @@ def _text_variant(value: object, body: str) -> dict[str, object]:
             if not equation:
                 continue
             label = str(raw.get("label") or "").strip() or None
-            equations.append({"equation": equation[:500], "label": label[:160] if label else None})
+            equations.append(
+                {
+                    "equation": equation[:500],
+                    "label": label[:160] if label else None,
+                    "authoredBy": str(raw.get("authoredBy") or "nevo"),
+                }
+            )
 
     return {
         "body": body,
         "keyPoints": points[:6],
         "keyTerms": key_terms[:12],
         "equationCallouts": equations[:8],
+        "authoredBy": str(source.get("authoredBy") or "person"),
+        "keyPointAuthorship": ["nevo" for _ in points[:6]],
     }
 
 
 def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
     if not isinstance(value, dict):
         return None
-    options = []
-    raw_options = value.get("options")
-    if isinstance(raw_options, list):
-        for option in raw_options:
-            if isinstance(option, dict) and "value" in option:
-                options.append(
-                    {
-                        "value": option["value"],
-                        "label": str(option.get("label") or option["value"]),
-                    }
-                )
-            elif isinstance(option, (str, int, float, bool)):
-                options.append({"value": option, "label": str(option)})
-    answer_key = value.get("answerKey")
-    if isinstance(answer_key, list):
-        answer_key = [
-            answer for answer in answer_key if isinstance(answer, (str, int, float, bool))
-        ]
-    elif not isinstance(answer_key, (str, int, float, bool, type(None))):
-        answer_key = None
-    instructions = value.get("instructions")
+    raw_steps = value.get("steps")
+    steps: list[dict[str, str]] = []
+    if isinstance(raw_steps, list):
+        for position, raw in enumerate(raw_steps, start=1):
+            if isinstance(raw, dict):
+                instruction = str(raw.get("instruction") or raw.get("text") or "").strip()
+                step_id = str(raw.get("id") or f"step-{position}")
+            else:
+                instruction = str(raw).strip()
+                step_id = f"step-{position}"
+            if instruction:
+                steps.append({"id": step_id[:120], "instruction": instruction[:500]})
+    if not steps:
+        legacy_instruction = str(
+            value.get("instructions") or value.get("prompt") or body[:500]
+        ).strip()
+        steps = [{"id": "step-1", "instruction": legacy_instruction}]
     return {
-        "type": str(value.get("type") or "practice_problem"),
-        "prompt": str(value.get("prompt") or body[:500]),
-        "expectedInteraction": str(value.get("expectedInteraction") or "teacher_review"),
-        "options": options,
-        "answerKey": answer_key,
-        "instructions": str(instructions) if instructions is not None else None,
+        "type": "activity",
+        "title": str(value.get("title") or "Try this activity")[:160],
+        "materials": [str(item)[:120] for item in value.get("materials", [])]
+        if isinstance(value.get("materials"), list)
+        else [],
+        "steps": steps[:12],
+        "outcome": str(
+            value.get("outcome") or "You have completed the activity."
+        )[:500],
     }
 
 
@@ -1404,9 +1494,11 @@ def _placeholder_step_narration(
 
 def _practice_variant(text: str) -> dict[str, object]:
     return {
-        "type": "practice_problem",
-        "prompt": text[:500],
-        "expectedInteraction": "teacher_review",
+        "type": "activity",
+        "title": "Try this activity",
+        "materials": [],
+        "steps": [{"id": "step-1", "instruction": text[:500]}],
+        "outcome": "You have completed the activity.",
     }
 
 

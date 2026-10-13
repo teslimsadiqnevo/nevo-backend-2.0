@@ -44,6 +44,7 @@ class ProbeOption(CamelResponse):
 class ProbeQuestion(CamelResponse):
     """One item, as a child sees it. No answer, by construction."""
 
+    subject_id: UUID
     item_id: UUID
     question: str
     options: list[ProbeOption]
@@ -57,6 +58,7 @@ class ProbeFinished(CamelResponse):
     """The probe's whole output: where to start this child in this subject."""
 
     finished: bool = True
+    subject_id: UUID
     #: 0 to 1, bounded away from certainty at both ends. The starting mastery
     #: estimate the knowledge graph is seeded with.
     entry_point: float
@@ -144,7 +146,11 @@ async def next_question(
     if not available:
         return ProbeEmpty(subject_id=subject_id)
     if state.finished:
-        return ProbeFinished(entry_point=entry_point(state), asked=state.asked)
+        return ProbeFinished(
+            subject_id=subject_id,
+            entry_point=entry_point(state),
+            asked=state.asked,
+        )
 
     asked = await _asked(session, student_id=student.id, subject_id=subject_id)
     pool: list[tuple[object, float]] = [(row[0], row[1]) for row in available]
@@ -152,10 +158,15 @@ async def next_question(
     if chosen is None:
         # The bank is exhausted before the run converged. Placing the child on
         # what we have is better than asking a question twice.
-        return ProbeFinished(entry_point=entry_point(state), asked=state.asked)
+        return ProbeFinished(
+            subject_id=subject_id,
+            entry_point=entry_point(state),
+            asked=state.asked,
+        )
     item = await session.get(ProbeItem, chosen)
     assert item is not None
     return ProbeQuestion(
+        subject_id=subject_id,
         item_id=item.id,
         question=item.question,
         options=[

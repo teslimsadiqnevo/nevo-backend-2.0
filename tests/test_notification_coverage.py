@@ -28,6 +28,9 @@ TRIGGERED: dict[NotificationType, str] = {
     NotificationType.ATTENTION_SUMMARY: "the weekly digest job runs",
     NotificationType.MODALITY_SHIFT: "a lesson finishes in which delivery changed",
     NotificationType.PAYMENT_CLEARED: "a payment settles an invoice",
+    NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: (
+        "a teacher asks an administrator to review a deactivated learner"
+    ),
 }
 
 #: The four a child can receive, declared ahead of the code that raises them.

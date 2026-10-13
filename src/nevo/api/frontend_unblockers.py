@@ -1,6 +1,7 @@
 import hashlib
 import re
 import secrets
+import statistics
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Annotated, Literal, cast
@@ -39,7 +40,6 @@ from nevo.api.learning_support import require_learning_support
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     checkpoint_payloads,
-    reading_chunks,
 )
 from nevo.api.pagination import (
     DEFAULT_LIMIT,
@@ -75,6 +75,7 @@ from nevo.api.response_models import (
 from nevo.api.response_models import (
     LessonModuleResponse as SharedLessonModuleResponse,
 )
+from nevo.content_parsing.chunks import reading_chunks
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
@@ -428,8 +429,9 @@ class BaselineTrial(BaseModel):
     correct: bool | None = None
     response_time_ms: int | None = Field(default=None, alias="responseTimeMs", ge=0, le=600_000)
     probe_item_id: UUID | None = Field(default=None, alias="probeItemId")
-    #: One tile-memory trial is one completed recall, not one tap. A skipped
-    #: motor step is recorded but excluded from accuracy and latency.
+    #: One tile-memory trial is one completed recall, not one tap. ``skipped``
+    #: means the activity could not be presented or a motor target was left
+    #: untapped. Choosing "not sure" is a response, not a skip.
     skipped: bool = False
 
 
@@ -437,9 +439,31 @@ class BaselineTrialsRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     session_id: str = Field(alias="sessionId", min_length=1, max_length=120)
-    age_band: AgeBand | None = Field(default=None, alias="ageBand")
+    age_band: AgeBand | None = Field(
+        default=None,
+        alias="ageBand",
+        description=(
+            "The band the task was actually sized for. Omit it when the roster band "
+            "was unavailable; a client fallback must not be recorded as the child's band."
+        ),
+    )
     form_factor: BaselineFormFactor | None = Field(default=None, alias="formFactor")
-    motor_step_skipped: bool = Field(default=False, alias="motorStepSkipped")
+    motor_step_skipped: bool = Field(
+        default=False,
+        alias="motorStepSkipped",
+        description=(
+            "True only when a presented motor step was skipped. False does not prove "
+            "that the step ran; motorSamplesMs is the evidence that it ran."
+        ),
+    )
+    #: Eight reach-and-tap timings in order. The first two are practice; the
+    #: median of the remaining scored samples is stored server-side.
+    motor_samples_ms: list[int] = Field(
+        default_factory=list,
+        alias="motorSamplesMs",
+        max_length=8,
+    )
+    motor_miss_count: int = Field(default=0, alias="motorMissCount", ge=0, le=8)
     trials: list[BaselineTrial] = Field(min_length=1, max_length=600)
 
 
@@ -457,6 +481,11 @@ class BaselinePromptResponse(BaseModel):
 
     dimension: BaselineDimension
     item_id: str = Field(alias="itemId")
+    subject_id: UUID | None = Field(
+        default=None,
+        alias="subjectId",
+        description="School subject for a served domain probe; null for device tasks.",
+    )
     #: Empty on the five days the warm-up runs a task on the device rather
     #: than asking anything. Only the domain task has a question, and
     #: requiring these of every dimension made the other five look like
@@ -1124,7 +1153,8 @@ async def lesson_detail(
                 sequenceOrder=item.sequence_order,
                 title=item.title,
                 body=item.body,
-                readingChunks=reading_chunks(item.segment_key, item.body),
+                readingChunks=item.reading_chunks
+                or reading_chunks(item.segment_key, item.body),
                 availableModalities=list(item.available_modalities),
                 comprehensionCheckpoints=checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
@@ -1722,6 +1752,7 @@ async def reply_to_thread(
     "/api/messages",
     response_model=MessageResponse,
     status_code=201,
+    responses={409: {"description": "student_has_no_assigned_teacher"}},
     tags=["messaging"],
 )
 async def send_message(
@@ -1732,6 +1763,14 @@ async def send_message(
     user = await session.get(User, principal.user_id)
     if user is None or user.school_id is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="School context required")
+    if user.role is UserRole.STUDENT and await _routing_teacher_id(session, user.id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "student_has_no_assigned_teacher",
+                "message": "Your school has not assigned a teacher to this class yet.",
+            },
+        )
     thread = await _find_or_create_thread(session, user, payload)
     message = Message(thread_id=thread.id, sender_id=user.id, content=payload.content.strip())
     thread.latest_preview = payload.content.strip()[:255]
@@ -1816,6 +1855,32 @@ async def submit_baseline_trials(
         baseline_profile["age_band"] = payload.age_band.value
     if payload.form_factor is not None:
         baseline_profile["form_factor"] = payload.form_factor
+    if payload.motor_samples_ms:
+        if payload.form_factor is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "motor_form_factor_required",
+                    "message": "Send the form factor with motor timings.",
+                },
+            )
+        scored = payload.motor_samples_ms[2:]
+        if scored:
+            measurement = {
+                "motorBaselineMs": int(statistics.median(scored)),
+                "scoredSampleCount": len(scored),
+                "missCount": payload.motor_miss_count,
+                "measurement": "reach_and_tap",
+                "latencyStatus": "corrected",
+            }
+            baselines = dict(baseline_profile.get("motor_baselines") or {})
+            baselines[payload.form_factor] = measurement
+            baseline_profile["motor_baselines"] = baselines
+            baseline_profile["motor_baseline_ms"] = measurement["motorBaselineMs"]
+            baseline_profile["motor_scored_sample_count"] = len(scored)
+            baseline_profile["motor_miss_count"] = payload.motor_miss_count
+    elif not payload.motor_step_skipped:
+        baseline_profile["motor_latency_status"] = "uncorrected_no_baseline"
     await session.execute(
         update(User)
         .where(User.id == principal.user_id)
@@ -1895,6 +1960,7 @@ async def recalibrate_prompt(
     return BaselinePromptResponse(
         dimension=dimension,
         itemId=str(item["id"]),
+        subjectId=item.get("subjectId"),
         question=str(item.get("question", "")),
         options=[
             BaselinePromptOption(value=value, label=label)
@@ -2032,6 +2098,7 @@ async def _todays_prompt(
         dimension,
         {
             "id": str(probe.id),
+            "subjectId": str(probe.school_subject_id),
             "question": probe.question,
             "options": options,
             "answer": probe.correct_option,

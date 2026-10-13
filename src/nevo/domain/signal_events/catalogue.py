@@ -226,13 +226,16 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
         (),
     ),
     SignalEventType.HINT_OFFERED: SignalContract(
-        "Nevo offered a hint, whether or not the child asked for one.",
+        "The hint became visible to the child, whether or not they asked for it. "
+        "Do not send this when the engine response arrives while another step's "
+        "confirmation is still showing; send it when the next step actually displays it.",
         ("segmentId", "[conceptId]", "[hintIndex]"),
     ),
     SignalEventType.HINT_USED: SignalContract(
-        "The child acted on a hint: opened one they had to open, or moved on "
-        "after one shown in full. A hint shown and ignored is hint_offered "
-        "alone. Ask B41.",
+        "The child acted on a hint: opened one they had to open, or submitted "
+        "the calculation step after reading one shown in full. A hint shown and "
+        "ignored is hint_offered alone; moving to a later screen is not required. "
+        "Ask B41/B130.",
         ("segmentId", "[conceptId]", "[hintIndex]"),
     ),
     SignalEventType.STEP_UP_OFFERED: SignalContract("Nevo offered harder work.", ("segmentId",)),

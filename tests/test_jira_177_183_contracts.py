@@ -76,13 +76,12 @@ def test_calculation_payload_is_renderer_ready_and_drops_generated_scaffold_imag
     assert review is None
     assert payload is not None
     assert payload["expression"] == "3/5 + 1/5"
-    assert payload["scaffold"] == {
-        "kind": "bar",
-        "parts": 5,
-        "rows": 1,
-        "marks": [3, 1],
-        "labels": ["3/5", "1/5"],
-    }
+    assert payload["scaffold"]["kind"] == "bar"
+    assert payload["scaffold"]["parts"] == 5
+    assert payload["scaffold"]["rows"] == 1
+    assert payload["scaffold"]["marks"] == [3, 1]
+    assert payload["scaffold"]["labels"] == ["3/5", "1/5"]
+    assert payload["scaffold"]["markIds"] == ["mark-1", "mark-2"]
     assert payload["steps"][0]["input"] == "number"
     assert payload["steps"][0]["assembles"] == "3/5 + 1/5 = ?/5"
     assert "scaffoldImage" not in payload

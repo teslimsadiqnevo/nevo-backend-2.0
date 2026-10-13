@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +13,7 @@ class PermissionSnapshot:
     status: str
     school_auth_method: str | None
     assigned_scopes: frozenset[PermissionScope]
+    admin_access_level: AdminAccessLevel | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +29,7 @@ class AdminTeamMember:
     scopes: frozenset[PermissionScope]
     founding: bool = False
     last_active_at: datetime | None = None
+    access_level: AdminAccessLevel = AdminAccessLevel.STANDARD
     learning_support: bool = False
     learning_support_granted_at: datetime | None = None
     learning_support_granted_by: UUID | None = None

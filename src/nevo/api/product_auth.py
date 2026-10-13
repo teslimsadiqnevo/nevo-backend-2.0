@@ -71,7 +71,7 @@ from nevo.domain.accounts.vocabulary import (
     UserStatus,
 )
 from nevo.domain.consent.vocabulary import ParentContactMethod, ParentRightType
-from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
 from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.notifications.links import join_url
@@ -755,7 +755,14 @@ async def register_school(
             category="account",
         )
     )
-    session.add(Admin(id=admin_id, user_id=user_id, school_id=school_id))
+    session.add(
+        Admin(
+            id=admin_id,
+            user_id=user_id,
+            school_id=school_id,
+            access_level=AdminAccessLevel.SENIOR,
+        )
+    )
     await session.flush()
     # One statement for every scope. Seven separate inserts meant seven round
     # trips to the database, which is most of what registration used to spend

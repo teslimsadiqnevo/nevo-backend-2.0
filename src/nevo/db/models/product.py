@@ -206,7 +206,7 @@ class UploadJob(Base):
         String(32), nullable=False, default="pending", server_default="pending"
     )
     stage: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="lessons", server_default="lessons"
+        String(32), nullable=False, default="receiving_file", server_default="receiving_file"
     )
     structure: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")

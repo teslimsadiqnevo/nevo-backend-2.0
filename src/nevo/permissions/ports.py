@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
 from nevo.permissions.entities import (
     AcceptedInvitation,
     AdminTeamMember,
@@ -48,6 +48,14 @@ class PermissionRepository(Protocol):
         target_user_id: UUID,
         active: bool,
         changed_at: datetime,
+    ) -> AdminTeamMember | None: ...
+
+    async def set_admin_access_level(
+        self,
+        *,
+        school_id: UUID,
+        target_user_id: UUID,
+        access_level: AdminAccessLevel,
     ) -> AdminTeamMember | None: ...
 
 

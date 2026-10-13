@@ -1,10 +1,9 @@
-import hashlib
-import re
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nevo.content_parsing.chunks import reading_chunks as reading_chunks
 from nevo.domain.intelligence.vocabulary import ManipulativeKind
 
 ScalarAnswer = str | int | float | bool
@@ -22,54 +21,12 @@ class ReadingChunk(BaseModel):
     end_offset: int = Field(alias="endOffset", ge=0)
 
 
-def reading_chunks(
-    segment_key: str,
-    body: str,
-    *,
-    target_chars: int = 420,
-) -> list[dict[str, object]]:
-    """Split prose deterministically; unchanged text keeps the same chunk IDs."""
-
-    text = body.strip()
-    if not text:
-        return []
-    pieces = [piece.strip() for piece in re.split(r"(?<=[.!?])\s+|\n+", text) if piece.strip()]
-    grouped: list[str] = []
-    current = ""
-    for piece in pieces:
-        candidate = f"{current} {piece}".strip()
-        if current and len(candidate) > target_chars:
-            grouped.append(current)
-            current = piece
-        else:
-            current = candidate
-    if current:
-        grouped.append(current)
-    chunks: list[dict[str, object]] = []
-    cursor = 0
-    for position, chunk_text in enumerate(grouped, start=1):
-        start = text.find(chunk_text, cursor)
-        start = cursor if start < 0 else start
-        end = start + len(chunk_text)
-        digest = hashlib.sha256(f"{segment_key}:{chunk_text}".encode()).hexdigest()[:20]
-        chunks.append(
-            {
-                "id": f"chunk-{digest}",
-                "sequenceOrder": position,
-                "text": chunk_text,
-                "startOffset": start,
-                "endOffset": end,
-            }
-        )
-        cursor = end
-    return chunks
-
-
 class CheckpointOption(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     value: ScalarAnswer
     label: str
+    authored_by: Literal["person", "nevo"] = Field(default="nevo", alias="authoredBy")
 
 
 class ComprehensionCheckpoint(BaseModel):
@@ -93,6 +50,7 @@ class ComprehensionCheckpoint(BaseModel):
     #: one has been generated.
     format: Literal["text", "spoken"] = "text"
     prompt_audio_url: str | None = Field(default=None, alias="promptAudioUrl")
+    authored_by: Literal["person", "nevo"] = Field(default="nevo", alias="authoredBy")
 
 
 class DepthVariantBody(BaseModel):
@@ -157,6 +115,11 @@ class TextVariant(BaseModel):
         alias="equationCallouts",
         max_length=8,
     )
+    authored_by: Literal["person", "nevo"] = Field(default="person", alias="authoredBy")
+    key_point_authorship: list[Literal["person", "nevo"]] = Field(
+        default_factory=list,
+        alias="keyPointAuthorship",
+    )
 
 
 class KeyTerm(BaseModel):
@@ -164,6 +127,7 @@ class KeyTerm(BaseModel):
 
     term: str = Field(min_length=1, max_length=120)
     definition: str = Field(min_length=1, max_length=500)
+    authored_by: Literal["person", "nevo"] = Field(default="nevo", alias="authoredBy")
 
 
 class EquationCallout(BaseModel):
@@ -175,6 +139,7 @@ class EquationCallout(BaseModel):
 
     equation: str = Field(min_length=1, max_length=500)
     label: str | None = Field(default=None, max_length=160)
+    authored_by: Literal["person", "nevo"] = Field(default="nevo", alias="authoredBy")
 
 
 class VisualVariant(BaseModel):
@@ -203,6 +168,9 @@ class VisualVariant(BaseModel):
     review_attempts: int = Field(default=0, alias="reviewAttempts")
     generated_at: str = Field(alias="generatedAt")
     caption: str
+    caption_authored_by: Literal["person", "nevo"] = Field(
+        default="nevo", alias="captionAuthoredBy"
+    )
     quality_validated: bool = Field(default=True, alias="qualityValidated")
     url_expires_in_seconds: int | None = Field(default=None, alias="urlExpiresInSeconds")
 
@@ -222,17 +190,24 @@ class AudioVariant(BaseModel):
     requires_authentication: bool = Field(default=False, alias="requiresAuthentication")
     url_expires_in_seconds: int | None = Field(default=None, alias="urlExpiresInSeconds")
     step_id: str | None = Field(default=None, alias="stepId")
+    script_authored_by: Literal["person", "nevo", "record"] = Field(
+        default="record", alias="scriptAuthoredBy"
+    )
+
+
+class InteractiveActivityStep(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    instruction: str = Field(min_length=1, max_length=500)
 
 
 class InteractiveVariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    type: str = "practice_problem"
-    prompt: str = ""
-    expected_interaction: str = Field(default="teacher_review", alias="expectedInteraction")
-    options: list[CheckpointOption] = Field(default_factory=list)
-    answer_key: ScalarAnswer | list[ScalarAnswer] | None = Field(default=None, alias="answerKey")
-    instructions: str | None = None
+    type: Literal["activity"] = "activity"
+    title: str = "Try this activity"
+    materials: list[str] = Field(default_factory=list, max_length=12)
+    steps: list[InteractiveActivityStep] = Field(default_factory=list, max_length=12)
+    outcome: str = "You have completed the activity."
 
 
 class CalculationHighlight(BaseModel):
@@ -244,6 +219,16 @@ class CalculationHighlight(BaseModel):
         )
     )
     role: Literal["active", "source", "result"] = "active"
+
+
+class CalculationEquationToken(BaseModel):
+    """One addressable part of the equation line."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(min_length=1, max_length=160)
+    text: str
+    hidden_until_accepted: bool = Field(default=False, alias="hiddenUntilAccepted")
 
 
 class CalculationStep(BaseModel):
@@ -268,7 +253,14 @@ class CalculationStep(BaseModel):
     unit: str | None = None
     confirmation_text: str = Field(alias="confirmationText")
     visual_update: str = Field(alias="visualUpdate")
-    equation_state: str = Field(alias="equationState")
+    equation_state: str = Field(
+        alias="equationState",
+        description=(
+            "Compatibility snapshot of the equation after this step is accepted. "
+            "Render assembles for the accepted-step update; use equationState only "
+            "when an older lesson has no assembles value."
+        ),
+    )
     narration_audio: AudioVariant | None = Field(default=None, alias="narrationAudio")
     #: Renderer contract for SCRUM-177. These fields say what the child does
     #: and what appears in the equation after that one step; the client never
@@ -277,6 +269,27 @@ class CalculationStep(BaseModel):
     targets: list[ScalarAnswer] = Field(default_factory=list)
     tap_count: int | None = Field(default=None, alias="tapCount", ge=1)
     assembles: str
+    required_characters: list[str] = Field(
+        default_factory=list,
+        alias="requiredCharacters",
+        max_length=32,
+        description=(
+            "The exact non-digit keys the Nevo pad must add for this step, for "
+            "example x, plus or minus. Empty means the standard numeric pad is sufficient."
+        ),
+    )
+    equation_tokens: list[CalculationEquationToken] = Field(
+        default_factory=list,
+        alias="equationTokens",
+        description="Addressable equation elements used by highlight targets.",
+    )
+    result_target_id: str = Field(
+        alias="resultTargetId",
+        description=(
+            "The equation token that holds this step's answer. It is always marked "
+            "hiddenUntilAccepted and has a result highlight."
+        ),
+    )
     #: Applied while this step is being asked. Once the answer is accepted,
     #: render ``assembles`` and move to the next step's highlights. ``target``
     #: is local to this calculation; an unknown one is ignored.
@@ -303,6 +316,31 @@ class CalculationStep(BaseModel):
             else [],
         )
         item.setdefault("assembles", item.get("equationState") or item.get("equation_state") or "")
+        step_id = str(item.get("stepId") or item.get("step_id") or "step")
+        answer = item.get("answer")
+        if "requiredCharacters" not in item and "required_characters" not in item:
+            typed = str(answer or "")
+            item["requiredCharacters"] = list(
+                dict.fromkeys(
+                    character
+                    for character in typed
+                    if not character.isalnum() and not character.isspace()
+                )
+            )
+        result_target_id = str(
+            item.get("resultTargetId")
+            or item.get("result_target_id")
+            or f"{step_id}-result"
+        )
+        item["resultTargetId"] = result_target_id
+        if "equationTokens" not in item and "equation_tokens" not in item:
+            item["equationTokens"] = [
+                {
+                    "id": result_target_id,
+                    "text": "" if answer is None else str(answer),
+                    "hiddenUntilAccepted": True,
+                }
+            ]
         if item.get("input") == "tap" and "tapCount" not in item:
             numeric = [
                 target
@@ -315,6 +353,15 @@ class CalculationStep(BaseModel):
                 {"target": str(target), "role": "active"}
                 for target in item.get("targets", [])
             ]
+        highlights = list(item.get("highlights") or [])
+        if not any(
+            isinstance(highlight, dict)
+            and highlight.get("target") == result_target_id
+            and highlight.get("role") == "result"
+            for highlight in highlights
+        ):
+            highlights.append({"target": result_target_id, "role": "result"})
+        item["highlights"] = highlights
         return item
 
 
@@ -339,7 +386,13 @@ class Manipulative(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    kind: ManipulativeKind
+    kind: ManipulativeKind = Field(
+        description=(
+            "Build-piece vocabulary: fraction_bar, counters, number_line, array or "
+            "place_value. The drawing-only scaffold aliases bar and dots are accepted "
+            "on input and normalised to fraction_bar and counters."
+        )
+    )
     #: How many equal pieces the whole is divided into - the denominator of a
     #: fraction bar, the columns of an array, the ticks on a number line.
     parts: int = Field(ge=1, le=100)
@@ -349,6 +402,28 @@ class Manipulative(BaseModel):
     #: What each piece is called when a child reads it aloud, if naming them
     #: helps. Empty when the pieces need no label.
     labels: list[str] = Field(default_factory=list, max_length=100)
+    piece_ids: list[str] = Field(
+        default_factory=list,
+        alias="pieceIds",
+        description="Stable ids for the draggable pieces, in renderer order.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_piece_ids(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        item = dict(value)
+        item["kind"] = {"bar": "fraction_bar", "dots": "counters"}.get(
+            str(item.get("kind")), item.get("kind")
+        )
+        if "pieceIds" not in item and "piece_ids" not in item:
+            try:
+                count = int(item.get("parts") or 0) * int(item.get("rows") or 1)
+            except (TypeError, ValueError):
+                count = 0
+            item["pieceIds"] = [f"piece-{index}" for index in range(1, count + 1)]
+        return item
 
 
 class CalculationScaffold(BaseModel):
@@ -372,6 +447,13 @@ class CalculationScaffold(BaseModel):
             "count may be greater than rows."
         ),
     )
+    start: ScalarAnswer | None = Field(
+        default=None,
+        description=(
+            "First value on a number line. Null for other scaffold kinds. Older "
+            "number-line lessons default to zero."
+        ),
+    )
     marks: list[ScalarAnswer] = Field(
         default_factory=list,
         max_length=100,
@@ -388,6 +470,31 @@ class CalculationScaffold(BaseModel):
             "are present, otherwise to scaffold part i."
         ),
     )
+    mark_ids: list[str] = Field(default_factory=list, alias="markIds")
+    label_ids: list[str] = Field(default_factory=list, alias="labelIds")
+    piece_ids: list[str] = Field(default_factory=list, alias="pieceIds")
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_addressable_elements(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        item = dict(value)
+        marks = item.get("marks") if isinstance(item.get("marks"), list) else []
+        labels = item.get("labels") if isinstance(item.get("labels"), list) else []
+        if "markIds" not in item and "mark_ids" not in item:
+            item["markIds"] = [f"mark-{index}" for index in range(1, len(marks) + 1)]
+        if "labelIds" not in item and "label_ids" not in item:
+            item["labelIds"] = [f"label-{index}" for index in range(1, len(labels) + 1)]
+        if "pieceIds" not in item and "piece_ids" not in item:
+            try:
+                count = int(item.get("parts") or 0) * int(item.get("rows") or 1)
+            except (TypeError, ValueError):
+                count = 0
+            item["pieceIds"] = [f"piece-{index}" for index in range(1, count + 1)]
+        if item.get("kind") == "number_line" and item.get("start") is None:
+            item["start"] = 0
+        return item
 
 
 class CalculationVariant(BaseModel):
@@ -429,6 +536,32 @@ class CalculationVariant(BaseModel):
             }.get(str(source.get("kind")), source.get("kind"))
             source.setdefault("marks", [])
             item["scaffold"] = source
+        scaffold = item.get("scaffold")
+        steps = item.get("steps")
+        if isinstance(scaffold, dict) and isinstance(steps, list):
+            marks = scaffold.get("marks") if isinstance(scaffold.get("marks"), list) else []
+            mark_ids = (
+                scaffold.get("markIds")
+                if isinstance(scaffold.get("markIds"), list)
+                else [f"mark-{index}" for index in range(1, len(marks) + 1)]
+            )
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                answer = step.get("answer")
+                highlights = list(step.get("highlights") or [])
+                for index, mark in enumerate(marks):
+                    if str(mark).strip().casefold() != str(answer).strip().casefold():
+                        continue
+                    target = str(mark_ids[index])
+                    if not any(
+                        isinstance(highlight, dict)
+                        and highlight.get("target") == target
+                        and highlight.get("role") == "result"
+                        for highlight in highlights
+                    ):
+                        highlights.append({"target": target, "role": "result"})
+                step["highlights"] = highlights
         return item
 
 

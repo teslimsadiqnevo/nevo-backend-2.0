@@ -307,6 +307,12 @@ class LessonSegment(Base):
     )
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    reading_chunks: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
     available_modalities: Mapped[list[str]] = mapped_column(
         JSONB,
         nullable=False,

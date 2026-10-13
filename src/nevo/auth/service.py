@@ -313,6 +313,7 @@ class AuthService:
         session = await self._sessions.find_by_digest(self._token_service.digest(access_token))
         if session is None or session.revoked_at is not None:
             raise InvalidSessionError
+        user = await self._users.find_by_id(principal.user_id)
         return IssuedSession(
             access_token=access_token,
             token_type="bearer",
@@ -320,6 +321,7 @@ class AuthService:
             user_id=principal.user_id,
             role=principal.role,
             replaced_session=False,
+            preferences=dict(user.preferences) if user else {},
         )
 
     async def _complete_login(
@@ -378,6 +380,7 @@ class AuthService:
             user_id=user.id,
             role=user.role,
             replaced_session=replaced is not None,
+            preferences=dict(user.preferences),
         )
 
     async def _reject_login(

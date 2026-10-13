@@ -143,7 +143,10 @@ def test_a_roster_with_no_date_of_birth_is_not_treated_as_agreement() -> None:
 
 def test_the_child_is_never_asked_or_blocked_over_the_note(spec: dict) -> None:
     assert "get" in spec["paths"]["/api/v1/age-checks"]
-    assert "post" in spec["paths"]["/api/v1/age-checks/{age_check_id}/resolve"]
+    assert "/api/v1/age-checks/{age_check_id}/resolve" not in spec["paths"]
+    fields = spec["components"]["schemas"]["AgeCheckResponse"]["properties"]
+    assert "parentDateOfBirth" not in fields
+    assert fields["blocksAccess"]["default"] is False
 
     from nevo.api.student_entry import set_pin_and_start
 

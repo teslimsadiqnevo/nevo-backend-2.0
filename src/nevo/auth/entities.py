@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
@@ -16,6 +16,7 @@ class AuthUser:
     login_identifier: str | None = None
     school_auth_method: str | None = None
     deactivated_at: datetime | None = None
+    preferences: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,3 +59,4 @@ class IssuedSession:
     user_id: UUID
     role: str
     replaced_session: bool
+    preferences: dict[str, object] = field(default_factory=dict)

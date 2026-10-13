@@ -6,6 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.api.lesson_contracts import checkpoint_payloads
+from nevo.content_parsing.chunks import reading_chunks
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
@@ -433,6 +434,7 @@ class SqlAlchemyContentParsingRepository:
                     sequence_order=segment.sequence_order,
                     title=segment.title,
                     body=segment.body,
+                    reading_chunks=reading_chunks(segment.segment_key, segment.body),
                     available_modalities=[
                         modality.value for modality in segment.available_modalities
                     ],

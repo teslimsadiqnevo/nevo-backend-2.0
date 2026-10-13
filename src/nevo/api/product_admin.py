@@ -45,7 +45,7 @@ from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.auth import AuthAuditEvent, AuthSession
 from nevo.db.models.consent import ParentLink
 from nevo.db.models.frontend_support import Notification
-from nevo.db.models.permission import LearningSupportGrant
+from nevo.db.models.permission import Admin, LearningSupportGrant
 from nevo.db.models.product import (
     DpaAcceptance,
     EnrollmentHistory,
@@ -72,6 +72,7 @@ from nevo.domain.accounts.vocabulary import (
     UserStatus,
 )
 from nevo.domain.consent.vocabulary import ParentContactMethod
+from nevo.domain.permissions.vocabulary import AdminAccessLevel
 from nevo.retention.anonymisation import anonymise_student
 from nevo.subjects.resolution import (
     display_names,
@@ -313,6 +314,29 @@ def _school_payload(school: School) -> dict[str, object]:
     }
 
 
+async def _require_senior_school_admin(
+    session: AsyncSession,
+    principal: object,
+) -> User:
+    user = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    level = await session.scalar(
+        select(Admin.access_level).where(Admin.user_id == user.id)
+    )
+    if level is not AdminAccessLevel.SENIOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "senior_admin_required",
+                "message": "A senior administrator manages school settings.",
+            },
+        )
+    return user
+
+
 @router.get("/school", response_model=SchoolResponse)
 async def school_detail(
     principal: PrincipalDependency,
@@ -331,11 +355,7 @@ async def update_school(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
-    user = await require_school_actor(
-        session,
-        principal,
-        roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
-    )
+    user = await _require_senior_school_admin(session, principal)
     school = await session.get(School, user.school_id)
     if school is None:
         raise HTTPException(status_code=404, detail="School not found")

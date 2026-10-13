@@ -75,6 +75,8 @@ class StudentEntryState(CamelResponse):
     #: recovery from a first-use child, whose pin is also null but whose
     #: baseline must still run.
     pin_cleared: bool = False
+    #: Complete routing state: first use, teacher-authorised recovery, or sign-in.
+    pin_state: Literal["not_set", "cleared", "set"]
     #: True while the school and the parent disagree about the child's date
     #: of birth. The child cannot start, and there is nothing for them to do
     #: about it, so the screen says the school is checking something.
@@ -94,6 +96,14 @@ class StudentEntrySession(CamelResponse):
     login_identifier: str | None
     session: SessionResponse
     pin_length: Literal[4] = 4
+
+
+def _pin_state(user: User) -> Literal["not_set", "cleared", "set"]:
+    if user.pin_hash is not None:
+        return "set"
+    if user.pin_cleared_at is not None:
+        return "cleared"
+    return "not_set"
 
 
 def age_on(born: date | None, today: date | None = None) -> int | None:
@@ -177,6 +187,7 @@ async def _state(session: AsyncSession, grant: StudentOnboardingGrant) -> Studen
         year_group=school_class.year_group if school_class else None,
         account_ready=student.pin_hash is not None,
         pin_cleared=student.pin_cleared_at is not None,
+        pin_state=_pin_state(student),
     )
 
 
@@ -376,7 +387,7 @@ class StudentPinSetup(BaseModel):
     responses={
         403: {"description": "consent_pending"},
         404: {"description": "entry_not_found"},
-        409: {"description": "pin_not_cleared or pin_already_set"},
+        409: {"description": "pin_already_set"},
         429: {"description": "too_many_attempts"},
     },
 )
@@ -387,17 +398,15 @@ async def set_own_pin(
     session: DatabaseSession,
     auth_service: AuthServiceDependency,
 ) -> StudentEntrySession:
-    """Set a PIN for a child who has none. SCRUM-216.
+    """Set a first or teacher-cleared replacement PIN. SCRUM-216/249.
 
     The missing half of the clear. A teacher can clear a child's PIN but can
     never set one, so without this door a cleared child could identify
     themselves and then had nowhere to go.
 
-    **Only reachable while the PIN is already cleared.** A child who has a PIN
-    is refused here and signs in through the ordinary door, so this cannot be
-    used to overwrite somebody else's credential: the window exists because an
-    adult who recognised the child deliberately opened it, and it closes the
-    moment a PIN is set.
+    Reachable in exactly two states: the child has never had a PIN, or a class
+    teacher cleared the previous PIN. A child who currently has a PIN is
+    refused, so this route cannot overwrite an existing credential.
 
     Identity only, as the ticket puts it - the school code and the child's own
     Student ID. That is the same pair the entry screen takes, throttled the
@@ -437,14 +446,6 @@ async def set_own_pin(
                     "This account already has a PIN. Sign in with it, or ask "
                     "your teacher to clear it."
                 ),
-            },
-        )
-    if student.pin_cleared_at is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "pin_not_cleared",
-                "message": "Ask your teacher to clear your PIN before choosing a new one.",
             },
         )
     if not await _has_consent(session, student.id):
@@ -538,4 +539,5 @@ async def lookup_entry(
         year_group=enrolled_class.year_group if enrolled_class else None,
         account_ready=student.pin_hash is not None,
         pin_cleared=student.pin_cleared_at is not None,
+        pin_state=_pin_state(student),
     )

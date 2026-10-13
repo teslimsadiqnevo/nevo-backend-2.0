@@ -235,6 +235,10 @@ class TeacherSummaryResponse(CamelResponse):
     status: UserStatus
     class_count: int = 0
     last_active_at: datetime | None = None
+    learning_support: bool = False
+    learning_support_granted_at: datetime | None = None
+    learning_support_granted_by: UUID | None = None
+    learning_support_granted_by_name: str | None = None
 
 
 class TeacherDetailResponse(TeacherSummaryResponse):
@@ -1086,6 +1090,9 @@ class AttentionFlagResponse(CamelResponse):
     description: str
     generated_at: datetime
     acknowledged: bool
+    acknowledged_at: datetime | None = None
+    acknowledged_by: UUID | None = None
+    acknowledged_by_name: str | None = None
     evidence_series: list[float] = Field(default_factory=list)
     action_targets: list[str] = Field(default_factory=list)
 

@@ -1,16 +1,4 @@
-"""Who may open the deepest view of a named child, and who decided that.
-
-The learning support surface shows a child's accommodations, their adaptation
-history, their help-seeking and their understanding. Nobody holds it by
-default: if the registering administrator got it automatically, every school
-would begin with its proprietor holding that view of every child in it.
-
-A hard wall by identity would break the legitimate case - the schools being
-sold to have actual learning support staff - so this is a recorded decision
-instead. The school can see who holds it and when they were given it, and so
-can Nevo. That turns a proprietor holding the role from an accommodation into
-a signal.
-"""
+"""Learning Support access, provenance, and the one-holder invariant."""
 
 from __future__ import annotations
 
@@ -44,6 +32,7 @@ class LearningSupportHolder(CamelResponse):
     role: str
     granted_at: datetime
     granted_by: UUID
+    granted_by_name: str
 
 
 class LearningSupportHolders(CamelResponse):
@@ -107,7 +96,8 @@ async def require_learning_support(session: AsyncSession, user: User) -> None:
             "code": "learning_support_role_required",
             "message": (
                 "This is the learning support view of a named child. An "
-                "administrator can grant that role from the compliance screen, "
+                "administrator can grant that role from the person's record "
+                "in Admin Team, "
                 "and the grant is recorded."
             ),
         },
@@ -115,16 +105,8 @@ async def require_learning_support(session: AsyncSession, user: User) -> None:
 
 
 async def require_learning_support_if_admin(session: AsyncSession, user: User) -> None:
-    """Hold an administrator to the role; leave everyone else as they were.
+    """Compatibility name for callers; every staff role now needs the grant."""
 
-    A teacher sees what a teacher sees today, and a class teacher opening
-    their own pupil is not what this ticket is about. What changes is an
-    administrator - who can reach every child in the school - needing the
-    role to open the learning support view of any of them.
-    """
-
-    if user.role.value not in ADMIN_ROLES:
-        return
     await require_learning_support(session, user)
 
 
@@ -134,7 +116,8 @@ async def _view(
     holders = []
     for grant in grants:
         person = await session.get(User, grant.holder_user_id)
-        if person is None:
+        granter = await session.get(User, grant.granted_by_user_id)
+        if person is None or granter is None:
             continue
         holders.append(
             LearningSupportHolder(
@@ -143,6 +126,7 @@ async def _view(
                 role=person.role.value,
                 granted_at=grant.granted_at,
                 granted_by=grant.granted_by_user_id,
+                granted_by_name=_name(granter),
             )
         )
     return holders
@@ -167,23 +151,31 @@ async def list_holders(
     "/holders",
     response_model=LearningSupportHolders,
     status_code=status.HTTP_201_CREATED,
+    responses={403: {"description": "A person cannot grant the role to themselves"}},
 )
 async def grant_learning_support(
     payload: GrantRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> LearningSupportHolders:
-    """Give somebody the role, deliberately and on the record.
-
-    An administrator may grant it to themselves. That is allowed and it is
-    exactly why it is written down: a proprietor holding the deepest view of
-    every child is unusual rather than forbidden, and the school and Nevo can
-    both see that it happened.
-    """
+    """Give another staff member the role, deliberately and on the record."""
 
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
+    if payload.user_id == actor.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "learning_support_self_grant_forbidden",
+                "message": "Learning Support must be granted by another administrator.",
+            },
+        )
     holder = await session.get(User, payload.user_id)
-    if holder is None or holder.school_id != actor.school_id:
+    if (
+        holder is None
+        or holder.school_id != actor.school_id
+        or holder.role.value not in {"teacher", *ADMIN_ROLES}
+        or holder.status.value != "active"
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="That person is not in this school",
@@ -220,7 +212,11 @@ async def grant_learning_support(
     return holders
 
 
-@router.delete("/holders/{user_id}", response_model=LearningSupportHolders)
+@router.delete(
+    "/holders/{user_id}",
+    response_model=LearningSupportHolders,
+    responses={409: {"description": "The final holder cannot be removed"}},
+)
 async def revoke_learning_support(
     user_id: UUID,
     principal: PrincipalDependency,
@@ -230,7 +226,21 @@ async def revoke_learning_support(
 
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
     now = datetime.now(UTC)
-    for grant in await _holders(session, actor.school_id):
+    existing = await _holders(session, actor.school_id)
+    target = next((grant for grant in existing if grant.holder_user_id == user_id), None)
+    if target is not None and len(existing) == 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "last_learning_support_holder",
+                "message": (
+                    "Grant Learning Support to another person before removing "
+                    "the final holder."
+                ),
+                "operation": "remove_role",
+            },
+        )
+    for grant in existing:
         if grant.holder_user_id != user_id:
             continue
         grant.revoked_at = now
@@ -244,6 +254,34 @@ async def revoke_learning_support(
     )
     await session.commit()
     return holders
+
+
+async def refuse_last_holder_change(
+    session: AsyncSession,
+    *,
+    school_id: UUID | None,
+    user_id: UUID,
+    operation: str,
+) -> None:
+    grants = await _holders(session, school_id)
+    if len(grants) == 1 and grants[0].holder_user_id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "last_learning_support_holder",
+                "message": (
+                    "Grant Learning Support to another person before changing "
+                    "the final holder."
+                ),
+                "operation": operation,
+            },
+        )
+
+
+def _name(user: User) -> str:
+    return " ".join(part for part in (user.first_name, user.last_name) if part) or (
+        user.email or "School team member"
+    )
 
 
 async def _admin(session: AsyncSession, user_id: UUID) -> Admin | None:

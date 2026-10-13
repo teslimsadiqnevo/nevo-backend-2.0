@@ -28,6 +28,13 @@ class LastOversightAdminError(PermissionError):
     public_message = "A school must retain at least one oversight administrator."
 
 
+class LastLearningSupportHolderError(PermissionError):
+    code = "last_learning_support_holder"
+    public_message = (
+        "Grant Learning Support to another person before changing the final holder."
+    )
+
+
 class SelfScopeRemovalError(PermissionError):
     code = "cannot_remove_own_oversight"
     public_message = "You cannot remove your own oversight permission."

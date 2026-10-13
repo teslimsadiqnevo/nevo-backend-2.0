@@ -28,6 +28,10 @@ class AdminTeamMember:
     scopes: frozenset[PermissionScope]
     founding: bool = False
     last_active_at: datetime | None = None
+    learning_support: bool = False
+    learning_support_granted_at: datetime | None = None
+    learning_support_granted_by: UUID | None = None
+    learning_support_granted_by_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

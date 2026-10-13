@@ -12,6 +12,7 @@ from nevo.db.models.permission import (
     Admin,
     AdminInvitation,
     AdminScopeAssignment,
+    LearningSupportGrant,
 )
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
@@ -23,6 +24,7 @@ from nevo.permissions.entities import (
 )
 from nevo.permissions.errors import (
     AdminSeatLimitReachedError,
+    LastLearningSupportHolderError,
     LastOversightAdminError,
     TeamMemberAlreadyExistsError,
 )
@@ -78,6 +80,19 @@ class SqlAlchemyPermissionRepository:
                 )
             ).all()
             last_active = dict(last_active_rows)
+            support_rows = (
+                await session.execute(
+                    select(LearningSupportGrant, User)
+                    .join(User, User.id == LearningSupportGrant.granted_by_user_id)
+                    .where(
+                        LearningSupportGrant.holder_user_id.in_(user_ids),
+                        LearningSupportGrant.revoked_at.is_(None),
+                    )
+                )
+            ).all()
+            support_by_user = {
+                grant.holder_user_id: (grant, granter) for grant, granter in support_rows
+            }
 
         return [
             self._team_member(
@@ -85,6 +100,7 @@ class SqlAlchemyPermissionRepository:
                 user,
                 scopes_by_admin.get(admin.id, frozenset()),
                 last_active_at=last_active.get(user.id),
+                learning_support=support_by_user.get(user.id),
             )
             for admin, user in rows
         ]
@@ -347,6 +363,27 @@ class SqlAlchemyPermissionRepository:
                 )
                 if int(oversight_count or 0) <= 1:
                     raise LastOversightAdminError
+            if not active:
+                holds_learning_support = await session.scalar(
+                    select(LearningSupportGrant.id).where(
+                        LearningSupportGrant.school_id == school_id,
+                        LearningSupportGrant.holder_user_id == target_user_id,
+                        LearningSupportGrant.revoked_at.is_(None),
+                    )
+                )
+                if holds_learning_support is not None:
+                    holder_count = await session.scalar(
+                        select(func.count())
+                        .select_from(LearningSupportGrant)
+                        .join(User, User.id == LearningSupportGrant.holder_user_id)
+                        .where(
+                            LearningSupportGrant.school_id == school_id,
+                            LearningSupportGrant.revoked_at.is_(None),
+                            User.status == UserStatus.ACTIVE,
+                        )
+                    )
+                    if int(holder_count or 0) <= 1:
+                        raise LastLearningSupportHolderError
             user.status = UserStatus.ACTIVE if active else UserStatus.DEACTIVATED
             user.deactivated_at = None if active else changed_at
             if not active:
@@ -474,7 +511,9 @@ class SqlAlchemyPermissionRepository:
         scopes: frozenset[PermissionScope],
         *,
         last_active_at: datetime | None = None,
+        learning_support: tuple[LearningSupportGrant, User] | None = None,
     ) -> AdminTeamMember:
+        grant, granter = learning_support or (None, None)
         return AdminTeamMember(
             user_id=user.id,
             admin_id=admin.id,
@@ -487,4 +526,15 @@ class SqlAlchemyPermissionRepository:
             scopes=scopes,
             founding=admin.created_by_user_id is None,
             last_active_at=last_active_at,
+            learning_support=grant is not None,
+            learning_support_granted_at=grant.granted_at if grant else None,
+            learning_support_granted_by=grant.granted_by_user_id if grant else None,
+            learning_support_granted_by_name=(
+                " ".join(
+                    part for part in (granter.first_name, granter.last_name) if part
+                )
+                or granter.email
+                if granter
+                else None
+            ),
         )

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nevo.api.auth import PrincipalDependency
 from nevo.api.consent_summary import empty_consent_summary, student_consent_summaries
 from nevo.api.dependencies import DatabaseSession
+from nevo.api.learning_support import refuse_last_holder_change
 from nevo.api.product_common import (
     actor_user,
     require_class_access,
@@ -44,6 +45,7 @@ from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.auth import AuthAuditEvent, AuthSession
 from nevo.db.models.consent import ParentLink
 from nevo.db.models.frontend_support import Notification
+from nevo.db.models.permission import LearningSupportGrant
 from nevo.db.models.product import (
     DpaAcceptance,
     EnrollmentHistory,
@@ -984,6 +986,9 @@ async def list_teachers(
             func.lower(func.concat(User.first_name, " ", User.last_name)).like(value)
         )
     teachers = (await session.execute(query.order_by(User.first_name))).all()
+    support = await _learning_support_metadata(
+        session, [item.id for item, _, _ in teachers]
+    )
     return [
         {
             "id": str(item.id),
@@ -992,6 +997,7 @@ async def list_teachers(
             "status": item.status.value,
             "classCount": class_count,
             "lastActiveAt": last_active_at,
+            **support.get(item.id, {"learningSupport": False}),
         }
         for item, class_count, last_active_at in teachers
     ]
@@ -1027,6 +1033,7 @@ async def teacher_detail(
     last_active_at = await session.scalar(
         select(func.max(AuthSession.last_seen_at)).where(AuthSession.user_id == teacher.id)
     )
+    support = await _learning_support_metadata(session, [teacher.id])
     return {
         "id": str(teacher.id),
         "name": _name(teacher),
@@ -1036,10 +1043,15 @@ async def teacher_detail(
         "classCount": len({item.class_id for item in assignments}),
         "lastActiveAt": last_active_at,
         "subjects": [subject_names.get(item.id, item.name) for item in subject_rows],
+        **support.get(teacher.id, {"learningSupport": False}),
     }
 
 
-@router.post("/teachers/{teacher_id}/revoke", status_code=204)
+@router.post(
+    "/teachers/{teacher_id}/revoke",
+    status_code=204,
+    responses={409: {"description": "The final Learning Support holder cannot be deactivated"}},
+)
 async def revoke_teacher(
     teacher_id: UUID,
     principal: PrincipalDependency,
@@ -1051,6 +1063,12 @@ async def revoke_teacher(
     teacher = await session.get(User, teacher_id)
     if teacher is None or teacher.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Teacher not found")
+    await refuse_last_holder_change(
+        session,
+        school_id=actor.school_id,
+        user_id=teacher.id,
+        operation="deactivate_staff",
+    )
     teacher.status = UserStatus.DEACTIVATED
     teacher.deactivated_at = datetime.now(UTC)
     await session.execute(
@@ -1059,6 +1077,32 @@ async def revoke_teacher(
         .values(revoked_at=datetime.now(UTC), revocation_reason="admin_revoked")
     )
     await session.commit()
+
+
+async def _learning_support_metadata(
+    session: DatabaseSession,
+    user_ids: list[UUID],
+) -> dict[UUID, dict[str, object]]:
+    if not user_ids:
+        return {}
+    grants = list(
+        await session.scalars(
+            select(LearningSupportGrant).where(
+                LearningSupportGrant.holder_user_id.in_(user_ids),
+                LearningSupportGrant.revoked_at.is_(None),
+            )
+        )
+    )
+    result: dict[UUID, dict[str, object]] = {}
+    for grant in grants:
+        granter = await session.get(User, grant.granted_by_user_id)
+        result[grant.holder_user_id] = {
+            "learningSupport": True,
+            "learningSupportGrantedAt": grant.granted_at,
+            "learningSupportGrantedBy": grant.granted_by_user_id,
+            "learningSupportGrantedByName": _name(granter) if granter else None,
+        }
+    return result
 
 
 @router.post("/teachers/{teacher_id}/restore", status_code=204)

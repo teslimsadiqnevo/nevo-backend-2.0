@@ -19,6 +19,7 @@ from nevo.permissions.errors import (
     AdminSeatLimitReachedError,
     InvalidAdminRoleError,
     InvalidInvitationError,
+    LastLearningSupportHolderError,
     LastOversightAdminError,
     PermissionDeniedError,
     PermissionError,
@@ -67,6 +68,16 @@ class TeamMemberResponse(BaseModel):
     scopes: list[PermissionScope] = Field(max_length=50)
     founding: bool = False
     last_active_at: datetime | None = Field(default=None, alias="lastActiveAt")
+    learning_support: bool = Field(default=False, alias="learningSupport")
+    learning_support_granted_at: datetime | None = Field(
+        default=None, alias="learningSupportGrantedAt"
+    )
+    learning_support_granted_by: UUID | None = Field(
+        default=None, alias="learningSupportGrantedBy"
+    )
+    learning_support_granted_by_name: str | None = Field(
+        default=None, alias="learningSupportGrantedByName"
+    )
 
     @classmethod
     def from_member(cls, member: AdminTeamMember) -> "TeamMemberResponse":
@@ -81,6 +92,10 @@ class TeamMemberResponse(BaseModel):
             scopes=sorted(member.scopes, key=lambda scope: scope.value),
             founding=member.founding,
             lastActiveAt=member.last_active_at,
+            learningSupport=member.learning_support,
+            learningSupportGrantedAt=member.learning_support_granted_at,
+            learningSupportGrantedBy=member.learning_support_granted_by,
+            learningSupportGrantedByName=member.learning_support_granted_by_name,
         )
 
 
@@ -362,6 +377,7 @@ def public_permission_error(error: PermissionError) -> HTTPException:
         (
             TeamMemberAlreadyExistsError,
             LastOversightAdminError,
+            LastLearningSupportHolderError,
             SelfScopeRemovalError,
             SelfDeactivationError,
             SsoManagedTeamError,

@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
+from nevo.api.learning_support import require_learning_support
 from nevo.api.product_common import actor_user, require_student_access
 from nevo.db.models.export import IepExport, IepExportShare
 from nevo.domain.accounts.vocabulary import UserRole
@@ -155,7 +156,8 @@ async def create_iep_export(
     service: IepExportDependency,
     session: DatabaseSession,
 ) -> IepExportResponse:
-    await require_student_access(session, principal, payload.student_id)
+    actor = await require_student_access(session, principal, payload.student_id)
+    await require_learning_support(session, actor)
     try:
         record = await service.create_draft(
             student_id=payload.student_id,
@@ -307,6 +309,7 @@ async def _require_export_access(
         if shared is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export not found")
         return record
+    await require_learning_support(session, actor)
     await require_student_access(session, principal, record.student_id)
     return record
 

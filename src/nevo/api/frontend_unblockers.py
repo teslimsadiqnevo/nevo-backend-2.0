@@ -35,6 +35,7 @@ from nevo.api.content import (
     get_lesson_media_service,
 )
 from nevo.api.dependencies import DatabaseSession
+from nevo.api.learning_support import require_learning_support
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     checkpoint_payloads,
@@ -294,6 +295,7 @@ class EscalationResponse(BaseModel):
     #: boolean that cannot say either.
     acknowledged_at: datetime | None = Field(default=None, alias="acknowledgedAt")
     acknowledged_by: UUID | None = Field(default=None, alias="acknowledgedBy")
+    acknowledged_by_name: str | None = Field(default=None, alias="acknowledgedByName")
 
 
 class NotificationResponse(BaseModel):
@@ -1351,8 +1353,10 @@ async def list_escalations(
     if actor.role is UserRole.TEACHER:
         query = query.where(Escalation.teacher_id == actor.id)
     rows = (await session.execute(query)).all()
-    return [
-        EscalationResponse(
+    result: list[EscalationResponse] = []
+    for record, student in rows:
+        viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
+        result.append(EscalationResponse(
             id=record.id,
             studentId=record.student_id,
             studentFirstName=student.first_name,
@@ -1363,9 +1367,9 @@ async def list_escalations(
             acknowledged=record.acknowledged_at is not None,
             acknowledgedAt=record.acknowledged_at,
             acknowledgedBy=record.acknowledged_by,
-        )
-        for record, student in rows
-    ]
+            acknowledgedByName=_display_name(viewer) if viewer else None,
+        ))
+    return result
 
 
 @router.post(
@@ -1394,6 +1398,7 @@ async def acknowledge_escalation(
         principal,
         roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
     )
+    await require_learning_support(session, actor)
     record = await session.get(Escalation, escalation_id)
     student = await session.get(User, record.student_id) if record else None
     if record is None or student is None or student.school_id != actor.school_id:
@@ -1414,6 +1419,7 @@ async def acknowledge_escalation(
         acknowledged=True,
         acknowledgedAt=record.acknowledged_at,
         acknowledgedBy=record.acknowledged_by,
+        acknowledgedByName=_display_name(actor),
     )
 
 
@@ -2198,19 +2204,23 @@ async def flags_alias(
         )
     rows, total = await paginate(session, query, limit=limit, offset=offset)
     set_page_headers(response, total=total, limit=limit, offset=offset)
-    return [
-        {
+    result: list[dict[str, object]] = []
+    for item in rows:
+        viewer = await session.get(User, item.acknowledged_by) if item.acknowledged_by else None
+        result.append({
             "id": str(item.id),
             "studentId": str(item.student_id),
             "flagType": item.flag_type.value,
             "description": item.description,
             "generatedAt": item.generated_at.isoformat(),
             "acknowledged": item.acknowledged_at is not None,
+            "acknowledgedAt": item.acknowledged_at,
+            "acknowledgedBy": item.acknowledged_by,
+            "acknowledgedByName": _display_name(viewer) if viewer else None,
             "evidenceSeries": item.evidence_series,
             "actionTargets": item.action_targets,
-        }
-        for item in rows
-    ]
+        })
+    return result
 
 
 @router.post(
@@ -2231,6 +2241,7 @@ async def acknowledge_flag(
     actor = await actor_user(session, principal)
     if principal.role == "student":
         raise HTTPException(status_code=403, detail="Students cannot acknowledge flags")
+    await require_learning_support(session, actor)
     flag = await session.get(AttentionFlag, flag_id)
     if flag is None:
         raise HTTPException(status_code=404, detail="Flag not found")
@@ -2239,6 +2250,7 @@ async def acknowledge_flag(
         flag.acknowledged_at = datetime.now(UTC)
         flag.acknowledged_by = actor.id
         await session.commit()
+    viewer = await session.get(User, flag.acknowledged_by) if flag.acknowledged_by else None
     return {
         "id": str(flag.id),
         "studentId": str(flag.student_id),
@@ -2246,6 +2258,9 @@ async def acknowledge_flag(
         "description": flag.description,
         "generatedAt": flag.generated_at.isoformat(),
         "acknowledged": True,
+        "acknowledgedAt": flag.acknowledged_at,
+        "acknowledgedBy": flag.acknowledged_by,
+        "acknowledgedByName": _display_name(viewer) if viewer else None,
         "evidenceSeries": flag.evidence_series,
         "actionTargets": flag.action_targets,
     }

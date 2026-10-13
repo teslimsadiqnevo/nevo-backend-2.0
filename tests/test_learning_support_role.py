@@ -11,6 +11,7 @@ import inspect
 
 import pytest
 
+from nevo.api.exports import create_iep_export
 from nevo.api.learning_support import (
     require_learning_support,
     require_learning_support_if_admin,
@@ -26,10 +27,11 @@ def spec() -> dict:
     return app.openapi()
 
 
-def test_registration_does_not_hand_out_the_learning_support_scope() -> None:
+def test_registration_bootstraps_the_founding_holder() -> None:
     source = inspect.getsource(register_school)
 
-    assert "if scope is not PermissionScope.SENCO" in source
+    assert "LearningSupportGrant" in source
+    assert "for scope in PermissionScope" in source
     assert PermissionScope.SENCO.value == "senco"
 
 
@@ -52,7 +54,7 @@ def test_the_holders_are_exposed_for_the_compliance_screen(spec: dict) -> None:
     assert "get" in spec["paths"]["/api/v1/learning-support/holders"]
     fields = spec["components"]["schemas"]["LearningSupportHolder"]["properties"]
 
-    assert {"name", "grantedAt", "grantedBy"} <= set(fields)
+    assert {"name", "grantedAt", "grantedBy", "grantedByName"} <= set(fields)
 
 
 def test_the_role_can_be_granted_handed_over_and_taken_back(spec: dict) -> None:
@@ -62,6 +64,8 @@ def test_the_role_can_be_granted_handed_over_and_taken_back(spec: dict) -> None:
 
     # Nevo does not decide a handover silently in either direction.
     assert "replaceExisting" in fields
+    responses = spec["paths"]["/api/v1/learning-support/holders/{user_id}"]["delete"]
+    assert "409" in responses["responses"]
 
 
 def test_the_refusal_comes_from_the_api_not_from_hidden_navigation() -> None:
@@ -71,11 +75,10 @@ def test_the_refusal_comes_from_the_api_not_from_hidden_navigation() -> None:
     assert "403" in source or "HTTP_403_FORBIDDEN" in source
 
 
-def test_a_teacher_is_unaffected() -> None:
-    # A class teacher opening their own pupil is not what this changes.
+def test_every_staff_role_needs_the_explicit_grant() -> None:
     source = inspect.getsource(require_learning_support_if_admin)
 
-    assert "ADMIN_ROLES" in source
+    assert "require_learning_support(session, user)" in source
 
 
 @pytest.mark.parametrize(
@@ -93,3 +96,7 @@ def test_the_deep_per_child_reads_are_gated(handler: tuple[str, str]) -> None:
     source = inspect.getsource(getattr(module, handler[1]))
 
     assert "require_learning_support_if_admin" in source
+
+
+def test_progress_report_creation_is_gated_by_learning_support() -> None:
+    assert "require_learning_support" in inspect.getsource(create_iep_export)

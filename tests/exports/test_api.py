@@ -98,6 +98,7 @@ def allow_isolated_export_actor(monkeypatch):
 
     monkeypatch.setattr("nevo.api.exports.require_student_access", allow)
     monkeypatch.setattr("nevo.api.exports._require_export_access", allow)
+    monkeypatch.setattr("nevo.api.exports.require_learning_support", allow)
 
 
 def test_create_export_endpoint_returns_draft() -> None:

@@ -65,10 +65,18 @@ def test_lesson_variants_and_checkpoints_are_typed() -> None:
             "textVariant": "TextVariant",
             "visualVariant": "VisualVariant",
             "audioVariant": "AudioVariant",
-            "interactiveVariant": "InteractiveVariant",
             "calculationVariant": "CalculationVariant",
         }.items():
             assert properties[field]["anyOf"][0]["$ref"].endswith(model)
+        interactive_refs = {
+            variant["$ref"].rsplit("/", 1)[-1]
+            for variant in properties["interactiveVariant"]["anyOf"]
+            if "$ref" in variant
+        }
+        assert interactive_refs == {
+            "InteractiveActivityVariant",
+            "LegacyInteractiveQuestionVariant",
+        }
         assert properties["comprehensionCheckpoints"]["items"]["$ref"].endswith(
             "ComprehensionCheckpoint"
         )

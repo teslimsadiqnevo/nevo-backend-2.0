@@ -104,6 +104,7 @@ class SegmentReviewReason(StrEnum):
 
     DETERMINISTIC_PARSE_USED = "deterministic_parse_used"
     FEWER_THAN_TWO_MODALITIES = "fewer_than_two_modalities"
+    INTERACTIVE_ACTIVITY_MISSING = "interactive_activity_missing"
     AUDIO_GENERATION_FAILED = "audio_generation_failed"
     CALCULATION_AUDIO_GENERATION_FAILED = "calculation_audio_generation_failed"
     VISUAL_GENERATION_FAILED = "visual_generation_failed"

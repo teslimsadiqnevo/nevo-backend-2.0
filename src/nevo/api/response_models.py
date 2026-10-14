@@ -933,7 +933,7 @@ class OfflinePackageModalityVariants(CamelResponse):
     text: dict[str, object] | None = None
     visual: dict[str, object] | None = None
     audio: dict[str, object] | None = None
-    interactive: dict[str, object] | None = None
+    interactive: InteractiveVariant | None = None
     calculation: dict[str, object] | None = None
 
 

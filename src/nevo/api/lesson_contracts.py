@@ -200,7 +200,7 @@ class InteractiveActivityStep(BaseModel):
     instruction: str = Field(min_length=1, max_length=500)
 
 
-class InteractiveVariant(BaseModel):
+class InteractiveActivityVariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     type: Literal["activity"] = "activity"
@@ -208,6 +208,41 @@ class InteractiveVariant(BaseModel):
     materials: list[str] = Field(default_factory=list, max_length=12)
     steps: list[InteractiveActivityStep] = Field(default_factory=list, max_length=12)
     outcome: str = "You have completed the activity."
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_activity_variant(cls, value: object) -> object:
+        if isinstance(value, dict) and (
+            value.get("type", "activity") != "activity"
+            or ("prompt" in value and "steps" not in value)
+        ):
+            raise ValueError("A stored question must use the legacy question contract.")
+        return value
+
+
+class LegacyInteractiveQuestionVariant(BaseModel):
+    """Stored question variants remain readable without inventing an activity."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = "practice_problem"
+    prompt: str = ""
+    expected_interaction: str = Field(default="teacher_review", alias="expectedInteraction")
+    options: list[CheckpointOption] = Field(default_factory=list)
+    answer_key: ScalarAnswer | list[ScalarAnswer] | None = Field(default=None, alias="answerKey")
+    instructions: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_question_variant(cls, value: object) -> object:
+        if isinstance(value, dict) and (
+            value.get("type") == "activity" or "steps" in value or "prompt" not in value
+        ):
+            raise ValueError("An activity must use the activity contract.")
+        return value
+
+
+InteractiveVariant = InteractiveActivityVariant | LegacyInteractiveQuestionVariant
 
 
 class CalculationHighlight(BaseModel):

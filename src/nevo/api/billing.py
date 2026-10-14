@@ -243,9 +243,7 @@ class BankTransferDetailsResponse(BaseModel):
 
 class InvoiceBankTransferDetailsResponse(BankTransferDetailsResponse):
     invoice_id: UUID = Field(alias="invoiceId")
-    reference: str = Field(
-        description="Write this invoice number as the bank-transfer reference."
-    )
+    reference: str = Field(description="Write this invoice number as the bank-transfer reference.")
     confirmation_authority: Literal["nevo_finance"] = Field(
         default="nevo_finance", alias="confirmationAuthority"
     )
@@ -318,6 +316,28 @@ class UpcomingChargeResponse(BaseModel):
 
     @classmethod
     def from_record(cls, record: UpcomingCharge) -> "UpcomingChargeResponse":
+        lines = []
+        if record.total_before_vat is not None:
+            lines.append(
+                UpcomingChargeLineItemResponse(
+                    description="Student subscriptions",
+                    kind="subscription",
+                    amount=record.total_before_vat,
+                    currency=record.currency,
+                    quantity=record.student_count,
+                    unitAmount=record.per_student_rate,
+                )
+            )
+        if record.vat_amount is not None:
+            lines.append(
+                UpcomingChargeLineItemResponse(
+                    description="VAT",
+                    kind="vat",
+                    amount=record.vat_amount,
+                    currency=record.currency,
+                    percentageRate=record.vat_rate,
+                )
+            )
         return cls(
             invoice_id=record.invoice_id,
             invoice_number=record.invoice_number,
@@ -331,24 +351,24 @@ class UpcomingChargeResponse(BaseModel):
                 if record.due_at and record.status is InvoiceStatus.OVERDUE
                 else 0
             ),
-            lineItems=(
-                [
-                    UpcomingChargeLineItemResponse(
-                        description="Nevo school subscription",
-                        amount=record.amount,
-                        currency=PricingCurrency.NGN,
-                    )
-                ]
-                if record.amount is not None
-                else []
-            ),
+            lineItems=lines,
         )
 
 
 class UpcomingChargeLineItemResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     description: str
     amount: Decimal
     currency: PricingCurrency
+    kind: Literal["subscription", "vat"]
+    quantity: int | None = None
+    unit_amount: Decimal | None = Field(default=None, alias="unitAmount")
+    percentage_rate: Decimal | None = Field(
+        default=None,
+        alias="percentageRate",
+        description="Percentage, not a fraction: 7.5 means 7.5%.",
+    )
 
 
 class PaymentMethodRequest(BaseModel):
@@ -835,9 +855,9 @@ async def report_manual_transfer(
         )
     )
     if existing is None:
-        digest = hashlib.sha256(
-            f"{school_id}:{invoice.id}:{bank_reference}".encode()
-        ).hexdigest()[:24]
+        digest = hashlib.sha256(f"{school_id}:{invoice.id}:{bank_reference}".encode()).hexdigest()[
+            :24
+        ]
         existing = PaymentTransaction(
             school_id=school_id,
             invoice_id=invoice.id,
@@ -935,9 +955,7 @@ async def confirm_manual_transfer(
                 "message": "Manual settlement confirmation is not configured.",
             },
         )
-    if finance_key is None or not secrets.compare_digest(
-        finance_key, expected.get_secret_value()
-    ):
+    if finance_key is None or not secrets.compare_digest(finance_key, expected.get_secret_value()):
         raise HTTPException(
             status_code=403,
             detail={

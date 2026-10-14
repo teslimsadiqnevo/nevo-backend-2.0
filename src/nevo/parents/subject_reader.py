@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nevo.db.models.account import Class, School, StudentClassEnrollment
+from nevo.db.models.account import School, StudentClassEnrollment, User
 from nevo.db.models.content import Lesson
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import StudentConceptMastery
@@ -75,13 +75,9 @@ async def child_subject_progress(
     omission is indistinguishable from a bug.
     """
 
-    school_id = await session.scalar(
-        select(Class.school_id)
-        .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)
-        .where(StudentClassEnrollment.student_id == student_id)
-        .limit(1)
-    )
+    school_id = await session.scalar(select(User.school_id).where(User.id == student_id))
     academic = {}
+    school = None
     if school_id is not None:
         school = await session.get(School, school_id)
         academic = school.academic_config if school else {}
@@ -90,6 +86,7 @@ async def child_subject_progress(
         starts_on=week_of,
         term_starts=_dates(academic.get(TERM_DATES_KEY)),
         breaks=_breaks(academic.get(BREAKS_KEY)),
+        setup_at=school.created_at if school else None,
     )
     opened_at, closed_at = window_bounds(window.starts_on, window.ends_on)
 
@@ -122,6 +119,16 @@ async def child_subject_progress(
     for subject_name, concept_name in touched:
         covered_by_subject.setdefault((subject_name or "").casefold(), []).append(concept_name)
 
+    last_lessons = (
+        await session.execute(
+            select(Lesson.subject, func.max(LessonSession.started_at))
+            .join(LessonSession, LessonSession.lesson_id == Lesson.id)
+            .where(LessonSession.student_id == student_id)
+            .group_by(Lesson.subject)
+        )
+    ).all()
+    last_by_subject = {(name or "").casefold(): moment for name, moment in last_lessons}
+
     mastery = (
         await session.execute(
             select(
@@ -140,14 +147,23 @@ async def child_subject_progress(
     for subject_id, own_name, canonical_name in subjects:
         name = canonical_name or own_name
         key = name.casefold()
-        covered = sorted(set(covered_by_subject.get(key, ())))
+        subject_keys = {key, own_name.casefold()}
+        covered = sorted(
+            {
+                concept
+                for subject_key in subject_keys
+                for concept in covered_by_subject.get(subject_key, ())
+            }
+        )
         mastered_now: list[str] = []
         working: list[str] = []
         mastered_before = 0
+        mastered_total = 0
         for subject_name, concept_name, probability, last_updated, practices in mastery:
-            if (subject_name or "").casefold() != key:
+            if (subject_name or "").casefold() not in subject_keys:
                 continue
             if probability >= MASTERED_AT:
+                mastered_total += 1
                 if last_updated is not None and opened_at <= last_updated < closed_at:
                     mastered_now.append(concept_name)
                 else:
@@ -171,6 +187,8 @@ async def child_subject_progress(
                 mastered_this_window=tuple(sorted(set(mastered_now))),
                 still_working_on=tuple(sorted(set(working))),
                 mastered_before_window=mastered_before,
+                mastered_so_far=mastered_total,
+                last_lesson_at=last_by_subject.get(key) or last_by_subject.get(own_name.casefold()),
             )
         )
     rows.sort(key=lambda row: row.subject_name)

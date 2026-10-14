@@ -111,6 +111,12 @@ class UpcomingCharge:
     status: InvoiceStatus | None
     renewal_banner_visible: bool
     renewal_message: str | None
+    currency: PricingCurrency = PricingCurrency.NGN
+    student_count: int | None = None
+    per_student_rate: Decimal | None = None
+    total_before_vat: Decimal | None = None
+    vat_amount: Decimal | None = None
+    vat_rate: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -73,6 +74,7 @@ class Window:
     #: True when this is the week in progress rather than a finished one, so a
     #: screen can say "so far" rather than reporting a part week as a whole.
     in_progress: bool
+    kind: Literal["week", "since_setup"] = "week"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +99,8 @@ class SubjectProgress:
     #: screen can say "three more, on top of the eleven before" without doing
     #: arithmetic the backend can do once.
     mastered_before_window: int
+    mastered_so_far: int = 0
+    last_lesson_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +165,7 @@ def build_window(
     starts_on: date | None,
     term_starts: list[date],
     breaks: list[tuple[date, date]],
+    setup_at: datetime | None = None,
 ) -> Window:
     """The week being asked about, defaulting to the one in progress.
 
@@ -169,6 +174,16 @@ def build_window(
     """
 
     today_monday, today_sunday = week_containing(now)
+    if not term_starts and starts_on is None and setup_at is not None:
+        if setup_at.tzinfo is None:
+            setup_at = setup_at.replace(tzinfo=UTC)
+        return Window(
+            starts_on=setup_at.astimezone(SCHOOL_TIMEZONE).date(),
+            ends_on=now.astimezone(SCHOOL_TIMEZONE).date(),
+            state=WindowState.TERMS_NOT_SET,
+            in_progress=True,
+            kind="since_setup",
+        )
     if starts_on is None:
         monday, sunday = today_monday, today_sunday
     else:

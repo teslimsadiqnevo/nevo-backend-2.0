@@ -25,6 +25,7 @@ from nevo.permissions.errors import (
     InvalidInvitationError,
     LastLearningSupportHolderError,
     LastOversightAdminError,
+    LastSeniorAdminError,
     PermissionDeniedError,
     PermissionError,
     SelfDeactivationError,
@@ -46,9 +47,7 @@ class PermissionResponse(BaseModel):
     role: UserRole
     scopes: list[PermissionScope] = Field(max_length=50)
     navigation: list[str]
-    admin_access_level: AdminAccessLevel | None = Field(
-        default=None, alias="adminAccessLevel"
-    )
+    admin_access_level: AdminAccessLevel | None = Field(default=None, alias="adminAccessLevel")
 
     @classmethod
     def from_snapshot(cls, snapshot: PermissionSnapshot) -> "PermissionResponse":
@@ -81,9 +80,7 @@ class TeamMemberResponse(BaseModel):
     learning_support_granted_at: datetime | None = Field(
         default=None, alias="learningSupportGrantedAt"
     )
-    learning_support_granted_by: UUID | None = Field(
-        default=None, alias="learningSupportGrantedBy"
-    )
+    learning_support_granted_by: UUID | None = Field(default=None, alias="learningSupportGrantedBy")
     learning_support_granted_by_name: str | None = Field(
         default=None, alias="learningSupportGrantedByName"
     )
@@ -362,6 +359,27 @@ async def promote_admin_to_senior(
 
 
 @router.post(
+    "/admin/team/{target_user_id}/demote-standard",
+    response_model=TeamMemberResponse,
+    responses={
+        403: {"description": "permission_denied: senior administrator required"},
+        409: {"description": "last_senior_admin"},
+    },
+)
+async def demote_admin_to_standard(
+    target_user_id: UUID,
+    principal: PrincipalDependency,
+    service: PermissionServiceDependency,
+) -> TeamMemberResponse:
+    """Return a senior admin to standard, preserving scopes and Learning Support."""
+    try:
+        member = await service.demote_to_standard(principal, target_user_id=target_user_id)
+    except PermissionError as error:
+        raise public_permission_error(error) from error
+    return TeamMemberResponse.from_member(member)
+
+
+@router.post(
     "/admin/team/{target_user_id}/deactivate",
     response_model=TeamMemberResponse,
 )
@@ -408,6 +426,7 @@ def public_permission_error(error: PermissionError) -> HTTPException:
         (
             TeamMemberAlreadyExistsError,
             LastOversightAdminError,
+            LastSeniorAdminError,
             LastLearningSupportHolderError,
             SelfScopeRemovalError,
             SelfDeactivationError,

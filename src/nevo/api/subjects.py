@@ -354,7 +354,11 @@ async def resolve_subjects(
     return previews
 
 
-@router.put("/teachers/{teacher_id}/subjects", response_model=list[SchoolSubjectResponse])
+@router.put(
+    "/teachers/{teacher_id}/subjects",
+    response_model=list[SchoolSubjectResponse],
+    responses={409: {"description": "subject_in_use_by_assignment: remove class assignment first"}},
+)
 async def set_teacher_subjects(
     teacher_id: UUID,
     payload: list[SubjectName],

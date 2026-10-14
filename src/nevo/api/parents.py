@@ -183,6 +183,8 @@ class SubjectProgressResponse(CamelResponse):
     #: starting point, and the only thing this week's movement is measured
     #: against.
     mastered_before_window: int
+    mastered_so_far: int
+    last_lesson_at: datetime | None
 
 
 class ProgressWindowResponse(CamelResponse):
@@ -193,6 +195,7 @@ class ProgressWindowResponse(CamelResponse):
     #: reimplemented per surface.
     state: WindowState
     in_progress: bool
+    kind: Literal["week", "since_setup"]
 
 
 class ChildSubjectProgressResponse(CamelResponse):
@@ -213,11 +216,13 @@ async def child_subject_progress(
     service: ParentInsightDependency,
     week_of: Annotated[date | None, Query(alias="weekOf")] = None,
 ) -> ChildSubjectProgressResponse:
-    """What this child covered and mastered, by subject, Monday to date.
+    """What this child covered and mastered in the reporting window.
 
     ``weekOf`` asks for a different week; any date in it will do. The default
     is the week in progress rather than the last complete one, because a parent
     opening this on Wednesday wants to know about Wednesday.
+    Without term dates, the default is since school setup; explicit weekOf
+    still selects a historical week. window.kind states which was selected.
 
     A parent reads only their own children, and the link is checked before any
     progress is read rather than after.
@@ -237,6 +242,7 @@ async def child_subject_progress(
             ends_on=progress.window.ends_on,
             state=progress.window.state,
             in_progress=progress.window.in_progress,
+            kind=progress.window.kind,
         ),
         subjects=[
             SubjectProgressResponse(
@@ -247,6 +253,8 @@ async def child_subject_progress(
                 mastered_this_window=list(row.mastered_this_window),
                 still_working_on=list(row.still_working_on),
                 mastered_before_window=row.mastered_before_window,
+                mastered_so_far=row.mastered_so_far,
+                last_lesson_at=row.last_lesson_at,
             )
             for row in progress.subjects
         ],

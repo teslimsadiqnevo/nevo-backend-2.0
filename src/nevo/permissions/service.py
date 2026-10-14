@@ -190,10 +190,7 @@ class PermissionService:
         actor = await self.require(principal, PermissionScope.OVERSIGHT)
         if actor.school_id is None:
             raise PermissionDeniedError
-        if (
-            target_user_id == actor.user_id
-            and PermissionScope.OVERSIGHT not in scopes
-        ):
+        if target_user_id == actor.user_id and PermissionScope.OVERSIGHT not in scopes:
             raise SelfScopeRemovalError
         member = await self._repository.replace_scopes(
             school_id=actor.school_id,
@@ -219,6 +216,24 @@ class PermissionService:
             school_id=actor.school_id,
             target_user_id=target_user_id,
             access_level=AdminAccessLevel.SENIOR,
+        )
+        if member is None:
+            raise TeamMemberNotFoundError
+        return self._with_effective_scopes(member)
+
+    async def demote_to_standard(
+        self,
+        principal: AuthPrincipal,
+        *,
+        target_user_id: UUID,
+    ) -> AdminTeamMember:
+        actor = await self.require_senior_admin(principal)
+        if actor.school_id is None:
+            raise PermissionDeniedError
+        member = await self._repository.set_admin_access_level(
+            school_id=actor.school_id,
+            target_user_id=target_user_id,
+            access_level=AdminAccessLevel.STANDARD,
         )
         if member is None:
             raise TeamMemberNotFoundError

@@ -77,7 +77,7 @@ def test_nothing_in_the_shape_is_a_number_about_another_child() -> None:
         for name, field in SubjectProgressResponse.model_fields.items()
         if field.annotation is int
     }
-    assert numeric == {"mastered_before_window"}
+    assert numeric == {"mastered_before_window", "mastered_so_far"}
 
 
 def test_movement_is_measured_against_the_child_own_starting_point() -> None:

@@ -1466,11 +1466,24 @@ async def create_escalation(
 @router.get(
     "/api/v1/escalations",
     response_model=list[EscalationResponse],
+    responses={
+        200: {
+            "description": "Paged concerns; total and remaining pages are reported in headers.",
+            "headers": {
+                "X-Total-Count": {"schema": {"type": "integer"}},
+                "X-Has-More": {"schema": {"type": "boolean"}},
+            },
+        }
+    },
     tags=["messaging"],
 )
 async def list_escalations(
     principal: PrincipalDependency,
     session: DatabaseSession,
+    response: Response,
+    open_only: Annotated[bool, Query(alias="openOnly")] = False,
+    limit: LimitQuery = DEFAULT_LIMIT,
+    offset: OffsetQuery = 0,
 ) -> list[EscalationResponse]:
     actor = await require_school_actor(
         session,
@@ -1482,7 +1495,6 @@ async def list_escalations(
         .join(User, User.id == Escalation.student_id)
         .where(User.school_id == actor.school_id)
         .order_by(Escalation.generated_at.desc())
-        .limit(100)
     )
     if actor.role is UserRole.TEACHER:
         query = query.where(
@@ -1498,7 +1510,13 @@ async def list_escalations(
                 )
             )
         )
-    rows = (await session.execute(query)).all()
+    if open_only:
+        query = query.where(Escalation.acknowledged_at.is_(None))
+    total = int(
+        await session.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+    )
+    set_page_headers(response, total=total, limit=limit, offset=offset)
+    rows = (await session.execute(query.limit(limit).offset(offset))).all()
     result: list[EscalationResponse] = []
     for record, student in rows:
         viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None

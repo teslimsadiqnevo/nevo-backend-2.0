@@ -26,6 +26,7 @@ from nevo.permissions.errors import (
     AdminSeatLimitReachedError,
     LastLearningSupportHolderError,
     LastOversightAdminError,
+    LastSeniorAdminError,
     TeamMemberAlreadyExistsError,
 )
 
@@ -53,9 +54,7 @@ class SqlAlchemyPermissionRepository:
             school_id=user.school_id,
             role=user.role.value,
             status=user.status.value,
-            school_auth_method=school_auth_method.value
-            if school_auth_method is not None
-            else None,
+            school_auth_method=school_auth_method.value if school_auth_method is not None else None,
             assigned_scopes=scopes,
             admin_access_level=admin_access_level,
         )
@@ -144,9 +143,7 @@ class SqlAlchemyPermissionRepository:
                     ):
                         raise TeamMemberAlreadyExistsError
                     admin = await session.scalar(
-                        select(Admin)
-                        .where(Admin.user_id == existing.id)
-                        .with_for_update()
+                        select(Admin).where(Admin.user_id == existing.id).with_for_update()
                     )
                     if admin is None:
                         raise TeamMemberAlreadyExistsError
@@ -242,9 +239,7 @@ class SqlAlchemyPermissionRepository:
                 return None
 
             user = await session.scalar(
-                select(User)
-                .where(User.id == invitation.user_id)
-                .with_for_update()
+                select(User).where(User.id == invitation.user_id).with_for_update()
             )
             if user is None or user.status is not UserStatus.INVITED:
                 return None
@@ -270,11 +265,7 @@ class SqlAlchemyPermissionRepository:
         changed_at: datetime,
     ) -> AdminTeamMember | None:
         async with self._sessions.begin() as session:
-            await session.execute(
-                select(School.id)
-                .where(School.id == school_id)
-                .with_for_update()
-            )
+            await session.execute(select(School.id).where(School.id == school_id).with_for_update())
             row = (
                 await session.execute(
                     select(Admin, User)
@@ -328,9 +319,7 @@ class SqlAlchemyPermissionRepository:
         changed_at: datetime,
     ) -> AdminTeamMember | None:
         async with self._sessions.begin() as session:
-            await session.execute(
-                select(School.id).where(School.id == school_id).with_for_update()
-            )
+            await session.execute(select(School.id).where(School.id == school_id).with_for_update())
             row = (
                 await session.execute(
                     select(Admin, User)
@@ -410,6 +399,8 @@ class SqlAlchemyPermissionRepository:
         access_level: AdminAccessLevel,
     ) -> AdminTeamMember | None:
         async with self._sessions.begin() as session:
+            if await session.get(School, school_id, with_for_update=True) is None:
+                return None
             row = (
                 await session.execute(
                     select(Admin, User)
@@ -421,10 +412,38 @@ class SqlAlchemyPermissionRepository:
             if row is None:
                 return None
             admin, user = row
+            if (
+                access_level is AdminAccessLevel.STANDARD
+                and admin.access_level is AdminAccessLevel.SENIOR
+                and user.status is UserStatus.ACTIVE
+            ):
+                other_senior = await session.scalar(
+                    select(Admin.id)
+                    .join(User, User.id == Admin.user_id)
+                    .where(
+                        Admin.school_id == school_id,
+                        Admin.user_id != target_user_id,
+                        Admin.access_level == AdminAccessLevel.SENIOR,
+                        User.status == UserStatus.ACTIVE,
+                    )
+                    .limit(1)
+                )
+                if other_senior is None:
+                    raise LastSeniorAdminError
             admin.access_level = access_level
             scopes = await self._active_scopes_for_update(session, admin.id)
             await session.flush()
-            return self._team_member(admin, user, scopes)
+            support = (
+                await session.execute(
+                    select(LearningSupportGrant, User)
+                    .join(User, User.id == LearningSupportGrant.granted_by_user_id)
+                    .where(
+                        LearningSupportGrant.holder_user_id == target_user_id,
+                        LearningSupportGrant.revoked_at.is_(None),
+                    )
+                )
+            ).one_or_none()
+            return self._team_member(admin, user, scopes, learning_support=support)
 
     @staticmethod
     async def _active_scopes_for_update(
@@ -524,10 +543,7 @@ class SqlAlchemyPermissionRepository:
         grouped: dict[UUID, set[PermissionScope]] = {}
         for admin_id, scope in rows:
             grouped.setdefault(admin_id, set()).add(scope)
-        return {
-            admin_id: frozenset(scopes)
-            for admin_id, scopes in grouped.items()
-        }
+        return {admin_id: frozenset(scopes) for admin_id, scopes in grouped.items()}
 
     @staticmethod
     def _team_member(
@@ -556,9 +572,7 @@ class SqlAlchemyPermissionRepository:
             learning_support_granted_at=grant.granted_at if grant else None,
             learning_support_granted_by=grant.granted_by_user_id if grant else None,
             learning_support_granted_by_name=(
-                " ".join(
-                    part for part in (granter.first_name, granter.last_name) if part
-                )
+                " ".join(part for part in (granter.first_name, granter.last_name) if part)
                 or granter.email
                 if granter
                 else None

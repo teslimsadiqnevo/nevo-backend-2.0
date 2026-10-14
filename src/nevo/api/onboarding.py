@@ -174,6 +174,12 @@ class ClassMergeProposal(CamelResponse):
     reason: str
 
 
+class FoundTeacherResponse(CamelResponse):
+    name: str
+    email: str | None
+    classes: list[str]
+
+
 class OnboardingState(CamelResponse):
     """Everything the onboarding screens render, in one read."""
 
@@ -181,6 +187,7 @@ class OnboardingState(CamelResponse):
     classes: list[DerivedClass]
     teacher_count: int
     teachers_found: list[str] = Field(default_factory=list)
+    teacher_details_found: list[FoundTeacherResponse] = Field(default_factory=list)
     student_count: int
     rejected: list[RejectedRow]
     #: Spellings that look like one class, each needing a yes or no before the
@@ -455,8 +462,7 @@ def _state(
     teachers_found = sorted(
         {
             " ".join(
-                str(row.values.get(key) or "").strip()
-                for key in ("first_name", "last_name")
+                str(row.values.get(key) or "").strip() for key in ("first_name", "last_name")
             ).strip()
             or str(row.values.get("email") or "Teacher")
             for row in rows
@@ -464,11 +470,38 @@ def _state(
         }
     )
     paid = invoice is not None and invoice.status is InvoiceStatus.PAID
+    teachers_by_email: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if not row.countable or row.kind is not OnboardingRowKind.TEACHER:
+            continue
+        email = str(row.values.get("email") or "").strip().casefold()
+        key = email or str(row.id)
+        found = teachers_by_email.setdefault(
+            key,
+            {
+                "name": " ".join(
+                    str(row.values.get(part) or "").strip() for part in ("first_name", "last_name")
+                ).strip()
+                or email
+                or "Teacher",
+                "email": email or None,
+                "classes": set(),
+            },
+        )
+        class_name = row.class_name or str(row.values.get("class") or "").strip()
+        if class_name:
+            found["classes"].add(class_name)
     return OnboardingState(
         stage=record.stage,
         classes=classes,
         teacher_count=teachers,
         teachers_found=teachers_found,
+        teacher_details_found=[
+            FoundTeacherResponse(
+                name=found["name"], email=found["email"], classes=sorted(found["classes"])
+            )
+            for _, found in sorted(teachers_by_email.items())
+        ],
         student_count=students,
         rejected=[
             RejectedRow(

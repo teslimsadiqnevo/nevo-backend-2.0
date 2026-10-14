@@ -129,6 +129,12 @@ class SqlAlchemyBillingRepository:
             status=invoice.status,
             renewal_banner_visible=visible,
             renewal_message=message,
+            currency=invoice.currency,
+            student_count=invoice.student_count,
+            per_student_rate=invoice.per_student_rate,
+            total_before_vat=invoice.total_before_vat,
+            vat_amount=invoice.vat_amount,
+            vat_rate=invoice.vat_rate,
         )
 
     async def update_payment_method(

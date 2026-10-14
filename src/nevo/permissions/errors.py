@@ -28,11 +28,16 @@ class LastOversightAdminError(PermissionError):
     public_message = "A school must retain at least one oversight administrator."
 
 
+class LastSeniorAdminError(PermissionError):
+    code = "last_senior_admin"
+    public_message = (
+        "Make another active administrator senior before removing the final senior role."
+    )
+
+
 class LastLearningSupportHolderError(PermissionError):
     code = "last_learning_support_holder"
-    public_message = (
-        "Grant Learning Support to another person before changing the final holder."
-    )
+    public_message = "Grant Learning Support to another person before changing the final holder."
 
 
 class SelfScopeRemovalError(PermissionError):

@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from nevo.auth.entities import AuthUser, SessionDraft, SessionRecord
@@ -137,7 +137,7 @@ class MemoryRateLimiter:
     async def check(self, identity_digest: str, ip_digest: str) -> None:
         del identity_digest, ip_digest
         if self.blocked:
-            raise RateLimitExceededError
+            raise RateLimitExceededError(datetime.now(UTC) + timedelta(minutes=15))
 
     async def record(
         self,

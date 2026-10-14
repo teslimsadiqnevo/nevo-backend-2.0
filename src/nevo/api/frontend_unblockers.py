@@ -209,6 +209,8 @@ class ClassStudentResponse(BaseModel):
     observations: list["LearnerObservationResponse"] = Field(default_factory=list)
     seat_context: str = Field(alias="seatContext")
     consent: StudentConsentSummaryResponse
+    admin_support_request_open: bool = False
+    admin_support_requested_at: datetime | None = None
 
 
 class ConceptResponse(BaseModel):
@@ -566,6 +568,10 @@ class ResetReceipt(BaseModel):
     expires_in_minutes: Literal[60] = Field(default=60, alias="expiresInMinutes")
 
 
+class AdminSupportRequestBody(BaseModel):
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class AdminSupportRequestResponse(BaseModel):
     model_config = CAMEL_CONFIG
 
@@ -774,15 +780,40 @@ async def class_students(
     )
     consent = await student_consent_summaries(session, (user.id for user, _, _ in rows))
     reset_targets = {f"/admin/students/{user.id}" for user, _, _ in rows}
-    requested_targets = set(
-        await session.scalars(
-            select(Notification.navigates_to).where(
-                Notification.type == NotificationType.PIN_RESET_REQUESTED.value,
-                Notification.navigates_to.in_(reset_targets),
-                Notification.archived_at.is_(None),
+    teacher_reset_targets = {
+        f"/teacher/students/{user.id}/clear-pin?class={class_id}" for user, _, _ in rows
+    }
+    requested_targets = (
+        set(
+            await session.scalars(
+                select(Notification.navigates_to).where(
+                    Notification.type == NotificationType.PIN_RESET_REQUESTED.value,
+                    Notification.navigates_to.in_(reset_targets | teacher_reset_targets),
+                    Notification.archived_at.is_(None),
+                )
             )
         )
-    ) if reset_targets else set()
+        if reset_targets
+        else set()
+    )
+    support_rows = (
+        (
+            await session.execute(
+                select(Notification.navigates_to, func.min(Notification.created_at))
+                .where(
+                    Notification.type
+                    == NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED.value,
+                    Notification.navigates_to.in_(reset_targets),
+                    Notification.read.is_(False),
+                    Notification.archived_at.is_(None),
+                )
+                .group_by(Notification.navigates_to)
+            )
+        ).all()
+        if reset_targets
+        else []
+    )
+    support_requested = dict(support_rows)
     return [
         ClassStudentResponse(
             student_id=user.id,
@@ -793,7 +824,13 @@ async def class_students(
             admission_number=user.admission_number,
             pinResetRequested=(
                 user.pin_cleared_at is None
-                and f"/admin/students/{user.id}" in requested_targets
+                and (
+                    f"/admin/students/{user.id}" in requested_targets
+                    or (
+                        f"/teacher/students/{user.id}/clear-pin?class={class_id}"
+                        in requested_targets
+                    )
+                )
             ),
             pinCleared=user.pin_hash is None and user.pin_cleared_at is not None,
             pinClearedAt=user.pin_cleared_at,
@@ -803,6 +840,8 @@ async def class_students(
             observations=observations[user.id]["observations"],
             seatContext=observations[user.id]["seatContext"],
             consent=consent.get(user.id, empty_consent_summary()),
+            admin_support_request_open=f"/admin/students/{user.id}" in support_requested,
+            admin_support_requested_at=support_requested.get(f"/admin/students/{user.id}"),
         )
         for user, profile_id, latest_session_at in rows
     ]
@@ -817,6 +856,7 @@ async def request_admin_support_for_student(
     student_id: UUID,
     actor: TeacherScope,
     session: DatabaseSession,
+    payload: AdminSupportRequestBody | None = None,
 ) -> AdminSupportRequestResponse:
     """Notify school administrators about a deactivated learner account."""
     student = await session.get(User, student_id)
@@ -855,18 +895,22 @@ async def request_admin_support_for_student(
     if not admins:
         raise HTTPException(status_code=409, detail="No active school administrator is available")
     target = f"/admin/students/{student_id}"
-    existing = set(
-        await session.scalars(
-            select(Notification.recipient_id).where(
-                Notification.recipient_id.in_([admin.id for admin in admins]),
-                Notification.type
-                == NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED.value,
-                Notification.navigates_to == target,
-                Notification.read.is_(False),
-                Notification.archived_at.is_(None),
+    existing = (
+        set(
+            await session.scalars(
+                select(Notification.recipient_id).where(
+                    Notification.recipient_id.in_([admin.id for admin in admins]),
+                    Notification.type
+                    == NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED.value,
+                    Notification.navigates_to == target,
+                    Notification.read.is_(False),
+                    Notification.archived_at.is_(None),
+                )
             )
         )
-    ) if admins else set()
+        if admins
+        else set()
+    )
     pending = [admin for admin in admins if admin.id not in existing]
     student_name = _display_name(student)
     for admin in pending:
@@ -878,6 +922,11 @@ async def request_admin_support_for_student(
                 title="A teacher needs help with a learner account",
                 description=(
                     f"{student_name}'s deactivated account needs an administrator's review."
+                    + (
+                        f" Teacher's note: {payload.note.strip()}"
+                        if payload and payload.note and payload.note.strip()
+                        else ""
+                    )
                 ),
                 navigates_to=target,
                 category=NotificationCategory.ACCOUNT.value,
@@ -1153,8 +1202,7 @@ async def lesson_detail(
                 sequenceOrder=item.sequence_order,
                 title=item.title,
                 body=item.body,
-                readingChunks=item.reading_chunks
-                or reading_chunks(item.segment_key, item.body),
+                readingChunks=item.reading_chunks or reading_chunks(item.segment_key, item.body),
                 availableModalities=list(item.available_modalities),
                 comprehensionCheckpoints=checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
@@ -1381,24 +1429,38 @@ async def list_escalations(
         .limit(100)
     )
     if actor.role is UserRole.TEACHER:
-        query = query.where(Escalation.teacher_id == actor.id)
+        query = query.where(
+            Escalation.student_id.in_(
+                select(StudentClassEnrollment.student_id)
+                .join(
+                    TeacherClassAssignment,
+                    TeacherClassAssignment.class_id == StudentClassEnrollment.class_id,
+                )
+                .where(
+                    TeacherClassAssignment.teacher_id == actor.id,
+                    TeacherClassAssignment.removed_at.is_(None),
+                )
+            )
+        )
     rows = (await session.execute(query)).all()
     result: list[EscalationResponse] = []
     for record, student in rows:
         viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
-        result.append(EscalationResponse(
-            id=record.id,
-            studentId=record.student_id,
-            studentFirstName=student.first_name,
-            teacherId=record.teacher_id,
-            note=record.teacher_note,
-            recentPicture=await _recent_picture(session, record.student_id),
-            generatedAt=record.generated_at,
-            acknowledged=record.acknowledged_at is not None,
-            acknowledgedAt=record.acknowledged_at,
-            acknowledgedBy=record.acknowledged_by,
-            acknowledgedByName=_display_name(viewer) if viewer else None,
-        ))
+        result.append(
+            EscalationResponse(
+                id=record.id,
+                studentId=record.student_id,
+                studentFirstName=student.first_name,
+                teacherId=record.teacher_id,
+                note=record.teacher_note,
+                recentPicture=await _recent_picture(session, record.student_id),
+                generatedAt=record.generated_at,
+                acknowledged=record.acknowledged_at is not None,
+                acknowledgedAt=record.acknowledged_at,
+                acknowledgedBy=record.acknowledged_by,
+                acknowledgedByName=_display_name(viewer) if viewer else None,
+            )
+        )
     return result
 
 
@@ -1737,6 +1799,7 @@ async def reply_to_thread(
     session.add(message)
     await session.flush()
     await _mark_thread_read(session, thread.id, user.id)
+    await _notify_thread_message(session, thread, user)
     await session.commit()
     return MessageResponse(
         messageId=message.id,
@@ -1778,6 +1841,7 @@ async def send_message(
     session.add(message)
     await session.flush()
     await _mark_thread_read(session, thread.id, user.id)
+    await _notify_thread_message(session, thread, user)
     await session.commit()
     return MessageResponse(
         messageId=message.id,
@@ -2274,19 +2338,21 @@ async def flags_alias(
     result: list[dict[str, object]] = []
     for item in rows:
         viewer = await session.get(User, item.acknowledged_by) if item.acknowledged_by else None
-        result.append({
-            "id": str(item.id),
-            "studentId": str(item.student_id),
-            "flagType": item.flag_type.value,
-            "description": item.description,
-            "generatedAt": item.generated_at.isoformat(),
-            "acknowledged": item.acknowledged_at is not None,
-            "acknowledgedAt": item.acknowledged_at,
-            "acknowledgedBy": item.acknowledged_by,
-            "acknowledgedByName": _display_name(viewer) if viewer else None,
-            "evidenceSeries": item.evidence_series,
-            "actionTargets": item.action_targets,
-        })
+        result.append(
+            {
+                "id": str(item.id),
+                "studentId": str(item.student_id),
+                "flagType": item.flag_type.value,
+                "description": item.description,
+                "generatedAt": item.generated_at.isoformat(),
+                "acknowledged": item.acknowledged_at is not None,
+                "acknowledgedAt": item.acknowledged_at,
+                "acknowledgedBy": item.acknowledged_by,
+                "acknowledgedByName": _display_name(viewer) if viewer else None,
+                "evidenceSeries": item.evidence_series,
+                "actionTargets": item.action_targets,
+            }
+        )
     return result
 
 
@@ -2308,11 +2374,12 @@ async def acknowledge_flag(
     actor = await actor_user(session, principal)
     if principal.role == "student":
         raise HTTPException(status_code=403, detail="Students cannot acknowledge flags")
-    await require_learning_support(session, actor)
     flag = await session.get(AttentionFlag, flag_id)
     if flag is None:
         raise HTTPException(status_code=404, detail="Flag not found")
     await require_student_access(session, principal, flag.student_id)
+    if actor.role is not UserRole.TEACHER:
+        await require_learning_support(session, actor)
     if flag.acknowledged_at is None:
         flag.acknowledged_at = datetime.now(UTC)
         flag.acknowledged_by = actor.id
@@ -2817,6 +2884,48 @@ async def _require_thread_access(session, user_id: UUID, thread_id: UUID) -> Mes
     if allowed is None:
         raise HTTPException(status_code=403, detail="Thread is not available to this account")
     return thread
+
+
+async def _notify_thread_message(session, thread: MessageThread, sender: User) -> None:
+    teachers = list(
+        await session.scalars(
+            select(User).where(
+                User.school_id == thread.school_id,
+                User.role == UserRole.TEACHER,
+                User.status == UserStatus.ACTIVE,
+                User.id != sender.id,
+            )
+        )
+    )
+    for teacher in teachers:
+        if await session.scalar(
+            select(MessageThread.id).where(
+                MessageThread.id == thread.id, _thread_access_clause(teacher)
+            )
+        ):
+            session.add(
+                Notification(
+                    recipient_id=teacher.id,
+                    recipient_role=teacher.role.value,
+                    type=NotificationType.TEACHER_REPLIED.value,
+                    category=NotificationCategory.MESSAGES.value,
+                    title="A new message",
+                    description="You have a new message in Connect.",
+                    navigates_to=f"/teacher/connect?thread={thread.id}",
+                )
+            )
+    if thread.student_id and sender.role is UserRole.TEACHER:
+        session.add(
+            Notification(
+                recipient_id=thread.student_id,
+                recipient_role=UserRole.STUDENT.value,
+                type=NotificationType.TEACHER_REPLIED.value,
+                category=NotificationCategory.MESSAGES.value,
+                title="Your teacher replied",
+                description="Your teacher sent you a message.",
+                navigates_to=f"/student/connect?thread={thread.id}",
+            )
+        )
 
 
 async def _find_or_create_thread(

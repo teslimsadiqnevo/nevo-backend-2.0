@@ -242,7 +242,7 @@ class SqlAlchemyLoginRateLimiter:
     async def check(self, identity_digest: str, ip_digest: str) -> None:
         cutoff = datetime.now(UTC) - self._window
         statement = (
-            select(func.count())
+            select(func.count(), func.min(AuthLoginAttempt.occurred_at))
             .select_from(AuthLoginAttempt)
             .where(
                 AuthLoginAttempt.succeeded.is_(False),
@@ -254,9 +254,10 @@ class SqlAlchemyLoginRateLimiter:
             )
         )
         async with self._sessions() as session:
-            failures = await session.scalar(statement)
-        if failures is not None and failures >= self._max_failures:
-            raise RateLimitExceededError
+            row = (await session.execute(statement)).one()
+        failures, oldest = row
+        if failures is not None and failures >= self._max_failures and oldest is not None:
+            raise RateLimitExceededError(oldest + self._window)
 
     async def record(
         self,

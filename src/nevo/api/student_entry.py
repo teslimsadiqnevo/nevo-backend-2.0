@@ -311,29 +311,36 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-async def _misses(session: AsyncSession, cutoff: datetime, *digests: str) -> int:
-    found = await session.scalar(
-        select(func.count())
-        .select_from(AuthLoginAttempt)
-        .where(
-            AuthLoginAttempt.succeeded.is_(False),
-            AuthLoginAttempt.occurred_at >= cutoff,
-            or_(
-                AuthLoginAttempt.identity_digest.in_(digests),
-                AuthLoginAttempt.ip_digest.in_(digests),
-            ),
+async def _misses(
+    session: AsyncSession, cutoff: datetime, *digests: str
+) -> tuple[int, datetime | None]:
+    found = (
+        await session.execute(
+            select(func.count(), func.min(AuthLoginAttempt.occurred_at))
+            .select_from(AuthLoginAttempt)
+            .where(
+                AuthLoginAttempt.succeeded.is_(False),
+                AuthLoginAttempt.occurred_at >= cutoff,
+                or_(
+                    AuthLoginAttempt.identity_digest.in_(digests),
+                    AuthLoginAttempt.ip_digest.in_(digests),
+                ),
+            )
         )
-    )
-    return found or 0
+    ).one()
+    return int(found[0] or 0), found[1]
 
 
-def _too_many() -> HTTPException:
+def _too_many(retry_at: datetime) -> HTTPException:
+    retry_seconds = max(1, int((retry_at - datetime.now(UTC)).total_seconds()) + 1)
     return HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail={
             "code": "too_many_attempts",
             "message": "Too many tries. Wait a few minutes and try again.",
+            "retryAt": retry_at.isoformat(),
         },
+        headers={"Retry-After": str(retry_seconds)},
     )
 
 
@@ -356,10 +363,12 @@ async def _throttle(session: AsyncSession, identity: str, ip: str, school: str) 
     """
 
     cutoff = datetime.now(UTC) - LOOKUP_WINDOW
-    if await _misses(session, cutoff, identity, ip) >= LOOKUP_MAX_ATTEMPTS:
-        raise _too_many()
-    if await _misses(session, cutoff, school) >= LOOKUP_MAX_PER_SCHOOL:
-        raise _too_many()
+    failures, oldest = await _misses(session, cutoff, identity, ip)
+    if failures >= LOOKUP_MAX_ATTEMPTS and oldest is not None:
+        raise _too_many(oldest + LOOKUP_WINDOW)
+    failures, oldest = await _misses(session, cutoff, school)
+    if failures >= LOOKUP_MAX_PER_SCHOOL and oldest is not None:
+        raise _too_many(oldest + LOOKUP_WINDOW)
 
 
 async def _record(

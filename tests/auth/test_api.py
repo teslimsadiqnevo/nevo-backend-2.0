@@ -143,3 +143,5 @@ def test_rate_limit_error_maps_to_http_429() -> None:
 
     assert response.status_code == 429
     assert response.json()["detail"]["code"] == "too_many_attempts"
+    assert response.json()["detail"]["retryAt"]
+    assert int(response.headers["Retry-After"]) > 0

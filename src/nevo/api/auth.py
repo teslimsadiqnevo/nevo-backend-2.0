@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -360,15 +360,24 @@ def public_auth_error(error: AuthError) -> HTTPException:
         status_code = status.HTTP_429_TOO_MANY_REQUESTS
     elif isinstance(error, SchoolCodeRequiredError):
         status_code = status.HTTP_409_CONFLICT
+    detail: dict[str, object] = {
+        "code": error.code,
+        "message": error.public_message,
+    }
+    headers = (
+        {"WWW-Authenticate": "Bearer"}
+        if status_code == status.HTTP_401_UNAUTHORIZED
+        else None
+    )
+    if isinstance(error, RateLimitExceededError):
+        now = datetime.now(UTC)
+        retry_seconds = max(1, int((error.retry_at - now).total_seconds()) + 1)
+        detail["retryAt"] = error.retry_at.isoformat()
+        headers = {"Retry-After": str(retry_seconds)}
     return HTTPException(
         status_code=status_code,
-        detail={
-            "code": error.code,
-            "message": error.public_message,
-        },
-        headers={"WWW-Authenticate": "Bearer"}
-        if status_code == status.HTTP_401_UNAUTHORIZED
-        else None,
+        detail=detail,
+        headers=headers,
     )
 
 

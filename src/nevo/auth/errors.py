@@ -1,3 +1,6 @@
+from datetime import datetime
+
+
 class AuthError(Exception):
     code = "authentication_failed"
     public_message = "Unable to authenticate with the supplied credentials."
@@ -6,10 +9,13 @@ class AuthError(Exception):
 class InvalidCredentialsError(AuthError):
     pass
 
-
 class RateLimitExceededError(AuthError):
     code = "too_many_attempts"
     public_message = "Too many attempts. Please wait before trying again."
+
+    def __init__(self, retry_at: datetime) -> None:
+        super().__init__(self.public_message)
+        self.retry_at = retry_at
 
 
 class InvalidSessionError(AuthError):

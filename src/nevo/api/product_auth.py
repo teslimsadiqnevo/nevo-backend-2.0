@@ -16,7 +16,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import delete, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from nevo.api.auth import (
@@ -26,6 +26,7 @@ from nevo.api.auth import (
     PrincipalDependency,
     SessionResponse,
     StudentPin,
+    client_ip,
 )
 from nevo.api.consent import ConsentServiceDependency
 from nevo.api.dependencies import DatabaseSession
@@ -51,7 +52,7 @@ from nevo.db.models.account import (
     StudentClassEnrollment,
     User,
 )
-from nevo.db.models.auth import AuthSession
+from nevo.db.models.auth import AuthLoginAttempt, AuthSession
 from nevo.db.models.frontend_support import Notification, PasswordResetToken
 from nevo.db.models.permission import Admin, AdminScopeAssignment, LearningSupportGrant
 from nevo.db.models.product import (
@@ -59,6 +60,7 @@ from nevo.db.models.product import (
     SharedDeviceProfile,
     StudentOnboardingGrant,
 )
+from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.age_bands import band_for_age
 from nevo.domain.accounts.codes import new_school_code
 from nevo.domain.accounts.vocabulary import (
@@ -80,6 +82,47 @@ from nevo.ops.background import spawn
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["product access"])
+
+PIN_CHANGE_MAX_ATTEMPTS = 5
+PIN_CHANGE_WINDOW = timedelta(minutes=15)
+
+
+def _pin_change_digest(prefix: str, value: object) -> str:
+    return hashlib.sha256(f"pin-change:{prefix}:{value}".encode()).hexdigest()
+
+
+async def _pin_change_pause(
+    session: DatabaseSession,
+    identity_digest: str,
+    ip_digest: str,
+) -> tuple[int, datetime | None]:
+    cutoff = datetime.now(UTC) - PIN_CHANGE_WINDOW
+    row = (
+        await session.execute(
+            select(func.count(), func.min(AuthLoginAttempt.occurred_at)).where(
+                AuthLoginAttempt.succeeded.is_(False),
+                AuthLoginAttempt.occurred_at >= cutoff,
+                or_(
+                    AuthLoginAttempt.identity_digest == identity_digest,
+                    AuthLoginAttempt.ip_digest == ip_digest,
+                ),
+            )
+        )
+    ).one()
+    return int(row[0] or 0), row[1]
+
+
+def _pin_change_throttled(retry_at: datetime) -> HTTPException:
+    retry_seconds = max(1, int((retry_at - datetime.now(UTC)).total_seconds()) + 1)
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "code": "too_many_attempts",
+            "message": "Too many attempts. Please wait before trying again.",
+            "retryAt": retry_at.isoformat(),
+        },
+        headers={"Retry-After": str(retry_seconds)},
+    )
 
 
 def get_parent_login_codes(request: Request) -> ParentLoginCodes:
@@ -417,8 +460,7 @@ async def school_by_sign_in_slug(
         "slug": school.school_url_slug,
         "authMethod": school.auth_method,
         "classes": [
-            {"id": item.id, "name": item.name, "yearGroup": item.year_group}
-            for item in classes
+            {"id": item.id, "name": item.name, "yearGroup": item.year_group} for item in classes
         ],
     }
 
@@ -426,6 +468,7 @@ async def school_by_sign_in_slug(
 @router.post(
     "/auth/pin",
     response_model=PinUpdateResponse,
+    responses={429: {"description": "too_many_attempts with retryAt"}},
     # Either, not neither: the handler takes an optional principal and
     # behaves differently signed in, so a flat [] told a client the one
     # thing it must not conclude - that sending a bearer changes nothing.
@@ -436,6 +479,7 @@ async def set_pin(
     principal: OptionalPrincipalDependency,
     session: DatabaseSession,
     auth_service: AuthServiceDependency,
+    request: Request,
     response: Response,
 ) -> dict[str, object]:
     if principal is not None:
@@ -446,9 +490,27 @@ async def set_pin(
                 detail="PIN is for student accounts",
             )
         hasher = credential_hasher()
+        identity_digest = _pin_change_digest("student", user.id)
+        ip_digest = _pin_change_digest("ip", client_ip(request))
+        failures, oldest = await _pin_change_pause(session, identity_digest, ip_digest)
+        if failures >= PIN_CHANGE_MAX_ATTEMPTS and oldest is not None:
+            raise _pin_change_throttled(oldest + PIN_CHANGE_WINDOW)
         if user.pin_hash is not None and not hasher.verify_pin(
             user.pin_hash, payload.current_pin or ""
         ):
+            now = datetime.now(UTC)
+            session.add(
+                AuthLoginAttempt(
+                    identity_digest=identity_digest,
+                    ip_digest=ip_digest,
+                    succeeded=False,
+                    occurred_at=now,
+                )
+            )
+            await session.commit()
+            failures, oldest = await _pin_change_pause(session, identity_digest, ip_digest)
+            if failures >= PIN_CHANGE_MAX_ATTEMPTS and oldest is not None:
+                raise _pin_change_throttled(oldest + PIN_CHANGE_WINDOW)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -461,6 +523,11 @@ async def set_pin(
             )
         user.pin_hash = hasher.hash_pin(payload.pin)
         user.auth_method = AuthMethod.PIN
+        await session.execute(
+            delete(AuthLoginAttempt).where(
+                AuthLoginAttempt.identity_digest == identity_digest,
+            )
+        )
         await session.commit()
         return {
             "status": "updated",
@@ -552,6 +619,36 @@ async def request_pin_reset(
                     title="Student needs a new PIN",
                     description=(f"{student.first_name or 'A student'} requested help signing in."),
                     navigates_to=f"/admin/students/{student.id}",
+                )
+            )
+        assignments = (
+            await session.execute(
+                select(TeacherClassAssignment.teacher_id, TeacherClassAssignment.class_id)
+                .join(
+                    StudentClassEnrollment,
+                    StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
+                )
+                .where(
+                    StudentClassEnrollment.student_id == student.id,
+                    TeacherClassAssignment.removed_at.is_(None),
+                )
+                .order_by(TeacherClassAssignment.class_id)
+            )
+        ).all()
+        notified = set()
+        for teacher_id, class_id in assignments:
+            if teacher_id in notified:
+                continue
+            notified.add(teacher_id)
+            session.add(
+                Notification(
+                    recipient_id=teacher_id,
+                    recipient_role=UserRole.TEACHER.value,
+                    type="pin_reset_requested",
+                    category="account",
+                    title="Student needs a new PIN",
+                    description=f"{student.first_name or 'A student'} requested help signing in.",
+                    navigates_to=f"/teacher/students/{student.id}/clear-pin?class={class_id}",
                 )
             )
         await session.commit()

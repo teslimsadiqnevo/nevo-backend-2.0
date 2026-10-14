@@ -710,6 +710,13 @@ class ClassLearningPulseResponse(CamelResponse):
     engagement: float | None
     comprehension: float | None
     focus: float | None
+    engagement_label: Literal[
+        "Steady", "Mixed", "May benefit from support", "Still gathering a picture"
+    ]
+    comprehension_label: Literal[
+        "Steady", "Mixed", "May benefit from support", "Still gathering a picture"
+    ]
+    focus_label: Literal["Steady", "Mixed", "May benefit from support", "Still gathering a picture"]
 
 
 class TeacherRecentActivityResponse(CamelResponse):

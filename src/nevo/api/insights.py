@@ -1002,22 +1002,37 @@ def _class_pulse(
             ),
             1,
         )
+    engagement = (
+        round(sum(engagement_values) / len(engagement_values), 1)
+        if engagement_values
+        else fallback_engagement
+    )
+    comprehension = (
+        round(sum(comprehension_values) / len(comprehension_values), 1)
+        if comprehension_values
+        else None
+    )
     return {
         "classId": str(school_class.id),
         "className": school_class.name,
         "studentCount": len(student_ids),
-        "engagement": (
-            round(sum(engagement_values) / len(engagement_values), 1)
-            if engagement_values
-            else fallback_engagement
-        ),
-        "comprehension": (
-            round(sum(comprehension_values) / len(comprehension_values), 1)
-            if comprehension_values
-            else None
-        ),
+        "engagement": engagement,
+        "comprehension": comprehension,
         "focus": focus,
+        "engagementLabel": _pulse_label(engagement),
+        "comprehensionLabel": _pulse_label(comprehension),
+        "focusLabel": _pulse_label(focus),
     }
+
+
+def _pulse_label(score: float | None) -> str:
+    if score is None:
+        return "Still gathering a picture"
+    if score >= 75:
+        return "Steady"
+    if score >= 50:
+        return "Mixed"
+    return "May benefit from support"
 
 
 async def _teacher_recent_activity(
@@ -1150,10 +1165,7 @@ def _segment_progress_rows(
         times = [
             seconds
             for event in matching
-            if (
-                seconds := _event_elapsed_seconds(event.event_data)
-            )
-            is not None
+            if (seconds := _event_elapsed_seconds(event.event_data)) is not None
         ]
         average = round(sum(times) / len(times), 1) if times else None
         slowdown_count = (
@@ -1199,11 +1211,7 @@ def _chunk_rereads(events: list[SignalEvent]) -> list[dict[str, object]]:
     counts: dict[str, int] = {}
     elapsed: dict[str, int] = {}
     evidence = sorted(
-        (
-            event
-            for event in events
-            if event.event_type is SignalEventType.READING_CHUNK_VIEWED
-        ),
+        (event for event in events if event.event_type is SignalEventType.READING_CHUNK_VIEWED),
         key=lambda event: event.timestamp,
     )
     for event in evidence:
@@ -1255,10 +1263,7 @@ def _student_session_sections(
         times = [
             seconds
             for event in matching
-            if (
-                seconds := _event_elapsed_seconds(event.event_data)
-            )
-            is not None
+            if (seconds := _event_elapsed_seconds(event.event_data)) is not None
         ]
         elapsed = max(times, default=0.0)
         expected = max(90.0, float(segment.estimated_minutes or 1) * 75.0)

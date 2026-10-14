@@ -195,6 +195,7 @@ class ProgressWrite(BaseModel):
         Field(default=None, alias="resultState")
     )
 
+
 class LessonQuestionAttemptWrite(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -748,8 +749,7 @@ async def lesson_detail(
                 "contentType": item.content_type.value,
                 "title": item.title,
                 "body": item.body,
-                "readingChunks": item.reading_chunks
-                or reading_chunks(item.segment_key, item.body),
+                "readingChunks": item.reading_chunks or reading_chunks(item.segment_key, item.body),
                 "availableModalities": item.available_modalities,
                 "comprehensionCheckpoints": checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
@@ -864,9 +864,7 @@ async def cloud_import_config(
     ):
         record = records.get(provider)
         configured = bool(
-            record
-            and record.enabled
-            and record.connection_status is SsoConnectionStatus.CONNECTED
+            record and record.enabled and record.connection_status is SsoConnectionStatus.CONNECTED
         )
         picker_ready = bool(
             configured
@@ -1321,8 +1319,7 @@ async def save_lesson_progress(
     # A lesson that was never attempted is not the "nothing landed" result.
     # Keep its sitting open at the saved cursor so the next launch resumes it.
     not_attempted = (
-        payload.status is LessonCompletionStatus.COMPLETED
-        and derived_result == "not_attempted"
+        payload.status is LessonCompletionStatus.COMPLETED and derived_result == "not_attempted"
     )
     if not_attempted:
         progress.status = LessonCompletionStatus.IN_PROGRESS
@@ -1331,8 +1328,7 @@ async def save_lesson_progress(
         lesson_session.completion_status = LessonCompletionStatus(payload.status)
     reroute: dict[str, object] | None = None
     nothing_landed = (
-        payload.status is LessonCompletionStatus.COMPLETED
-        and derived_result == "nothing_landed"
+        payload.status is LessonCompletionStatus.COMPLETED and derived_result == "nothing_landed"
     )
     if payload.status == "completed" and not not_attempted:
         progress.completed_at = datetime.now(UTC)
@@ -1579,7 +1575,8 @@ async def student_profile(
     actor = await require_student_access(session, principal, student_id)
     # The deepest per-child view in the product. Held deliberately, by
     # somebody, and refused here rather than by hiding a menu item.
-    await require_learning_support_if_admin(session, actor)
+    if actor.role is not UserRole.TEACHER:
+        await require_learning_support_if_admin(session, actor)
     student = await session.get(User, student_id)
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")

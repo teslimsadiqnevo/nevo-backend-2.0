@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from nevo.access import accessible_lessons_page
+from nevo.access import accessible_lessons_page, accessible_lessons_query
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
@@ -66,6 +66,7 @@ from nevo.api.response_models import (
     LessonDetailResponse,
     LessonSegmentResponse,
     LessonSummaryResponse,
+    LibraryTotalsResponse,
     OutcomesResponse,
     ProfileAliasResponse,
     SchoolHealthResponse,
@@ -81,7 +82,7 @@ from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag, Escalation, InterventionRecommendation
 from nevo.db.models.consent import ParentLink
-from nevo.db.models.content import Lesson, LessonSegment
+from nevo.db.models.content import Lesson, LessonKeyPoint, LessonSegment
 from nevo.db.models.frontend_support import (
     Concept,
     LessonAssignment,
@@ -1083,6 +1084,61 @@ async def concept(concept_id: UUID, session: DatabaseSession) -> ConceptResponse
     return ConceptResponse(
         id=record.id, name=record.name, subject=record.subject, lessonId=record.lesson_id
     )
+
+
+@router.get("/api/content/lessons/totals", response_model=LibraryTotalsResponse, tags=["content"])
+async def library_totals(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    scope: LessonScope | None = None,
+) -> dict[str, int]:
+    """Counts across the caller's full library, independent of page size."""
+    actor = await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    visible = accessible_lessons_query(actor, scope=scope)
+    if visible is None:
+        return {"lessonsUploaded": 0, "liveToClasses": 0, "inReview": 0}
+    live = (
+        select(LessonAssignment.id)
+        .where(
+            LessonAssignment.lesson_id == Lesson.id,
+            LessonAssignment.class_id.is_not(None),
+            LessonAssignment.status != "cancelled",
+            or_(
+                LessonAssignment.available_from.is_(None),
+                LessonAssignment.available_from <= datetime.now(UTC),
+            ),
+        )
+        .exists()
+    )
+    review = or_(
+        select(LessonSegment.id)
+        .where(
+            LessonSegment.lesson_id == Lesson.id,
+            LessonSegment.needs_review.is_(True),
+            LessonSegment.approved_at.is_(None),
+        )
+        .exists(),
+        select(LessonKeyPoint.id)
+        .where(
+            LessonKeyPoint.lesson_id == Lesson.id,
+            LessonKeyPoint.review_state == "unsure",
+        )
+        .exists(),
+    )
+    row = (
+        await session.execute(
+            select(
+                func.count(Lesson.id),
+                func.count(Lesson.id).filter(live),
+                func.count(Lesson.id).filter(review),
+            ).where(Lesson.id.in_(visible.with_only_columns(Lesson.id).order_by(None)))
+        )
+    ).one()
+    return {"lessonsUploaded": row[0], "liveToClasses": row[1], "inReview": row[2]}
 
 
 @router.get(

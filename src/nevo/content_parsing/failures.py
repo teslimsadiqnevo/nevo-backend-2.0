@@ -15,7 +15,48 @@ different things.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from uuid import uuid4
+
+
+class UploadReasonCode(StrEnum):
+    FILE_TOO_LARGE = "file_too_large"
+    UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
+    UNREADABLE_FILE = "unreadable_file"
+    NO_READABLE_TEXT = "no_readable_text"
+    PREPARATION_TIMEOUT = "preparation_timeout"
+    SERVICE_BUSY = "service_busy"
+    SAVE_FAILED = "save_failed"
+    OUTPUT_LIMIT = "output_limit"
+    PARTIAL_READING = "partial_reading"
+    UNKNOWN = "unknown"
+
+
+def failure_code(error: BaseException | str) -> UploadReasonCode:
+    text = (
+        f"{error.__class__.__name__} {error}" if isinstance(error, BaseException) else str(error)
+    ).casefold()
+    rules = (
+        (UploadReasonCode.FILE_TOO_LARGE, ("exceeds 50 mb", "file_too_large")),
+        (UploadReasonCode.UNSUPPORTED_FILE_TYPE, ("upload a txt", "unsupported file")),
+        (
+            UploadReasonCode.UNREADABLE_FILE,
+            ("could not read", "badzipfile", "not a zip", "invalid pdf"),
+        ),
+        (UploadReasonCode.NO_READABLE_TEXT, ("no readable", "no text", "empty", "no lesson text")),
+        (UploadReasonCode.PREPARATION_TIMEOUT, ("timeout", "timed out", "readtimeout")),
+        (UploadReasonCode.SERVICE_BUSY, ("rate limit", "429", "too many requests")),
+        (
+            UploadReasonCode.SAVE_FAILED,
+            ("does not exist", "undefinedcolumn", "undefinedtable", "relation"),
+        ),
+        (UploadReasonCode.OUTPUT_LIMIT, ("max_tokens", "token limit", "truncated")),
+    )
+    for code, markers in rules:
+        if any(marker in text for marker in markers):
+            return code
+    return UploadReasonCode.UNKNOWN
+
 
 #: When we cannot say anything specific. Deliberately not a paraphrase of the
 #: exception: a guess dressed as a diagnosis sends a teacher to fix the wrong

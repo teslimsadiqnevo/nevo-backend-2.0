@@ -15,6 +15,7 @@ from nevo.api.lesson_contracts import (
     TextVariant,
     VisualVariant,
 )
+from nevo.content_parsing.failures import UploadReasonCode
 from nevo.domain.accounts.age_bands import AgeBand
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
@@ -25,6 +26,7 @@ from nevo.domain.accounts.vocabulary import (
     UserRole,
     UserStatus,
 )
+from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory
 from nevo.domain.attention_flags.vocabulary import AttentionFlagType
 from nevo.domain.consent.vocabulary import ParentRightType
 from nevo.domain.intelligence.vocabulary import (
@@ -49,6 +51,37 @@ def _camel(value: str) -> str:
 
 class CamelResponse(BaseModel):
     model_config = ConfigDict(alias_generator=_camel, populate_by_name=True)
+
+
+class LibraryTotalsResponse(CamelResponse):
+    lessons_uploaded: int
+    live_to_classes: int
+    in_review: int
+
+
+class UploadReasonCatalogueResponse(CamelResponse):
+    codes: list[UploadReasonCode]
+    fallback_code: Literal["unknown"] = "unknown"
+
+
+class HelpCategoryCatalogueResponse(CamelResponse):
+    codes: list[AskNevoQuestionCategory]
+    fallback_code: Literal["general"] = "general"
+
+
+class PulseBandResponse(CamelResponse):
+    code: Literal["support", "mixed", "steady"]
+    minimum_inclusive: float
+    maximum: float
+    maximum_inclusive: bool
+    label: str
+
+
+class PulseThresholdsResponse(CamelResponse):
+    score_minimum: Literal[0] = 0
+    score_maximum: Literal[100] = 100
+    bands: list[PulseBandResponse]
+    no_data_label: str
 
 
 def renderable_review_reasons(value: object) -> object:
@@ -983,6 +1016,7 @@ class BatchUploadItemResponse(CamelResponse):
     stage: UploadStage | None = None
     #: Why this file was not accepted. Populated only when accepted is false.
     error: str | None = None
+    reason_code: UploadReasonCode | None = None
 
 
 class BatchUploadResponse(CamelResponse):
@@ -1032,6 +1066,7 @@ class UploadStatusResponse(CamelResponse):
     #: parse failed. Where we cannot say anything specific it says so plainly
     #: rather than paraphrasing the exception.
     failure_reason: str | None = None
+    reason_code: UploadReasonCode | None = None
     #: The reference a teacher can quote for a failed parse - the same twelve
     #: hex characters an unhandled error carries, and in the log beside it.
     incident_id: str | None = None

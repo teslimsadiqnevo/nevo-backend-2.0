@@ -65,6 +65,7 @@ from nevo.api.response_models import (
     TeacherDashboardResponse,
     UploadConfirmedResponse,
     UploadCreatedResponse,
+    UploadReasonCatalogueResponse,
     UploadRetryResponse,
     UploadStatusResponse,
     UploadStructureDocument,
@@ -72,7 +73,12 @@ from nevo.api.response_models import (
 )
 from nevo.content_parsing.chunks import reading_chunks
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
-from nevo.content_parsing.failures import failure_reason, new_incident
+from nevo.content_parsing.failures import (
+    UploadReasonCode,
+    failure_code,
+    failure_reason,
+    new_incident,
+)
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag, InterventionRecommendation
@@ -2034,7 +2040,12 @@ async def _ingest_one_file(
     content = await file.read()
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Lesson file exceeds 50 MB")
-    source_text = _extract_text(filename, content)
+    try:
+        source_text = _extract_text(filename, content)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="Could not read lesson file") from error
     if not source_text.strip():
         raise HTTPException(status_code=400, detail="No readable lesson text was found")
     result = await staged_upload(
@@ -2111,6 +2122,7 @@ async def staged_batch_upload(
                     "filename": filename,
                     "accepted": False,
                     "error": str(error.detail),
+                    "reasonCode": failure_code(str(error.detail)),
                 }
             )
         else:
@@ -2248,6 +2260,24 @@ def _title_of(job: UploadJob, titles: dict[UUID, str | None]) -> str | None:
     return titles.get(lesson_id) if lesson_id is not None else None
 
 
+@router.get("/uploads/reason-codes", response_model=UploadReasonCatalogueResponse)
+async def upload_reason_codes(principal: PrincipalDependency, session: DatabaseSession):
+    await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    return {"codes": list(UploadReasonCode), "fallbackCode": "unknown"}
+
+
+def _upload_reason_code(job: UploadJob) -> UploadReasonCode | None:
+    if job.status == "failed":
+        return failure_code(job.error_message or job.failure_reason or "")
+    if _failed_pages(job.structure):
+        return UploadReasonCode.PARTIAL_READING
+    return None
+
+
 @router.get("/uploads", response_model=list[UploadStatusResponse])
 async def upload_list(
     principal: PrincipalDependency,
@@ -2298,6 +2328,7 @@ async def upload_list(
             "structure": job.structure,
             "error": job.error_message,
             "failureReason": job.failure_reason,
+            "reasonCode": _upload_reason_code(job),
             "incidentId": job.incident_id,
         }
         for job in jobs
@@ -2347,6 +2378,7 @@ async def upload_status(
         "structure": job.structure,
         "error": job.error_message,
         "failureReason": job.failure_reason,
+        "reasonCode": _upload_reason_code(job),
         "incidentId": job.incident_id,
     }
 

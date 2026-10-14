@@ -19,8 +19,10 @@ from nevo.api.response_models import (
     ConversationEvidenceResponse,
     EngineConfig,
     EngineConfigResponse,
+    HelpCategoryCatalogueResponse,
     LessonClassProgressResponse,
     MisconceptionResponse,
+    PulseThresholdsResponse,
     SessionStateResponse,
     StudentProgressResponse,
     StudentSessionDetailResponse,
@@ -40,6 +42,7 @@ from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import ConsentStatus, UserRole
 from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory
 from nevo.domain.consent.vocabulary import REQUIRED_LEARNING_CONSENT
+from nevo.domain.intelligence.pulse import PULSE_BANDS, PULSE_NO_DATA_LABEL, pulse_label
 from nevo.domain.intelligence.vocabulary import AccommodationType, ClassInsightState
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 
@@ -70,6 +73,38 @@ ADAPTATION_EVENTS = {
     SignalEventType.MODALITY_SWITCH_OUTCOME,
     SignalEventType.ADAPTATION_SUPPRESSED,
 }
+
+
+@router.get("/intelligence/pulse-thresholds", response_model=PulseThresholdsResponse)
+async def pulse_thresholds(principal: PrincipalDependency, session: DatabaseSession):
+    await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    return {
+        "bands": [
+            {
+                "code": code,
+                "minimumInclusive": minimum,
+                "maximum": maximum,
+                "maximumInclusive": maximum == 100,
+                "label": label,
+            }
+            for code, minimum, maximum, label in PULSE_BANDS
+        ],
+        "noDataLabel": PULSE_NO_DATA_LABEL,
+    }
+
+
+@router.get("/intelligence/help-categories", response_model=HelpCategoryCatalogueResponse)
+async def help_categories(principal: PrincipalDependency, session: DatabaseSession):
+    await require_school_actor(
+        session,
+        principal,
+        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+    )
+    return {"codes": list(AskNevoQuestionCategory), "fallbackCode": "general"}
 
 
 @router.get("/v1/teachers/me/home", response_model=TeacherHomeResponse)
@@ -1026,13 +1061,7 @@ def _class_pulse(
 
 
 def _pulse_label(score: float | None) -> str:
-    if score is None:
-        return "Still gathering a picture"
-    if score >= 75:
-        return "Steady"
-    if score >= 50:
-        return "Mixed"
-    return "May benefit from support"
+    return pulse_label(score)
 
 
 async def _teacher_recent_activity(

@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import School, User
 from nevo.db.models.ask_nevo import AskNevoThread
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
+from nevo.domain.ask_nevo.vocabulary import AskNevoRole
 from nevo.retention.anonymisation import anonymise_student
 
 DEFAULT_BATCH_SIZE = 200
@@ -73,6 +74,14 @@ class RetentionService:
         )
 
     async def _sweep_chats(self, now: datetime) -> int:
+        removed = 0
+        while True:
+            batch = await self._sweep_chat_batch(now)
+            removed += batch
+            if batch < DEFAULT_BATCH_SIZE:
+                return removed
+
+    async def _sweep_chat_batch(self, now: datetime) -> int:
         """Remove Ask Nevo conversations past their school's window.
 
         A chat holds a child's own words, which is about as sensitive as this
@@ -88,6 +97,10 @@ class RetentionService:
                     .where(
                         or_(
                             AskNevoThread.deleted_at.is_not(None),
+                            and_(
+                                AskNevoThread.role == AskNevoRole.TEACHER,
+                                AskNevoThread.created_at <= now - timedelta(days=90),
+                            ),
                             AskNevoThread.last_message_at
                             < now
                             - func.make_interval(
@@ -102,9 +115,7 @@ class RetentionService:
                 )
             )
             if expired:
-                await session.execute(
-                    delete(AskNevoThread).where(AskNevoThread.id.in_(expired))
-                )
+                await session.execute(delete(AskNevoThread).where(AskNevoThread.id.in_(expired)))
         return len(expired)
 
     @staticmethod

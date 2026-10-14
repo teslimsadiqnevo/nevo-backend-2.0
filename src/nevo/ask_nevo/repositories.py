@@ -1,7 +1,7 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,6 +33,15 @@ from nevo.domain.ask_nevo.vocabulary import (
 )
 
 
+def _teacher_thread_expired(thread: AskNevoThread, *, now: datetime | None = None) -> bool:
+    if thread.role != AskNevoRole.TEACHER:
+        return False
+    created = thread.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return created <= (now or datetime.now(UTC)) - timedelta(days=90)
+
+
 class SqlAlchemyAskNevoRepository:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
@@ -55,9 +64,7 @@ class SqlAlchemyAskNevoRepository:
             if student_id is not None:
                 student = await session.get(User, student_id)
                 profile = await session.scalar(
-                    select(LearnerProfile).where(
-                        LearnerProfile.learner_id == student_id
-                    )
+                    select(LearnerProfile).where(LearnerProfile.learner_id == student_id)
                 )
                 flags = (
                     await session.scalars(
@@ -116,8 +123,7 @@ class SqlAlchemyAskNevoRepository:
                 assignments = (
                     await session.scalars(
                         select(TeacherClassAssignment).where(
-                            TeacherClassAssignment.class_id
-                            == request.context_ids.class_id,
+                            TeacherClassAssignment.class_id == request.context_ids.class_id,
                             TeacherClassAssignment.removed_at.is_(None),
                         )
                     )
@@ -237,6 +243,7 @@ class SqlAlchemyAskNevoRepository:
                 thread is None
                 or thread.actor_user_id != actor_user_id
                 or thread.deleted_at is not None
+                or _teacher_thread_expired(thread)
             ):
                 return []
             messages = list(
@@ -284,7 +291,11 @@ class SqlAlchemyAskNevoRepository:
                 )
                 session.add(thread)
                 await session.flush()
-            elif thread.actor_user_id != actor_user_id or thread.deleted_at is not None:
+            elif (
+                thread.actor_user_id != actor_user_id
+                or thread.deleted_at is not None
+                or _teacher_thread_expired(thread, now=now)
+            ):
                 # A thread id the asker does not own, or one they deleted.
                 # Neither is a conversation to append to.
                 return
@@ -325,9 +336,13 @@ class SqlAlchemyAskNevoRepository:
                     .where(
                         AskNevoThread.actor_user_id == actor_user_id,
                         AskNevoThread.deleted_at.is_(None),
+                        or_(
+                            AskNevoThread.role != AskNevoRole.TEACHER,
+                            AskNevoThread.created_at > datetime.now(UTC) - timedelta(days=90),
+                        ),
                     )
                     .order_by(AskNevoThread.last_message_at.desc())
-                    .limit(limit)
+                    .limit(max(1, min(limit, 50)))
                 )
             )
         return [
@@ -360,6 +375,7 @@ class SqlAlchemyAskNevoRepository:
                 thread is None
                 or thread.actor_user_id != actor_user_id
                 or thread.deleted_at is not None
+                or _teacher_thread_expired(thread)
             ):
                 return None
             messages = list(
@@ -422,7 +438,6 @@ class SqlAlchemyAskNevoRepository:
                 .values(response_helpful=helpful)
             )
 
-
     async def build_toolset(
         self,
         *,
@@ -458,8 +473,6 @@ class SqlAlchemyAskNevoRepository:
                 )
 
         return schemas_for(role), execute, directory
-
-
 
 
 def _context_ids_payload(request: AskNevoRequest) -> dict[str, str | None]:
@@ -509,7 +522,8 @@ def _profile_payload(profile: LearnerProfile | None) -> dict[str, object | None]
 
 def _thread_title(question: str) -> str:
     """What a list of past chats shows: the opening question, trimmed."""
-    cleaned = " ".join(question.split()).strip()
+    first_line = next((line for line in question.splitlines() if line.strip()), "")
+    cleaned = " ".join(first_line.split()).strip()
     if len(cleaned) <= 160:
         return cleaned or "New chat"
     return cleaned[:157].rstrip() + "..."

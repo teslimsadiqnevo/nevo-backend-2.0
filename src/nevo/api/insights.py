@@ -1236,7 +1236,7 @@ def _segment_progress_rows(
 def _chunk_rereads(events: list[SignalEvent]) -> list[dict[str, object]]:
     """Count only re-entry after a chunk was passed, independently per learner."""
 
-    passed: set[tuple[UUID, str]] = set()
+    passed: set[tuple[UUID, UUID, str, str]] = set()
     counts: dict[str, int] = {}
     elapsed: dict[str, int] = {}
     evidence = sorted(
@@ -1247,12 +1247,18 @@ def _chunk_rereads(events: list[SignalEvent]) -> list[dict[str, object]]:
         chunk_id = str(event.event_data.get("chunkId") or "")
         if not chunk_id:
             continue
-        key = (event.student_id, chunk_id)
+        key = (
+            event.student_id,
+            event.session_id,
+            chunk_id,
+            str(event.event_data.get("formFactor") or ""),
+        )
         action = event.event_data.get("action")
         if action == "passed":
             passed.add(key)
         elif action == "entered" and key in passed:
             counts[chunk_id] = counts.get(chunk_id, 0) + 1
+            passed.remove(key)
         duration = event.event_data.get("durationMs")
         if isinstance(duration, int | float) and not isinstance(duration, bool):
             elapsed[chunk_id] = elapsed.get(chunk_id, 0) + max(0, int(duration))

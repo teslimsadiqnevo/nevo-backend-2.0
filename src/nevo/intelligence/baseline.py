@@ -26,11 +26,19 @@ def build_baseline_profile(
         return fmean(candidates) if candidates else default
 
     accuracy = _normalise_ratio(
-        average("accuracy", "comprehension_accuracy", "correct_ratio", default=0.65)
+        average(
+            "accuracy", "comprehension_accuracy", "correct_ratio", "domain_accuracy", default=0.65
+        )
     )
     response_ms = max(
         100.0,
-        average("response_time_ms", "mean_response_time_ms", "latency_ms", default=2500.0),
+        average(
+            "response_time_ms",
+            "mean_response_time_ms",
+            "latency_ms",
+            "ps_median_response_ms",
+            default=2500.0,
+        ),
     )
     reading_wpm = _clamp(average("reading_wpm", "words_per_minute", default=120.0), 30.0, 350.0)
     attention_minutes = _clamp(

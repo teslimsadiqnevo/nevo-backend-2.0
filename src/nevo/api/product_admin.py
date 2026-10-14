@@ -323,9 +323,7 @@ async def _require_senior_school_admin(
         principal,
         roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
     )
-    level = await session.scalar(
-        select(Admin.access_level).where(Admin.user_id == user.id)
-    )
+    level = await session.scalar(select(Admin.access_level).where(Admin.user_id == user.id))
     if level is not AdminAccessLevel.SENIOR:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -343,6 +341,19 @@ async def school_detail(
     session: DatabaseSession,
 ) -> dict[str, object]:
     user = await require_school_actor(session, principal)
+    school = await session.get(School, user.school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    return _school_payload(school)
+
+
+@router.get(
+    "/settings/school",
+    response_model=SchoolResponse,
+    responses={403: {"description": "senior_admin_required"}},
+)
+async def school_settings(principal: PrincipalDependency, session: DatabaseSession):
+    user = await _require_senior_school_admin(session, principal)
     school = await session.get(School, user.school_id)
     if school is None:
         raise HTTPException(status_code=404, detail="School not found")
@@ -561,9 +572,10 @@ async def current_dpa_agreement(
     profile = school.profile if isinstance(school.profile, dict) else {}
     raw_address = profile.get("address")
     if isinstance(raw_address, dict):
-        address = ", ".join(
-            str(value).strip() for value in raw_address.values() if str(value).strip()
-        ) or None
+        address = (
+            ", ".join(str(value).strip() for value in raw_address.values() if str(value).strip())
+            or None
+        )
     else:
         address = str(raw_address).strip() if raw_address else None
     return DpaAgreementResponse(
@@ -1006,9 +1018,7 @@ async def list_teachers(
             func.lower(func.concat(User.first_name, " ", User.last_name)).like(value)
         )
     teachers = (await session.execute(query.order_by(User.first_name))).all()
-    support = await _learning_support_metadata(
-        session, [item.id for item, _, _ in teachers]
-    )
+    support = await _learning_support_metadata(session, [item.id for item, _, _ in teachers])
     return [
         {
             "id": str(item.id),

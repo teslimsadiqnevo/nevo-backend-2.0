@@ -80,9 +80,8 @@ class StudentEntryState(CamelResponse):
     #: existing clients do not have to guess whether a null PIN is first use
     #: or teacher-authorised recovery.
     pin_state: Literal["not_set", "cleared", "set"]
-    #: True while the school and the parent disagree about the child's date
-    #: of birth. The child cannot start, and there is nothing for them to do
-    #: about it, so the screen says the school is checking something.
+    #: Compatibility field, always false. A date difference is a roster note
+    #: and never blocks a child or changes the school's operative date.
     age_check_pending: bool = False
 
 

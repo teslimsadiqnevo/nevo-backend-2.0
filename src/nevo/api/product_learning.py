@@ -2518,16 +2518,15 @@ def _upload_structure(parsed) -> dict[str, object]:
     several lessons. ``lessonId`` and ``modules`` mirror the first lesson so
     single-lesson clients written against the old shape keep working.
     """
-    segment_ids = [str(item.segment_key) for item in parsed.segments]
     modules = [
         {
-            "title": f"Module {index // 5 + 1}",
-            "sequenceOrder": index // 5 + 1,
-            "segmentIds": segment_ids[index : index + 5],
-            "recap": None,
-            "preview": None,
+            "title": module.title,
+            "sequenceOrder": position,
+            "segmentIds": list(module.segment_keys),
+            "recap": module.recap,
+            "preview": module.preview,
         }
-        for index in range(0, len(segment_ids), 5)
+        for position, module in enumerate(getattr(parsed, "modules", ()), start=1)
     ]
     lessons = [
         {
@@ -2535,6 +2534,9 @@ def _upload_structure(parsed) -> dict[str, object]:
             "title": parsed.title,
             "sequenceOrder": 1,
             "modules": modules,
+            "segmentIds": [segment.segment_key for segment in parsed.segments]
+            if not modules
+            else [],
         }
     ]
     segment_rows = [
@@ -2663,8 +2665,11 @@ async def confirm_upload(
 
         claimed = [
             segments[key]
-            for module in modules
-            for key in module.get("segmentIds", [])
+            for key in (
+                [key for module in modules for key in module.get("segmentIds", [])]
+                if modules
+                else entry.get("segmentIds") or (list(segments) if len(entries) == 1 else [])
+            )
             if isinstance(key, str) and key in segments
         ]
         for position, segment in enumerate(claimed, start=1):
@@ -2677,20 +2682,23 @@ async def confirm_upload(
         lesson.estimated_minutes = sum(item.estimated_minutes for item in claimed)
 
         for module in modules:
-            session.add(
-                LessonModule(
-                    lesson_id=lesson.id,
-                    title=str(module.get("title") or "Module"),
-                    recap=module.get("recap"),
-                    preview=module.get("preview"),
-                    sequence_order=int(module.get("sequenceOrder") or 1),
-                    segment_ids=(
-                        list(segment_ids)
-                        if isinstance((segment_ids := module.get("segmentIds")), list)
-                        else []
-                    ),
-                )
+            module_row = LessonModule(
+                id=uuid4(),
+                lesson_id=lesson.id,
+                title=str(module.get("title") or "Module"),
+                recap=module.get("recap"),
+                preview=module.get("preview"),
+                sequence_order=int(module.get("sequenceOrder") or 1),
+                segment_ids=(
+                    list(segment_ids)
+                    if isinstance((segment_ids := module.get("segmentIds")), list)
+                    else []
+                ),
             )
+            session.add(module_row)
+            for key in module_row.segment_ids:
+                if key in segments:
+                    segments[key].module_id = module_row.id
 
     job.status = "confirmed"
     job.stage = UploadStage.READY_TO_ASSIGN.value

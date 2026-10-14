@@ -328,9 +328,7 @@ class CalculationStep(BaseModel):
                 )
             )
         result_target_id = str(
-            item.get("resultTargetId")
-            or item.get("result_target_id")
-            or f"{step_id}-result"
+            item.get("resultTargetId") or item.get("result_target_id") or f"{step_id}-result"
         )
         item["resultTargetId"] = result_target_id
         if "equationTokens" not in item and "equation_tokens" not in item:
@@ -350,8 +348,7 @@ class CalculationStep(BaseModel):
             item["tapCount"] = numeric[0] if numeric else None
         if "highlights" not in item:
             item["highlights"] = [
-                {"target": str(target), "role": "active"}
-                for target in item.get("targets", [])
+                {"target": str(target), "role": "active"} for target in item.get("targets", [])
             ]
         highlights = list(item.get("highlights") or [])
         if not any(
@@ -498,6 +495,7 @@ class CalculationScaffold(BaseModel):
 
 
 class CalculationVariant(BaseModel):
+    language_support_allowed: Literal[False] = Field(default=False, alias="languageSupportAllowed")
     model_config = ConfigDict(populate_by_name=True)
 
     type: Literal["co_construction"] = "co_construction"

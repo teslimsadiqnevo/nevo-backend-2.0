@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from nevo.api.auth import SessionResponse
 from nevo.api.lesson_contracts import (
@@ -534,6 +534,7 @@ class LessonModuleResponse(CamelResponse):
     preview: str | None
     sequence_order: int
     segment_ids: list[str]
+    segments: list[LessonSegmentResponse] = Field(default_factory=list)
 
 
 class LessonClassResponse(CamelResponse):
@@ -565,6 +566,16 @@ class LessonDetailResponse(LessonSummaryResponse):
     #: those with somebody assigned.
     classes: list[LessonClassResponse] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def attach_module_segments(self):
+        by_key = {}
+        for segment in self.segments:
+            by_key[str(segment.id)] = segment
+            by_key[segment.segment_key] = segment
+        for module in self.modules:
+            module.segments = [by_key[key] for key in module.segment_ids if key in by_key]
+        return self
+
 
 class AssignmentResponse(CamelResponse):
     id: UUID
@@ -575,6 +586,7 @@ class AssignmentResponse(CamelResponse):
     due_at: datetime | None
     available_from: datetime | None
     note: str | None = None
+    note_authored_by: Literal["person"] = "person"
     cancellation_reason: str | None = None
     recall_withdrawn: bool = False
     #: The teacher who set this, by name. The note reaches the child
@@ -1096,6 +1108,9 @@ class UploadLessonDocument(CamelResponse):
     title: str
     sequence_order: int
     modules: list[UploadModuleDocument] = Field(default_factory=list)
+    segment_ids: list[str] = Field(
+        default_factory=list, description="Ordered segment keys for a lesson without modules."
+    )
 
 
 class UploadStructureDocument(CamelResponse):

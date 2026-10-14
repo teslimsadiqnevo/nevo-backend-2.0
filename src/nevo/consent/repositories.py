@@ -823,14 +823,7 @@ class SqlAlchemyConsentRepository:
         parent_date_of_birth: date | None,
         now: datetime,
     ) -> AgeCheckState:
-        """Compare the parent's date of birth with the school's.
-
-        Two sources rather than one, because a date of birth decides whether
-        a child should be offered the product at all, and the school's roster
-        alone is one person's typing. A disagreement is an exception for a
-        person to settle with both sides - never resolved by asking the child,
-        and never resolved silently by preferring one source.
-        """
+        """Record a difference; only a school roster correction clears it."""
 
         student = await session.get(User, student_id)
         school_date = student.date_of_birth if student else None
@@ -838,13 +831,14 @@ class SqlAlchemyConsentRepository:
         if check is None:
             check = AgeCheck(school_id=school_id, student_id=student_id)
             session.add(check)
+        already_differed = check.state is AgeCheckState.MISMATCH
         check.school_date_of_birth = school_date
         check.parent_date_of_birth = parent_date_of_birth
-        if parent_date_of_birth is None:
+        if already_differed:
+            check.state = AgeCheckState.MISMATCH
+        elif parent_date_of_birth is None:
             check.state = AgeCheckState.AWAITING_PARENT
         elif school_date is None or school_date != parent_date_of_birth:
-            # A roster with no date of birth is not agreement, it is a second
-            # missing source. Both cases need a person.
             check.state = AgeCheckState.MISMATCH
         else:
             check.state = AgeCheckState.MATCHED

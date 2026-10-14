@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.api.lesson_contracts import checkpoint_payloads
@@ -24,6 +24,7 @@ from nevo.db.models.content import (
 )
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.probe import ProbeItem
+from nevo.db.models.product import LessonModule
 from nevo.db.models.subject import SchoolSubject
 from nevo.domain.accounts.vocabulary import UserStatus
 from nevo.domain.intelligence.vocabulary import (
@@ -452,6 +453,26 @@ class SqlAlchemyContentParsingRepository:
                 session.add(row)
                 await session.flush()
                 _add_key_points(session, row)
+            await session.execute(delete(LessonModule).where(LessonModule.lesson_id == lesson_id))
+            for position, module in enumerate(parsed.modules, start=1):
+                module_row = LessonModule(
+                    lesson_id=lesson_id,
+                    title=module.title,
+                    sequence_order=position,
+                    segment_ids=list(module.segment_keys),
+                    recap=module.recap,
+                    preview=module.preview,
+                )
+                session.add(module_row)
+                await session.flush()
+                await session.execute(
+                    update(LessonSegment)
+                    .where(
+                        LessonSegment.lesson_id == lesson_id,
+                        LessonSegment.segment_key.in_(module.segment_keys),
+                    )
+                    .values(module_id=module_row.id)
+                )
         return StoredParsedLesson(
             lesson_id=lesson_id,
             parse_run_id=parse_run_id,
@@ -465,6 +486,7 @@ class SqlAlchemyContentParsingRepository:
             assessment=parsed.assessment,
             review_notes=parsed.review_notes,
             segments=parsed.segments,
+            modules=parsed.modules,
         )
 
 

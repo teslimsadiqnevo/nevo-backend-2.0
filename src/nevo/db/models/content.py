@@ -291,6 +291,12 @@ class LessonSegment(Base):
         nullable=False,
     )
     segment_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    module_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("lesson_modules.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     content_type: Mapped[LessonContentType] = mapped_column(
         lesson_content_type_enum,
         nullable=False,

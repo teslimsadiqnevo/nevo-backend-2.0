@@ -22,6 +22,7 @@ from nevo.content_parsing.depth import (
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
+    ParsedLessonModule,
     ParsedLessonSegment,
     ParseRunState,
     SourcePage,
@@ -232,6 +233,7 @@ class ContentParsingService:
         lose a lesson.
         """
         source = _source_for_prompt(request)
+        modules = []
         await _report(on_stage, UploadStage.READING_DOCUMENT)
         chunks = _chunks(source)
         await _report(on_stage, UploadStage.FINDING_SECTIONS)
@@ -263,12 +265,9 @@ class ContentParsingService:
                 )
                 ai_call_count += 1
                 payload = _json_payload(result.text)
-                segments.extend(
-                    _segments_from_payload_list(
-                        payload,
-                        sequence_offset=len(segments),
-                    )
-                )
+                chunk_segments = _segments_from_payload_list(payload, sequence_offset=len(segments))
+                modules.extend(_modules_from_payload(payload, chunk_segments))
+                segments.extend(chunk_segments)
                 # The lesson's ending comes from whichever chunk wrote one.
                 # A multi-chunk source closes once, not once per chunk.
                 recap = recap or _optional_string(payload.get("recap"))
@@ -331,6 +330,7 @@ class ContentParsingService:
             assessment=tuple(assessment),
             gemini_call_count=ai_call_count,
             chunk_count=len(chunks),
+            modules=tuple(modules),
         )
         return await self._repository.store(
             request=request,
@@ -784,6 +784,43 @@ def _json_payload(text: str) -> dict[str, object]:
     return payload
 
 
+def _modules_from_payload(payload, segments) -> list[ParsedLessonModule]:
+    available = {segment.segment_key for segment in segments}
+    used = set()
+    modules = []
+    raw_modules = payload.get("modules")
+    for item in raw_modules if isinstance(raw_modules, list) else []:
+        if not isinstance(item, dict):
+            continue
+        keys = item.get("segmentKeys")
+        if not isinstance(keys, list):
+            indices = item.get("segment_indices") or []
+            keys = [
+                segments[index].segment_key
+                for index in indices
+                if isinstance(index, int) and 0 <= index < len(segments)
+            ]
+        keys = [str(key) for key in keys]
+        title = str(item.get("title") or "").strip()
+        if (
+            not title
+            or not keys
+            or len(keys) != len(set(keys))
+            or any(key not in available or key in used for key in keys)
+        ):
+            continue
+        used.update(keys)
+        modules.append(
+            ParsedLessonModule(
+                title=title,
+                segment_keys=tuple(keys),
+                recap=_optional_string(item.get("recap")),
+                preview=_optional_string(item.get("preview")),
+            )
+        )
+    return modules if used == available else []
+
+
 def _segment_from_payload(
     item: dict[str, object],
     *,
@@ -823,7 +860,7 @@ def _segment_from_payload(
         body=body,
         available_modalities=modalities,
         comprehension_checkpoints=tuple(checkpoints),
-        text_variant=_text_variant(item.get("text_variant"), body),
+        text_variant=_text_variant(item.get("text_variant"), body, authored_by="nevo"),
         visual_variant=_dict_or_none(item.get("visual_variant")),
         audio_variant=_audio_variant(item.get("audio_variant"), body),
         interactive_variant=_interactive_variant(item.get("interactive_variant"), body),
@@ -918,6 +955,16 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
         )
         needs_review = True
         reasons.append("audio_generation_failed")
+    if (
+        segment.content_type is not LessonContentType.CALCULATION
+        and ContentModality.INTERACTIVE in modalities
+        and segment.interactive_variant is None
+    ):
+        modalities = tuple(
+            modality for modality in modalities if modality is not ContentModality.INTERACTIVE
+        )
+        needs_review = True
+        reasons.append("interactive_activity_missing")
     if segment.content_type is LessonContentType.CALCULATION:
         modalities = tuple(
             modality
@@ -1361,7 +1408,7 @@ def _audio_variant(value: object, body: str) -> dict[str, object] | None:
     return _placeholder_audio_variant(body)
 
 
-def _text_variant(value: object, body: str) -> dict[str, object]:
+def _text_variant(value: object, body: str, *, authored_by: str = "person") -> dict[str, object]:
     """The text modality. Its body is the segment's body, always.
 
     These were two independently settable strings. The model could return a
@@ -1429,7 +1476,7 @@ def _text_variant(value: object, body: str) -> dict[str, object]:
         "keyPoints": points[:6],
         "keyTerms": key_terms[:12],
         "equationCallouts": equations[:8],
-        "authoredBy": str(source.get("authoredBy") or "person"),
+        "authoredBy": authored_by,
         "keyPointAuthorship": ["nevo" for _ in points[:6]],
     }
 
@@ -1449,11 +1496,8 @@ def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
                 step_id = f"step-{position}"
             if instruction:
                 steps.append({"id": step_id[:120], "instruction": instruction[:500]})
-    if not steps:
-        legacy_instruction = str(
-            value.get("instructions") or value.get("prompt") or body[:500]
-        ).strip()
-        steps = [{"id": "step-1", "instruction": legacy_instruction}]
+    if not steps or not str(value.get("outcome") or "").strip():
+        return None
     return {
         "type": "activity",
         "title": str(value.get("title") or "Try this activity")[:160],
@@ -1461,9 +1505,7 @@ def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
         if isinstance(value.get("materials"), list)
         else [],
         "steps": steps[:12],
-        "outcome": str(
-            value.get("outcome") or "You have completed the activity."
-        )[:500],
+        "outcome": str(value.get("outcome") or "You have completed the activity.")[:500],
     }
 
 

@@ -21,7 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
@@ -411,7 +411,7 @@ BaselineDimension = Literal[
     "domain",
     "motor_speed",
 ]
-BaselineFormFactor = Literal["tablet_touch", "desktop_cursor", "mobile_touch"]
+BaselineFormFactor = Literal["tablet_touch", "desktop_cursor", "phone_touch", "mobile_touch"]
 
 
 class BaselineTrial(BaseModel):
@@ -461,13 +461,18 @@ class BaselineTrialsRequest(BaseModel):
     )
     #: Eight reach-and-tap timings in order. The first two are practice; the
     #: median of the remaining scored samples is stored server-side.
-    motor_samples_ms: list[int] = Field(
+    motor_samples_ms: list[Annotated[int, Field(ge=0, strict=True)]] = Field(
         default_factory=list,
         alias="motorSamplesMs",
         max_length=8,
     )
     motor_miss_count: int = Field(default=0, alias="motorMissCount", ge=0, le=8)
     trials: list[BaselineTrial] = Field(min_length=1, max_length=600)
+
+    @field_validator("form_factor")
+    @classmethod
+    def canonical_form_factor(cls, value):
+        return "phone_touch" if value == "mobile_touch" else value
 
 
 class BaselineSubmitResponse(BaseModel):
@@ -1983,20 +1988,17 @@ async def submit_baseline_trials(
                 "responseTimeMs": trial.response_time_ms,
             }
         )
-    features = reduce_trials(marked)
-    baseline_profile, engine_config = build_baseline_profile(
-        session_id=payload.session_id,
-        features=features,
+    user = await session.get(User, principal.user_id)
+    held_baselines = (
+        dict((user.baseline_profile or {}).get("motor_baselines") or {}) if user else {}
     )
-    baseline_profile["motor_step_skipped"] = payload.motor_step_skipped
-    if payload.age_band is not None:
-        baseline_profile["age_band"] = payload.age_band.value
-    if payload.form_factor is not None:
-        baseline_profile["form_factor"] = payload.form_factor
+    if "mobile_touch" in held_baselines and "phone_touch" not in held_baselines:
+        held_baselines["phone_touch"] = held_baselines.pop("mobile_touch")
+    measurement = None
     if payload.motor_samples_ms:
         if payload.form_factor is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=422,
                 detail={
                     "code": "motor_form_factor_required",
                     "message": "Send the form factor with motor timings.",
@@ -2005,20 +2007,40 @@ async def submit_baseline_trials(
         scored = payload.motor_samples_ms[2:]
         if scored:
             measurement = {
-                "motorBaselineMs": int(statistics.median(scored)),
+                "motorBaselineMs": statistics.median(scored),
                 "scoredSampleCount": len(scored),
                 "missCount": payload.motor_miss_count,
                 "measurement": "reach_and_tap",
                 "latencyStatus": "corrected",
             }
-            baselines = dict(baseline_profile.get("motor_baselines") or {})
-            baselines[payload.form_factor] = measurement
-            baseline_profile["motor_baselines"] = baselines
-            baseline_profile["motor_baseline_ms"] = measurement["motorBaselineMs"]
-            baseline_profile["motor_scored_sample_count"] = len(scored)
-            baseline_profile["motor_miss_count"] = payload.motor_miss_count
-    elif not payload.motor_step_skipped:
-        baseline_profile["motor_latency_status"] = "uncorrected_no_baseline"
+            held_baselines[payload.form_factor] = measurement
+    selected_motor = held_baselines.get(payload.form_factor) if payload.form_factor else None
+    if selected_motor:
+        for trial in marked:
+            if trial["responseTimeMs"] is not None:
+                trial["responseTimeMs"] = max(
+                    0, trial["responseTimeMs"] - selected_motor["motorBaselineMs"]
+                )
+    features = reduce_trials(marked)
+    baseline_profile, engine_config = build_baseline_profile(
+        session_id=payload.session_id,
+        features=features,
+    )
+    baseline_profile["motor_step_skipped"] = payload.motor_step_skipped
+    baseline_profile["motor_baselines"] = held_baselines
+    baseline_profile["motor_latency_status"] = (
+        "corrected" if selected_motor else "uncorrected_no_baseline"
+    )
+    if selected_motor:
+        baseline_profile["motor_baseline_ms"] = selected_motor["motorBaselineMs"]
+        baseline_profile["motor_scored_sample_count"] = selected_motor["scoredSampleCount"]
+        baseline_profile["motor_miss_count"] = selected_motor["missCount"]
+    engine_config["pacing"]["latencyStatus"] = baseline_profile["motor_latency_status"]
+    engine_config["pacing"]["motorFormFactor"] = payload.form_factor
+    if payload.age_band is not None:
+        baseline_profile["age_band"] = payload.age_band.value
+    if payload.form_factor is not None:
+        baseline_profile["form_factor"] = payload.form_factor
     await session.execute(
         update(User)
         .where(User.id == principal.user_id)

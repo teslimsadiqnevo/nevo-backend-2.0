@@ -51,6 +51,14 @@ class ParsedLessonSegment:
 
 
 @dataclass(frozen=True, slots=True)
+class ParsedLessonModule:
+    title: str
+    segment_keys: tuple[str, ...]
+    recap: str | None = None
+    preview: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ParsedLesson:
     title: str
     segments: tuple[ParsedLessonSegment, ...]
@@ -62,6 +70,7 @@ class ParsedLesson:
     assessment: tuple[dict[str, object], ...] = ()
     gemini_call_count: int = 0
     chunk_count: int = 1
+    modules: tuple[ParsedLessonModule, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +88,7 @@ class StoredParsedLesson:
     #: Addressed to the child, and the questions they close on.
     recap: str | None = None
     assessment: tuple[dict[str, object], ...] = ()
+    modules: tuple[ParsedLessonModule, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
-from uuid import UUID
+from uuid import UUID, uuid4
 
 EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PHONE_PATTERN = re.compile(r"(?<!\w)(?:\+?\d[\d ()-]{7,}\d)(?!\w)")
@@ -38,6 +38,53 @@ SENSITIVE_KEYS = {
 
 class AiPrivacyGuard:
     """Pseudonymise direct identifiers before any provider receives a prompt."""
+
+    def mask_lesson_characters(
+        self,
+        variables: Mapping[str, str],
+        *,
+        material_keys: frozenset[str],
+        pseudonym: str,
+        sensitive_terms: tuple[tuple[str, str], ...],
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Keep source characters locally reversible, never roster identities.
+
+        A fictional character can share a roster name. Protect the provider
+        boundary with per-call aliases, then restore only names actually present
+        in teacher material. Contacts, credentials and labelled identities are
+        scrubbed first and never enter the restoration map.
+        """
+        names = {
+            term.strip()
+            for term, replacement in sensitive_terms
+            if replacement.startswith("Learner-")
+            and len(term.strip()) >= 3
+            and all(char.isalpha() or char in " '-\u2019" for char in term.strip())
+        }
+        if not names:
+            return dict(variables), {}
+        pattern = re.compile(
+            r"(?<!\w)(?:"
+            + "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+            + r")(?!\w)",
+            re.IGNORECASE,
+        )
+        aliases: dict[str, str] = {}
+        originals: dict[str, str] = {}
+
+        def mask(match: re.Match[str]) -> str:
+            original = match.group()
+            if original not in aliases:
+                alias = f"LessonCharacter{uuid4().hex}"
+                aliases[original] = alias
+                originals[alias] = original
+            return aliases[original]
+
+        prepared = dict(variables)
+        for key in material_keys & variables.keys():
+            clean = self.sanitize_text(variables[key], pseudonym=pseudonym)
+            prepared[key] = pattern.sub(mask, clean)
+        return prepared, originals
 
     def sanitize_variables(
         self,

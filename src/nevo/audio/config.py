@@ -15,10 +15,10 @@ class AudioSettings(BaseSettings):
         validation_alias="YARNGPT_API_KEY",
     )
     yarngpt_api_url: AnyHttpUrl = Field(
-        default=AnyHttpUrl("https://yarngpt.ai/api/v1/tts"),
+        default=AnyHttpUrl("https://api.yarngpt.ai/api/v1/tts"),
         validation_alias="YARNGPT_API_URL",
     )
-    yarngpt_voice: str = Field(default="Idera", validation_alias="YARNGPT_VOICE")
+    yarngpt_voice: str | None = Field(default=None, validation_alias="YARNGPT_VOICE")
     supabase_url: AnyHttpUrl | None = Field(
         default=None,
         validation_alias="SUPABASE_URL",

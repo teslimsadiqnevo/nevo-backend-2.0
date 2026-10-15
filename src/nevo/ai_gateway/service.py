@@ -31,6 +31,7 @@ from nevo.ai_gateway.prompts import PromptRenderer
 from nevo.domain.ai_gateway.vocabulary import (
     SERVICE_PRIORITIES,
     AiCallStatus,
+    AiService,
 )
 
 ONE_MILLION = Decimal("1000000")
@@ -91,8 +92,23 @@ class AiGatewayService:
         )
         if template is None:
             raise PromptTemplateNotFoundError
+        variables = request.variables
+        lesson_characters: dict[str, str] = {}
+        # Only parse-time educational material is reversible, never chat,
+        # learner context, export evidence or model-invented identifiers.
+        if request.service is AiService.LESSON_GENERATION:
+            material_keys = {
+                "content_parse.default": frozenset({"source_text", "lesson_title"}),
+                "lesson_depth.default": frozenset({"body", "title"}),
+            }.get(request.prompt_name, frozenset())
+            variables, lesson_characters = self._privacy.mask_lesson_characters(
+                variables,
+                material_keys=material_keys,
+                pseudonym=self._privacy.pseudonym(request.student_id or request.requester_user_id),
+                sensitive_terms=context.sensitive_terms,
+            )
         safe_variables = self._privacy.sanitize_variables(
-            request.variables,
+            variables,
             requester_user_id=request.requester_user_id,
             student_id=request.student_id,
             sensitive_terms=context.sensitive_terms,
@@ -197,8 +213,11 @@ class AiGatewayService:
                 error_code=error_code,
             )
         )
+        text = accepted.text
+        for alias, original in lesson_characters.items():
+            text = text.replace(alias, original)
         return AiGenerationResult(
-            text=accepted.text,
+            text=text,
             provider=accepted.provider,
             model=accepted.model,
             prompt_name=template.name,

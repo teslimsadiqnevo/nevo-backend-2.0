@@ -139,3 +139,36 @@ def test_sensitive_variables_are_replaced_wholesale() -> None:
     assert sanitized["age_band"] == "7-9"
     assert "Ada" not in sanitized["observation"]
     assert "six of eight problems" in sanitized["observation"]
+
+
+def test_teaching_characters_are_reversible_but_identifiers_are_not():
+    variables, originals = GUARD.mask_lesson_characters(
+        {
+            "source_text": (
+                "Ada saves 20,000 naira. Grace saves 10,000 naira. "
+                "Email: ada@example.com; password: Ada; name: Ada Lovelace."
+            ),
+            "context": "Ada needs support.",
+        },
+        material_keys=frozenset({"source_text"}),
+        pseudonym=PSEUDONYM,
+        sensitive_terms=(("Ada", PSEUDONYM), ("Grace", "Learner-BBB")),
+    )
+    assert "Ada" not in variables["source_text"]
+    assert "Grace" not in variables["source_text"]
+    assert set(originals.values()) == {"Ada", "Grace"}
+    safe = GUARD.sanitize_variables(
+        variables,
+        requester_user_id=SUBJECT,
+        student_id=None,
+        sensitive_terms=(("Ada", PSEUDONYM), ("Grace", "Learner-BBB")),
+    )
+    restored = safe["source_text"]
+    for alias, original in originals.items():
+        restored = restored.replace(alias, original)
+    assert "Ada saves 20,000 naira" in restored
+    assert "Grace saves 10,000 naira" in restored
+    assert "ada@example.com" not in restored
+    assert "password: Ada" not in restored
+    assert "Ada Lovelace" not in restored
+    assert "Ada" not in safe["context"]

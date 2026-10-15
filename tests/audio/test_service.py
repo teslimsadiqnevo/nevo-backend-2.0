@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -14,7 +16,7 @@ async def test_generates_and_uploads_audio(monkeypatch: pytest.MonkeyPatch) -> N
         requests.append(request)
         if request.method == "HEAD":
             return httpx.Response(404)
-        if request.url.host == "yarngpt.ai":
+        if request.url.host == "api.yarngpt.ai":
             assert request.headers["Authorization"] == "Bearer yarn-secret"
             return httpx.Response(200, content=b"mp3-bytes")
         assert request.headers["Authorization"] == "Bearer supabase-secret"
@@ -83,7 +85,7 @@ async def test_a_slow_reply_is_tried_again(monkeypatch: pytest.MonkeyPatch) -> N
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "HEAD":
             return httpx.Response(404)
-        if request.url.host == "yarngpt.ai":
+        if request.url.host == "api.yarngpt.ai":
             calls["yarngpt"] += 1
             if calls["yarngpt"] == 1:
                 raise httpx.ReadTimeout("slow", request=request)
@@ -126,3 +128,61 @@ def _settings() -> AudioSettings:
         SUPABASE_STORAGE_BUCKET="lesson-media",
         SUPABASE_STORAGE_PUBLIC=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_honours_retry_after_and_reuses_idempotency(monkeypatch):
+    requests = []
+    sleep = AsyncMock()
+    monkeypatch.setattr("nevo.audio.service.asyncio.sleep", sleep)
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(429, headers={"Retry-After": "3"})
+        return httpx.Response(200, content=b"mp3")
+
+    _install(monkeypatch, handler)
+    result = await AudioGenerationService(_settings())._generate_audio("A short lesson.")
+    assert result == b"mp3"
+    sleep.assert_awaited_once_with(3.0)
+    assert requests[0].headers["Idempotency-Key"] == requests[1].headers["Idempotency-Key"]
+
+
+@pytest.mark.asyncio
+async def test_daily_limit_fails_fast_and_is_shared_across_instances(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(429, headers={"Retry-After": "8000"})
+
+    _install(monkeypatch, handler)
+    for _ in range(2):
+        with pytest.raises(AudioGenerationError, match="rate limited"):
+            await AudioGenerationService(_settings())._generate_audio("Read this.")
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_current_tts_job_is_polled_and_only_audio_is_returned(monkeypatch):
+    import json
+
+    monkeypatch.setattr("nevo.audio.service.asyncio.sleep", AsyncMock())
+
+    def handler(request):
+        if request.method == "POST":
+            body = json.loads(request.content)
+            assert body["output_format"] == "mp3"
+            assert "response_format" not in body
+            return httpx.Response(202, json={"job_id": "job-123", "status": "queued"})
+        if request.url.path == "/api/v1/status/job-123":
+            return httpx.Response(
+                200, json={"status": "completed", "audio_url": "https://media.example/audio.mp3"}
+            )
+        assert "Authorization" not in request.headers
+        return httpx.Response(200, content=b"generated-mp3", headers={"Content-Type": "audio/mpeg"})
+
+    _install(monkeypatch, handler)
+    result = await AudioGenerationService(_settings())._generate_audio("Read this.")
+    assert result == b"generated-mp3"

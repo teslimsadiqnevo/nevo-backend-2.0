@@ -939,6 +939,12 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
     reasons = list(segment.review_reasons)
     needs_review = segment.needs_review
     modalities = tuple(dict.fromkeys(segment.available_modalities))
+    if (
+        segment.content_type is not LessonContentType.CALCULATION
+        and segment.interactive_variant is not None
+        and ContentModality.INTERACTIVE not in modalities
+    ):
+        modalities = (*modalities, ContentModality.INTERACTIVE)
     visual_variant = segment.visual_variant
     if ContentModality.VISUAL in modalities and not _has_visual_delivery(segment):
         visual_variant = None
@@ -1483,21 +1489,25 @@ def _text_variant(value: object, body: str, *, authored_by: str = "person") -> d
 
 def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
     if not isinstance(value, dict):
-        return None
+        return _source_activity(body)
     raw_steps = value.get("steps")
     steps: list[dict[str, str]] = []
     if isinstance(raw_steps, list):
         for position, raw in enumerate(raw_steps, start=1):
             if isinstance(raw, dict):
-                instruction = str(raw.get("instruction") or raw.get("text") or "").strip()
+                instruction = str(
+                    raw.get("instruction") or raw.get("text") or raw.get("description") or ""
+                ).strip()
                 step_id = str(raw.get("id") or f"step-{position}")
-            else:
+            elif isinstance(raw, str):
                 instruction = str(raw).strip()
                 step_id = f"step-{position}"
+            else:
+                continue
             if instruction:
                 steps.append({"id": step_id[:120], "instruction": instruction[:500]})
-    if not steps or not str(value.get("outcome") or "").strip():
-        return None
+    if not steps:
+        return _source_activity(body)
     return {
         "type": "activity",
         "title": str(value.get("title") or "Try this activity")[:160],
@@ -1505,7 +1515,41 @@ def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
         if isinstance(value.get("materials"), list)
         else [],
         "steps": steps[:12],
-        "outcome": str(value.get("outcome") or "You have completed the activity.")[:500],
+        "outcome": (
+            _optional_string(value.get("outcome")) or "You have completed the activity."
+        )[:500],
+    }
+
+
+def _source_activity(body: str) -> dict[str, object] | None:
+    """Recover explicit source instructions, never invent an experiment.
+
+    Explanatory prose and question-only payloads are not activities. Preserve
+    every source sentence, including safety and observation text, when the
+    source already contains at least two clear procedural instructions.
+    """
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", body) if part.strip()]
+    imperative = re.compile(
+        r"^(?:\d+[.)]\s*)?(?:take|place|rinse|add|boil|spread|measure|record|"
+        r"observe|mix|pour|cut|draw|label|compare|repeat|collect|stir)\b",
+        re.IGNORECASE,
+    )
+    if sum(bool(imperative.match(sentence)) for sentence in sentences) < 2:
+        return None
+    # Refuse rather than truncate a source instruction or a safety warning.
+    if len(sentences) > 12 or any(len(sentence) > 500 for sentence in sentences):
+        return None
+    warnings = [sentence for sentence in sentences if re.match(r"^safety\s*:", sentence, re.I)]
+    sentences = warnings + [sentence for sentence in sentences if sentence not in warnings]
+    return {
+        "type": "activity",
+        "title": "Follow the source activity",
+        "materials": [],
+        "steps": [
+            {"id": f"source-step-{index}", "instruction": sentence}
+            for index, sentence in enumerate(sentences, start=1)
+        ],
+        "outcome": "You have completed the source activity.",
     }
 
 

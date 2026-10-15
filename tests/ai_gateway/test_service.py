@@ -1,4 +1,6 @@
+from dataclasses import replace
 from decimal import Decimal
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -31,6 +33,40 @@ from .fakes import (
     MemoryPromptRepository,
     SequenceProvider,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lesson_material", [True, False])
+async def test_only_lesson_material_names_are_restored_after_provider_call(lesson_material):
+    class EchoProvider(SequenceProvider):
+        async def generate(self, request):
+            self.requests.append(request)
+            return provider_response(request.user_content)
+
+    provider = EchoProvider([])
+    service, calls, _ = service_with(provider)
+    service._prompts.template = replace(
+        template(),
+        service=AiService.LESSON_GENERATION if lesson_material else AiService.NARRATIVE,
+        name="content_parse.default" if lesson_material else "ask_nevo.student",
+        user_template="{source_text}",
+        required_variables=frozenset({"source_text"}),
+    )
+    calls.resolve_context = AsyncMock(
+        return_value=replace(calls.context, sensitive_terms=(("Ada", "Learner-AAA"),))
+    )
+    result = await service.generate(
+        replace(
+            request(),
+            service=service._prompts.template.service,
+            prompt_name=service._prompts.template.name,
+            variables={"source_text": "Ada saves 20,000 naira; ada@example.com"},
+        )
+    )
+    assert "Ada" not in provider.requests[0].user_content
+    assert "ada@example.com" not in provider.requests[0].user_content
+    assert ("Ada saves 20,000 naira" in result.text) is lesson_material
+    assert "ada@example.com" not in result.text
 
 
 def template() -> PromptTemplate:

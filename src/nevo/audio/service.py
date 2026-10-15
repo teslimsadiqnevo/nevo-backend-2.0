@@ -23,6 +23,9 @@ JOB_TIMEOUT_SECONDS = 300.0
 class _AccountGate:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     retry_at: float = 0.0
+    voice_names: tuple[str, ...] = ()
+    default_voice: str | None = None
+    catalogue_updated_at: float = 0.0
 
 
 # Share the account's queue across concurrent uploads/service instances in
@@ -106,17 +109,17 @@ class AudioGenerationService:
             if wait > 0:
                 await asyncio.sleep(wait)
             async with httpx.AsyncClient(timeout=YARNGPT_TIMEOUT_SECONDS) as client:
-                body: dict[str, str] = {"text": text, "output_format": "mp3"}
-                if self._settings.yarngpt_voice:
-                    body["voice"] = self._settings.yarngpt_voice
-                digest = hashlib.sha256(
-                    f"{self._settings.yarngpt_voice}\0{text}".encode()
-                ).hexdigest()
+                url = str(self._settings.yarngpt_api_url)
+                auth = {"Authorization": f"Bearer {api_key.get_secret_value()}"}
+                voice = await self._resolve_voice(
+                    client, url, gate, auth, requested=self._settings.yarngpt_voice
+                )
+                body: dict[str, str] = {"text": text, "output_format": "mp3", "voice": voice}
+                digest = hashlib.sha256(f"{voice}\0{text}".encode()).hexdigest()
                 headers = {
                     "Authorization": f"Bearer {api_key.get_secret_value()}",
                     "Idempotency-Key": digest,
                 }
-                url = str(self._settings.yarngpt_api_url)
                 response = await self._request(
                     client, "POST", url, gate, headers=headers, json=body
                 )
@@ -162,6 +165,45 @@ class AudioGenerationService:
                     poll_delay = min(5.0, poll_delay + 1.0)
                 raise AudioGenerationError("YarnGPT synthesis job timed out")
 
+    async def _resolve_voice(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        gate: _AccountGate,
+        headers: dict[str, str],
+        *,
+        requested: str | None,
+        refresh: bool = False,
+    ) -> str:
+        if refresh or not gate.voice_names or time.monotonic() - gate.catalogue_updated_at > 900:
+            response = await self._request(
+                client, "GET", url.rsplit("/", 1)[0] + "/voices", gate, headers=headers
+            )
+            try:
+                payload = response.json()
+                entries = payload if isinstance(payload, list) else payload.get("voices", [])
+            except (ValueError, AttributeError) as error:
+                raise AudioGenerationError("YarnGPT returned an invalid voice catalogue") from error
+            if not isinstance(entries, list):
+                raise AudioGenerationError("YarnGPT returned an invalid voice catalogue")
+            names = [
+                entry
+                for entry in entries
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]
+            ]
+            gate.voice_names = tuple(entry["name"] for entry in names)
+            gate.default_voice = next(
+                (entry["name"] for entry in names if entry.get("default") is True), None
+            )
+            gate.catalogue_updated_at = time.monotonic()
+        if requested:
+            for name in gate.voice_names:
+                if name.casefold() == requested.strip().casefold():
+                    return name
+        if gate.default_voice:
+            return gate.default_voice
+        raise AudioGenerationError("YarnGPT has no default voice; configure a current voice ID")
+
     async def _request(
         self, client: httpx.AsyncClient, method: str, url: str, gate: _AccountGate, **kwargs
     ) -> httpx.Response:
@@ -202,11 +244,15 @@ class AudioGenerationService:
                     and body.get("voice")
                     and attempt < YARNGPT_ATTEMPTS - 1
                 ):
-                    body = {key: value for key, value in body.items() if key != "voice"}
+                    auth = {"Authorization": kwargs["headers"]["Authorization"]}
+                    voice = await self._resolve_voice(
+                        client, url, gate, auth, requested=None, refresh=True
+                    )
+                    body = {**body, "voice": voice}
                     kwargs["json"] = body
                     headers = dict(kwargs.get("headers", {}))
                     headers["Idempotency-Key"] = hashlib.sha256(
-                        ("default\0" + str(body["text"])).encode()
+                        (voice + "\0" + str(body["text"])).encode()
                     ).hexdigest()
                     kwargs["headers"] = headers
                     continue

@@ -47,12 +47,20 @@ method/path, provider code and trace id. A specific POST `VOICE_NOT_FOUND` gets
 one fallback to the provider-selected voice, with a different idempotency key
 because the body changed. Other 404s are not retried as voice errors.
 
-Both current documented TTS and voice routes answered 401 to unauthenticated
-route probes. This confirms route reachability, not successful synthesis or the
-cause of production's 404. No YarnGPT key is configured in the local environment,
-so authenticated end-to-end generation remains unverified. The next production
-failure must retain its exact provider code/trace rather than be called a quota
-problem. The returned voice is null when the exact delivered voice is unknown.
+An authenticated follow-up found a documentation mismatch: the live TTS route
+requires `voice` and returns 422 when it is omitted. The adapter now fetches and
+caches the current voice catalogue, resolves display-case settings such as
+`Idera` to the actual `idera` ID, and explicitly sends the catalogue's default
+when no configured ID is usable. A retired-voice 404 refreshes that catalogue.
+
+Live synthesis then succeeded: 78,956 MP3 bytes, validated by macOS `afinfo` as
+4.896 seconds of mono 16 kHz audio. This confirms provider generation, not
+Supabase/browser playback: local `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+are absent. The test key is in ignored `.env`, never in the repository. Eleven
+focused audio tests passed after the correction.
+
+The exact historical production 404 still cannot be attributed from its old
+status-only message; the new provider code/trace remains necessary for that.
 
 Reference: https://yarngpt.ai/api-docs
 

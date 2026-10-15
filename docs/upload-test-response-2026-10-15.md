@@ -36,7 +36,9 @@ approval, and image/audio failures remain visible rather than being cleared.
 The adapter now uses the current v1 TTS request contract: `output_format`, an
 idempotency key, queued-job polling and downloading actual audio before storage.
 The default host is `api.yarngpt.ai`; an explicit environment override still wins.
-Unless a voice is configured, the provider selects its current default voice.
+The adapter resolves the current voice catalogue and explicitly sends a valid
+voice ID, using its default when no configured ID is usable; the live API
+requires this even though its documentation describes the field as optional.
 
 Concurrent audio work is serialized per API-key fingerprint within each worker.
 Transient errors get bounded retries, short 429 windows honour `Retry-After`,

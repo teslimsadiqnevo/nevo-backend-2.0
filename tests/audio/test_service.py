@@ -18,6 +18,8 @@ async def test_generates_and_uploads_audio(monkeypatch: pytest.MonkeyPatch) -> N
             return httpx.Response(404)
         if request.url.host == "api.yarngpt.ai":
             assert request.headers["Authorization"] == "Bearer yarn-secret"
+            if request.url.path.endswith("/voices"):
+                return httpx.Response(200, json={"voices": [{"name": "idera", "default": True}]})
             return httpx.Response(200, content=b"mp3-bytes")
         assert request.headers["Authorization"] == "Bearer supabase-secret"
         assert request.headers["x-upsert"] == "true"
@@ -40,7 +42,7 @@ async def test_generates_and_uploads_audio(monkeypatch: pytest.MonkeyPatch) -> N
     assert result["audioUrl"].startswith(
         "https://project.supabase.co/storage/v1/object/public/lesson-media/"
     )
-    assert [request.method for request in requests] == ["HEAD", "POST", "POST"]
+    assert [request.method for request in requests] == ["HEAD", "GET", "POST", "POST"]
 
 
 @pytest.mark.asyncio
@@ -68,7 +70,12 @@ async def test_reuses_existing_supabase_object(monkeypatch: pytest.MonkeyPatch) 
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, handler) -> None:  # type: ignore[no-untyped-def]
-    transport = httpx.MockTransport(handler)
+    def with_catalogue(request):
+        if request.method == "GET" and request.url.path.endswith("/voices"):
+            return httpx.Response(200, json={"voices": [{"name": "idera", "default": True}]})
+        return handler(request)
+
+    transport = httpx.MockTransport(with_catalogue)
     original_client = httpx.AsyncClient
 
     def client(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -174,6 +181,7 @@ async def test_current_tts_job_is_polled_and_only_audio_is_returned(monkeypatch)
         if request.method == "POST":
             body = json.loads(request.content)
             assert body["output_format"] == "mp3"
+            assert body["voice"] == "idera"
             assert "response_format" not in body
             return httpx.Response(202, json={"job_id": "job-123", "status": "queued"})
         if request.url.path == "/api/v1/status/job-123":
@@ -189,7 +197,8 @@ async def test_current_tts_job_is_polled_and_only_audio_is_returned(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_retired_voice_falls_back_but_other_404s_do_not(monkeypatch):
+@pytest.mark.parametrize("requested", ["RetiredVoice", "Idera", None])
+async def test_voice_is_resolved_from_catalogue_before_synthesis(monkeypatch, requested):
     import json
 
     requests = []
@@ -197,17 +206,15 @@ async def test_retired_voice_falls_back_but_other_404s_do_not(monkeypatch):
     def handler(request):
         requests.append(request)
         body = json.loads(request.content)
-        if body.get("voice"):
-            return httpx.Response(404, json={"error": {"code": "VOICE_NOT_FOUND"}})
+        assert body["voice"] == "idera"
         return httpx.Response(200, content=b"default-voice-mp3")
 
     _install(monkeypatch, handler)
-    settings = _settings().model_copy(update={"yarngpt_voice": "RetiredVoice"})
+    settings = _settings().model_copy(update={"yarngpt_voice": requested})
     assert (
         await AudioGenerationService(settings)._generate_audio("A lesson.") == b"default-voice-mp3"
     )
-    assert len(requests) == 2
-    assert requests[0].headers["Idempotency-Key"] != requests[1].headers["Idempotency-Key"]
+    assert len(requests) == 1
 
 
 @pytest.mark.asyncio

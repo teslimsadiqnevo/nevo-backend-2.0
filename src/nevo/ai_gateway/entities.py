@@ -33,6 +33,7 @@ class AiGenerationRequest:
     timeout_seconds: float | None = None
     model: str | None = None
     cache_prompt: bool = True
+    json_output: bool = False
     #: Tool schemas offered to the model. When set, the gateway drives a tool
     #: loop instead of a single completion, keeping audit, cost accounting,
     #: rate limiting and the fallback around it.

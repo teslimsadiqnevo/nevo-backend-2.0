@@ -2,7 +2,15 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from nevo.api.auth import SessionResponse
 from nevo.api.lesson_contracts import (
@@ -525,6 +533,18 @@ class LessonSegmentResponse(CamelResponse):
     estimated_minutes: int = 0
 
     _keep_renderable = field_validator("review_reasons", mode="before")(renderable_review_reasons)
+
+    @field_validator("visual_variant", mode="before")
+    @classmethod
+    def only_deliverable_images(cls, value: object) -> object:
+        if isinstance(value, dict):
+            try:
+                return VisualVariant.model_validate(value)
+            except ValidationError:
+                # A proposed diagram is not a generated bitmap. Calculations
+                # render their own scaffold without an image variant.
+                return None
+        return value
 
 
 class LessonModuleResponse(CamelResponse):

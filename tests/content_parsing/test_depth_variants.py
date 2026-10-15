@@ -144,6 +144,22 @@ async def test_an_unreadable_answer_is_refused_rather_than_stored() -> None:
         await depth.generate(title=None, body=BODY, requested_by_user_id=ACTOR)
 
 
+async def test_invalid_json_gets_one_larger_strict_json_retry() -> None:
+    class RecoveringGateway(Gateway):
+        async def generate(self, request):
+            self.text = "{" if not self.requests else '{"simplified":"Use the rate and time."}'
+            return await super().generate(request)
+
+    gateway = RecoveringGateway("")
+    variants, _ = await DepthVariantService(ai_gateway=gateway).generate(
+        title=None, body=BODY, requested_by_user_id=ACTOR
+    )
+    assert variants.simplified == "Use the rate and time."
+    assert len(gateway.requests) == 2
+    assert gateway.requests[1].max_output_tokens > gateway.requests[0].max_output_tokens
+    assert gateway.requests[0].json_output is True
+
+
 def test_a_short_segment_is_not_worth_rewriting() -> None:
     depth, _ = service("{}")
 

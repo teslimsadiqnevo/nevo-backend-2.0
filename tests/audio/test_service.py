@@ -225,3 +225,18 @@ async def test_missing_route_reports_provider_code_and_trace(monkeypatch):
     _install(monkeypatch, handler)
     with pytest.raises(AudioGenerationError, match=r"POST /api/v1/tts.*NOT_FOUND.*trace-123"):
         await AudioGenerationService(_settings())._generate_audio("A lesson.")
+
+
+@pytest.mark.asyncio
+async def test_quota_refusal_stops_following_provider_attempts(monkeypatch):
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(402, json={"error": {"code": "QUOTA_EXCEEDED"}})
+
+    _install(monkeypatch, handler)
+    for number in range(3):
+        with pytest.raises(AudioGenerationError, match="QUOTA_EXCEEDED"):
+            await AudioGenerationService(_settings())._generate_audio(f"Section {number}")
+    assert len(attempts) == 1

@@ -1,12 +1,19 @@
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from nevo.content_parsing.chunks import reading_chunks as reading_chunks
 from nevo.domain.intelligence.vocabulary import ManipulativeKind
 
 ScalarAnswer = str | int | float | bool
+
+
+def canonical_authorship(value: object) -> object:
+    return {"person-authored": "person", "nevo-authored": "nevo"}.get(str(value), value)
+
+
+Authorship = Annotated[Literal["person", "nevo"], BeforeValidator(canonical_authorship)]
 
 
 class ReadingChunk(BaseModel):
@@ -127,7 +134,7 @@ class KeyTerm(BaseModel):
 
     term: str = Field(min_length=1, max_length=120)
     definition: str = Field(min_length=1, max_length=500)
-    authored_by: Literal["person", "nevo"] = Field(default="nevo", alias="authoredBy")
+    authored_by: Authorship = Field(default="nevo", alias="authoredBy")
 
 
 class EquationCallout(BaseModel):
@@ -139,7 +146,7 @@ class EquationCallout(BaseModel):
 
     equation: str = Field(min_length=1, max_length=500)
     label: str | None = Field(default=None, max_length=160)
-    authored_by: Literal["person", "nevo"] = Field(default="nevo", alias="authoredBy")
+    authored_by: Authorship = Field(default="nevo", alias="authoredBy")
 
 
 class VisualVariant(BaseModel):

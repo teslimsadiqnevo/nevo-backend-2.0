@@ -125,7 +125,14 @@ class AiGatewayService:
         for attempt in range(self._max_compliance_retries + 1):
             provider_request = ProviderRequest(
                 system_instruction=self._privacy.sanitize_text(
-                    rendered.system_instruction,
+                    rendered.system_instruction
+                    + (
+                        "\nReturn only a complete valid JSON object, without markdown. "
+                        "Escape all backslashes, quotes and control characters in JSON strings, "
+                        "including mathematical notation."
+                        if request.json_output
+                        else ""
+                    ),
                     pseudonym=self._privacy.pseudonym(
                         request.student_id or request.requester_user_id
                     ),

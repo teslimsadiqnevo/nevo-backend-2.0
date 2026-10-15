@@ -12,7 +12,7 @@ from uuid import UUID
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
-from nevo.api.lesson_contracts import checkpoint_payloads
+from nevo.api.lesson_contracts import canonical_authorship, checkpoint_payloads
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
 from nevo.content_parsing.depth import (
     DEPTH_CONCURRENCY,
@@ -235,7 +235,7 @@ class ContentParsingService:
         source = _source_for_prompt(request)
         modules = []
         await _report(on_stage, UploadStage.READING_DOCUMENT)
-        chunks = _chunks(source)
+        chunks = _bounded_chunks(source.strip(), MAX_CHUNK_CHARS - 1600)
         await _report(on_stage, UploadStage.FINDING_SECTIONS)
         segments: list[ParsedLessonSegment] = []
         missing_pages = _missing_text_pages(source)
@@ -248,27 +248,59 @@ class ContentParsingService:
         title: str | None = None
         assessment: list[dict[str, object]] = []
 
-        for index, chunk in enumerate(chunks, start=1):
-            try:
-                result = await self._ai_gateway.generate(
-                    AiGenerationRequest(
-                        requester_user_id=requested_by_user_id,
-                        service=AiService.LESSON_GENERATION,
-                        prompt_name=PROMPT_NAME,
-                        variables={
-                            "lesson_title": request.title,
-                            "source_type": request.source_type.value,
-                            "chunk_number": str(index),
-                            "chunk_count": str(len(chunks)),
-                            "source_text": chunk,
-                        },
-                        max_output_tokens=PARSE_OUTPUT_TOKENS,
-                        timeout_seconds=PARSE_TIMEOUT_SECONDS,
+        pass_limit = asyncio.Semaphore(2)
+
+        async def read_pass(index: int, chunk: str):
+            async with pass_limit:
+                try:
+                    return await self._ai_gateway.generate(
+                        AiGenerationRequest(
+                            requester_user_id=requested_by_user_id,
+                            service=AiService.LESSON_GENERATION,
+                            prompt_name=PROMPT_NAME,
+                            variables={
+                                "lesson_title": request.title,
+                                "source_type": request.source_type.value,
+                                "chunk_number": str(index),
+                                "chunk_count": str(len(chunks)),
+                                "source_text": _pass_source(chunks, index),
+                            },
+                            max_output_tokens=PARSE_OUTPUT_TOKENS,
+                            timeout_seconds=PARSE_TIMEOUT_SECONDS,
+                            json_output=True,
+                        )
                     )
-                )
+                except (AiGatewayError, ValueError) as error:
+                    return error
+
+        results = await asyncio.gather(
+            *(read_pass(index, chunk) for index, chunk in enumerate(chunks, start=1))
+        )
+        recap_parts: list[str] = []
+        seen_bodies: set[str] = set()
+
+        for index, chunk in enumerate(chunks, start=1):
+            result = results[index - 1]
+            try:
+                if isinstance(result, Exception):
+                    raise result
                 ai_call_count += 1
                 payload = _json_payload(result.text)
                 chunk_segments = _segments_from_payload_list(payload, sequence_offset=len(segments))
+                if len(chunks) > 1:
+                    retained = []
+                    for segment in chunk_segments:
+                        if _is_wrapup(segment.title):
+                            recap_parts.append(segment.body)
+                            continue
+                        signature = " ".join(segment.body.casefold().split())
+                        if signature in seen_bodies:
+                            continue
+                        seen_bodies.add(signature)
+                        retained.append(
+                            replace(segment, sequence_order=len(segments) + len(retained) + 1)
+                        )
+                    chunk_segments = retained
                 chunk_modules = _modules_from_payload(payload, chunk_segments)
                 if len(chunks) > 1:
                     key_map = {
@@ -300,12 +332,14 @@ class ContentParsingService:
                 segments.extend(chunk_segments)
                 # The lesson's ending comes from whichever chunk wrote one.
                 # A multi-chunk source closes once, not once per chunk.
-                recap = recap or _optional_string(payload.get("recap"))
+                chunk_recap = _optional_string(payload.get("recap"))
+                if chunk_recap:
+                    recap_parts.append(chunk_recap)
                 description = description or _optional_string(payload.get("description"))
                 # Likewise its name. The filename is a fallback, not a title:
                 # nobody writing a lesson is naming it for a teacher's library.
                 title = title or _lesson_title(payload.get("title"))
-                if not assessment:
+                if index == len(chunks):
                     assessment = _assessment_questions(payload)
             except (AiGatewayError, ValueError, json.JSONDecodeError) as error:
                 # Say what went wrong, not just that something did. This note
@@ -336,6 +370,7 @@ class ContentParsingService:
                     )
                 )
 
+        recap = "\n\n".join(dict.fromkeys(recap_parts)) or recap
         # Segments are independent, and so are pictures and audio: audio reads
         # the script or the body, pictures only set the visual. So the two run
         # side by side, each under its own limit, and their results are merged
@@ -677,6 +712,31 @@ def _chunks(source: str) -> list[str]:
     return _bounded_chunks(source.strip(), MAX_CHUNK_CHARS)
 
 
+def _pass_source(chunks: list[str], index: int) -> str:
+    if len(chunks) == 1:
+        return chunks[0]
+    previous = chunks[index - 2][-500:] if index > 1 else ""
+    following = chunks[index][:500] if index < len(chunks) else ""
+    return (
+        f"Part {index} of {len(chunks)} of ONE continuous lesson. Convert only CURRENT SOURCE. "
+        "Neighbour context is orientation, never extra source to repeat. Do not reintroduce "
+        "earlier concepts. Do not add a lesson introduction except in part 1. Only the final "
+        "part may add a wrap-up or assessment; other parts return recap null and assessment [].\n"
+        f"PREVIOUS CONTEXT ONLY:\n{previous}\nCURRENT SOURCE:\n{chunks[index - 1]}"
+        f"\nNEXT CONTEXT ONLY:\n{following}"
+    )
+
+
+def _is_wrapup(title: str | None) -> bool:
+    return bool(
+        re.match(
+            r"^(?:lesson recap|lesson summary|key takeaways|wrap[ -]?up|conclusion)\b",
+            (title or "").strip(),
+            re.IGNORECASE,
+        )
+    )
+
+
 def _bounded_chunks(source: str, limit: int) -> list[str]:
     """Prefer structural boundaries but enforce the cap even on one huge line."""
     chunks: list[str] = []
@@ -930,7 +990,12 @@ def _fallback_segments(
     *,
     sequence_offset: int,
 ) -> tuple[ParsedLessonSegment, ...]:
-    parts = [part.strip() for part in _bounded_chunks(source, 1800) if part.strip()]
+    parts = [
+        part.strip()
+        for paragraph in re.split(r"\n{2,}", source)
+        for part in _bounded_chunks(paragraph, 1800)
+        if part.strip()
+    ]
     if not parts:
         parts = [source.strip() or "Teacher review required."]
     segments: list[ParsedLessonSegment] = []
@@ -1003,6 +1068,8 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
     ):
         modalities = (*modalities, ContentModality.INTERACTIVE)
     visual_variant = segment.visual_variant
+    if not _is_generated_image_variant(visual_variant):
+        visual_variant = None
     if ContentModality.VISUAL in modalities and not _has_visual_delivery(segment):
         visual_variant = None
         modalities = tuple(
@@ -1519,7 +1586,7 @@ def _text_variant(value: object, body: str, *, authored_by: str = "person") -> d
                     {
                         "term": term[:120],
                         "definition": definition[:500],
-                        "authoredBy": str(raw.get("authoredBy") or "nevo"),
+                        "authoredBy": canonical_authorship(raw.get("authoredBy") or "nevo"),
                     }
                 )
 
@@ -1537,7 +1604,7 @@ def _text_variant(value: object, body: str, *, authored_by: str = "person") -> d
                 {
                     "equation": equation[:500],
                     "label": label[:160] if label else None,
-                    "authoredBy": str(raw.get("authoredBy") or "nevo"),
+                    "authoredBy": canonical_authorship(raw.get("authoredBy") or "nevo"),
                 }
             )
 

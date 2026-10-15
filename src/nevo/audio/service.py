@@ -26,6 +26,8 @@ class _AccountGate:
     voice_names: tuple[str, ...] = ()
     default_voice: str | None = None
     catalogue_updated_at: float = 0.0
+    quota_retry_at: float = 0.0
+    quota_error: str | None = None
 
 
 # Share the account's queue across concurrent uploads/service instances in
@@ -101,6 +103,11 @@ class AudioGenerationService:
         gates = _GATES.setdefault(asyncio.get_running_loop(), {})
         gate = gates.setdefault(fingerprint, _AccountGate())
         async with gate.lock:
+            if gate.quota_error and time.monotonic() < gate.quota_retry_at:
+                raise AudioGenerationError(
+                    f"YarnGPT requests paused after {gate.quota_error}; "
+                    "credit/account action required"
+                )
             wait = gate.retry_at - time.monotonic()
             if wait > MAX_RATE_LIMIT_WAIT:
                 raise AudioGenerationError(
@@ -235,6 +242,9 @@ class AudioGenerationService:
                 if not isinstance(provider_error, dict):
                     provider_error = {}
                 code = str(provider_error.get("code") or "UNKNOWN")[:80]
+                if response.status_code == 402:
+                    gate.quota_error = code
+                    gate.quota_retry_at = time.monotonic() + 300
                 body = kwargs.get("json")
                 if (
                     response.status_code == 404

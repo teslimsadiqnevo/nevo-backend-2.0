@@ -159,27 +159,38 @@ class DepthVariantService:
     ) -> tuple[DepthVariants, str | None]:
         """Both versions of one segment, and the model that wrote them."""
 
-        try:
-            result = await self._ai_gateway.generate(
-                AiGenerationRequest(
-                    requester_user_id=requested_by_user_id,
-                    # Parse-time work, so it queues with the parse rather
-                    # than jumping into the adaptation lane, which exists for
-                    # calls made while a child is waiting.
-                    service=AiService.LESSON_GENERATION,
-                    prompt_name=PROMPT_NAME,
-                    variables={"title": title or "", "body": body},
-                    max_output_tokens=DEPTH_OUTPUT_TOKENS,
+        token_budget = max(DEPTH_OUTPUT_TOKENS, min(8192, len(body) * 2))
+        for attempt in range(2):
+            try:
+                result = await self._ai_gateway.generate(
+                    AiGenerationRequest(
+                        requester_user_id=requested_by_user_id,
+                        # Parse-time work, so it queues with the parse rather
+                        # than jumping into the adaptation lane, which exists for
+                        # calls made while a child is waiting.
+                        service=AiService.LESSON_GENERATION,
+                        prompt_name=PROMPT_NAME,
+                        variables={"title": title or "", "body": body},
+                        max_output_tokens=token_budget,
+                        timeout_seconds=90,
+                        json_output=True,
+                    )
                 )
-            )
-        except AiGatewayError as error:
-            raise DepthVariantError(str(error)) from error
-
-        if result.fallback_used:
-            # The deterministic fallback rewrites nothing; it would store the
-            # same text under two names and tell a child it was simpler.
-            raise DepthVariantError("The provider was unavailable")
-        payload = _json_payload(result.text)
+            except AiGatewayError as error:
+                raise DepthVariantError(str(error)) from error
+            if result.fallback_used:
+                # The deterministic fallback rewrites nothing; it would store the
+                # same text under two names and tell a child it was simpler.
+                raise DepthVariantError("The provider was unavailable")
+            try:
+                if result.stop_reason == "max_tokens":
+                    raise DepthVariantError("The rewrite reached its output token limit")
+                payload = _json_payload(result.text)
+                break
+            except DepthVariantError:
+                if attempt == 1:
+                    raise
+                token_budget = min(16384, token_budget * 2)
         return (
             DepthVariants(
                 simplified=accept(

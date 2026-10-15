@@ -80,7 +80,9 @@ class AudioGenerationService:
             "storagePath": object_path,
             "durationMs": None,
             "provider": "yarngpt",
-            "voice": self._settings.yarngpt_voice,
+            # The provider may select its default if a configured voice was
+            # retired; do not claim the requested voice is the delivered one.
+            "voice": None,
             "format": "mp3",
             "requiresAuthentication": False,
             "urlExpiresInSeconds": (
@@ -184,8 +186,37 @@ class AudioGenerationService:
                 await asyncio.sleep(2**attempt)
                 continue
             if response.is_error:
+                try:
+                    provider_error = response.json().get("error", {})
+                except (ValueError, AttributeError):
+                    provider_error = {}
+                if not isinstance(provider_error, dict):
+                    provider_error = {}
+                code = str(provider_error.get("code") or "UNKNOWN")[:80]
+                body = kwargs.get("json")
+                if (
+                    response.status_code == 404
+                    and code == "VOICE_NOT_FOUND"
+                    and method == "POST"
+                    and isinstance(body, dict)
+                    and body.get("voice")
+                    and attempt < YARNGPT_ATTEMPTS - 1
+                ):
+                    body = {key: value for key, value in body.items() if key != "voice"}
+                    kwargs["json"] = body
+                    headers = dict(kwargs.get("headers", {}))
+                    headers["Idempotency-Key"] = hashlib.sha256(
+                        ("default\0" + str(body["text"])).encode()
+                    ).hexdigest()
+                    kwargs["headers"] = headers
+                    continue
+                trace = str(
+                    provider_error.get("trace_id")
+                    or response.headers.get("X-Request-Id", "unknown")
+                )[:100]
                 raise AudioGenerationError(
-                    f"YarnGPT generation failed with status {response.status_code}"
+                    f"YarnGPT {method} {httpx.URL(url).path} failed with status "
+                    f"{response.status_code} ({code}, trace {trace})"
                 )
             return response
         raise AudioGenerationError("YarnGPT retry limit reached")

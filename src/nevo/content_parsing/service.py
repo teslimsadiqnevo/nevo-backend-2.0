@@ -238,7 +238,10 @@ class ContentParsingService:
         chunks = _chunks(source)
         await _report(on_stage, UploadStage.FINDING_SECTIONS)
         segments: list[ParsedLessonSegment] = []
-        review_notes: list[dict[str, object]] = []
+        missing_pages = _missing_text_pages(source)
+        review_notes: list[dict[str, object]] = (
+            [{"code": "page_text_missing", "pageNumbers": missing_pages}] if missing_pages else []
+        )
         ai_call_count = 0
         recap: str | None = None
         description: str | None = None
@@ -266,7 +269,34 @@ class ContentParsingService:
                 ai_call_count += 1
                 payload = _json_payload(result.text)
                 chunk_segments = _segments_from_payload_list(payload, sequence_offset=len(segments))
-                modules.extend(_modules_from_payload(payload, chunk_segments))
+                chunk_modules = _modules_from_payload(payload, chunk_segments)
+                if len(chunks) > 1:
+                    key_map = {
+                        segment.segment_key: f"chunk-{index}-{position}-{segment.segment_key}"[:120]
+                        for position, segment in enumerate(chunk_segments, start=1)
+                    }
+                    if len(key_map) != len(chunk_segments):
+                        raise ValueError("AI provider returned duplicate section keys")
+                    chunk_segments = [
+                        replace(
+                            segment,
+                            segment_key=key_map[segment.segment_key],
+                            comprehension_checkpoints=tuple(
+                                {**checkpoint, "id": f"chunk-{index}-{checkpoint['id']}"}
+                                if checkpoint.get("id")
+                                else checkpoint
+                                for checkpoint in segment.comprehension_checkpoints
+                            ),
+                        )
+                        for segment in chunk_segments
+                    ]
+                    chunk_modules = [
+                        replace(
+                            module, segment_keys=tuple(key_map[key] for key in module.segment_keys)
+                        )
+                        for module in chunk_modules
+                    ]
+                modules.extend(chunk_modules)
                 segments.extend(chunk_segments)
                 # The lesson's ending comes from whichever chunk wrote one.
                 # A multi-chunk source closes once, not once per chunk.
@@ -285,6 +315,7 @@ class ContentParsingService:
                 review_notes.append(
                     {
                         "code": "ai_parse_fallback",
+                        "textRetained": True,
                         "chunkNumber": index,
                         "message": (
                             "This chunk used deterministic parsing because the AI "
@@ -643,22 +674,44 @@ def _page_text(page: SourcePage) -> str:
 
 
 def _chunks(source: str) -> list[str]:
-    source = source.strip()
-    if len(source) <= MAX_CHUNK_CHARS:
-        return [source]
-    paragraphs = re.split(r"\n{2,}", source)
+    return _bounded_chunks(source.strip(), MAX_CHUNK_CHARS)
+
+
+def _bounded_chunks(source: str, limit: int) -> list[str]:
+    """Prefer structural boundaries but enforce the cap even on one huge line."""
     chunks: list[str] = []
-    current = ""
-    for paragraph in paragraphs:
-        candidate = f"{current}\n\n{paragraph}".strip()
-        if len(candidate) > MAX_CHUNK_CHARS and current:
-            chunks.append(current)
-            current = paragraph
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    return chunks
+    start = 0
+    boundaries = (
+        r"(?m)^\[Page \d+\][ \t]*$",
+        r"\n{2,}",
+        r"\n",
+        r"(?<=[.!?])\s+",
+        r"\s+",
+    )
+    while len(source) - start > limit:
+        window = source[start : start + limit]
+        cut = limit
+        for pattern in boundaries:
+            matches = [match for match in re.finditer(pattern, window) if match.start() > 0]
+            if matches:
+                cut = matches[-1].start()
+                break
+        chunks.append(source[start : start + cut])
+        start += cut
+    if start < len(source):
+        chunks.append(source[start:])
+    return chunks or [""]
+
+
+def _missing_text_pages(source: str) -> list[int]:
+    markers = list(re.finditer(r"(?m)^\[Page (\d+)\][ \t]*$", source))
+    return [
+        int(marker.group(1))
+        for index, marker in enumerate(markers)
+        if not source[
+            marker.end() : markers[index + 1].start() if index + 1 < len(markers) else len(source)
+        ].strip()
+    ]
 
 
 def _assessment_questions(payload: dict[str, object]) -> list[dict[str, object]]:
@@ -863,7 +916,9 @@ def _segment_from_payload(
         text_variant=_text_variant(item.get("text_variant"), body, authored_by="nevo"),
         visual_variant=_dict_or_none(item.get("visual_variant")),
         audio_variant=_audio_variant(item.get("audio_variant"), body),
-        interactive_variant=_interactive_variant(item.get("interactive_variant"), body),
+        interactive_variant=_interactive_variant(
+            item.get("interactive_variant"), body, title=_optional_string(item.get("title"))
+        ),
         calculation_variant=calculation_variant,
         needs_review=needs_review,
         review_reasons=tuple(review_reasons),
@@ -875,11 +930,13 @@ def _fallback_segments(
     *,
     sequence_offset: int,
 ) -> tuple[ParsedLessonSegment, ...]:
-    parts = [part.strip() for part in re.split(r"\n{2,}", source) if part.strip()]
+    parts = [part.strip() for part in _bounded_chunks(source, 1800) if part.strip()]
     if not parts:
         parts = [source.strip() or "Teacher review required."]
     segments: list[ParsedLessonSegment] = []
-    for index, part in enumerate(parts[:80], start=1):
+    for index, part in enumerate(parts, start=1):
+        if not re.sub(r"(?m)^\[Page \d+\][ \t]*$", "", part).strip():
+            continue
         sequence_order = sequence_offset + index
         content_type = _infer_content_type(part)
         modalities = _fallback_modalities(content_type, part)
@@ -1396,8 +1453,15 @@ def _fallback_modalities(
 
 
 def _fallback_title(text: str, sequence_order: int) -> str:
-    first_line = text.splitlines()[0].strip()
-    if len(first_line) <= 80:
+    first_line = next(
+        (
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not re.fullmatch(r"\[Page \d+\]", line.strip())
+        ),
+        "",
+    )
+    if first_line and len(first_line) <= 80:
         return first_line
     return f"Segment {sequence_order}"
 
@@ -1487,9 +1551,11 @@ def _text_variant(value: object, body: str, *, authored_by: str = "person") -> d
     }
 
 
-def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
+def _interactive_variant(
+    value: object, body: str, *, title: str | None = None
+) -> dict[str, object] | None:
     if not isinstance(value, dict):
-        return _source_activity(body)
+        return _source_activity(body, title=title)
     raw_steps = value.get("steps")
     steps: list[dict[str, str]] = []
     if isinstance(raw_steps, list):
@@ -1507,26 +1573,27 @@ def _interactive_variant(value: object, body: str) -> dict[str, object] | None:
             if instruction:
                 steps.append({"id": step_id[:120], "instruction": instruction[:500]})
     if not steps:
-        return _source_activity(body)
+        return _source_activity(body, title=title)
     return {
         "type": "activity",
         "title": str(value.get("title") or "Try this activity")[:160],
+        "introduction": _optional_string(value.get("introduction")),
         "materials": [str(item)[:120] for item in value.get("materials", [])]
         if isinstance(value.get("materials"), list)
         else [],
         "steps": steps[:12],
-        "outcome": (
-            _optional_string(value.get("outcome")) or "You have completed the activity."
-        )[:500],
+        "outcome": (_optional_string(value.get("outcome")) or "You have completed the activity.")[
+            :500
+        ],
     }
 
 
-def _source_activity(body: str) -> dict[str, object] | None:
+def _source_activity(body: str, *, title: str | None = None) -> dict[str, object] | None:
     """Recover explicit source instructions, never invent an experiment.
 
     Explanatory prose and question-only payloads are not activities. Preserve
-    every source sentence, including safety and observation text, when the
-    source already contains at least two clear procedural instructions.
+    source context and observations separately from actionable steps, when
+    the source already contains at least two clear procedural instructions.
     """
     sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", body) if part.strip()]
     imperative = re.compile(
@@ -1534,22 +1601,40 @@ def _source_activity(body: str) -> dict[str, object] | None:
         r"observe|mix|pour|cut|draw|label|compare|repeat|collect|stir)\b",
         re.IGNORECASE,
     )
-    if sum(bool(imperative.match(sentence)) for sentence in sentences) < 2:
+    actions = [index for index, sentence in enumerate(sentences) if imperative.match(sentence)]
+    if len(actions) < 2:
         return None
     # Refuse rather than truncate a source instruction or a safety warning.
     if len(sentences) > 12 or any(len(sentence) > 500 for sentence in sentences):
         return None
     warnings = [sentence for sentence in sentences if re.match(r"^safety\s*:", sentence, re.I)]
-    sentences = warnings + [sentence for sentence in sentences if sentence not in warnings]
+    introduction = " ".join(
+        sentence
+        for index, sentence in enumerate(sentences)
+        if index < actions[-1] and index not in actions and sentence not in warnings
+    )
+    outcome = " ".join(
+        sentence
+        for index, sentence in enumerate(sentences)
+        if index > actions[-1] and sentence not in warnings
+    )
+    if not outcome or len(outcome) > 500:
+        return None
+    instructions = [sentences[index] for index in actions]
+    if warnings:
+        instructions[0] = " ".join([*warnings, instructions[0]])
+        if len(instructions[0]) > 500:
+            return None
     return {
         "type": "activity",
-        "title": "Follow the source activity",
+        "title": (title or introduction or instructions[0])[:160],
+        "introduction": introduction or None,
         "materials": [],
         "steps": [
             {"id": f"source-step-{index}", "instruction": sentence}
-            for index, sentence in enumerate(sentences, start=1)
+            for index, sentence in enumerate(instructions, start=1)
         ],
-        "outcome": "You have completed the source activity.",
+        "outcome": outcome,
     }
 
 

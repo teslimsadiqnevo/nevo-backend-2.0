@@ -205,6 +205,9 @@ class InteractiveActivityVariant(BaseModel):
 
     type: Literal["activity"] = "activity"
     title: str = "Try this activity"
+    introduction: str | None = Field(
+        default=None, description="Source context shown before the actionable steps, not a task."
+    )
     materials: list[str] = Field(default_factory=list, max_length=12)
     steps: list[InteractiveActivityStep] = Field(default_factory=list, max_length=12)
     outcome: str = "You have completed the activity."

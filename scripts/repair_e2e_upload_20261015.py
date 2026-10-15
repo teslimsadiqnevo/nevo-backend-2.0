@@ -66,8 +66,10 @@ async def repair(apply: bool):
                                 setattr(segment, field, updated)
                                 changed += 1
                         segment.reading_chunks = reading_chunks(segment.segment_key, segment.body)
-                    elif segment.interactive_variant is None:
-                        activity = _source_activity(segment.body)
+                    elif segment.interactive_variant is None or (
+                        segment.interactive_variant.get("title") == "Follow the source activity"
+                    ):
+                        activity = _source_activity(segment.body, title=segment.title)
                         if activity is None:
                             continue
                         original = ParsedLessonSegment(

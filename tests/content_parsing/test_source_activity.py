@@ -18,12 +18,16 @@ def test_source_experiment_is_recovered_without_inventing_or_losing_safety():
         "Add iodine solution. If starch is present, it turns blue-black. "
         "Safety: heat alcohol in a water bath, never over a flame."
     )
-    activity = _interactive_variant(None, source)
+    activity = _interactive_variant(None, source, title="Testing a Leaf for Starch")
     assert activity is not None
     instructions = [step["instruction"] for step in activity["steps"]]
     assert instructions[0].startswith("Safety:")
-    assert "If starch is present, it turns blue-black." in instructions
-    assert all(instruction in source for instruction in instructions)
+    assert "If starch is present, it turns blue-black." not in instructions
+    assert activity["outcome"] == "If starch is present, it turns blue-black."
+    assert activity["introduction"] == "We can test a leaf for starch."
+    assert activity["title"] == "Testing a Leaf for Starch"
+    assert len(instructions) == 4
+    assert instructions[0].endswith("Take a leaf from a plant in sunlight.")
 
 
 def test_explanation_and_question_are_not_fabricated_into_activities():

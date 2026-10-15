@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -1987,12 +1988,15 @@ def _parse_into_job(
 
     async def work() -> None:
         try:
-            parsed = await parser.parse(
-                request=request,
-                requested_by_user_id=actor_id,
-                on_stage=note_stage,
-            )
+            async with asyncio.timeout(20 * 60):
+                parsed = await parser.parse(
+                    request=request,
+                    requested_by_user_id=actor_id,
+                    on_stage=note_stage,
+                )
         except Exception as error:
+            if isinstance(error, TimeoutError):
+                error = TimeoutError("Upload preparation timed out after 20 minutes")
             # The same 12 hex characters an unhandled 500 carries, so a teacher
             # looking at a failed parse has something to quote and we can find
             # it in the log. A parse fails behind the response, so there is no
@@ -2202,6 +2206,10 @@ async def import_cloud_file(
 @router.post(
     "/uploads/{upload_id}/retry-pages",
     response_model=UploadRetryResponse,
+    responses={
+        409: {"description": "upload_already_processing, or the source is not a PDF"},
+        404: {"description": "The upload or retained source was not found"},
+    },
 )
 async def retry_upload_pages(
     upload_id: UUID,
@@ -2222,23 +2230,40 @@ async def retry_upload_pages(
         raise HTTPException(status_code=404, detail="Upload source was not found")
     if not blob.filename.casefold().endswith(".pdf"):
         raise HTTPException(status_code=409, detail="Page retry is available for PDF uploads")
+    if job.status == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "upload_already_processing",
+                "message": "This upload is still being read.",
+            },
+        )
     pages = _extract_pdf_pages(blob.content, payload.page_numbers)
     if not pages:
         raise HTTPException(status_code=422, detail="None of those pages exist in the PDF")
+    source_text = _extract_text(blob.filename, blob.content)
     # Same reason as the first parse: re-reading pages is minutes of model
     # work, so the job records that it is running and the client polls.
     job.undo_stack = [*job.undo_stack, job.structure][-20:]
     job.status = "processing"
     job.stage = UploadStage.RECEIVING_FILE.value
     job.error_message = None
+    job.failure_reason = None
+    job.incident_id = None
+    job.completed_at = None
     await session.commit()
     _parse_into_job(
         job_id=upload_id,
         request=ContentParseRequest(
             title=_title_from_filename(blob.filename),
             source_type=LessonSourceType.PDF,
-            pages=tuple(pages),
-            source_metadata={"retryOfUploadId": str(upload_id)},
+            # Rebuild from the retained full source, not just the selected
+            # pages: replacing the structure with a subset loses other pages.
+            source_text=source_text,
+            source_metadata={
+                "retryOfUploadId": str(upload_id),
+                "retryPageNumbers": sorted(set(payload.page_numbers)),
+            },
         ),
         actor_id=actor.id,
         parser=parser,
@@ -2569,7 +2594,10 @@ def _failed_pages(structure: dict[str, object]) -> list[int]:
         return []
     pages: set[int] = set()
     for note in notes:
-        if not isinstance(note, dict) or note.get("code") != "ai_parse_fallback":
+        if not isinstance(note, dict) or note.get("code") not in {
+            "page_text_missing",
+            "page_extraction_failed",
+        }:
             continue
         values = note.get("pageNumbers")
         if isinstance(values, list):

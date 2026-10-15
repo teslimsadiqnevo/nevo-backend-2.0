@@ -1069,7 +1069,13 @@ class UploadStatusResponse(CamelResponse):
     #: Every segment the parse produced, in order. Modules point at these by
     #: segmentKey.
     segments: list[UploadSegmentDocument] = Field(default_factory=list)
-    failed_pages: list[int] = Field(default_factory=list)
+    failed_pages: list[int] = Field(
+        default_factory=list,
+        description=(
+            "1-based PDF pages whose text could not be extracted; AI formatting "
+            "failures with text retained in fallback sections are not missing pages."
+        ),
+    )
     structure: "UploadStructureDocument"
     #: Raw, for reporting. Whatever the driver or the provider said, which is
     #: not prose and was never meant to be shown to a teacher.

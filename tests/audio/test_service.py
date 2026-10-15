@@ -186,3 +186,35 @@ async def test_current_tts_job_is_polled_and_only_audio_is_returned(monkeypatch)
     _install(monkeypatch, handler)
     result = await AudioGenerationService(_settings())._generate_audio("Read this.")
     assert result == b"generated-mp3"
+
+
+@pytest.mark.asyncio
+async def test_retired_voice_falls_back_but_other_404s_do_not(monkeypatch):
+    import json
+
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        body = json.loads(request.content)
+        if body.get("voice"):
+            return httpx.Response(404, json={"error": {"code": "VOICE_NOT_FOUND"}})
+        return httpx.Response(200, content=b"default-voice-mp3")
+
+    _install(monkeypatch, handler)
+    settings = _settings().model_copy(update={"yarngpt_voice": "RetiredVoice"})
+    assert (
+        await AudioGenerationService(settings)._generate_audio("A lesson.") == b"default-voice-mp3"
+    )
+    assert len(requests) == 2
+    assert requests[0].headers["Idempotency-Key"] != requests[1].headers["Idempotency-Key"]
+
+
+@pytest.mark.asyncio
+async def test_missing_route_reports_provider_code_and_trace(monkeypatch):
+    def handler(request):
+        return httpx.Response(404, json={"error": {"code": "NOT_FOUND", "trace_id": "trace-123"}})
+
+    _install(monkeypatch, handler)
+    with pytest.raises(AudioGenerationError, match=r"POST /api/v1/tts.*NOT_FOUND.*trace-123"):
+        await AudioGenerationService(_settings())._generate_audio("A lesson.")

@@ -54,10 +54,13 @@ caches the current voice catalogue, resolves display-case settings such as
 when no configured ID is usable. A retired-voice 404 refreshes that catalogue.
 
 Live synthesis then succeeded: 78,956 MP3 bytes, validated by macOS `afinfo` as
-4.896 seconds of mono 16 kHz audio. This confirms provider generation, not
-Supabase/browser playback: local `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
-are absent. The test key is in ignored `.env`, never in the repository. Eleven
-focused audio tests passed after the correction.
+4.896 seconds of mono 16 kHz audio. After storage credentials were configured,
+the same service uploaded the clip to Supabase and its returned playback URL
+served HTTP 200, `audio/mpeg`, with the same 78,956 bytes; the downloaded MP3
+also passed `afinfo` validation. This verifies generation, storage and direct
+media retrieval, not a browser UI interaction or deployed production code.
+Credentials are in ignored `.env`, never in the repository. Eleven focused
+audio tests passed after the correction. Provider rate limits still apply.
 
 The exact historical production 404 still cannot be attributed from its old
 status-only message; the new provider code/trace remains necessary for that.

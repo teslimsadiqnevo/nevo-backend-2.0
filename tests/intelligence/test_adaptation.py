@@ -444,3 +444,102 @@ def test_a_client_that_never_reports_its_depths_is_unaffected() -> None:
 
     assert plan.proactive_adjustment is not None
     assert plan.proactive_adjustment.action == "simplify"
+
+
+def test_slower_is_returned_when_pacing_and_comprehension_are_strained() -> None:
+    pacing_signals = RuntimeSignals(
+        current_segment_id="text-1",
+        current_modality=ContentModality.TEXT,
+        available_modalities=(ContentModality.TEXT,),
+        comprehension_score=40.0,
+        session_average_comprehension=70.0,
+        accuracy_below_baseline=True,
+        consecutive_errors=0,
+        engagement_score=0.3,
+        engagement_baseline=0.7,
+        engagement_below_baseline_seconds=200,
+        current_segment_elapsed_seconds=200,
+    )
+    plan = rule_based_adaptation_plan(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            mode=AdaptationMode.IN_LESSON,
+            segments=(
+                ContentSegment(
+                    id="text-1",
+                    segment_type=ContentSegmentType.EXPLANATION,
+                    available_modalities=(ContentModality.TEXT,),
+                    available_depths=("simplified", "expanded"),
+                ),
+            ),
+            signals=pacing_signals,
+        ),
+        profile=balanced_profile(),
+    )
+    assert plan.proactive_adjustment is not None
+    assert plan.proactive_adjustment.action == "slower"
+
+
+def test_expand_is_returned_when_learner_is_excelling() -> None:
+    excelling_signals = RuntimeSignals(
+        current_segment_id="text-1",
+        current_modality=ContentModality.TEXT,
+        available_modalities=(ContentModality.TEXT,),
+        comprehension_score=90.0,
+        session_average_comprehension=75.0,
+        consecutive_errors=0,
+        replay_count_on_segment=0,
+        current_segment_elapsed_seconds=100,
+    )
+    plan = rule_based_adaptation_plan(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            mode=AdaptationMode.IN_LESSON,
+            segments=(
+                ContentSegment(
+                    id="text-1",
+                    segment_type=ContentSegmentType.EXPLANATION,
+                    available_modalities=(ContentModality.TEXT,),
+                    available_depths=("simplified", "expanded"),
+                ),
+            ),
+            signals=excelling_signals,
+        ),
+        profile=balanced_profile(),
+    )
+    assert plan.proactive_adjustment is not None
+    assert plan.proactive_adjustment.action == "expand"
+
+
+def test_expand_is_withheld_when_no_expanded_depth_available() -> None:
+    excelling_signals = RuntimeSignals(
+        current_segment_id="text-1",
+        current_modality=ContentModality.TEXT,
+        available_modalities=(ContentModality.TEXT,),
+        comprehension_score=90.0,
+        session_average_comprehension=75.0,
+        consecutive_errors=0,
+        replay_count_on_segment=0,
+        current_segment_elapsed_seconds=100,
+    )
+    plan = rule_based_adaptation_plan(
+        request=AdaptationRequest(
+            student_id=STUDENT_ID,
+            lesson_id=LESSON_ID,
+            mode=AdaptationMode.IN_LESSON,
+            segments=(
+                ContentSegment(
+                    id="text-1",
+                    segment_type=ContentSegmentType.EXPLANATION,
+                    available_modalities=(ContentModality.TEXT,),
+                    available_depths=("simplified",),
+                ),
+            ),
+            signals=excelling_signals,
+        ),
+        profile=balanced_profile(),
+    )
+    assert plan.proactive_adjustment is None
+

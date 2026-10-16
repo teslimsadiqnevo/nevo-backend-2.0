@@ -1167,6 +1167,7 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
         audio_variant=audio_variant,
         interactive_variant=segment.interactive_variant,
         calculation_variant=segment.calculation_variant,
+        depth_variants=segment.depth_variants,
         needs_review=needs_review,
         review_reasons=tuple(dict.fromkeys(reasons)),
         estimated_minutes=segment.estimated_minutes or estimate_segment_minutes(segment),

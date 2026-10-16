@@ -640,6 +640,20 @@ def _proactive_adjustment(
     profile: LearnerProfileSnapshot,
     segment: ContentSegment | None = None,
 ) -> ProactiveAdjustment | None:
+    positive_evidence = _positive_trigger_signals(signals)
+    if (
+        len(positive_evidence) >= 2
+        and len(_evidence_by_category(positive_evidence)) >= 2
+        and _combined_confidence(positive_evidence) >= _confidence_threshold(signals)
+    ):
+        return ProactiveAdjustment(
+            action="expand",
+            segment_id=signals.current_segment_id,
+            reason="Engagement and comprehension are both above the current baseline.",
+            confidence=_combined_confidence(positive_evidence),
+            trigger_signals=positive_evidence,
+        )
+
     evidence = _trigger_signals(signals=signals, profile=profile)
     confidence = _combined_confidence(evidence)
     if not _evidence_allows_adaptation(signals=signals, evidence=evidence):
@@ -653,10 +667,7 @@ def _proactive_adjustment(
     if stuck is not None:
         return replace(stuck, segment_id=signals.current_segment_id)
     evidence_by_category = _evidence_by_category(evidence)
-    if "comprehension" in evidence_by_category and {
-        "engagement",
-        "performance",
-    }.intersection(evidence_by_category):
+    if "performance" in evidence_by_category:
         return ProactiveAdjustment(
             action="simplify",
             segment_id=signals.current_segment_id,
@@ -672,14 +683,13 @@ def _proactive_adjustment(
             confidence=confidence,
             trigger_signals=evidence,
         )
-    positive_evidence = _positive_trigger_signals(signals)
-    if _evidence_allows_adaptation(signals=signals, evidence=positive_evidence):
+    if "comprehension" in evidence_by_category:
         return ProactiveAdjustment(
-            action="expand",
+            action="simplify",
             segment_id=signals.current_segment_id,
-            reason="Engagement and comprehension are both above the current baseline.",
-            confidence=_combined_confidence(positive_evidence),
-            trigger_signals=positive_evidence,
+            reason="Comprehension has dropped below this session's average.",
+            confidence=confidence,
+            trigger_signals=evidence,
         )
     return None
 

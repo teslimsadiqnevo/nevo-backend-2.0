@@ -200,3 +200,24 @@ async def test_a_rewrite_that_fails_its_checks_is_reported_as_rejected() -> None
 def test_variants_with_nothing_in_them_are_empty() -> None:
     assert DepthVariants(simplified=None, expanded=None).empty
     assert not DepthVariants(simplified="x", expanded=None).empty
+
+
+def test_normalize_segment_preserves_depth_variants() -> None:
+    from nevo.content_parsing.service import _normalize_segment
+
+    sample = segment()
+    with_depth = ParsedLessonSegment(
+        segment_key=sample.segment_key,
+        content_type=sample.content_type,
+        sequence_order=sample.sequence_order,
+        title=sample.title,
+        body=sample.body,
+        available_modalities=sample.available_modalities,
+        depth_variants={"simplified": {"body": "Shorter."}, "expanded": {"body": "Longer."}},
+    )
+    normalized = _normalize_segment(with_depth)
+    assert normalized.depth_variants == {
+        "simplified": {"body": "Shorter."},
+        "expanded": {"body": "Longer."},
+    }
+

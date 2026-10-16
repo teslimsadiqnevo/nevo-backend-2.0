@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -7,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.content_parsing.chunks import reading_chunks
+from nevo.content_parsing.delivery import validated_delivery
+from nevo.content_parsing.descriptions import clean_lesson_description
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
@@ -256,6 +259,16 @@ class SqlAlchemyContentParsingRepository:
         existing_lesson_id: UUID | None = None,
         parse_run_id: UUID | None = None,
     ) -> StoredParsedLesson:
+        # Never publish a completed parse whose variants cannot be read back.
+        # Validation runs before opening the write transaction or replacing rows.
+        parsed = replace(
+            parsed,
+            description=clean_lesson_description(parsed.description),
+            segments=tuple(validated_delivery(segment) for segment in parsed.segments),
+            assessment=tuple(
+                checkpoint_payloads(list(parsed.assessment), segment_key="lesson-assessment")
+            ),
+        )
         lesson_id = existing_lesson_id or uuid4()
         parse_run_id = parse_run_id or uuid4()
         school_id = await self.requester_school_id(requested_by_user_id)

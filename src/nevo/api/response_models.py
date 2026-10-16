@@ -23,6 +23,7 @@ from nevo.api.lesson_contracts import (
     TextVariant,
     VisualVariant,
 )
+from nevo.content_parsing.descriptions import clean_lesson_description
 from nevo.content_parsing.failures import UploadReasonCode
 from nevo.domain.accounts.age_bands import AgeBand
 from nevo.domain.accounts.vocabulary import (
@@ -499,6 +500,8 @@ class LessonSummaryResponse(CamelResponse):
     #: What a teacher quotes for it.
     incident_id: str | None = None
     created_at: datetime
+
+    _content_description = field_validator("description", mode="before")(clean_lesson_description)
 
 
 class LessonSegmentResponse(CamelResponse):

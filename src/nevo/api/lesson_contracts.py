@@ -128,6 +128,33 @@ class TextVariant(BaseModel):
         alias="keyPointAuthorship",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def inherit_known_provenance(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        item = dict(value)
+        origin = canonical_authorship(item.get("authoredBy", item.get("authored_by", "person")))
+        if origin not in ("person", "nevo"):
+            return item
+        for key, snake_key in (
+            ("keyTerms", "key_terms"),
+            ("equationCallouts", "equation_callouts"),
+        ):
+            actual_key = key if key in item else snake_key
+            if isinstance(item.get(actual_key), list):
+                item[actual_key] = [
+                    {**child, "authoredBy": origin}
+                    if isinstance(child, dict)
+                    and canonical_authorship(
+                        child.get("authoredBy", child.get("authored_by", origin))
+                    )
+                    not in ("person", "nevo")
+                    else child
+                    for child in item[actual_key]
+                ]
+        return item
+
 
 class KeyTerm(BaseModel):
     """A term the child can inspect without leaving the segment."""

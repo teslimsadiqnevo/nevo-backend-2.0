@@ -45,7 +45,8 @@ def test_invalid_image_proposal_and_authorship_alias_do_not_break_read():
         },
         sequence_order=1,
     )
-    assert segment.text_variant["equationCallouts"][0]["authoredBy"] == "person"
+    # Generated aids use server-owned provenance, not an author string from the model.
+    assert segment.text_variant["equationCallouts"][0]["authoredBy"] == "nevo"
 
 
 @pytest.mark.asyncio

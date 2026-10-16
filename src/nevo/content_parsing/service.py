@@ -12,13 +12,14 @@ from uuid import UUID
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
-from nevo.api.lesson_contracts import canonical_authorship, checkpoint_payloads
+from nevo.api.lesson_contracts import checkpoint_payloads
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
 from nevo.content_parsing.depth import (
     DEPTH_CONCURRENCY,
     DepthVariantError,
     DepthVariantService,
 )
+from nevo.content_parsing.descriptions import clean_lesson_description
 from nevo.content_parsing.entities import (
     ContentParseRequest,
     ParsedLesson,
@@ -233,15 +234,26 @@ class ContentParsingService:
         lose a lesson.
         """
         source = _source_for_prompt(request)
+        missing_pages = _missing_text_pages(source)
+        source, navigation_pages = _without_contents_pages(source)
         modules = []
         await _report(on_stage, UploadStage.READING_DOCUMENT)
         chunks = _bounded_chunks(source.strip(), MAX_CHUNK_CHARS - 1600)
         await _report(on_stage, UploadStage.FINDING_SECTIONS)
         segments: list[ParsedLessonSegment] = []
-        missing_pages = _missing_text_pages(source)
         review_notes: list[dict[str, object]] = (
             [{"code": "page_text_missing", "pageNumbers": missing_pages}] if missing_pages else []
         )
+        if navigation_pages:
+            review_notes.append(
+                {
+                    "code": "source_navigation_pages",
+                    "pageNumbers": navigation_pages,
+                    "message": (
+                        "Contents pages remain in the original file but are not teaching sections."
+                    ),
+                }
+            )
         ai_call_count = 0
         recap: str | None = None
         description: str | None = None
@@ -335,7 +347,7 @@ class ContentParsingService:
                 chunk_recap = _optional_string(payload.get("recap"))
                 if chunk_recap:
                     recap_parts.append(chunk_recap)
-                description = description or _optional_string(payload.get("description"))
+                description = description or clean_lesson_description(payload.get("description"))
                 # Likewise its name. The filename is a fallback, not a title:
                 # nobody writing a lesson is naming it for a teacher's library.
                 title = title or _lesson_title(payload.get("title"))
@@ -725,6 +737,30 @@ def _pass_source(chunks: list[str], index: int) -> str:
         f"PREVIOUS CONTEXT ONLY:\n{previous}\nCURRENT SOURCE:\n{chunks[index - 1]}"
         f"\nNEXT CONTEXT ONLY:\n{following}"
     )
+
+
+def _without_contents_pages(source: str) -> tuple[str, list[int]]:
+    """Keep navigation in the retained source, not generated teaching content."""
+    markers = list(re.finditer(r"(?m)^\[Page (\d+)\][ \t]*$", source))
+    if not markers:
+        return source, []
+    retained = [source[: markers[0].start()]]
+    omitted: list[int] = []
+    in_contents = False
+    for index, marker in enumerate(markers):
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(source)
+        page = source[marker.start() : end]
+        heading = bool(re.search(r"(?im)^\s*(?:table of )?contents\s*$", page))
+        listing_lines = len(re.findall(r"(?m)(?:\.\s*){3,}\d+\s*$", page))
+        in_contents = listing_lines >= 3 and (heading or in_contents)
+        if in_contents:
+            omitted.append(int(marker.group(1)))
+        else:
+            retained.append(page)
+    content = "".join(retained)
+    if omitted and not content.strip():
+        raise ValueError("No teaching content was found beyond the contents pages")
+    return content, omitted
 
 
 def _is_wrapup(title: str | None) -> bool:
@@ -1586,7 +1622,7 @@ def _text_variant(value: object, body: str, *, authored_by: str = "person") -> d
                     {
                         "term": term[:120],
                         "definition": definition[:500],
-                        "authoredBy": canonical_authorship(raw.get("authoredBy") or "nevo"),
+                        "authoredBy": authored_by,
                     }
                 )
 
@@ -1604,7 +1640,7 @@ def _text_variant(value: object, body: str, *, authored_by: str = "person") -> d
                 {
                     "equation": equation[:500],
                     "label": label[:160] if label else None,
-                    "authoredBy": canonical_authorship(raw.get("authoredBy") or "nevo"),
+                    "authoredBy": authored_by,
                 }
             )
 

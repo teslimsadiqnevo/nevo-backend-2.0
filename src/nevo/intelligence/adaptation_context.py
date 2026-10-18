@@ -4,13 +4,14 @@ from datetime import UTC, datetime
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 
+from nevo.api.lesson_contracts import segment_modalities
 from nevo.api.product_common import actor_user
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import LessonAssignment
 from nevo.db.models.mastery import StudentConceptScaffoldState
 from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.signal_event import LessonSession, SignalEvent
-from nevo.domain.intelligence.vocabulary import AdaptationMode, ContentModality
+from nevo.domain.intelligence.vocabulary import AdaptationMode, ContentModality, ContentSegmentType
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 from nevo.intelligence.adaptation import ADAPTATION_HISTORY_EVENT_TYPES
 from nevo.intelligence.entities import AdaptationRequest, ContentSegment
@@ -109,6 +110,7 @@ async def prepare_adaptation(session, principal, payload, signals):
             or next((item.get("conceptId") for item in checkpoints if item.get("conceptId")), None)
         )
         steps = calculation.get("steps") or []
+        modes = segment_modalities(row.content_type, row.available_modalities, calculation)
         hints = tuple(str(item["hint"]) for item in [*steps, *checkpoints] if item.get("hint"))
         questions = tuple(str(item["prompt"]) for item in steps if item.get("prompt"))
         if not questions:
@@ -121,20 +123,34 @@ async def prepare_adaptation(session, principal, payload, signals):
         segments.append(
             ContentSegment(
                 id=declared.id,
-                segment_type=declared.segment_type,
-                available_modalities=tuple(
-                    ContentModality(value) for value in row.available_modalities
+                segment_type=ContentSegmentType(
+                    {
+                        "explanatory_text": "explanation",
+                        "visual_diagram": "diagram",
+                        "practice_question": "practice",
+                        "definition": "definition",
+                        "summary": "summary",
+                        "worked_example": "worked_example",
+                        "calculation": "calculation",
+                    }[row.content_type]
                 ),
+                available_modalities=tuple(ContentModality(value) for value in modes),
                 concept_id=str(concept_id) if concept_id else None,
                 estimated_minutes=row.estimated_minutes,
                 passive=declared.passive,
                 title=row.title,
                 available_depths=tuple(
-                    key for key in (row.depth_variants or {}) if key in {"simplified", "expanded"}
+                    key
+                    for key, value in (row.depth_variants or {}).items()
+                    if key in {"simplified", "expanded"}
+                    and isinstance(value, dict)
+                    and value.get("body")
+                    and value.get("reviewStatus") != "pending"
                 ),
                 hints=hints,
                 guided_questions=questions,
                 scaffold_intensity=states.get(str(concept_id)),
+                primary_modality=ContentModality(modes[0]) if modes else None,
             )
         )
     if sitting is not None:
@@ -207,14 +223,84 @@ async def prepare_adaptation(session, principal, payload, signals):
             if attempt.correct is not False:
                 break
             errors += 1
-        signals = replace(
-            signals,
-            available_modalities=tuple(
-                ContentModality(value) for value in current.available_modalities
+        from nevo.intelligence.runtime_evidence import derive_runtime_evidence
+
+        historical_sessions = (
+            select(LessonSession.id)
+            .where(
+                LessonSession.student_id == actor.id,
+                LessonSession.id != sitting.id,
+                LessonSession.ended_at.is_not(None),
+            )
+            .order_by(LessonSession.started_at.desc())
+            .limit(5)
+        )
+        history_ids = list(await session.scalars(historical_sessions))
+        historical_attempts = list(
+            await session.scalars(
+                select(LessonQuestionAttempt)
+                .where(
+                    LessonQuestionAttempt.student_id == actor.id,
+                    LessonQuestionAttempt.session_id.in_(history_ids),
+                )
+                .order_by(LessonQuestionAttempt.submitted_at.desc())
+                .limit(100)
+            )
+        )
+        historical_events = list(
+            await session.scalars(
+                select(SignalEvent).where(
+                    SignalEvent.student_id == actor.id,
+                    SignalEvent.session_id.in_(history_ids),
+                    SignalEvent.event_type == SignalEventType.ENGAGEMENT_SIGNAL,
+                )
+            )
+        )
+        derived = derive_runtime_evidence(
+            attempts=attempts,
+            events=events,
+            historical_attempts=historical_attempts,
+            historical_events=historical_events,
+            baseline=actor.baseline_profile or {},
+            current=current,
+            now=now,
+            started_at=sitting.started_at,
+        )
+        current_modes = (
+            segment_modalities(
+                current.content_type, current.available_modalities, current.calculation_variant
             )
             if current
+            else []
+        )
+        signals = replace(
+            signals,
+            **derived,
+            current_modality=ContentModality(
+                next(
+                    (
+                        event.event_data.get("toModality") or event.event_data.get("modality")
+                        for event in reversed(events)
+                        if current
+                        and str(event.event_data.get("segmentId"))
+                        in {str(current.id), current.segment_key}
+                        and event.event_type
+                        in {
+                            SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
+                            SignalEventType.MODALITY_MANUAL_SWITCH,
+                        }
+                        and (event.event_data.get("toModality") or event.event_data.get("modality"))
+                        in current_modes
+                    ),
+                    current_modes[0],
+                )
+            )
+            if current and current_modes
+            else None,
+            midpoint_reached=bool(current and stored.index(current) >= len(stored) / 2),
+            available_modalities=tuple(ContentModality(value) for value in current_modes)
+            if current
             else (),
-            consecutive_errors=errors,
             misconception_confirmed=repeated_near_miss(attempts),
             session_modality_shift_count=len(shifts),
             session_adaptation_count=len(adaptations),
@@ -242,6 +328,10 @@ async def prepare_adaptation(session, principal, payload, signals):
                 event.event_type is SignalEventType.MODALITY_SUGGESTION_DECLINED for event in events
             ),
         )
+    else:
+        from nevo.intelligence.entities import RuntimeSignals
+
+        signals = RuntimeSignals()
     result = AdaptationRequest(
         student_id=actor.id,
         lesson_id=lesson.id,

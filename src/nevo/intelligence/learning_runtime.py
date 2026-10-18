@@ -27,6 +27,65 @@ ONBOARDING_MODULES = ("grid_span", "pattern_flanker", "sentence_dot", "domain_pr
 MASTERY_THRESHOLD = 0.7
 
 
+async def seed_completed_lesson_reviews(session, student_id, session_id):
+    attempts = list(
+        await session.scalars(
+            select(LessonQuestionAttempt)
+            .where(
+                LessonQuestionAttempt.student_id == student_id,
+                LessonQuestionAttempt.session_id == session_id,
+                LessonQuestionAttempt.correct.is_not(None),
+            )
+            .order_by(LessonQuestionAttempt.submitted_at)
+        )
+    )
+    outcomes = {}
+    for attempt in attempts:
+        key = (attempt.question_snapshot or {}).get("conceptId")
+        if key:
+            outcomes[UUID(str(key))] = bool(attempt.correct)
+    existing = set(
+        await session.scalars(
+            select(StudentConceptScheduling.concept_id).where(
+                StudentConceptScheduling.student_id == student_id,
+                StudentConceptScheduling.concept_id.in_(outcomes),
+            )
+        )
+    )
+    valid = set(
+        await session.scalars(
+            select(Concept.id)
+            .join(User, User.school_id == Concept.school_id)
+            .where(User.id == student_id, Concept.id.in_(outcomes))
+        )
+    )
+    for concept_id, successful in outcomes.items():
+        if concept_id in existing or concept_id not in valid:
+            continue
+        schedule = initial_schedule(
+            student_id=student_id,
+            concept_id=concept_id,
+            recall_successful=successful,
+            reviewed_at=datetime.now(UTC),
+        )
+        session.add(
+            StudentConceptScheduling(
+                **{
+                    name: getattr(schedule, name)
+                    for name in (
+                        "student_id",
+                        "concept_id",
+                        "stability",
+                        "difficulty",
+                        "last_review",
+                        "review_count",
+                        "next_review_due",
+                    )
+                }
+            )
+        )
+
+
 def onboarding_modules(profile: dict) -> set[str]:
     return set(profile.get("completed_modules") or ()) & set(ONBOARDING_MODULES)
 

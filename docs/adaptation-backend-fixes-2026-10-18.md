@@ -1,5 +1,7 @@
 # Adaptation Backend Fixes and Handoff
 
+For the subsequent 17 October engineering notes and corrections, see [the remaining-gap follow-up](adaptation-remaining-backend-fixes-2026-10-18.md). Its status supersedes this first handoff where the scope overlaps.
+
 Date: 18 October 2026
 
 Status: implemented and tested, with configured Supabase migrations applied through `20261018_0103`. Backend only. Hosting deployment must be confirmed separately. The original findings remain in `nevo-adaptation-backend-audit-2026-10-18.md` as an audit snapshot.

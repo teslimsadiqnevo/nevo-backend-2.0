@@ -9,7 +9,11 @@ from nevo.domain.intelligence.vocabulary import ScaffoldingLevel
 
 
 def build_baseline_profile(
-    *, session_id: str, features: Iterable[Mapping[str, object]]
+    *,
+    session_id: str,
+    features: Iterable[Mapping[str, object]],
+    previous_profile: Mapping[str, object] | None = None,
+    previous_engine_config: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Reduce device-produced baseline aggregates into bounded engine settings."""
     rows = list(features)
@@ -44,7 +48,7 @@ def build_baseline_profile(
     attention_minutes = _clamp(
         average("attention_minutes", "sustained_attention_minutes", default=12.0), 1.0, 60.0
     )
-    working_memory = round(_clamp(1.0 + accuracy * 4.0, 1.0, 5.0))
+    working_memory = round(_clamp(1.0 + average("wmc_accuracy", default=accuracy) * 4.0, 1.0, 5.0))
     processing_speed = round(_clamp(6.0 - response_ms / 1000.0, 1.0, 5.0))
     confidence = "medium" if len(rows) >= 3 else "low"
     now = datetime.now(UTC).isoformat()
@@ -58,6 +62,7 @@ def build_baseline_profile(
         "reading_wpm": round(reading_wpm, 2),
         "attention_span_minutes": round(attention_minutes, 2),
         "comprehension_accuracy": round(accuracy, 4),
+        "response_time_ms": round(response_ms),
         "confidence": confidence,
         "updated_at": now,
     }
@@ -85,6 +90,73 @@ def build_baseline_profile(
         },
         "generatedFromBaselineAt": now,
     }
+    measured_reading = bool(values.get("reading_wpm") or values.get("words_per_minute"))
+    if not measured_reading:
+        profile.pop("reading_wpm", None)
+    else:
+        profile["reading_wpm_source"] = "measured"
+    # Recalibration updates only what this run measured, not default values
+    # for unrelated dimensions. A new account still gets safe delivery defaults.
+    previous = dict(previous_profile or {})
+    if previous:
+        dimensions = {str(row.get("dimension", "")) for row in rows}
+        modules = {str(row.get("module", "")) for row in rows}
+        fields = {
+            "working_memory_capacity": "wmc" in dimensions
+            or "grid_span" in modules
+            or bool(values.get("wmc_accuracy")),
+            "processing_speed": "ps" in dimensions
+            or "pattern_flanker" in modules
+            or any(key in values for key in ("response_time_ms", "ps_median_response_ms")),
+            "attention_span_minutes": "attention" in dimensions
+            or bool(values.get("attention_minutes")),
+            "comprehension_accuracy": "domain" in dimensions
+            or any(
+                key in values for key in ("accuracy", "comprehension_accuracy", "domain_accuracy")
+            ),
+            "reading_wpm": measured_reading,
+            "response_time_ms": "ps" in dimensions
+            or any(key in values for key in ("response_time_ms", "ps_median_response_ms")),
+        }
+        profile = {
+            **previous,
+            **{key: value for key, value in profile.items() if key not in fields or fields[key]},
+        }
+        held = dict(previous_engine_config or {})
+        for section in ("reading", "pacing", "support"):
+            engine_config[section] = {
+                **dict(held.get(section) or {}),
+                **dict(engine_config[section]),
+            }
+        if not measured_reading:
+            engine_config["reading"] = dict(held.get("reading") or engine_config["reading"])
+            if not held.get("reading") and previous.get("reading_wpm"):
+                rate = float(previous["reading_wpm"])
+                engine_config["reading"].update(
+                    targetWordsPerMinute=round(rate),
+                    segmentWordTarget=round(_clamp(rate * 1.5, 60, 260)),
+                )
+        pacing = engine_config["pacing"]
+        held_pacing = dict(held.get("pacing") or {})
+        if not fields["processing_speed"]:
+            pacing["responseTimeTargetMs"] = held_pacing.get(
+                "responseTimeTargetMs", previous.get("response_time_ms", response_ms)
+            )
+        if not fields["attention_span_minutes"]:
+            pacing["attentionWindowMinutes"] = held_pacing.get(
+                "attentionWindowMinutes", previous.get("attention_span_minutes", attention_minutes)
+            )
+        if not fields["working_memory_capacity"] and not fields["comprehension_accuracy"]:
+            engine_config["support"] = dict(held.get("support") or engine_config["support"])
+        else:
+            memory = int(profile.get("working_memory_capacity", working_memory))
+            accuracy = float(profile.get("comprehension_accuracy", accuracy))
+            engine_config["support"].update(
+                initialScaffoldLevel=ScaffoldingLevel.STRONG.value
+                if memory <= 2 or accuracy < 0.7
+                else ScaffoldingLevel.STANDARD.value,
+                comprehensionCheckInterval=2 if memory <= 2 else 3,
+            )
     return profile, engine_config
 
 
@@ -150,6 +222,17 @@ def reduce_trials(
             feature[f"{dimension}_median_response_ms"] = (
                 ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
             )
+        if dimension == "reading":
+            measured = [
+                float(row["readingWordCount"]) * 60_000 / float(row["responseTimeMs"])
+                for row in rows
+                if isinstance(row.get("readingWordCount"), (int, float))
+                and isinstance(row.get("responseTimeMs"), (int, float))
+                and float(row["readingWordCount"]) > 0
+                and float(row["responseTimeMs"]) > 0
+            ]
+            if measured:
+                feature["reading_wpm"] = sum(measured) / len(measured)
         if condition:
             feature["condition"] = condition
             feature[f"{dimension}_{condition}_accuracy"] = feature[f"{dimension}_accuracy"]

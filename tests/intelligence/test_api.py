@@ -130,9 +130,9 @@ def test_adapt_endpoint_returns_adaptation_plan() -> None:
     assert service.requests[0].mode is AdaptationMode.IN_LESSON
     assert service.requests[0].student_id == principal.user_id
     assert service.requests[0].session_id == session_id
-    assert service.requests[0].signals.current_segment_elapsed_seconds == 30
-    assert service.requests[0].signals.seconds_since_last_adaptation == 20
-    assert service.requests[0].signals.session_modality_shift_count == 2
+    assert service.requests[0].signals.current_segment_elapsed_seconds is None
+    assert service.requests[0].signals.seconds_since_last_adaptation is None
+    assert service.requests[0].signals.session_modality_shift_count is None
 
 
 def test_adapt_endpoint_rejects_different_student_context() -> None:

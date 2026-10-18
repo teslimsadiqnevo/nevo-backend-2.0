@@ -7,7 +7,6 @@ from uuid import UUID
 import pytest
 
 from nevo.domain.learner_profiles.vocabulary import (
-    ChannelPreferenceStrength,
     ConfidenceLevel,
 )
 from nevo.learner_profiles.profile_updates import (
@@ -152,10 +151,10 @@ async def test_update_after_lesson_flags_sudden_change() -> None:
             {
                 "updates": [
                     {
-                        "dimension": "visual_spatial_preference",
-                        "value": "low",
+                        "dimension": "cognitive_load_threshold",
+                        "value": 1,
                         "confidence": "medium",
-                        "rationale": "Session pattern moved away from visuals.",
+                        "rationale": "Session support needs changed abruptly.",
                     }
                 ]
             }
@@ -164,8 +163,8 @@ async def test_update_after_lesson_flags_sudden_change() -> None:
     repository = FakeRepository(
         profile_context(
             {
-                "visual_spatial_preference": ProfileDimensionState(
-                    value=ChannelPreferenceStrength.STRONG,
+                "cognitive_load_threshold": ProfileDimensionState(
+                    value=5,
                     confidence=ConfidenceLevel.HIGH,
                 ),
             }
@@ -186,10 +185,10 @@ async def test_update_after_lesson_flags_sudden_change() -> None:
     assert outcome.flag_id == FLAG_ID
     assert repository.applied == ()
     assert repository.flag == ProfileAttentionFlagDraft(
-        dimension="visual_spatial_preference",
-        current_value="strong",
-        recommended_value="low",
-        rationale="Session pattern moved away from visuals.",
+        dimension="cognitive_load_threshold",
+        current_value=5,
+        recommended_value=1,
+        rationale="Session support needs changed abruptly.",
     )
 
 
@@ -199,8 +198,8 @@ def test_parse_profile_update_response_accepts_dict_updates() -> None:
         ```json
         {
           "updates": {
-            "auditory_preference": {
-              "value": "moderate",
+            "processing_speed": {
+              "value": 3,
               "confidence": "medium"
             }
           },
@@ -213,8 +212,8 @@ def test_parse_profile_update_response_accepts_dict_updates() -> None:
     assert rationale == "Audio signals increased."
     assert recommendations == (
         ProfileDimensionRecommendation(
-            dimension="auditory_preference",
-            value=ChannelPreferenceStrength.MODERATE,
+            dimension="processing_speed",
+            value=3,
             confidence=ConfidenceLevel.MEDIUM,
             rationale=None,
         ),

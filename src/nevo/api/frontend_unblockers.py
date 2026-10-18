@@ -40,6 +40,7 @@ from nevo.api.learning_support import require_learning_support
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     checkpoint_payloads,
+    depth_payloads,
 )
 from nevo.api.pagination import (
     DEFAULT_LIMIT,
@@ -436,6 +437,16 @@ class BaselineTrial(BaseModel):
     #: means the activity could not be presented or a motor target was left
     #: untapped. Choosing "not sure" is a response, not a skip.
     skipped: bool = False
+    reading_word_count: int | None = Field(
+        default=None,
+        alias="readingWordCount",
+        ge=1,
+        le=10000,
+        description=(
+            "Words in the displayed reading passage; paired with observed responseTimeMs "
+            "to derive WPM server-side. Omit when the activity is not timed reading."
+        ),
+    )
 
 
 class BaselineTrialsRequest(BaseModel):
@@ -561,7 +572,6 @@ BASELINE_DIMENSIONS: tuple[BaselineDimension, ...] = (
     "ans",
     "attention",
     "domain",
-    "motor_speed",
 )
 
 
@@ -1283,7 +1293,11 @@ async def lesson_detail(
                 audioVariant=item.audio_variant,
                 interactiveVariant=item.interactive_variant,
                 calculationVariant=item.calculation_variant,
-                depthVariants=item.depth_variants,
+                depthVariants=depth_payloads(
+                    item.depth_variants,
+                    item.text_variant,
+                    for_student=actor.role == UserRole.STUDENT,
+                ),
                 needsReview=item.needs_review,
                 reviewReasons=list(item.review_reasons),
                 approved=item.approved_at is not None,
@@ -1643,6 +1657,16 @@ async def approve_segment(
     if segment.approved_at is None:
         segment.approved_at = datetime.now(UTC)
         segment.approved_by = user.id
+    variants = dict(segment.depth_variants or {})
+    for key in ("simplified", "expanded"):
+        if isinstance(variants.get(key), dict) and variants[key].get("reviewStatus") == "pending":
+            variants[key] = {
+                **variants[key],
+                "reviewStatus": "approved",
+                "reviewedBy": str(user.id),
+                "reviewedAt": datetime.now(UTC).isoformat(),
+            }
+    segment.depth_variants = variants
     await session.flush()
     total, approved = await _approval_counts(session, lesson.id)
     await session.commit()
@@ -1974,7 +1998,7 @@ async def submit_baseline_trials(
     if principal.role != "student":
         raise HTTPException(403, detail="Student account required")
     marked: list[dict[str, object]] = []
-    user = await session.get(User, principal.user_id)
+    user = await session.get(User, principal.user_id, with_for_update=True)
     if user is None:
         raise HTTPException(404, detail="Student not found")
     item_ids = [trial.probe_item_id for trial in payload.trials if trial.probe_item_id]
@@ -2008,6 +2032,7 @@ async def submit_baseline_trials(
                 "condition": trial.condition,
                 "correct": bool(correct),
                 "responseTimeMs": trial.response_time_ms,
+                "readingWordCount": trial.reading_word_count,
             }
         )
     user = await session.get(User, principal.user_id)
@@ -2047,6 +2072,8 @@ async def submit_baseline_trials(
     baseline_profile, engine_config = build_baseline_profile(
         session_id=payload.session_id,
         features=features,
+        previous_profile=user.baseline_profile if user else None,
+        previous_engine_config=user.engine_config if user else None,
     )
     baseline_profile["motor_step_skipped"] = payload.motor_step_skipped
     baseline_profile["motor_baselines"] = held_baselines
@@ -2109,9 +2136,12 @@ async def submit_baseline(
                 "aggregate baseline features."
             ),
         )
+    user = await session.get(User, principal.user_id, with_for_update=True)
     baseline_profile, engine_config = build_baseline_profile(
         session_id=payload.session_id,
         features=features,
+        previous_profile=user.baseline_profile if user else None,
+        previous_engine_config=user.engine_config if user else None,
     )
     from nevo.intelligence.learning_runtime import merge_baseline
 

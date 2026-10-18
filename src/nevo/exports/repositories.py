@@ -101,11 +101,10 @@ class SqlAlchemyIepExportRepository:
                     .group_by(SignalEvent.event_type)
                 )
             ).all()
-        student_name = " ".join(
-            part
-            for part in (student.first_name, student.last_name)
-            if part
-        ) or "this learner"
+        student_name = (
+            " ".join(part for part in (student.first_name, student.last_name) if part)
+            or "this learner"
+        )
         return ExportEvidence(
             student_name=student_name,
             payload={
@@ -117,9 +116,7 @@ class SqlAlchemyIepExportRepository:
                     "start": period_start.isoformat(),
                     "end": period_end.isoformat(),
                 },
-                "profileDimensionHistory": [
-                    _profile_history_payload(item) for item in history
-                ],
+                "profileDimensionHistory": [_profile_history_payload(item) for item in history],
                 "signalTrends": [
                     {"eventType": event_type.value, "count": count}
                     for event_type, count in signal_counts
@@ -218,9 +215,7 @@ class SqlAlchemyIepExportRepository:
             if record is None:
                 raise ExportNotFoundError
             await session.execute(
-                update(IepExport)
-                .where(IepExport.id == export_id)
-                .values(**values)
+                update(IepExport).where(IepExport.id == export_id).values(**values)
             )
             session.add(
                 StudentRecordEvent(
@@ -258,9 +253,7 @@ class SqlAlchemyIepExportRepository:
             if export_content is not None:
                 values["export_content"] = export_content
             await session.execute(
-                update(IepExport)
-                .where(IepExport.id == export_id)
-                .values(**values)
+                update(IepExport).where(IepExport.id == export_id).values(**values)
             )
             session.add(
                 StudentRecordEvent(
@@ -325,20 +318,6 @@ def _profile_history_payload(item: LearnerProfileHistory) -> dict[str, object | 
     return {
         "version": item.version,
         "createdAt": item.created_at.isoformat(),
-        "visualSpatialPreference": item.visual_spatial_preference.value
-        if item.visual_spatial_preference
-        else None,
-        "auditoryPreference": item.auditory_preference.value
-        if item.auditory_preference
-        else None,
-        "readingWritingPreference": item.reading_writing_preference.value
-        if item.reading_writing_preference
-        else None,
-        "interactiveKinestheticPreference": (
-            item.interactive_kinesthetic_preference.value
-            if item.interactive_kinesthetic_preference
-            else None
-        ),
         "cognitiveLoadThreshold": item.cognitive_load_threshold,
         "processingSpeed": item.processing_speed,
         "workingMemoryCapacity": item.working_memory_capacity,

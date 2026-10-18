@@ -1,5 +1,7 @@
 # Nevo Adaptation: Backend Status and Gaps
 
+Latest follow-up: [remaining backend fixes from the two engineering notes](adaptation-remaining-backend-fixes-2026-10-18.md).
+
 > **Implementation follow-up, 18 October:** Backend fixes have since been implemented and tested locally. See [the implementation handoff](adaptation-backend-fixes-2026-10-18.md) for current contracts, verification, deployment requirements, and remaining frontend/product acceptance limits. The audit below preserves the original findings against the inspected commit; it is not the current implementation status.
 
 Audit date: 18 October 2026  

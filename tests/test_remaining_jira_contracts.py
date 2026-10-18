@@ -31,7 +31,8 @@ async def test_motor_samples_correct_only_the_current_device():
     session = SimpleNamespace(
         get=AsyncMock(
             return_value=SimpleNamespace(
-                baseline_profile={"motor_baselines": {"desktop_cursor": desktop}}
+                baseline_profile={"motor_baselines": {"desktop_cursor": desktop}},
+                engine_config={},
             )
         ),
         execute=AsyncMock(),
@@ -56,7 +57,8 @@ async def test_no_motor_baseline_is_uncorrected_and_never_borrowed():
     session = SimpleNamespace(
         get=AsyncMock(
             return_value=SimpleNamespace(
-                baseline_profile={"motor_baselines": {"tablet_touch": {"motorBaselineMs": 100}}}
+                baseline_profile={"motor_baselines": {"tablet_touch": {"motorBaselineMs": 100}}},
+                engine_config={},
             )
         ),
         execute=AsyncMock(),

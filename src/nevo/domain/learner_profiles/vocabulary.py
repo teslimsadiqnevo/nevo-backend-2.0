@@ -1,10 +1,31 @@
 from enum import StrEnum
 
+RETIRED_STYLE_KEYS = frozenset(
+    {
+        "visualspatialpreference",
+        "auditorypreference",
+        "readingwritingpreference",
+        "interactivekinestheticpreference",
+        "processingchannelpreference",
+        "learningstyle",
+        "learningstyles",
+        "preferredmodality",
+        "channelpreferences",
+    }
+)
+
+
+def contains_learning_style(value: object) -> bool:
+    if isinstance(value, dict):
+        return any(
+            str(key).replace("_", "").casefold().removesuffix("confidence") in RETIRED_STYLE_KEYS
+            or contains_learning_style(item)
+            for key, item in value.items()
+        )
+    return isinstance(value, list) and any(contains_learning_style(item) for item in value)
+
+
 CANONICAL_PROFILE_DIMENSIONS = (
-    "visual_spatial_preference",
-    "auditory_preference",
-    "reading_writing_preference",
-    "interactive_kinesthetic_preference",
     "cognitive_load_threshold",
     "processing_speed",
     "working_memory_capacity",

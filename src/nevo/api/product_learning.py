@@ -5,7 +5,7 @@ import logging
 import secrets
 from datetime import UTC, datetime, time, timedelta
 from io import BytesIO
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -39,7 +39,7 @@ from nevo.api.frontend_unblockers import (
     _title_from_filename,
 )
 from nevo.api.learning_support import require_learning_support_if_admin
-from nevo.api.lesson_contracts import checkpoint_payloads
+from nevo.api.lesson_contracts import checkpoint_payloads, depth_payloads
 from nevo.api.product_common import (
     actor_user,
     require_approved_lessons,
@@ -606,6 +606,7 @@ async def _question_for_attempt(
                     "id": str(step.get("stepId")),
                     "prompt": str(step.get("prompt") or ""),
                     "answerKey": step.get("answer"),
+                    "acceptedAnswers": step.get("acceptedAnswers") or [],
                     "hint": step.get("hint"),
                     "conceptId": str(concept_id) if concept_id else None,
                     "answerType": "numeric"
@@ -839,7 +840,9 @@ async def lesson_detail(
                 "audioVariant": item.audio_variant,
                 "interactiveVariant": item.interactive_variant,
                 "calculationVariant": item.calculation_variant,
-                "depthVariants": item.depth_variants,
+                "depthVariants": depth_payloads(
+                    item.depth_variants, item.text_variant, for_student=not for_teacher
+                ),
                 **(
                     {
                         "needsReview": item.needs_review,
@@ -1349,11 +1352,8 @@ async def save_lesson_question_attempt(
         )
         or 1
     )
-    # The snapshot is an untyped bag, so what comes out of it is object. Cast
-    # rather than widen _normalise_answer's signature: it is the one place that
-    # knows what shapes an answer can be, and loosening it there would let
-    # anything through everywhere else.
-    answer_key = cast(JsonValue | None, question.get("answerKey"))
+    from nevo.content_parsing.answers import answer_matches
+
     record = LessonQuestionAttempt(
         student_id=actor.id,
         lesson_id=lesson.id,
@@ -1365,11 +1365,7 @@ async def save_lesson_question_attempt(
         attempt_number=attempt_number,
         question_snapshot=question,
         answer=payload.answer,
-        correct=(
-            None
-            if answer_key is None
-            else _normalise_answer(payload.answer) == _normalise_answer(answer_key)
-        ),
+        correct=answer_matches(payload.answer, question),
         response_time_ms=payload.response_time_ms,
         hint_count=payload.hint_count,
     )
@@ -1482,6 +1478,9 @@ async def save_lesson_progress(
         payload.status is LessonCompletionStatus.COMPLETED and derived_result == "nothing_landed"
     )
     if payload.status == "completed" and not not_attempted:
+        from nevo.intelligence.learning_runtime import seed_completed_lesson_reviews
+
+        await seed_completed_lesson_reviews(session, actor.id, lesson_session.id)
         progress.completed_at = datetime.now(UTC)
         assignment = (
             await session.get(LessonAssignment, payload.assignment_id)
@@ -1641,10 +1640,10 @@ def _result_note(mastered: list[dict[str, object]], revisit: list[dict[str, obje
     kept = [str(item["conceptName"]) for item in mastered]
     again = [str(item["conceptName"]) for item in revisit]
     if kept and not again:
-        return f"You had every question right on {_join(kept)}."
+        return f"You explored {_join(kept)} today."
     if again and not kept:
         return f"{_join(again).capitalize()} is worth another look."
-    return f"You had {_join(kept)} right. {_join(again).capitalize()} is worth another look."
+    return f"You explored {_join(kept)}. {_join(again).capitalize()} is worth another look."
 
 
 def _join(names: list[str]) -> str:
@@ -2688,7 +2687,9 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
                 # Offline too: the point of the offline package is a lesson
                 # that still adapts where there is no network, and an
                 # adaptation that cannot reach its text is not one.
-                "depthVariants": item.depth_variants,
+                "depthVariants": depth_payloads(
+                    item.depth_variants, item.text_variant, for_student=True
+                ),
                 "comprehensionCheckpoints": checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
                 ),

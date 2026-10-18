@@ -94,6 +94,8 @@ def runtime(monkeypatch):
                         baseline_profile={
                             "completed_modules": list(ONBOARDING_MODULES),
                             "subject_placements": {"maths": 0.6},
+                            "comprehension_accuracy": 0.8,
+                            "response_time_ms": 2000,
                         },
                         engine_config={"version": 1},
                     ),
@@ -154,10 +156,24 @@ def runtime(monkeypatch):
                     },
                     calculation_variant={
                         "conceptId": str(ids["concept"]),
+                        "fullEquation": "5 fifths = 1 whole",
+                        "expression": "5 fifths",
+                        "answer": 5,
+                        "completionStatement": "You have built the whole.",
                         "steps": [
                             {
+                                "stepId": "step-1",
+                                "stepNumber": 1,
                                 "prompt": "How many equal parts make the whole?",
                                 "hint": "Count the equal parts.",
+                                "answer": 5,
+                                "expectedInput": "numeric",
+                                "confirmationText": "That makes a whole.",
+                                "visualUpdate": "Show the whole.",
+                                "equationState": "5 fifths = 1 whole",
+                                "input": "number",
+                                "targets": [],
+                                "assembles": "5 fifths = 1 whole",
                             }
                         ],
                     },
@@ -295,6 +311,118 @@ def test_fast_taps_cannot_increase_mastery(runtime):
             )
             assert state.mastery_probability_concept == 0.6
             assert state.practice_count == 0
+
+    run(inspect())
+
+
+def test_numeric_equivalence_is_saved_and_survives_read(runtime):
+    async def change_question():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            questions = list(segment.comprehension_checkpoints)
+            questions[0] = {
+                **questions[0],
+                "answerKey": "1/2",
+                "answerType": "numeric",
+                "acceptedAnswers": ["one half"],
+            }
+            segment.comprehension_checkpoints = questions
+
+    run(change_question())
+    sitting = start(runtime)
+    result = answer(runtime, sitting, "0.5")
+    assert result.status_code == 201, result.text
+    assert result.json()["correct"] is True
+    result = answer(runtime, sitting, "one half")
+    assert result.status_code == 201 and result.json()["correct"] is True
+
+
+def test_client_scores_cannot_manufacture_an_adaptation(runtime):
+    sitting = start(runtime)
+    response = adapt(
+        runtime,
+        sitting,
+        comprehensionScore=0,
+        sessionAverageComprehension=100,
+        engagementScore=0,
+        engagementBaseline=1,
+        engagementBelowBaselineSeconds=999,
+        consecutiveErrors=9,
+        accuracyBelowBaseline=True,
+        responseTimeBelowBaseline=True,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["proactiveAdjustment"] is None
+    assert response.json()["modalitySuggestion"] is None
+
+
+def test_timed_reading_then_warmup_preserves_the_rest_of_the_baseline(runtime):
+    response = runtime.client.post(
+        "/api/baseline/trials",
+        json={
+            "sessionId": "reading-run",
+            "trials": [
+                {
+                    "dimension": "reading",
+                    "correct": True,
+                    "responseTimeMs": 30000,
+                    "readingWordCount": 30,
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    profile = response.json()["baselineProfile"]
+    assert profile["reading_wpm"] == 60
+    assert profile["reading_wpm_source"] == "measured"
+    later = runtime.client.post(
+        "/api/baseline/trials",
+        json={
+            "sessionId": "warmup-run",
+            "trials": [{"dimension": "ps", "correct": True, "responseTimeMs": 1000}],
+        },
+    )
+    assert later.status_code == 200, later.text
+    saved = later.json()["baselineProfile"]
+    assert saved["reading_wpm"] == 60
+    assert saved["comprehension_accuracy"] == profile["comprehension_accuracy"]
+    assert saved["subject_placements"] == profile["subject_placements"]
+
+
+def test_real_errors_offer_help_without_client_computed_metrics(runtime):
+    sitting = start(runtime)
+    for _ in range(2):
+        assert answer(runtime, sitting, 0).status_code == 201
+    response = adapt(runtime, sitting)
+    assert response.status_code == 200, response.text
+    assert response.json()["proactiveAdjustment"]["action"] == "offer_hint"
+
+
+def test_lesson_completion_creates_first_review_before_mastery(runtime):
+    sitting = start(runtime)
+    assert answer(runtime, sitting, 5).status_code == 201
+    response = runtime.client.put(
+        f"/api/v1/lessons/{runtime.ids['lesson']}/progress",
+        json={
+            "sessionId": sitting,
+            "status": "completed",
+            "modulePosition": 0,
+            "segmentPosition": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    async def inspect():
+        async with runtime.sessions() as session:
+            rows = list(
+                await session.scalars(
+                    select(StudentConceptScheduling).where(
+                        StudentConceptScheduling.student_id == runtime.ids["student"]
+                    )
+                )
+            )
+            assert len(rows) == 1
+            assert rows[0].next_review_due > rows[0].last_review
 
     run(inspect())
 
@@ -740,3 +868,35 @@ def test_curriculum_write_read_and_cycle_refusal(runtime):
     )
     assert cycle.status_code == 422, cycle.text
     assert cycle.json()["detail"]["code"] == "curriculum_cycle"
+
+
+def test_depth_backfill_review_keeps_original_approval_and_hides_pending_text(runtime):
+    original = datetime.now(UTC) - timedelta(days=1)
+
+    async def seed_pending():
+        async with runtime.sessions.begin() as session:
+            row = await session.get(LessonSegment, runtime.ids["segment"])
+            row.approved_at = original
+            row.approved_by = runtime.ids["teacher"]
+            row.depth_variants = {
+                "simplified": {"body": "Count the parts.", "reviewStatus": "pending"}
+            }
+
+    run(seed_pending())
+    lesson_url = f"/api/v1/lessons/{runtime.ids['lesson']}"
+    child = runtime.client.get(lesson_url)
+    assert child.status_code == 200, child.text
+    assert child.json()["segments"][0]["depthVariants"]["simplified"] is None
+    teacher = AuthPrincipal(user_id=runtime.ids["teacher"], role="teacher", session_id=uuid4())
+    runtime.client.app.dependency_overrides[authenticated_principal] = lambda: teacher
+    approved = runtime.client.post(f"{lesson_url}/segments/{runtime.ids['segment']}/approve")
+    assert approved.status_code == 200, approved.text
+
+    async def inspect():
+        async with runtime.sessions() as session:
+            row = await session.get(LessonSegment, runtime.ids["segment"])
+            assert row.approved_at == original
+            assert row.depth_variants["simplified"]["reviewStatus"] == "approved"
+            assert row.depth_variants["simplified"]["reviewedBy"] == str(runtime.ids["teacher"])
+
+    run(inspect())

@@ -130,6 +130,18 @@ def accept(variant: str | None, *, source: str, shorter: bool) -> str | None:
     if numbers_in(source) - numbers_in(text):
         logger.warning("Depth variant omitted source figures; dropped")
         return None
+    equations = re.findall(r"\$[^$\n]+\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]", source)
+    equations.extend(
+        line.strip()
+        for line in source.splitlines()
+        if re.search(r"\S\s*(?:=|<=|>=)\s*\S", line)
+        and len(line.strip()) <= 160
+        and not re.search(r"\b[A-Za-z]{3,}\b", line)
+    )
+    compact = re.sub(r"\s+", "", text)
+    if any(re.sub(r"\s+", "", equation) not in compact for equation in equations):
+        logger.warning("Depth variant omitted a source equation; dropped")
+        return None
     if shorter and len(text) > len(source) * LENGTH_MARGIN:
         return None
     if not shorter and len(text) * LENGTH_MARGIN < len(source):
@@ -161,6 +173,43 @@ class DepthVariantService:
         requested_by_user_id: UUID,
     ) -> tuple[DepthVariants, str | None]:
         """Both versions of one segment, and the model that wrote them."""
+
+        if len(body) > 10_000:
+            from nevo.content_parsing.chunks import reading_chunks
+
+            parts = []
+            held = []
+            size = 0
+            for chunk in reading_chunks("depth-source", body):
+                text = str(chunk["text"])
+                if held and size + len(text) > 6000:
+                    parts.append("\n\n".join(held))
+                    held, size = [], 0
+                held.append(text)
+                size += len(text)
+            if held:
+                parts.append("\n\n".join(held))
+            if len(parts) > 50:
+                raise DepthVariantError("Source exceeds the bounded depth-rewrite budget")
+            results = [
+                await self.generate(
+                    title=title, body=part, requested_by_user_id=requested_by_user_id
+                )
+                for part in parts
+            ]
+            simplified = [result.simplified for result, _ in results]
+            expanded = [result.expanded for result, _ in results]
+            return (
+                DepthVariants(
+                    simplified=accept("\n\n".join(simplified), source=body, shorter=True)
+                    if all(simplified)
+                    else None,
+                    expanded=accept("\n\n".join(expanded), source=body, shorter=False)
+                    if all(expanded)
+                    else None,
+                ),
+                results[-1][1],
+            )
 
         token_budget = max(DEPTH_OUTPUT_TOKENS, min(8192, len(body) * 2))
         for attempt in range(2):

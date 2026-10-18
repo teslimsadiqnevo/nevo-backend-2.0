@@ -501,20 +501,6 @@ def _profile_payload(profile: LearnerProfile | None) -> dict[str, object | None]
     if profile is None:
         return {"status": "not_observed_yet"}
     return {
-        "visual_spatial_preference": profile.visual_spatial_preference.value
-        if profile.visual_spatial_preference
-        else None,
-        "auditory_preference": profile.auditory_preference.value
-        if profile.auditory_preference
-        else None,
-        "reading_writing_preference": profile.reading_writing_preference.value
-        if profile.reading_writing_preference
-        else None,
-        "interactive_kinesthetic_preference": (
-            profile.interactive_kinesthetic_preference.value
-            if profile.interactive_kinesthetic_preference
-            else None
-        ),
         "working_memory_capacity": profile.working_memory_capacity,
         "attention_span": profile.attention_span,
     }

@@ -1745,6 +1745,16 @@ def merge_preferences(
     incoming: dict[str, object],
 ) -> dict[str, object]:
     """One rule for both settings paths. Null removes a key."""
+    from nevo.domain.learner_profiles.vocabulary import contains_learning_style
+
+    if contains_learning_style(incoming):
+        raise HTTPException(
+            422,
+            detail={
+                "code": "learning_style_not_stored",
+                "message": "Learning-format preferences are not stored on an account.",
+            },
+        )
     merged = {**dict(stored), **incoming}
     return {key: value for key, value in merged.items() if value is not None}
 

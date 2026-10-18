@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from nevo.domain.learner_profiles.vocabulary import (
-    ChannelPreferenceStrength,
     ConfidenceLevel,
 )
 from nevo.domain.signal_events.vocabulary import SignalEventType
@@ -64,9 +63,7 @@ def test_cold_start_seeds_only_low_confidence_dimensions() -> None:
         ]
     )
 
-    assert result["visual_spatial_preference"].value is ChannelPreferenceStrength.STRONG
-    assert result["auditory_preference"].value is ChannelPreferenceStrength.STRONG
-    assert result["interactive_kinesthetic_preference"].value is ChannelPreferenceStrength.MODERATE
+    assert not any("preference" in key for key in result)
     assert result["working_memory_capacity"].value == 5
     assert result["cognitive_load_threshold"].value == 4
     assert result["attention_span"].value == 2
@@ -120,9 +117,7 @@ def test_modality_outcomes_raise_channel_confidence_after_three_sessions() -> No
         ]
     )
 
-    visual = result["visual_spatial_preference"]
-    assert visual.value is ChannelPreferenceStrength.STRONG
-    assert visual.confidence is ConfidenceLevel.MEDIUM
+    assert result == {}
 
 
 def test_declines_reduce_suggestion_frequency_without_lowering_channel_confidence() -> None:
@@ -143,7 +138,7 @@ def test_declines_reduce_suggestion_frequency_without_lowering_channel_confidenc
     assert "visual_spatial_preference" not in result
     frequency = result[f"suggestion_frequency:visual:{session_id}"]
     assert frequency.value is None
-    assert "do not reduce channel confidence" in frequency.notes[0]
+    assert "this session only" in frequency.notes[0]
 
 
 def test_calculation_narration_and_manipulative_events_update_dimensions() -> None:
@@ -179,9 +174,9 @@ def test_calculation_narration_and_manipulative_events_update_dimensions() -> No
         ]
     )
 
-    assert result["interactive_kinesthetic_preference"].value is ChannelPreferenceStrength.STRONG
+    assert "interactive_kinesthetic_preference" not in result
     assert result["working_memory_capacity"].value == 4
-    assert result["auditory_preference"].value is ChannelPreferenceStrength.STRONG
+    assert "auditory_preference" not in result
 
 
 def test_reading_writing_strength_requires_comprehension_not_just_time() -> None:
@@ -208,6 +203,4 @@ def test_reading_writing_strength_requires_comprehension_not_just_time() -> None
         ]
     )
 
-    reading = result["reading_writing_preference"]
-    assert reading.value is ChannelPreferenceStrength.STRONG
-    assert reading.evidence_count == 1
+    assert result == {}

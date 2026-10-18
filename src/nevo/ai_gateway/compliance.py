@@ -13,6 +13,17 @@ PROHIBITED_RESPONSE_TERMS = PROHIBITED_SCHEMA_TERMS | frozenset(
         "patient",
         "syndrome",
         "treatment",
+        "visual_learner",
+        "auditory_learner",
+        "kinesthetic_learner",
+        "kinaesthetic_learner",
+        "learning_style",
+        "learning_styles",
+        "visual_spatial_preference",
+        "auditory_preference",
+        "reading_writing_preference",
+        "interactive_kinesthetic_preference",
+        "processing_channel_preference",
     }
 )
 
@@ -45,6 +56,6 @@ class ZeroTagCompliancePolicy:
 
 ZERO_TAG_REWRITE_INSTRUCTION = (
     "\n\nYour previous response violated Nevo's Zero-Tag policy. Rewrite it "
-    "using only observable learning preferences, classroom behavior, and "
-    "functional support. Do not mention or infer labels."
+    "using only observable classroom activity and functional support. "
+    "Do not mention or infer labels or assign a learning style to a person."
 )

@@ -33,6 +33,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("backfill_depth")
 
 
+def missing_depths(value):
+    held = value if isinstance(value, dict) else {}
+    return {
+        key
+        for key in ("simplified", "expanded")
+        if not isinstance(held.get(key), dict) or not held[key].get("body")
+    }
+
+
 async def backfill(
     *,
     lesson_id: UUID | None = None,
@@ -47,13 +56,33 @@ async def backfill(
     ai_gateway = build_ai_gateway(sessions=session_factory, settings=ai_settings)
     depth_service = DepthVariantService(ai_gateway=ai_gateway)
 
-    if not depth_service.configured:
+    if not depth_service.configured and not dry_run:
         logger.error(
             "DepthVariantService is NOT configured! "
             "Ensure AI_ANTHROPIC_API_KEY is set in your environment or Render dashboard."
         )
         await engine.dispose()
-        return
+        raise RuntimeError("Claude must be configured before running the write backfill")
+
+    semaphore = asyncio.Semaphore(min(4, ai_settings.max_concurrency))
+
+    async def rewrite(segment, creator):
+        async with semaphore:
+            try:
+                variants, model = await depth_service.generate(
+                    title=segment.title, body=segment.body, requested_by_user_id=creator
+                )
+                if variants.empty:
+                    return None, "rejected"
+                validated = (
+                    TypeAdapter(DepthVariants)
+                    .validate_python(variants.payload(model=model))
+                    .model_dump(by_alias=True, mode="json")
+                )
+                return validated, None
+            except DepthVariantError as error:
+                logger.warning("Segment %s depth rewrite failed: %s", segment.id, error)
+                return None, "failed"
 
     async with session_factory() as session:
         # Query lessons
@@ -88,58 +117,52 @@ async def backfill(
             )
 
             lesson_updated = 0
+            pending = []
             for segment in segments:
                 # Check if depth variants already exist with valid body
                 dv = segment.depth_variants or {}
-                if isinstance(dv, dict) and (
-                    dv.get("simplified", {}).get("body") or dv.get("expanded", {}).get("body")
-                ):
+                missing = missing_depths(dv)
+                if not missing:
                     continue
 
                 if not depth_service.worth_rewriting(segment.body):
                     total_skipped += 1
                     continue
 
-                try:
-                    variants, model = await depth_service.generate(
-                        title=segment.title,
-                        body=segment.body,
-                        requested_by_user_id=lesson.created_by_user_id,
-                    )
-                except DepthVariantError as error:
-                    logger.warning(
-                        "Segment %s depth rewrite failed: %s", segment.segment_key, error
-                    )
-                    total_failed += 1
+                if dry_run:
+                    logger.info("[DRY RUN] Missing %s on segment %s", sorted(missing), segment.id)
+                    total_updated += 1
                     continue
 
-                if variants.empty:
-                    logger.warning(
-                        "Segment %s depth rewrites rejected by checks", segment.segment_key
-                    )
+                pending.append(segment)
+
+            results = await asyncio.gather(
+                *(rewrite(segment, lesson.created_by_user_id) for segment in pending)
+            )
+            for segment, (validated, error) in zip(pending, results, strict=True):
+                if error:
+                    total_failed += error == "failed"
+                    total_rejected += error == "rejected"
+                    continue
+                held = segment.depth_variants if isinstance(segment.depth_variants, dict) else {}
+                missing = missing_depths(held)
+                updates = {
+                    key: {**value, "reviewStatus": "pending"}
+                    for key, value in validated.items()
+                    if key in missing and isinstance(value, dict) and value.get("body")
+                }
+                if not updates:
                     total_rejected += 1
                     continue
-
-                payload = variants.payload(model=model)
-                validated = (
-                    TypeAdapter(DepthVariants)
-                    .validate_python(payload)
-                    .model_dump(by_alias=True, mode="json")
-                )
-
-                if not dry_run:
-                    segment.depth_variants = validated
-                    lesson_updated += 1
-                    total_updated += 1
-                else:
-                    logger.info(
-                        "[DRY RUN] Would set depth_variants on %s: simplified=%s, expanded=%s",
-                        segment.segment_key,
-                        "simplified" in validated,
-                        "expanded" in validated,
+                segment.depth_variants = {**held, **updates, "model": validated.get("model")}
+                segment.needs_review = True
+                segment.review_reasons = list(
+                    dict.fromkeys(
+                        [*(segment.review_reasons or []), "depth_variant_review_required"]
                     )
-                    lesson_updated += 1
-                    total_updated += 1
+                )
+                lesson_updated += 1
+                total_updated += 1
 
             if not dry_run and lesson_updated > 0:
                 await session.commit()

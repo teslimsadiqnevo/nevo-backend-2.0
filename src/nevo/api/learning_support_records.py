@@ -181,16 +181,13 @@ async def list_active_accommodations(
     return [
         StudentAccommodationSummary(
             student_id=student.id,
-            student_name=" ".join(
-                part for part in (student.first_name, student.last_name) if part
-            )
+            student_name=" ".join(part for part in (student.first_name, student.last_name) if part)
             or "Student",
             active=sorted(
                 [
                     accommodation
                     for (student_id, accommodation), change in latest.items()
-                    if student_id == student.id
-                    and change.action is AccommodationChangeAction.ADDED
+                    if student_id == student.id and change.action is AccommodationChangeAction.ADDED
                 ],
                 key=lambda item: item.value,
             ),
@@ -383,11 +380,10 @@ async def read_accommodation_history(
     )
 
 
-#: The two dimensions the surface draws as a pair, so a reader can see when
-#: the gap between them widened or closed. Stored values, not derived ones.
+# Functional support history; do not disguise a modality preference as mastery.
 SERIES_DIMENSIONS = (
-    ("conceptUnderstanding", "visual_spatial_preference"),
-    ("readingDemand", "reading_writing_preference"),
+    ("cognitiveLoadThreshold", "cognitive_load_threshold"),
+    ("processingSpeed", "processing_speed"),
 )
 
 
@@ -401,7 +397,7 @@ def _series(history: list[LearnerProfileHistory]) -> list[DimensionSeries]:
             points.append(
                 DimensionPoint(
                     recorded_at=row.created_at,
-                    value=value.value if value is not None else None,
+                    value=str(value) if value is not None else None,
                     confidence=confidence.value if confidence is not None else "unknown",
                 )
             )

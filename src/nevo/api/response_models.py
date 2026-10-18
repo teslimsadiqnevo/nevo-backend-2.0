@@ -22,6 +22,7 @@ from nevo.api.lesson_contracts import (
     ReadingChunk,
     TextVariant,
     VisualVariant,
+    segment_modalities,
 )
 from nevo.content_parsing.descriptions import clean_lesson_description
 from nevo.content_parsing.failures import UploadReasonCode
@@ -515,6 +516,22 @@ class LessonSegmentResponse(CamelResponse):
     #: Which concept this segment teaches. SCRUM-177, ask B25.
     concept_id: UUID | None = None
     available_modalities: list[str]
+    primary_modality: Literal["text", "visual", "audio", "interactive"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def authored_delivery(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            modes = segment_modalities(
+                value.get("contentType", value.get("content_type")),
+                value.get("availableModalities", value.get("available_modalities", [])),
+                value.get("calculationVariant", value.get("calculation_variant")),
+            )
+            value["availableModalities"] = modes
+            value["primaryModality"] = modes[0] if modes else None
+        return value
+
     comprehension_checkpoints: list[ComprehensionCheckpoint]
     text_variant: TextVariant | None = None
     visual_variant: VisualVariant | None = None
@@ -986,6 +1003,23 @@ class OfflinePackageSegment(CamelResponse):
     content_type: LessonContentType
     sequence_order: int
     available_modalities: list[str] = Field(default_factory=list)
+    primary_modality: Literal["text", "visual", "audio", "interactive"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def authored_delivery(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            variants = value.get("modalityVariants", value.get("modality_variants")) or {}
+            modes = segment_modalities(
+                value.get("contentType", value.get("content_type")),
+                value.get("availableModalities", value.get("available_modalities", [])),
+                variants.get("calculation"),
+            )
+            value["availableModalities"] = modes
+            value["primaryModality"] = modes[0] if modes else None
+        return value
+
     modality_variants: OfflinePackageModalityVariants = Field(
         default_factory=OfflinePackageModalityVariants
     )

@@ -92,12 +92,16 @@ class RuntimeSignalsRequest(BaseModel):
     engagement_score: float | None = Field(
         default=None,
         alias="engagementScore",
+        deprecated=True,
+        description="Ignored compatibility input; the server derives this from persisted events.",
         ge=0,
         le=1,
     )
     engagement_baseline: float | None = Field(
         default=None,
         alias="engagementBaseline",
+        deprecated=True,
+        description="Ignored compatibility input; personal references are derived server-side.",
         ge=0,
         le=1,
     )
@@ -109,12 +113,18 @@ class RuntimeSignalsRequest(BaseModel):
     comprehension_score: float | None = Field(
         default=None,
         alias="comprehensionScore",
+        deprecated=True,
+        description="Ignored compatibility input; the server uses saved, marked answers.",
         ge=0,
         le=100,
     )
     session_average_comprehension: float | None = Field(
         default=None,
         alias="sessionAverageComprehension",
+        deprecated=True,
+        description=(
+            "Ignored compatibility input; the server derives the reference from marked answers."
+        ),
         ge=0,
         le=100,
     )
@@ -905,28 +915,10 @@ def _ensure_student_or_staff(*, principal, student_id: UUID) -> None:
 
 
 def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:
+    # Only the content location is client context. Scores, timing references,
+    # streaks and guardrail counters are reconstructed from persisted evidence.
     return RuntimeSignals(
         current_segment_id=signals.current_segment_id,
-        current_modality=signals.current_modality,
-        available_modalities=tuple(signals.available_modalities),
-        continuous_minutes=signals.continuous_minutes,
-        engagement_score=signals.engagement_score,
-        engagement_baseline=signals.engagement_baseline,
-        engagement_below_baseline_seconds=(signals.engagement_below_baseline_seconds),
-        comprehension_score=signals.comprehension_score,
-        session_average_comprehension=signals.session_average_comprehension,
-        consecutive_errors=signals.consecutive_errors,
-        replay_count_on_segment=signals.replay_count_on_segment,
-        same_segment_suggestion_shown=signals.same_segment_suggestion_shown,
-        segments_since_last_suggestion=signals.segments_since_last_suggestion,
-        declined_modalities=tuple(signals.declined_modalities),
-        session_decline_count=signals.session_decline_count,
-        accuracy_below_baseline=signals.accuracy_below_baseline,
-        response_time_below_baseline=signals.response_time_below_baseline,
-        midpoint_reached=signals.midpoint_reached,
-        current_segment_elapsed_seconds=signals.current_segment_elapsed_seconds,
-        seconds_since_last_adaptation=signals.seconds_since_last_adaptation,
-        session_modality_shift_count=signals.session_modality_shift_count,
     )
 
 

@@ -4,6 +4,9 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.db.models.account import User
+from nevo.db.models.content import Lesson, LessonSegment
+from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.domain.intelligence.vocabulary import AccommodationType
 from nevo.domain.signal_events.vocabulary import (
@@ -99,9 +102,120 @@ class SqlAlchemyAccommodationPatternRepository:
                     .order_by(SignalEvent.timestamp)
                 )
             ).all()
+            attempts = list(
+                await session.scalars(
+                    select(LessonQuestionAttempt).where(
+                        LessonQuestionAttempt.student_id == student_id,
+                        LessonQuestionAttempt.session_id.in_(session_ids),
+                    )
+                )
+            )
+            student = await session.get(User, student_id)
+            lessons = {
+                row.id: row
+                for row in await session.scalars(
+                    select(Lesson).where(
+                        Lesson.id.in_([item.lesson_id for item in lesson_sessions])
+                    )
+                )
+            }
+            segments = {
+                str(row.id): row
+                for row in await session.scalars(
+                    select(LessonSegment).where(LessonSegment.lesson_id.in_(lessons))
+                )
+            }
 
         evidence_by_session: dict[UUID, set[str]] = defaultdict(set)
         maths_sessions: set[UUID] = set()
+        for sitting in lesson_sessions:
+            lesson = lessons.get(sitting.lesson_id)
+            if (
+                lesson
+                and lesson.subject
+                and any(
+                    word in lesson.subject.casefold() for word in ("math", "arithmetic", "numeracy")
+                )
+            ):
+                maths_sessions.add(sitting.id)
+        positions = {}
+        regressions = defaultdict(int)
+        sittings_by_id = {item.id: item for item in lesson_sessions}
+        segment_keys = {(row.lesson_id, row.segment_key): row for row in segments.values()}
+        for event in events:
+            data = event.event_data or {}
+            sitting = sittings_by_id.get(event.session_id)
+            segment = segments.get(str(data.get("segmentId"))) or segment_keys.get(
+                (sitting.lesson_id if sitting else None, data.get("segmentId"))
+            )
+            key = (event.session_id, str(segment.id) if segment else str(data.get("segmentId")))
+            if event.event_type in {
+                SignalEventType.SCROLL,
+                SignalEventType.TIME_ON_SEGMENT,
+            } and isinstance(data.get("depthRatio"), (int, float)):
+                position = float(data["depthRatio"])
+                if key in positions and position < positions[key] - 0.1:
+                    regressions[key] += 1
+                positions[key] = position
+                if regressions[key] >= 2:
+                    evidence_by_session[event.session_id].add("backward_scroll")
+            if (
+                event.event_type is SignalEventType.TIME_ON_SEGMENT
+                and segment
+                and len(segment.body.split()) >= 80
+            ):
+                snapshot = sitting.delivery_state if sitting else {}
+                rate = (
+                    snapshot.get("engineConfig", {})
+                    .get("reading", {})
+                    .get("targetWordsPerMinute", 120)
+                )
+                expected_ms = len(segment.body.split()) * 60_000 / max(30, float(rate))
+                if _number(data, "durationMs") >= expected_ms * 1.5:
+                    evidence_by_session[event.session_id].add("reading_latency")
+            if event.event_type is SignalEventType.ENGAGEMENT_SIGNAL:
+                indicator, value = data.get("indicator"), _number(data, "value")
+                if indicator == "task_switch" and value >= 3:
+                    evidence_by_session[event.session_id].add("task_switch")
+                if indicator == "navigation_fragmentation" and value >= 4:
+                    evidence_by_session[event.session_id].update(
+                        {"erratic_navigation", "fragmented_flow"}
+                    )
+                if (
+                    indicator == "focus_drop"
+                    and value >= 60_000
+                    and sitting
+                    and (event.timestamp - sitting.started_at).total_seconds() >= 300
+                ):
+                    evidence_by_session[event.session_id].add("focus_drop")
+        for (sitting_id, segment_id), position in positions.items():
+            segment = segments.get(segment_id)
+            if segment and len(segment.body.split()) >= 80 and position <= 0.6:
+                evidence_by_session[sitting_id].add("low_text_completion")
+        numeric_by_question = defaultdict(list)
+        baseline_ms = (student.baseline_profile or {}).get("response_time_ms") if student else None
+        for attempt in attempts:
+            question = attempt.question_snapshot or {}
+            if attempt.source == "calculation" or question.get("answerType") == "numeric":
+                maths_sessions.add(attempt.session_id)
+                numeric_by_question[(attempt.session_id, attempt.question_id)].append(attempt)
+                if (
+                    baseline_ms
+                    and attempt.response_time_ms
+                    and attempt.response_time_ms >= float(baseline_ms) * 1.5
+                ):
+                    evidence_by_session[attempt.session_id].add("calculation_latency")
+                if (
+                    baseline_ms
+                    and attempt.response_time_ms
+                    and attempt.response_time_ms >= float(baseline_ms) + 5000
+                ):
+                    evidence_by_session[attempt.session_id].add("numeric_hesitation")
+        for (sitting_id, _), rows in numeric_by_question.items():
+            if sum(row.correct is False for row in rows) >= 2:
+                evidence_by_session[sitting_id].update(
+                    {"repeated_numeric_mistake", "numerical_correction"}
+                )
         for event in events:
             evidence = _evidence_from_event(event)
             evidence_by_session[event.session_id].update(evidence)

@@ -15,24 +15,11 @@ from nevo.domain.intelligence.vocabulary import (
     ScaffoldIntensity,
     ScaffoldOutcome,
 )
-from nevo.domain.learner_profiles.vocabulary import (
-    ChannelPreferenceStrength,
-    ConfidenceLevel,
-)
-
-
-@dataclass(frozen=True, slots=True)
-class ChannelPreference:
-    value: ChannelPreferenceStrength | None
-    confidence: ConfidenceLevel
+from nevo.domain.learner_profiles.vocabulary import ConfidenceLevel
 
 
 @dataclass(frozen=True, slots=True)
 class LearnerProfileSnapshot:
-    visual_spatial_preference: ChannelPreference
-    auditory_preference: ChannelPreference
-    reading_writing_preference: ChannelPreference
-    interactive_kinesthetic_preference: ChannelPreference
     working_memory_capacity: int | None = None
     attention_span: int | None = None
 
@@ -67,6 +54,7 @@ class ContentSegment:
     hints: tuple[str, ...] = ()
     guided_questions: tuple[str, ...] = ()
     scaffold_intensity: ScaffoldIntensity | None = None
+    primary_modality: ContentModality | None = None
 
 
 @dataclass(frozen=True, slots=True)

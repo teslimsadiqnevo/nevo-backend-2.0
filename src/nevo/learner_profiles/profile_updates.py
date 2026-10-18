@@ -22,23 +22,12 @@ from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.learner_profiles.vocabulary import (
     CANONICAL_PROFILE_DIMENSIONS,
-    ChannelPreferenceStrength,
     ConfidenceLevel,
     ProfileAttentionFlagStatus,
     ProfileChangeSource,
 )
 
-CHANNEL_DIMENSIONS = frozenset(
-    {
-        "visual_spatial_preference",
-        "auditory_preference",
-        "reading_writing_preference",
-        "interactive_kinesthetic_preference",
-    }
-)
-NUMERIC_DIMENSIONS = frozenset(CANONICAL_PROFILE_DIMENSIONS).difference(
-    CHANNEL_DIMENSIONS
-)
+NUMERIC_DIMENSIONS = frozenset(CANONICAL_PROFILE_DIMENSIONS)
 PROFILE_UPDATE_PROMPT_NAME = "profile_update.default"
 
 
@@ -54,14 +43,14 @@ class ProfileUpdateResponseError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ProfileDimensionState:
-    value: int | ChannelPreferenceStrength | None
+    value: int | None
     confidence: ConfidenceLevel
 
 
 @dataclass(frozen=True, slots=True)
 class ProfileDimensionRecommendation:
     dimension: str
-    value: int | ChannelPreferenceStrength | None
+    value: int | None
     confidence: ConfidenceLevel
     rationale: str | None = None
 
@@ -293,9 +282,7 @@ class SqlAlchemyPostLessonProfileUpdateRepository:
             if lesson_session is None or lesson_session.student_id != student_id:
                 raise LookupError("Lesson session was not found for student")
             profile = await session.scalar(
-                select(LearnerProfile).where(
-                    LearnerProfile.learner_id == student_id
-                )
+                select(LearnerProfile).where(LearnerProfile.learner_id == student_id)
             )
             events = (
                 await session.scalars(
@@ -308,9 +295,7 @@ class SqlAlchemyPostLessonProfileUpdateRepository:
                 )
             ).all()
             current_profile = (
-                _profile_from_model(profile)
-                if profile is not None
-                else _empty_profile_state()
+                _profile_from_model(profile) if profile is not None else _empty_profile_state()
             )
             return SessionProfileUpdateContext(
                 student_id=student_id,
@@ -442,10 +427,6 @@ def _profile_dimension_values(profile: LearnerProfile) -> dict[str, object]:
             profile,
             f"{dimension}_confidence",
         )
-    values["processing_channel_preference"] = profile.processing_channel_preference
-    values["processing_channel_preference_confidence"] = (
-        profile.processing_channel_preference_confidence
-    )
     return values
 
 
@@ -461,16 +442,12 @@ def _session_summary(
             "lesson_id": str(lesson_session.lesson_id),
             "started_at": lesson_session.started_at.isoformat(),
             "ended_at": (
-                lesson_session.ended_at.isoformat()
-                if lesson_session.ended_at is not None
-                else None
+                lesson_session.ended_at.isoformat() if lesson_session.ended_at is not None else None
             ),
             "completion_status": lesson_session.completion_status.value,
             "exit_position": lesson_session.exit_position,
             "break_count": lesson_session.break_count,
-            "proactive_adjustments_count": (
-                lesson_session.proactive_adjustments_count
-            ),
+            "proactive_adjustments_count": (lesson_session.proactive_adjustments_count),
         },
         "event_count": len(event_list),
         "event_type_counts": dict(sorted(counts.items())),
@@ -498,11 +475,9 @@ def _json_payload(response_text: str) -> str:
 def _coerce_profile_value(
     dimension: str,
     value: object,
-) -> int | ChannelPreferenceStrength | None:
+) -> int | None:
     if value is None:
         return None
-    if dimension in CHANNEL_DIMENSIONS:
-        return ChannelPreferenceStrength(str(value))
     number = int(value)
     if dimension == "attention_span":
         if number < 1 or number > 240:
@@ -515,32 +490,17 @@ def _coerce_profile_value(
 
 def _is_significant_change(
     dimension: str,
-    current_value: int | ChannelPreferenceStrength,
-    recommended_value: int | ChannelPreferenceStrength,
+    current_value: int,
+    recommended_value: int,
 ) -> bool:
-    if dimension in CHANNEL_DIMENSIONS:
-        strength_order = {
-            ChannelPreferenceStrength.LOW: 1,
-            ChannelPreferenceStrength.MODERATE: 2,
-            ChannelPreferenceStrength.STRONG: 3,
-        }
-        return (
-            abs(
-                strength_order[ChannelPreferenceStrength(str(current_value))]
-                - strength_order[ChannelPreferenceStrength(str(recommended_value))]
-            )
-            >= 2
-        )
     if dimension == "attention_span":
         return abs(int(current_value) - int(recommended_value)) >= 60
     return abs(int(current_value) - int(recommended_value)) >= 2
 
 
 def _serialize_profile_value(
-    value: int | ChannelPreferenceStrength | None,
+    value: int | None,
 ) -> str | int | None:
-    if isinstance(value, ChannelPreferenceStrength):
-        return value.value
     return value
 
 

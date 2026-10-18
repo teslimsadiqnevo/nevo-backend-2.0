@@ -36,7 +36,6 @@ def test_warm_up_dimensions_and_server_owned_domain_items_are_explicit() -> None
         "ans",
         "attention",
         "domain",
-        "motor_speed",
     }
     spec = app.openapi()
     schema = spec["components"]["schemas"]["BaselinePromptResponse"]["properties"]

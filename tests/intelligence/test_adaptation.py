@@ -9,10 +9,6 @@ from nevo.domain.intelligence.vocabulary import (
     ContentSegmentType,
     DensityLevel,
 )
-from nevo.domain.learner_profiles.vocabulary import (
-    ChannelPreferenceStrength,
-    ConfidenceLevel,
-)
 from nevo.intelligence.adaptation import (
     AdaptationEngineService,
     AdaptationRateLimitState,
@@ -21,7 +17,6 @@ from nevo.intelligence.adaptation import (
 )
 from nevo.intelligence.entities import (
     AdaptationRequest,
-    ChannelPreference,
     ContentSegment,
     LearnerProfileSnapshot,
     RuntimeSignals,
@@ -71,18 +66,7 @@ class FakeRateLimits:
 
 
 def channel_profile() -> LearnerProfileSnapshot:
-    low = ChannelPreference(value=None, confidence=ConfidenceLevel.LOW)
     return LearnerProfileSnapshot(
-        visual_spatial_preference=ChannelPreference(
-            value=ChannelPreferenceStrength.STRONG,
-            confidence=ConfidenceLevel.HIGH,
-        ),
-        auditory_preference=low,
-        reading_writing_preference=ChannelPreference(
-            value=ChannelPreferenceStrength.MODERATE,
-            confidence=ConfidenceLevel.MEDIUM,
-        ),
-        interactive_kinesthetic_preference=low,
         working_memory_capacity=2,
     )
 
@@ -103,7 +87,7 @@ def segments() -> tuple[ContentSegment, ...]:
     )
 
 
-def test_rule_based_adaptation_prioritizes_four_channel_profile() -> None:
+def test_rule_based_adaptation_preserves_authored_order_and_formats() -> None:
     plan = rule_based_adaptation_plan(
         request=AdaptationRequest(
             student_id=STUDENT_ID,
@@ -115,8 +99,8 @@ def test_rule_based_adaptation_prioritizes_four_channel_profile() -> None:
     )
 
     assert plan.source == "rule_based"
-    assert plan.segments[0].segment_id == "diagram-1"
-    assert plan.segments[0].modality is ContentModality.VISUAL
+    assert plan.segments[0].segment_id == "text-1"
+    assert plan.segments[0].modality is ContentModality.TEXT
     assert plan.segments[1].density is DensityLevel.LOW
 
 
@@ -162,6 +146,7 @@ def test_new_learner_can_receive_a_supported_alternative_modality() -> None:
                 available_modalities=(ContentModality.TEXT, ContentModality.VISUAL),
                 engagement_below_baseline_seconds=190,
                 accuracy_below_baseline=True,
+                response_time_below_baseline=True,
                 segments_since_last_suggestion=2,
             ),
         ),
@@ -207,6 +192,9 @@ def test_rule_based_adaptation_requires_subsequent_confidence_threshold() -> Non
                 response_time_below_baseline=True,
                 segments_since_last_suggestion=2,
                 session_modality_shift_count=1,
+                consecutive_errors=3,
+                comprehension_score=10,
+                session_average_comprehension=90,
             ),
         ),
         profile=channel_profile(),

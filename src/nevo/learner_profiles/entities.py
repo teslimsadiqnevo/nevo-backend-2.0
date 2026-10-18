@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 
 from nevo.domain.learner_profiles.vocabulary import (
-    ChannelPreferenceStrength,
     ConfidenceLevel,
 )
 
-ProfileValue = int | ChannelPreferenceStrength | None
+ProfileValue = int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,4 +20,3 @@ class DimensionInference:
     confidence: ConfidenceLevel
     evidence_count: int
     notes: tuple[str, ...] = ()
-

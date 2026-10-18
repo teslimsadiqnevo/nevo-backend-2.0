@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -7,6 +8,13 @@ from nevo.content_parsing.chunks import reading_chunks as reading_chunks
 from nevo.domain.intelligence.vocabulary import ManipulativeKind
 
 ScalarAnswer = str | int | float | bool
+
+
+def segment_modalities(content_type, available, calculation):
+    values = list(available or [])
+    if content_type == "calculation" and calculation:
+        return ["interactive", *(["visual"] if "visual" in values else [])]
+    return values
 
 
 def canonical_authorship(value: object) -> object:
@@ -48,6 +56,9 @@ class ComprehensionCheckpoint(BaseModel):
     )
     options: list[CheckpointOption] = Field(default_factory=list)
     answer_key: ScalarAnswer | list[ScalarAnswer] | None = Field(default=None, alias="answerKey")
+    accepted_answers: list[ScalarAnswer | list[ScalarAnswer]] = Field(
+        default_factory=list, alias="acceptedAnswers", max_length=30
+    )
     explanation: str | None = None
     hint: str | None = None
     guided_questions: list[str] = Field(default_factory=list, alias="guidedQuestions", max_length=5)
@@ -69,6 +80,35 @@ class DepthVariantBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     body: str = ""
+    review_status: Literal["approved", "pending"] = Field(default="approved", alias="reviewStatus")
+    reviewed_by: UUID | None = Field(default=None, alias="reviewedBy")
+    reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
+    key_terms: list["KeyTerm"] = Field(default_factory=list, alias="keyTerms")
+    equation_callouts: list["EquationCallout"] = Field(
+        default_factory=list, alias="equationCallouts"
+    )
+
+
+def depth_payloads(values, text_variant, *, for_student=False):
+    """Source annotations survive a rewrite; pending backfills stay staff-only."""
+    if not isinstance(values, dict):
+        return None
+    result = {"model": values.get("model")}
+    source = TextVariant.model_validate(
+        text_variant if isinstance(text_variant, dict) else {}
+    ).model_dump(by_alias=True, mode="json")
+    for key in ("simplified", "expanded"):
+        item = values.get(key)
+        if not isinstance(item, dict) or not item.get("body"):
+            continue
+        if for_student and item.get("reviewStatus") == "pending":
+            continue
+        result[key] = {
+            **item,
+            "keyTerms": source.get("keyTerms") or [],
+            "equationCallouts": source.get("equationCallouts") or [],
+        }
+    return result
 
 
 class DepthVariants(BaseModel):
@@ -270,6 +310,9 @@ class LegacyInteractiveQuestionVariant(BaseModel):
     expected_interaction: str = Field(default="teacher_review", alias="expectedInteraction")
     options: list[CheckpointOption] = Field(default_factory=list)
     answer_key: ScalarAnswer | list[ScalarAnswer] | None = Field(default=None, alias="answerKey")
+    accepted_answers: list[ScalarAnswer | list[ScalarAnswer]] = Field(
+        default_factory=list, alias="acceptedAnswers", max_length=30
+    )
     instructions: str | None = None
 
     @model_validator(mode="before")
@@ -319,6 +362,9 @@ class CalculationStep(BaseModel):
     #: fraction scaffold might want a numerator, so mapping the total onto the
     #: last step would be wrong even when it looks right.
     answer: ScalarAnswer | None = None
+    accepted_answers: list[ScalarAnswer] = Field(
+        default_factory=list, alias="acceptedAnswers", max_length=30
+    )
     #: What a selection or drag step offers. Empty for numeric and text, where
     #: the child types. Same shape as a checkpoint's options, so one renderer
     #: serves both.
@@ -586,7 +632,7 @@ class CalculationVariant(BaseModel):
     #: What the whole problem comes to. Sent rather than left to be inferred
     #: from the last step: this is what a child is marked against, and a
     #: client guessing it would be guessing the mark.
-    answer: str = ""
+    answer: ScalarAnswer = ""
     steps: list[CalculationStep]
     scaffold: CalculationScaffold | None = None
     #: Present when the steps are meant to be dragged rather than typed. Null

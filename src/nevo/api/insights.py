@@ -979,15 +979,8 @@ def _progress_narrative(
             ["Complete a lesson to start building your progress story."],
             "Nothing yet - finish a lesson to start.",
         )
-    if mastery_average >= 0.8:
-        reflection = f"You are applying most of the ideas you have practised in {area}."
-        note = "Applying what you have practised."
-    elif mastery_average >= 0.6:
-        reflection = f"Your understanding in {area} is becoming steadier with practice."
-        note = "Getting steadier with practice."
-    else:
-        reflection = f"You are building familiarity with the ideas in {area}, one step at a time."
-        note = "Building familiarity, one step at a time."
+    reflection = f"You have been exploring ideas in {area}, one step at a time."
+    note = "Your learning story grows with each visit."
     highlights = [f"Worked with {concept_count} concept{'s' if concept_count != 1 else ''}."]
     if practice_count:
         practice_suffix = "s" if practice_count != 1 else ""

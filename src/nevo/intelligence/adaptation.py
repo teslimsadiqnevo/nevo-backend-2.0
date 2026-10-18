@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Protocol
@@ -13,13 +12,11 @@ from nevo.db.models.signal_event import SignalEvent
 from nevo.domain.intelligence.vocabulary import (
     AdaptationMode,
     ContentModality,
-    ContentSegmentType,
     DensityLevel,
     ScaffoldingLevel,
     ScaffoldIntensity,
 )
 from nevo.domain.learner_profiles.vocabulary import (
-    ChannelPreferenceStrength,
     ConfidenceLevel,
 )
 from nevo.domain.signal_events.vocabulary import SignalEventType
@@ -27,7 +24,6 @@ from nevo.intelligence.breaks import monitor_break_thresholds
 from nevo.intelligence.entities import (
     AdaptationPlan,
     AdaptationRequest,
-    ChannelPreference,
     ContentSegment,
     LearnerProfileSnapshot,
     ModalitySuggestion,
@@ -45,12 +41,6 @@ MIN_ALIGNED_SIGNAL_CATEGORIES = 2
 MIN_MODALITY_DWELL_SECONDS = 90
 ADAPTATION_COOLDOWN_SECONDS = 120
 MAX_MODALITY_SHIFTS_PER_SESSION = 3
-MODALITY_BY_CHANNEL = {
-    "visual_spatial_preference": ContentModality.VISUAL,
-    "auditory_preference": ContentModality.AUDIO,
-    "reading_writing_preference": ContentModality.TEXT,
-    "interactive_kinesthetic_preference": ContentModality.INTERACTIVE,
-}
 ADAPTATION_HISTORY_EVENT_TYPES = {
     SignalEventType.SIMPLIFY_TRIGGER,
     SignalEventType.EXPAND_TRIGGER,
@@ -63,28 +53,6 @@ ADAPTATION_HISTORY_EVENT_TYPES = {
 MODALITY_SHIFT_EVENT_TYPES = {
     SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
     SignalEventType.MODALITY_MANUAL_SWITCH,
-}
-CHANNEL_BY_MODALITY = {modality: channel for channel, modality in MODALITY_BY_CHANNEL.items()}
-SEGMENT_TYPE_PRIORITY = {
-    "visual_spatial_preference": {
-        ContentSegmentType.DIAGRAM,
-        ContentSegmentType.WORKED_EXAMPLE,
-    },
-    "auditory_preference": {
-        ContentSegmentType.EXPLANATION,
-        ContentSegmentType.CHECKPOINT,
-    },
-    "reading_writing_preference": {
-        ContentSegmentType.EXPLANATION,
-        ContentSegmentType.DEFINITION,
-        ContentSegmentType.SUMMARY,
-        ContentSegmentType.WORKED_EXAMPLE,
-    },
-    "interactive_kinesthetic_preference": {
-        ContentSegmentType.PRACTICE,
-        ContentSegmentType.INTERACTION,
-        ContentSegmentType.CHECKPOINT,
-    },
 }
 
 
@@ -193,7 +161,7 @@ def rule_based_adaptation_plan(
     request: AdaptationRequest,
     profile: LearnerProfileSnapshot,
 ) -> AdaptationPlan:
-    active_channels = _active_channels(profile)
+    active_channels = ()
     segments = tuple(
         sorted(
             (_adapt_segment(segment, active_channels, profile) for segment in request.segments),
@@ -249,22 +217,6 @@ class SqlAlchemyLearnerProfileRepository:
                     else None,
                 )
         return LearnerProfileSnapshot(
-            visual_spatial_preference=ChannelPreference(
-                value=profile.visual_spatial_preference,
-                confidence=profile.visual_spatial_preference_confidence,
-            ),
-            auditory_preference=ChannelPreference(
-                value=profile.auditory_preference,
-                confidence=profile.auditory_preference_confidence,
-            ),
-            reading_writing_preference=ChannelPreference(
-                value=profile.reading_writing_preference,
-                confidence=profile.reading_writing_preference_confidence,
-            ),
-            interactive_kinesthetic_preference=ChannelPreference(
-                value=profile.interactive_kinesthetic_preference,
-                confidence=profile.interactive_kinesthetic_preference_confidence,
-            ),
             working_memory_capacity=profile.working_memory_capacity,
             attention_span=profile.attention_span,
         )
@@ -358,13 +310,7 @@ class SqlAlchemyAdaptationRateLimitRepository:
 
 
 def balanced_profile() -> LearnerProfileSnapshot:
-    low = ChannelPreference(value=None, confidence=ConfidenceLevel.LOW)
-    return LearnerProfileSnapshot(
-        visual_spatial_preference=low,
-        auditory_preference=low,
-        reading_writing_preference=low,
-        interactive_kinesthetic_preference=low,
-    )
+    return LearnerProfileSnapshot()
 
 
 def _rate_limit_violation_from_signals(
@@ -495,23 +441,10 @@ def _adapt_segment(
     active_channels: tuple[str, ...],
     profile: LearnerProfileSnapshot,
 ) -> SegmentAdaptation:
-    modality = _preferred_modality(segment, active_channels)
-    priority = _segment_priority(segment, active_channels)
+    modality = segment.primary_modality or _preferred_modality(segment, ())
+    priority = 50
     density = DensityLevel.MEDIUM
     scaffolding = ScaffoldingLevel.STANDARD
-    if (
-        segment.segment_type is ContentSegmentType.EXPLANATION
-        and ContentModality.TEXT in segment.available_modalities
-        and "visual_spatial_preference" in active_channels
-    ):
-        density = DensityLevel.LOW
-        scaffolding = ScaffoldingLevel.STRONG
-    if "reading_writing_preference" in active_channels and segment.segment_type in {
-        ContentSegmentType.DEFINITION,
-        ContentSegmentType.SUMMARY,
-        ContentSegmentType.EXPLANATION,
-    }:
-        density = DensityLevel.HIGH
     if profile.working_memory_capacity is not None and profile.working_memory_capacity <= 2:
         scaffolding = ScaffoldingLevel.STRONG
         density = DensityLevel.LOW
@@ -531,43 +464,13 @@ def _adapt_segment(
     )
 
 
-def _active_channels(profile: LearnerProfileSnapshot) -> tuple[str, ...]:
-    channels: list[str] = []
-    for channel, preference in _profile_channels(profile).items():
-        if preference.value in {
-            ChannelPreferenceStrength.MODERATE,
-            ChannelPreferenceStrength.STRONG,
-        }:
-            channels.append(channel)
-    return tuple(channels)
-
-
 def _preferred_modality(
     segment: ContentSegment,
     active_channels: tuple[str, ...],
 ) -> ContentModality:
-    for channel in active_channels:
-        modality = MODALITY_BY_CHANNEL[channel]
-        if modality in segment.available_modalities:
-            return modality
     if segment.available_modalities:
         return segment.available_modalities[0]
     return ContentModality.TEXT
-
-
-def _segment_priority(
-    segment: ContentSegment,
-    active_channels: tuple[str, ...],
-) -> int:
-    if not active_channels:
-        return 50
-    priority = 50
-    for channel in active_channels:
-        if segment.segment_type in SEGMENT_TYPE_PRIORITY[channel]:
-            priority += 20
-        if MODALITY_BY_CHANNEL[channel] in segment.available_modalities:
-            priority += 10
-    return priority
 
 
 #: The rewrites a segment can carry, and the action each one answers. Written
@@ -743,62 +646,26 @@ def _modality_suggestion(
     if signals.current_modality is None:
         return None
 
-    current_channel = CHANNEL_BY_MODALITY.get(signals.current_modality)
-    current_confidence = (
-        _profile_channels(profile)[current_channel].confidence
-        if current_channel is not None
-        else ConfidenceLevel.LOW
+    candidate = next(
+        (
+            value
+            for value in signals.available_modalities
+            if value != signals.current_modality and value not in signals.declined_modalities
+        ),
+        None,
     )
-    candidate = _higher_confidence_available_channel(
-        profile=profile,
-        current_confidence=current_confidence,
-        available_modalities=signals.available_modalities,
-        declined_modalities=signals.declined_modalities,
-    )
-    if candidate is None:
-        candidate = _neutral_available_channel(
-            current_modality=signals.current_modality,
-            available_modalities=signals.available_modalities,
-            declined_modalities=signals.declined_modalities,
-        )
     if candidate is None:
         return None
     trigger_signals = _trigger_signals(signals=signals, profile=profile)
-    profile_signal = TriggerSignal(
-        category="profile",
-        name=f"{candidate}_available",
-        confidence=_confidence_rank(_profile_channels(profile)[candidate].confidence),
-    )
-    trigger_signals = (*trigger_signals, profile_signal)
     if not _evidence_allows_adaptation(signals=signals, evidence=trigger_signals):
         return None
     return ModalitySuggestion(
-        suggested=MODALITY_BY_CHANNEL[candidate],
+        suggested=candidate,
         trigger_reason="combined",
-        confidence=_profile_channels(profile)[candidate].confidence,
+        confidence=ConfidenceLevel.MEDIUM,
         adaptation_confidence=_combined_confidence(trigger_signals),
         trigger_signals=trigger_signals,
     )
-
-
-def _neutral_available_channel(
-    *,
-    current_modality: ContentModality,
-    available_modalities: tuple[ContentModality, ...],
-    declined_modalities: tuple[ContentModality, ...],
-) -> str | None:
-    """Choose a real alternative when evidence is strong but the profile is new.
-
-    This does not bypass multi-signal confirmation. It only prevents a balanced
-    first-use profile from making every valid modality suggestion impossible.
-    """
-    for modality in available_modalities:
-        if modality == current_modality or modality in declined_modalities:
-            continue
-        channel = CHANNEL_BY_MODALITY.get(modality)
-        if channel is not None:
-            return channel
-    return None
 
 
 def _modality_constraints_allow(signals: RuntimeSignals) -> bool:
@@ -898,7 +765,7 @@ def _trigger_signals(
                 confidence=0.68,
             )
         )
-    if signals.consecutive_errors >= 3:
+    if signals.consecutive_errors >= 2:
         evidence.append(
             TriggerSignal(
                 category="performance",
@@ -987,52 +854,3 @@ def _confidence_threshold(signals: RuntimeSignals) -> float:
     ):
         return SUBSEQUENT_ADAPTATION_CONFIDENCE_THRESHOLD
     return FIRST_ADAPTATION_CONFIDENCE_THRESHOLD
-
-
-def _confidence_rank(confidence: ConfidenceLevel) -> float:
-    return {
-        ConfidenceLevel.LOW: 0.45,
-        ConfidenceLevel.MEDIUM: 0.65,
-        ConfidenceLevel.HIGH: 0.85,
-    }[confidence]
-
-
-def _higher_confidence_available_channel(
-    *,
-    profile: LearnerProfileSnapshot,
-    current_confidence: ConfidenceLevel,
-    available_modalities: tuple[ContentModality, ...],
-    declined_modalities: tuple[ContentModality, ...],
-) -> str | None:
-    confidence_rank = {
-        ConfidenceLevel.LOW: 1,
-        ConfidenceLevel.MEDIUM: 2,
-        ConfidenceLevel.HIGH: 3,
-    }
-    candidates: list[tuple[int, str]] = []
-    for channel, preference in _profile_channels(profile).items():
-        modality = MODALITY_BY_CHANNEL[channel]
-        if modality not in available_modalities or modality in declined_modalities:
-            continue
-        if preference.value not in {
-            ChannelPreferenceStrength.MODERATE,
-            ChannelPreferenceStrength.STRONG,
-        }:
-            continue
-        rank = confidence_rank[preference.confidence]
-        if rank > confidence_rank[current_confidence]:
-            candidates.append((rank, channel))
-    if not candidates:
-        return None
-    return sorted(candidates, reverse=True)[0][1]
-
-
-def _profile_channels(
-    profile: LearnerProfileSnapshot,
-) -> Mapping[str, ChannelPreference]:
-    return {
-        "visual_spatial_preference": profile.visual_spatial_preference,
-        "auditory_preference": profile.auditory_preference,
-        "reading_writing_preference": profile.reading_writing_preference,
-        "interactive_kinesthetic_preference": (profile.interactive_kinesthetic_preference),
-    }

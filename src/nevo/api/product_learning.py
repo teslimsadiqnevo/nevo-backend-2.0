@@ -111,8 +111,8 @@ from nevo.domain.intelligence.vocabulary import (
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 from nevo.intelligence.learning_runtime import (
     apply_marked_attempt,
+    ensure_onboarding,
     ensure_prerequisites,
-    require_onboarding,
 )
 from nevo.intelligence.session_delivery import delivery_snapshot
 from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
@@ -710,7 +710,7 @@ async def _lesson_for_actor(
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
     if actor.role == UserRole.STUDENT:
-        require_onboarding(actor)
+        await ensure_onboarding(session, actor)
         assignment = await session.scalar(
             select(LessonAssignment.id).where(
                 LessonAssignment.student_id == actor.id,
@@ -1660,6 +1660,10 @@ async def student_dashboard(
     actor = await actor_user(session, principal)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
+    from nevo.intelligence.learning_runtime import refresh_onboarding
+
+    await refresh_onboarding(session, actor)
+    await session.commit()
     enrolled_class = await session.scalar(
         select(Class)
         .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)

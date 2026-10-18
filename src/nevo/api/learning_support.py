@@ -105,9 +105,9 @@ async def require_learning_support(session: AsyncSession, user: User) -> None:
 
 
 async def require_learning_support_if_admin(session: AsyncSession, user: User) -> None:
-    """Compatibility name for callers; every staff role now needs the grant."""
-
-    await require_learning_support(session, user)
+    """Class access is checked separately; administrators still need the grant."""
+    if user.role.value in ADMIN_ROLES:
+        await require_learning_support(session, user)
 
 
 async def _view(
@@ -234,8 +234,7 @@ async def revoke_learning_support(
             detail={
                 "code": "last_learning_support_holder",
                 "message": (
-                    "Grant Learning Support to another person before removing "
-                    "the final holder."
+                    "Grant Learning Support to another person before removing the final holder."
                 ),
                 "operation": "remove_role",
             },
@@ -271,8 +270,7 @@ async def refuse_last_holder_change(
             detail={
                 "code": "last_learning_support_holder",
                 "message": (
-                    "Grant Learning Support to another person before changing "
-                    "the final holder."
+                    "Grant Learning Support to another person before changing the final holder."
                 ),
                 "operation": operation,
             },

@@ -36,7 +36,7 @@ from nevo.api.content import (
     get_lesson_media_service,
 )
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.learning_support import require_learning_support
+from nevo.api.learning_support import holds_learning_support, require_learning_support
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     checkpoint_payloads,
@@ -81,7 +81,12 @@ from nevo.content_parsing.chunks import reading_chunks
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
-from nevo.db.models.attention_flag import AttentionFlag, Escalation, InterventionRecommendation
+from nevo.db.models.attention_flag import (
+    AttentionFlag,
+    AttentionFlagRead,
+    Escalation,
+    InterventionRecommendation,
+)
 from nevo.db.models.consent import ParentLink
 from nevo.db.models.content import Lesson, LessonKeyPoint, LessonSegment
 from nevo.db.models.frontend_support import (
@@ -1258,13 +1263,13 @@ async def lesson_detail(
         )
     )
     from nevo.content_parsing.modules import delivery_modules
-    from nevo.intelligence.learning_runtime import require_onboarding
+    from nevo.intelligence.learning_runtime import ensure_onboarding
 
     if actor.role == UserRole.STUDENT:
         from nevo.api.product_learning import _lesson_for_actor
 
         await _lesson_for_actor(lesson_id, principal, session)
-        require_onboarding(actor)
+        await ensure_onboarding(session, actor)
     modules = delivery_modules(lesson.id, segments, modules)
     return LessonDetailResponse(
         **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)).model_dump(
@@ -1525,7 +1530,7 @@ async def list_escalations(
         .where(User.school_id == actor.school_id)
         .order_by(Escalation.generated_at.desc())
     )
-    if actor.role is UserRole.TEACHER:
+    if actor.role is UserRole.TEACHER and not await holds_learning_support(session, actor):
         query = query.where(
             Escalation.student_id.in_(
                 select(StudentClassEnrollment.student_id)
@@ -2486,6 +2491,7 @@ async def flags_alias(
     class_id: ClassIdQuery = None,
     limit: LimitQuery = DEFAULT_LIMIT,
     offset: OffsetQuery = 0,
+    unseen_only: bool = Query(default=False, alias="unseenOnly"),
 ) -> list[dict[str, object]]:
     """List attention flags.
 
@@ -2495,6 +2501,29 @@ async def flags_alias(
     """
     actor = await actor_user(session, principal)
     query = select(AttentionFlag).order_by(AttentionFlag.generated_at.desc())
+    if actor.role is UserRole.TEACHER and not await holds_learning_support(session, actor):
+        query = query.where(
+            AttentionFlag.student_id.in_(
+                select(StudentClassEnrollment.student_id)
+                .join(
+                    TeacherClassAssignment,
+                    TeacherClassAssignment.class_id == StudentClassEnrollment.class_id,
+                )
+                .where(
+                    TeacherClassAssignment.teacher_id == actor.id,
+                    TeacherClassAssignment.removed_at.is_(None),
+                )
+            )
+        )
+    if unseen_only:
+        query = query.where(
+            ~select(AttentionFlagRead.flag_id)
+            .where(
+                AttentionFlagRead.flag_id == AttentionFlag.id,
+                AttentionFlagRead.user_id == actor.id,
+            )
+            .exists()
+        )
     if class_id is not None:
         await require_class_access(session, actor, class_id)
         query = query.join(
@@ -2512,6 +2541,15 @@ async def flags_alias(
         )
     rows, total = await paginate(session, query, limit=limit, offset=offset)
     set_page_headers(response, total=total, limit=limit, offset=offset)
+    reads = {
+        read.flag_id: read
+        for read in await session.scalars(
+            select(AttentionFlagRead).where(
+                AttentionFlagRead.user_id == actor.id,
+                AttentionFlagRead.flag_id.in_([item.id for item in rows]),
+            )
+        )
+    }
     result: list[dict[str, object]] = []
     for item in rows:
         viewer = await session.get(User, item.acknowledged_by) if item.acknowledged_by else None
@@ -2528,6 +2566,8 @@ async def flags_alias(
                 "acknowledgedByName": _display_name(viewer) if viewer else None,
                 "evidenceSeries": item.evidence_series,
                 "actionTargets": item.action_targets,
+                "seenByMe": item.id in reads,
+                "seenAt": reads[item.id].seen_at if item.id in reads else None,
             }
         )
     return result
@@ -2551,12 +2591,11 @@ async def acknowledge_flag(
     actor = await actor_user(session, principal)
     if principal.role == "student":
         raise HTTPException(status_code=403, detail="Students cannot acknowledge flags")
-    flag = await session.get(AttentionFlag, flag_id)
+    flag = await session.get(AttentionFlag, flag_id, with_for_update=True)
     if flag is None:
         raise HTTPException(status_code=404, detail="Flag not found")
     await require_student_access(session, principal, flag.student_id)
-    if actor.role is not UserRole.TEACHER:
-        await require_learning_support(session, actor)
+    await require_learning_support(session, actor)
     if flag.acknowledged_at is None:
         flag.acknowledged_at = datetime.now(UTC)
         flag.acknowledged_by = actor.id
@@ -2574,6 +2613,45 @@ async def acknowledge_flag(
         "acknowledgedByName": _display_name(viewer) if viewer else None,
         "evidenceSeries": flag.evidence_series,
         "actionTargets": flag.action_targets,
+    }
+
+
+@router.post(
+    "/api/intelligence/flags/{flag_id}/seen",
+    response_model=AttentionFlagResponse,
+    tags=["intelligence"],
+)
+async def mark_flag_seen(flag_id: UUID, principal: PrincipalDependency, session: DatabaseSession):
+    """Personal dismissal only; never a Learning Support acknowledgement."""
+    actor = await actor_user(session, principal)
+    if actor.role.value not in {"teacher", "senco_admin", "other_admin"}:
+        raise HTTPException(403, detail="Staff account required")
+    flag = await session.get(AttentionFlag, flag_id)
+    if flag is None:
+        raise HTTPException(404, detail="Flag not found")
+    await require_student_access(session, principal, flag.student_id)
+    await session.execute(
+        insert(AttentionFlagRead)
+        .values(flag_id=flag.id, user_id=actor.id)
+        .on_conflict_do_nothing(index_elements=["flag_id", "user_id"])
+    )
+    await session.commit()
+    read = await session.get(AttentionFlagRead, (flag.id, actor.id))
+    viewer = await session.get(User, flag.acknowledged_by) if flag.acknowledged_by else None
+    return {
+        "id": str(flag.id),
+        "studentId": str(flag.student_id),
+        "flagType": flag.flag_type.value,
+        "description": flag.description,
+        "generatedAt": flag.generated_at,
+        "acknowledged": flag.acknowledged_at is not None,
+        "acknowledgedAt": flag.acknowledged_at,
+        "acknowledgedBy": flag.acknowledged_by,
+        "acknowledgedByName": _display_name(viewer) if viewer else None,
+        "evidenceSeries": flag.evidence_series,
+        "actionTargets": flag.action_targets,
+        "seenByMe": True,
+        "seenAt": read.seen_at,
     }
 
 

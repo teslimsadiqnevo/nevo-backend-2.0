@@ -10,11 +10,12 @@ from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import actor_user, require_school_actor
 from nevo.api.response_models import CamelResponse
-from nevo.db.models.account import StudentClassEnrollment
 from nevo.db.models.frontend_support import Concept
-from nevo.db.models.probe import ProbeItem
-from nevo.db.models.subject import ClassSubject, SchoolSubject
-from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
+from nevo.intelligence.learning_runtime import (
+    ONBOARDING_MODULES,
+    onboarding_modules,
+    refresh_onboarding,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["intelligence"])
 
@@ -22,6 +23,7 @@ router = APIRouter(prefix="/api/v1", tags=["intelligence"])
 class OnboardingModule(CamelResponse):
     id: str
     completed: bool
+    status: Literal["pending", "completed", "unavailable"] = "pending"
 
 
 class OnboardingSubject(CamelResponse):
@@ -35,6 +37,8 @@ class LearningReadiness(CamelResponse):
     modules: list[OnboardingModule]
     subjects: list[OnboardingSubject]
     next_module: str | None
+    probe_subject_id: UUID | None = None
+    probe_policy: Literal["one_available_subject"] = "one_available_subject"
 
 
 @router.get("/students/me/onboarding", response_model=LearningReadiness)
@@ -44,37 +48,25 @@ async def readiness(
     student = await actor_user(session, principal)
     if student.role != "student":
         raise HTTPException(403, detail="Student account required")
+    subjects, available = await refresh_onboarding(session, student)
     completed = onboarding_modules(student.baseline_profile or {})
-    subjects = list(
-        await session.scalars(
-            select(SchoolSubject)
-            .join(
-                ClassSubject,
-                ClassSubject.school_subject_id == SchoolSubject.id,
-            )
-            .join(StudentClassEnrollment, StudentClassEnrollment.class_id == ClassSubject.class_id)
-            .where(
-                StudentClassEnrollment.student_id == student.id,
-                SchoolSubject.school_id == student.school_id,
-            )
-            .distinct()
-            .order_by(SchoolSubject.name)
-        )
-    )
-    available = set(
-        await session.scalars(
-            select(ProbeItem.school_subject_id)
-            .where(
-                ProbeItem.school_id == student.school_id,
-                ProbeItem.retired.is_(False),
-            )
-            .distinct()
-        )
-    )
+    unavailable = (student.baseline_profile or {}).get(
+        "domain_probe_status"
+    ) == "unavailable_at_onboarding"
+    await session.commit()
     return LearningReadiness(
         complete=set(ONBOARDING_MODULES).issubset(completed),
         modules=[
-            OnboardingModule(id=name, completed=name in completed) for name in ONBOARDING_MODULES
+            OnboardingModule(
+                id=name,
+                completed=name in completed,
+                status="unavailable"
+                if name == "domain_probe" and unavailable
+                else "completed"
+                if name in completed
+                else "pending",
+            )
+            for name in ONBOARDING_MODULES
         ],
         subjects=[
             OnboardingSubject(
@@ -83,6 +75,9 @@ async def readiness(
             for subject in subjects
         ],
         next_module=next((name for name in ONBOARDING_MODULES if name not in completed), None),
+        probe_subject_id=next(
+            (subject.id for subject in subjects if subject.id in available), None
+        ),
     )
 
 
@@ -111,13 +106,14 @@ async def read_next_work(
     subject: str | None = None,
     consent: StudentLearningConsent = None,
 ):
-    from nevo.intelligence.learning_runtime import require_onboarding
+    from nevo.intelligence.learning_runtime import ensure_onboarding
     from nevo.intelligence.progression import next_work
 
     student = await actor_user(session, principal)
     if student.role != "student":
         raise HTTPException(403, detail="Student account required")
-    require_onboarding(student)
+    await ensure_onboarding(session, student)
+    await session.commit()
     return await next_work(session, student, subject)
 
 

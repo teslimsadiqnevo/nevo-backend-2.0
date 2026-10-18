@@ -103,6 +103,10 @@ async def can_access_student(
         return True
     if actor.role.value != "teacher":
         return False
+    from nevo.api.learning_support import holds_learning_support
+
+    if await holds_learning_support(session, actor):
+        return True
     return bool(
         await session.scalar(
             select(TeacherClassAssignment.id)

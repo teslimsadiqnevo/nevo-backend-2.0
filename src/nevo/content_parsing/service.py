@@ -1138,7 +1138,11 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
     visual_variant = segment.visual_variant
     if not _is_generated_image_variant(visual_variant):
         visual_variant = None
-    if ContentModality.VISUAL in modalities and not _has_visual_delivery(segment):
+    if (
+        segment.content_type is not LessonContentType.CALCULATION
+        and ContentModality.VISUAL in modalities
+        and not _has_visual_delivery(segment)
+    ):
         visual_variant = None
         modalities = tuple(
             modality for modality in modalities if modality is not ContentModality.VISUAL
@@ -1164,12 +1168,8 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
         needs_review = True
         reasons.append("interactive_activity_missing")
     if segment.content_type is LessonContentType.CALCULATION:
-        modalities = tuple(
-            modality
-            for modality in (ContentModality.INTERACTIVE, ContentModality.VISUAL)
-            if (modality is ContentModality.INTERACTIVE and segment.calculation_variant is not None)
-            or (modality is ContentModality.VISUAL and _has_visual_delivery(segment))
-        )
+        visual_variant = None
+        modalities = (ContentModality.INTERACTIVE,) if segment.calculation_variant else ()
         if segment.calculation_variant is None:
             # Without the co-construction this is not a calculation any more,
             # whatever else survived. It used to fall back only when nothing
@@ -1183,7 +1183,7 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
             reasons.append("calculation_segment_has_no_interactive_delivery")
     elif ContentModality.TEXT not in modalities:
         modalities = (ContentModality.TEXT, *modalities)
-    if len(modalities) < 2:
+    if len(modalities) < 2 and segment.content_type is not LessonContentType.CALCULATION:
         needs_review = True
         reasons.append("fewer_than_two_modalities")
     return ParsedLessonSegment(
@@ -1208,7 +1208,7 @@ def _normalize_segment(segment: ParsedLessonSegment) -> ParsedLessonSegment:
 
 def _has_visual_delivery(segment: ParsedLessonSegment) -> bool:
     if segment.content_type is LessonContentType.CALCULATION and segment.calculation_variant:
-        return True
+        return False
     return _is_generated_image_variant(segment.visual_variant)
 
 

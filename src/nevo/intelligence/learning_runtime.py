@@ -87,7 +87,59 @@ async def seed_completed_lesson_reviews(session, student_id, session_id):
 
 
 def onboarding_modules(profile: dict) -> set[str]:
-    return set(profile.get("completed_modules") or ()) & set(ONBOARDING_MODULES)
+    completed = set(profile.get("completed_modules") or ()) & set(ONBOARDING_MODULES)
+    if profile.get("domain_probe_status") == "unavailable_at_onboarding":
+        completed.add("domain_probe")
+    return completed
+
+
+async def onboarding_subjects(session: AsyncSession, user: User):
+    from nevo.db.models.account import StudentClassEnrollment
+    from nevo.db.models.probe import ProbeItem
+    from nevo.db.models.subject import ClassSubject, SchoolSubject
+
+    subjects = list(
+        await session.scalars(
+            select(SchoolSubject)
+            .join(ClassSubject, ClassSubject.school_subject_id == SchoolSubject.id)
+            .join(StudentClassEnrollment, StudentClassEnrollment.class_id == ClassSubject.class_id)
+            .where(
+                StudentClassEnrollment.student_id == user.id,
+                SchoolSubject.school_id == user.school_id,
+            )
+            .distinct()
+            .order_by(SchoolSubject.name)
+        )
+    )
+    available = set(
+        await session.scalars(
+            select(ProbeItem.school_subject_id)
+            .where(
+                ProbeItem.school_id == user.school_id,
+                ProbeItem.retired.is_(False),
+                ProbeItem.school_subject_id.in_([subject.id for subject in subjects]),
+            )
+            .distinct()
+        )
+    )
+    return subjects, available
+
+
+async def refresh_onboarding(session: AsyncSession, user: User):
+    """Record an explicit unmeasured outcome, never a fabricated placement."""
+    subjects, available = await onboarding_subjects(session, user)
+    profile = dict(user.baseline_profile or {})
+    if "domain_probe" not in onboarding_modules(profile) and not available:
+        profile["domain_probe_status"] = "unavailable_at_onboarding"
+        profile["domain_probe_unavailable_at"] = datetime.now(UTC).isoformat()
+        user.baseline_profile = profile
+        await session.flush()
+    return subjects, available
+
+
+async def ensure_onboarding(session: AsyncSession, user: User) -> None:
+    await refresh_onboarding(session, user)
+    require_onboarding(user)
 
 
 def require_onboarding(user: User) -> None:

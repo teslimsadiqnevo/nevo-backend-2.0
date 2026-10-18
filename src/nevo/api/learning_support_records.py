@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.learning_support import require_learning_support_if_admin
+from nevo.api.learning_support import require_learning_support, require_learning_support_if_admin
 from nevo.api.product_common import can_access_student, require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.db.models.account import User
@@ -158,7 +158,7 @@ async def list_active_accommodations(
 ) -> list[StudentAccommodationSummary]:
     """Current inferred delivery adjustments across the caller's school."""
     actor = await require_school_actor(session, principal, roles=STAFF_ROLES)
-    await require_learning_support_if_admin(session, actor)
+    await require_learning_support(session, actor)
     students = list(
         await session.scalars(
             select(User)

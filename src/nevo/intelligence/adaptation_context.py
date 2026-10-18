@@ -15,7 +15,7 @@ from nevo.domain.intelligence.vocabulary import AdaptationMode, ContentModality,
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 from nevo.intelligence.adaptation import ADAPTATION_HISTORY_EVENT_TYPES
 from nevo.intelligence.entities import AdaptationRequest, ContentSegment
-from nevo.intelligence.learning_runtime import require_onboarding
+from nevo.intelligence.learning_runtime import ensure_onboarding
 
 
 def repeated_near_miss(attempts):
@@ -45,7 +45,7 @@ async def prepare_adaptation(session, principal, payload, signals):
             403,
             detail={"code": "student_context_forbidden", "message": "Student account required."},
         )
-    require_onboarding(actor)
+    await ensure_onboarding(session, actor)
     lesson = await session.get(Lesson, payload.lesson_id)
     assignment = await session.scalar(
         select(LessonAssignment.id).where(

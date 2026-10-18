@@ -67,6 +67,21 @@ class AttentionFlag(Base):
     )
 
 
+class AttentionFlagRead(Base):
+    __tablename__ = "attention_flag_reads"
+    __table_args__ = (Index("ix_attention_flag_reads_user_seen", "user_id", "seen_at"),)
+
+    flag_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("attention_flags.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Escalation(Base):
     __tablename__ = "escalations"
     __table_args__ = (

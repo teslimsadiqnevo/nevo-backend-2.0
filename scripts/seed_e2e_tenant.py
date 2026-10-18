@@ -79,7 +79,7 @@ NOW = datetime.now(UTC)
 #: in a test school - there is nothing here worth protecting, and one password
 #: everybody knows beats five nobody can find.
 PASSWORD = "NevoE2E#2026!"
-STUDENT_PIN = "246810"
+STUDENT_PIN = "4820"
 
 # Yinka's thresholds, named so a reader can see which ask each one answers.
 CONSENT_MIX = {

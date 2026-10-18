@@ -13,6 +13,7 @@ from nevo.db.models.ask_nevo import (
 )
 from nevo.db.models.attention_flag import (
     AttentionFlag,
+    AttentionFlagRead,
     Escalation,
     InterventionRecommendation,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "AskNevoMessage",
     "AskNevoThread",
     "AttentionFlag",
+    "AttentionFlagRead",
     "AuthAuditEvent",
     "AuthLoginAttempt",
     "AuthSession",

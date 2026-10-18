@@ -120,6 +120,31 @@ async def _asked(session: DatabaseSession, *, student_id: UUID, subject_id: UUID
     return {row[0] for row in rows}
 
 
+async def _finish(session, student, result):
+    from datetime import UTC, datetime
+
+    from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
+
+    baseline = dict(student.baseline_profile or {})
+    state = await _state(session, student_id=student.id, subject_id=result.subject_id)
+    if state.asked:
+        subject = await session.get(SchoolSubject, result.subject_id)
+        placements = dict(baseline.get("subject_placements") or {})
+        placements[str(result.subject_id)] = result.entry_point
+        placements[subject.name.casefold()] = result.entry_point
+        baseline["subject_placements"] = placements
+    baseline["domain_probe_status"] = (
+        "completed" if state.asked else "completed_without_scored_answers"
+    )
+    completed = onboarding_modules(baseline) | {"domain_probe"}
+    baseline["completed_modules"] = sorted(completed)
+    if set(ONBOARDING_MODULES).issubset(completed):
+        baseline.setdefault("onboarding_completed_at", datetime.now(UTC).isoformat())
+    student.baseline_profile = baseline
+    await session.commit()
+    return result
+
+
 @router.get(
     "/probe/{subject_id}/next",
     response_model=ProbeQuestion | ProbeFinished | ProbeEmpty,
@@ -149,28 +174,42 @@ async def next_question(
         )
     ).all()
     if not available:
+        from nevo.intelligence.learning_runtime import refresh_onboarding
+
+        await refresh_onboarding(session, student)
+        await session.commit()
         return ProbeEmpty(subject_id=subject_id)
     if state.finished:
-        return ProbeFinished(
-            subject_id=subject_id,
-            entry_point=entry_point(state),
-            asked=state.asked,
+        return await _finish(
+            session,
+            student,
+            ProbeFinished(
+                subject_id=subject_id,
+                entry_point=entry_point(state),
+                asked=state.asked,
+            ),
         )
 
     asked = await _asked(session, student_id=student.id, subject_id=subject_id)
     if len(asked) >= MAX_QUESTIONS:
-        return ProbeFinished(
-            subject_id=subject_id, entry_point=entry_point(state), asked=len(asked)
+        return await _finish(
+            session,
+            student,
+            ProbeFinished(subject_id=subject_id, entry_point=entry_point(state), asked=len(asked)),
         )
     pool: list[tuple[object, float]] = [(row[0], row[1]) for row in available]
     chosen = choose(state, available=pool, already_asked=set(asked))
     if chosen is None:
         # The bank is exhausted before the run converged. Placing the child on
         # what we have is better than asking a question twice.
-        return ProbeFinished(
-            subject_id=subject_id,
-            entry_point=entry_point(state),
-            asked=state.asked,
+        return await _finish(
+            session,
+            student,
+            ProbeFinished(
+                subject_id=subject_id,
+                entry_point=entry_point(state),
+                asked=state.asked,
+            ),
         )
     item = await session.get(ProbeItem, chosen)
     assert item is not None
@@ -246,21 +285,6 @@ async def submit_answer(
         )
     await session.flush()
     result = await next_question(subject_id, principal, session)
-    if isinstance(result, ProbeFinished):
-        from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
-
-        subject = await session.get(SchoolSubject, subject_id)
-        baseline = dict(student.baseline_profile or {})
-        placements = dict(baseline.get("subject_placements") or {})
-        placements[str(subject_id)] = result.entry_point
-        placements[subject.name.casefold()] = result.entry_point
-        completed = onboarding_modules(baseline) | {"domain_probe"}
-        baseline.update(subject_placements=placements, completed_modules=sorted(completed))
-        if set(ONBOARDING_MODULES).issubset(completed):
-            from datetime import UTC, datetime
-
-            baseline.setdefault("onboarding_completed_at", datetime.now(UTC).isoformat())
-        student.baseline_profile = baseline
     await session.commit()
     return result  # type: ignore[return-value]
 

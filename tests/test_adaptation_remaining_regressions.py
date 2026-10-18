@@ -94,7 +94,6 @@ def test_calculation_delivery_does_not_offer_text_as_its_opening_mode():
 
     assert segment_modalities("calculation", ["text", "audio", "visual"], {"steps": []}) == [
         "interactive",
-        "visual",
     ]
 
 

@@ -1245,6 +1245,8 @@ class UploadRetryResponse(CamelResponse):
 
 
 class AttentionFlagResponse(CamelResponse):
+    seen_by_me: bool = False
+    seen_at: datetime | None = None
     id: UUID
     student_id: UUID
     flag_type: AttentionFlagType

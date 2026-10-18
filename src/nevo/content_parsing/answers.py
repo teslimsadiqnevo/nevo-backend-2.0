@@ -28,11 +28,40 @@ def _number(value):
         return None
 
 
+def correct_choice_aliases(expected, options, aliases):
+    """Only the correct choice's representations, never a distractor's ID."""
+    correct = next(
+        (
+            option
+            for option in options
+            if isinstance(option, dict) and normalise(option.get("value")) == normalise(expected)
+        ),
+        None,
+    )
+    wrong = [
+        option.get("value")
+        for option in options
+        if isinstance(option, dict) and normalise(option.get("value")) != normalise(expected)
+    ]
+    label = correct.get("label") if correct else expected
+    result = []
+    for value in aliases:
+        if any(normalise(value) == normalise(other) for other in wrong):
+            continue
+        if normalise(value) in (normalise(expected), normalise(label)) or (
+            (numeric := _number(value)) is not None and numeric == _number(label)
+        ):
+            result.append(value)
+    return result
+
+
 def answer_matches(answer, question):
     expected = question.get("answerKey")
     if expected is None:
         return None
     alternatives = question.get("acceptedAnswers") or []
+    if question.get("options") and not isinstance(expected, list):
+        alternatives = correct_choice_aliases(expected, question["options"], alternatives)
     allow_number = question.get("answerType") == "numeric" or not question.get("options")
     for candidate in [expected, *alternatives]:
         if isinstance(answer, bool) != isinstance(candidate, bool):

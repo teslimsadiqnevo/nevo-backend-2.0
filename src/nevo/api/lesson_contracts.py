@@ -12,8 +12,10 @@ ScalarAnswer = str | int | float | bool
 
 def segment_modalities(content_type, available, calculation):
     values = list(available or [])
-    if content_type == "calculation" and calculation:
-        return ["interactive", *(["visual"] if "visual" in values else [])]
+    if content_type == "calculation":
+        if calculation:
+            return ["interactive"]
+        return ["text", *(["audio"] if "audio" in values else [])]
     return values
 
 
@@ -439,6 +441,12 @@ class CalculationStep(BaseModel):
         item.setdefault("assembles", item.get("equationState") or item.get("equation_state") or "")
         step_id = str(item.get("stepId") or item.get("step_id") or "step")
         answer = item.get("answer")
+        if item.get("input") == "choice" and options:
+            from nevo.content_parsing.answers import correct_choice_aliases
+
+            item["acceptedAnswers"] = correct_choice_aliases(
+                answer, options, item.get("acceptedAnswers") or item.get("accepted_answers") or []
+            )
         if "requiredCharacters" not in item and "required_characters" not in item:
             typed = str(answer or "")
             item["requiredCharacters"] = list(

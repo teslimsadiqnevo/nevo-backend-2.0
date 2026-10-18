@@ -1,20 +1,53 @@
 from collections import defaultdict
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.signal_event import LessonSession, SignalEvent
+from nevo.domain.intelligence.vocabulary import AccommodationType
 from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
     SignalEventType,
 )
-from nevo.intelligence.entities import BehaviourPatternAggregate
+from nevo.intelligence.entities import (
+    AccommodationAnalysis,
+    AccommodationSignal,
+    BehaviourPatternAggregate,
+)
 
 
 class SqlAlchemyAccommodationPatternRepository:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
+
+    async def current_session_analysis(self, *, student_id: UUID) -> AccommodationAnalysis | None:
+        async with self._sessions() as session:
+            sitting = await session.scalar(
+                select(LessonSession)
+                .where(
+                    LessonSession.student_id == student_id,
+                    LessonSession.completion_status == LessonCompletionStatus.IN_PROGRESS,
+                    LessonSession.lesson_id.is_not(None),
+                )
+                .order_by(LessonSession.started_at.desc())
+                .limit(1)
+            )
+            if sitting is None or not sitting.delivery_state:
+                return None
+            return AccommodationAnalysis(
+                student_id=student_id,
+                source="session_delivery_snapshot",
+                active=tuple(
+                    AccommodationSignal(
+                        accommodation=AccommodationType(item["accommodation"]),
+                        frontend_signal=item["frontendSignal"],
+                        evidence=tuple(item["evidence"]),
+                        lesson_count=item["lessonCount"],
+                    )
+                    for item in sitting.delivery_state.get("accommodationEvidence", [])
+                ),
+            )
 
     async def aggregate_for_student(
         self,
@@ -23,10 +56,29 @@ class SqlAlchemyAccommodationPatternRepository:
         lesson_limit: int = 5,
     ) -> BehaviourPatternAggregate:
         async with self._sessions() as session:
+            latest = (
+                select(
+                    LessonSession.id,
+                    func.row_number()
+                    .over(
+                        partition_by=LessonSession.lesson_id,
+                        order_by=LessonSession.started_at.desc(),
+                    )
+                    .label("sitting"),
+                )
+                .where(
+                    LessonSession.student_id == student_id,
+                    LessonSession.lesson_id.is_not(None),
+                    LessonSession.completion_status == LessonCompletionStatus.COMPLETED,
+                )
+                .subquery()
+            )
             lesson_sessions = (
                 await session.scalars(
                     select(LessonSession)
+                    .join(latest, latest.c.id == LessonSession.id)
                     .where(
+                        latest.c.sitting == 1,
                         LessonSession.student_id == student_id,
                         LessonSession.completion_status == LessonCompletionStatus.COMPLETED,
                     )

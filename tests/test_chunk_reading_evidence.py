@@ -11,8 +11,9 @@ def test_chunks_follow_paragraphs_and_keep_exact_offsets():
     first = "One sentence. " * 60
     body = f"{first.strip()}\n\nA new idea begins here."
     chunks = reading_chunks("segment", body)
-    assert len(chunks) == 2
-    assert chunks[0]["text"] == first.strip()
+    assert len(chunks) == 3
+    assert all(len(chunk["text"].split()) <= 80 for chunk in chunks)
+    assert " ".join(chunk["text"] for chunk in chunks[:2]) == first.strip()
     for chunk in chunks:
         assert body[chunk["startOffset"] : chunk["endOffset"]] == chunk["text"]
     assert chunks == reading_chunks("segment", body)

@@ -645,6 +645,8 @@ class LessonSessionResponse(CamelResponse):
     rerouted_from_session_id: UUID | None = None
     check_position: int | None = None
     check_resumable_until: datetime | None = None
+    delivery_state: "SessionDeliveryResponse | None" = None
+    segment_position: int = 0
 
 
 class LessonRerouteResponse(CamelResponse):
@@ -653,6 +655,7 @@ class LessonRerouteResponse(CamelResponse):
     depth: Literal["standard", "lower"]
     segment_position: int
     reason: Literal["nothing_landed", "not_attempted"]
+    delivery_state: "SessionDeliveryResponse | None" = None
 
 
 class ConceptOutcomeResponse(CamelResponse):
@@ -702,7 +705,7 @@ class LessonQuestionAttemptResponse(CamelResponse):
     session_id: UUID
     question_id: str
     segment_id: UUID | None = None
-    source: Literal["checkpoint", "assessment"]
+    source: Literal["checkpoint", "assessment", "calculation"]
     attempt_number: int
     question: ComprehensionCheckpoint
     answer: JsonValue
@@ -748,10 +751,21 @@ class RecentProgressResponse(CamelResponse):
     result_note: str = ""
 
 
+class LearningWorkResponse(CamelResponse):
+    lesson_id: UUID
+    concept_id: UUID
+    concept_name: str
+    segment_id: UUID | None
+    segment_position: int
+    kind: Literal["review", "new_work"]
+
+
 class StudentDashboardResponse(CamelResponse):
     student: PersonReferenceResponse
     assignments: list[AssignmentResponse]
     recent_progress: list[RecentProgressResponse]
+    onboarding_complete: bool = False
+    next_work: LearningWorkResponse | None = None
 
 
 class LearnerProfileSummaryResponse(CamelResponse):
@@ -1250,6 +1264,9 @@ class EngineReadingConfig(CamelResponse):
 
     target_words_per_minute: int = 120
     segment_word_target: int = 180
+    font_scale: float = 1.0
+    line_spacing: float = 1.5
+    contrast: Literal["standard", "soft"] = "standard"
 
 
 class EnginePacingConfig(CamelResponse):
@@ -1307,6 +1324,8 @@ class EngineSupportConfig(CamelResponse):
             "not split prose itself. A lesson without chunks falls back to its body."
         ),
     )
+    pause_between_segments: bool = False
+    numerical_visuals: bool = False
 
 
 class EngineConfig(CamelResponse):
@@ -1322,6 +1341,12 @@ class EngineConfig(CamelResponse):
     pacing: EnginePacingConfig = Field(default_factory=EnginePacingConfig)
     support: EngineSupportConfig = Field(default_factory=EngineSupportConfig)
     generated_from_baseline_at: datetime | None = None
+
+
+class SessionDeliveryResponse(CamelResponse):
+    engine_config: EngineConfig
+    accommodations: list[AccommodationType]
+    captured_at: datetime
 
 
 class EngineConfigResponse(CamelResponse):

@@ -485,6 +485,7 @@ class BaselineSubmitResponse(BaseModel):
 
 
 class BaselinePromptResponse(BaseModel):
+    duration_seconds: Literal[45] = Field(default=45, alias="durationSeconds")
     model_config = ConfigDict(populate_by_name=True)
 
     dimension: BaselineDimension
@@ -1246,6 +1247,15 @@ async def lesson_detail(
             LessonAssignment.status != "cancelled",
         )
     )
+    from nevo.content_parsing.modules import delivery_modules
+    from nevo.intelligence.learning_runtime import require_onboarding
+
+    if actor.role == UserRole.STUDENT:
+        from nevo.api.product_learning import _lesson_for_actor
+
+        await _lesson_for_actor(lesson_id, principal, session)
+        require_onboarding(actor)
+    modules = delivery_modules(lesson.id, segments, modules)
     return LessonDetailResponse(
         **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)).model_dump(
             by_alias=True
@@ -1941,6 +1951,7 @@ async def submit_baseline_trials(
     payload: BaselineTrialsRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> BaselineSubmitResponse:
     """Take the baseline as it happened and reduce it here. Ask B9.
 
@@ -1960,14 +1971,25 @@ async def submit_baseline_trials(
     reads, and holding six hundred raw trials per child earns nothing.
     """
 
+    if principal.role != "student":
+        raise HTTPException(403, detail="Student account required")
     marked: list[dict[str, object]] = []
+    user = await session.get(User, principal.user_id)
+    if user is None:
+        raise HTTPException(404, detail="Student not found")
     item_ids = [trial.probe_item_id for trial in payload.trials if trial.probe_item_id]
     answers: dict[UUID, str] = {}
     if item_ids:
         rows = await session.execute(
-            select(ProbeItem.id, ProbeItem.correct_option).where(ProbeItem.id.in_(item_ids))
+            select(ProbeItem.id, ProbeItem.correct_option).where(
+                ProbeItem.id.in_(item_ids),
+                ProbeItem.school_id == user.school_id,
+                ProbeItem.retired.is_(False),
+            )
         )
         answers = {row[0]: str(row[1]) for row in rows.all()}
+        if set(item_ids) != set(answers):
+            raise HTTPException(404, detail="Probe item not found")
     for trial in payload.trials:
         if trial.skipped or (
             (trial.response or "").strip().casefold() == "not_sure" and trial.correct is None
@@ -2041,6 +2063,13 @@ async def submit_baseline_trials(
         baseline_profile["age_band"] = payload.age_band.value
     if payload.form_factor is not None:
         baseline_profile["form_factor"] = payload.form_factor
+    from nevo.intelligence.learning_runtime import merge_baseline
+
+    baseline_profile = merge_baseline(
+        user.baseline_profile or {} if user else {},
+        baseline_profile,
+        {trial.dimension for trial in payload.trials if not trial.skipped},
+    )
     await session.execute(
         update(User)
         .where(User.id == principal.user_id)
@@ -2066,7 +2095,10 @@ async def submit_baseline(
     payload: BaselineSubmitRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> BaselineSubmitResponse:
+    if principal.role != "student":
+        raise HTTPException(403, detail="Student account required")
     features = payload.features
     leaked = {key for feature in features for key in feature if is_private_interaction_key(key)}
     if leaked:
@@ -2080,6 +2112,25 @@ async def submit_baseline(
     baseline_profile, engine_config = build_baseline_profile(
         session_id=payload.session_id,
         features=features,
+    )
+    from nevo.intelligence.learning_runtime import merge_baseline
+
+    user = await session.get(User, principal.user_id)
+    dimensions = set()
+    for feature in features:
+        module = feature.get("module")
+        if module == "grid_span" and int(feature.get("roundsCompleted") or 0) > 0:
+            dimensions.add("wmc")
+        acts = feature.get("acts") or {}
+        if isinstance(acts, dict) and any(
+            isinstance(value, dict) and int(value.get("trials") or 0) > 0 for value in acts.values()
+        ):
+            if module == "pattern_flanker":
+                dimensions.update({"ps", "attention"})
+            elif module == "sentence_dot":
+                dimensions.update({"reading", "ans"})
+    baseline_profile = merge_baseline(
+        user.baseline_profile or {} if user else {}, baseline_profile, dimensions
     )
     await session.execute(
         update(User)

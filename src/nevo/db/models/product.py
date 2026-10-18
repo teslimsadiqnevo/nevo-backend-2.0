@@ -297,6 +297,10 @@ class LessonQuestionAttempt(Base):
 
     __tablename__ = "lesson_question_attempts"
     __table_args__ = (
+        CheckConstraint(
+            "response_time_ms IS NULL OR response_time_ms >= 0", name="ck_attempt_response_time"
+        ),
+        CheckConstraint("hint_count >= 0", name="ck_attempt_hint_count"),
         UniqueConstraint(
             "session_id",
             "question_id",
@@ -335,6 +339,8 @@ class LessonQuestionAttempt(Base):
     question_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     answer: Mapped[object] = mapped_column(JSONB, nullable=False)
     correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hint_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

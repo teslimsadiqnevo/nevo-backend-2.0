@@ -62,6 +62,21 @@ class HybridAktMasteryEngine:
         interaction: MasteryUpdate,
         related_mastery: dict[UUID, float],
     ) -> MasteryUpdateResult:
+        if interaction.response_correct and (
+            interaction.hint_count > 0
+            or (
+                interaction.minimum_response_time_ms > 0
+                and (
+                    interaction.response_time_ms is None
+                    or interaction.response_time_ms < interaction.minimum_response_time_ms
+                )
+            )
+        ):
+            # A correct answer is still recorded, but unsupported recall is
+            # not evidence for increasing either mastery or skill transfer.
+            return MasteryUpdateResult(
+                state=state, attention_transfer=0, recommended_modality_shift=False
+            )
         transfer = _attention_transfer(state.attention_weights, related_mastery)
         concept = _clamp(
             state.mastery_probability_concept

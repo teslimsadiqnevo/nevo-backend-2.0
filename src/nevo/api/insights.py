@@ -492,7 +492,10 @@ async def class_insights_narrative(
 
 @router.get("/session/state/{student_id}", response_model=SessionStateResponse)
 async def session_state(
-    student_id: UUID, principal: PrincipalDependency, session: DatabaseSession
+    student_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    session_id: Annotated[UUID | None, Query(alias="sessionId")] = None,
 ) -> SessionStateResponse:
     """Everything a lesson needs at the moment it starts. Ask B24.
 
@@ -510,7 +513,21 @@ async def session_state(
     student = await session.get(User, student_id)
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
-    stored = dict(student.engine_config or {})
+    from nevo.intelligence.session_delivery import delivery_snapshot
+
+    query = select(LessonSession).where(
+        LessonSession.student_id == student_id,
+        LessonSession.completion_status == LessonCompletionStatus.IN_PROGRESS,
+    )
+    if session_id is not None:
+        query = query.where(LessonSession.id == session_id)
+    sitting = await session.scalar(query.order_by(LessonSession.started_at.desc()).limit(1))
+    if session_id is not None and sitting is None:
+        raise HTTPException(404, detail="Lesson session not found")
+    snapshot = await delivery_snapshot(session, student, sitting)
+    if sitting is not None:
+        await session.commit()
+    stored = dict(snapshot["engineConfig"])
     consent_status = await session.scalar(
         select(ConsentRecord.status).where(
             ConsentRecord.subject_user_id == student_id,
@@ -526,18 +543,16 @@ async def session_state(
     active = sorted(
         {
             accommodation
-            for name in _stored_accommodations(stored)
+            for name in snapshot["accommodations"]
             if (accommodation := _known_accommodation(str(name))) is not None
         }
     )
     engine_config = EngineConfig.model_validate(stored) if stored else EngineConfig()
     # The accommodations decide these two, so a client never has to work out
     # what an accommodation means - it reads the directive and follows it.
-    engine_config.support.number_problems_step_by_step = AccommodationType.NUMERICAL in active
-    engine_config.support.shorter_text_blocks = AccommodationType.READING in active
     return SessionStateResponse(
         student_id=student_id,
-        configured=bool(stored),
+        configured=bool(student.engine_config),
         # Validated through the typed model, so a stored config written by an
         # older build is read against today's shape rather than passed on raw.
         engine_config=engine_config,
@@ -581,10 +596,25 @@ async def engine_config(
     student = await session.get(User, student_id)
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
+    from nevo.intelligence.session_delivery import delivery_snapshot
+
+    sitting = await session.scalar(
+        select(LessonSession)
+        .where(
+            LessonSession.student_id == student_id,
+            LessonSession.lesson_id.is_not(None),
+            LessonSession.completion_status == LessonCompletionStatus.IN_PROGRESS,
+        )
+        .order_by(LessonSession.started_at.desc())
+        .limit(1)
+    )
+    snapshot = await delivery_snapshot(session, student, sitting)
+    if sitting is not None:
+        await session.commit()
     return {
         "studentId": str(student_id),
         "configured": bool(student.engine_config),
-        "engineConfig": dict(student.engine_config),
+        "engineConfig": snapshot["engineConfig"],
         "baselineVersion": student.baseline_profile.get("version"),
     }
 

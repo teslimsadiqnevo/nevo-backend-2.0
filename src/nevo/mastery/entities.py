@@ -34,6 +34,9 @@ class MasteryUpdate:
     response_correct: bool
     item_text_density: float
     related_concept_ids: tuple[UUID, ...] = ()
+    response_time_ms: int | None = None
+    minimum_response_time_ms: int = 0
+    hint_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)

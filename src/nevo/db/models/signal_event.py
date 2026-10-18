@@ -5,6 +5,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -27,6 +28,32 @@ signal_event_type_enum = Enum(
     name="signal_event_type",
     values_callable=lambda enum: [item.value for item in enum],
 )
+
+
+class AdaptationDecision(Base):
+    __tablename__ = "adaptation_decisions"
+    __table_args__ = (
+        Index("ix_adaptation_decisions_student_session", "student_id", "session_id"),
+        CheckConstraint("confidence BETWEEN 0 AND 1", name="adaptation_decision_confidence"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("lesson_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    lesson_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    segment_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    trigger_signals: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 lesson_completion_status_enum = Enum(
     LessonCompletionStatus,
     name="lesson_completion_status",
@@ -107,6 +134,9 @@ class LessonSession(Base):
     #: a learner back through the same lesson using its simplified variants.
     delivery_depth: Mapped[str] = mapped_column(
         String(16), nullable=False, default="standard", server_default="standard"
+    )
+    delivery_state: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
     rerouted_from_session_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,

@@ -37,7 +37,9 @@ async def test_motor_samples_correct_only_the_current_device():
         execute=AsyncMock(),
         commit=AsyncMock(),
     )
-    result = await submit_baseline_trials(payload, SimpleNamespace(user_id=uuid4()), session)
+    result = await submit_baseline_trials(
+        payload, SimpleNamespace(user_id=uuid4(), role="student"), session
+    )
     assert result.baseline_profile["motor_baseline_ms"] == 100
     assert result.baseline_profile["motor_scored_sample_count"] == 6
     assert result.baseline_profile["motor_baselines"]["desktop_cursor"] == desktop
@@ -60,7 +62,9 @@ async def test_no_motor_baseline_is_uncorrected_and_never_borrowed():
         execute=AsyncMock(),
         commit=AsyncMock(),
     )
-    result = await submit_baseline_trials(payload, SimpleNamespace(user_id=uuid4()), session)
+    result = await submit_baseline_trials(
+        payload, SimpleNamespace(user_id=uuid4(), role="student"), session
+    )
     assert "motor_baseline_ms" not in result.baseline_profile
     assert result.baseline_profile["motor_latency_status"] == "uncorrected_no_baseline"
     assert result.engine_config["pacing"]["responseTimeTargetMs"] == 700

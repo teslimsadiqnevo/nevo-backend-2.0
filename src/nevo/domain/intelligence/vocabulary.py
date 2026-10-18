@@ -123,6 +123,7 @@ class SegmentReviewReason(StrEnum):
     #: The model asked for a human look in words of its own. Kept as a reason
     #: the console can render, rather than as prose it cannot.
     MODEL_FLAGGED_FOR_REVIEW = "model_flagged_for_review"
+    DEPTH_VARIANT_REVIEW_REQUIRED = "depth_variant_review_required"
 
 
 class UploadStatus(StrEnum):
@@ -212,6 +213,7 @@ class BreakThreshold(StrEnum):
 
     #: Twenty unbroken minutes.
     TIME_THRESHOLD = "time_threshold"
+    PERSISTENT_STALL = "persistent_stall"
     #: Three minutes below this session's own engagement baseline.
     ENGAGEMENT_DECLINE = "engagement_decline"
     #: Comprehension has fallen away from its session average.

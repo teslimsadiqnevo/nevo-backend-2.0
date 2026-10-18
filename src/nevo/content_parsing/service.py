@@ -275,7 +275,13 @@ class ContentParsingService:
                                 "source_type": request.source_type.value,
                                 "chunk_number": str(index),
                                 "chunk_count": str(len(chunks)),
-                                "source_text": _pass_source(chunks, index),
+                                "source_text": (
+                                    "For each comprehension checkpoint, include a short hint that "
+                                    "does not reveal its answer and guidedQuestions with two or "
+                                    "three questions grounded in the supplied teaching material. "
+                                    "Do not invent facts or add a new topic.\n\n"
+                                    + _pass_source(chunks, index)
+                                ),
                             },
                             max_output_tokens=PARSE_OUTPUT_TOKENS,
                             timeout_seconds=PARSE_TIMEOUT_SECONDS,
@@ -408,7 +414,7 @@ class ContentParsingService:
             assessment=tuple(assessment),
             gemini_call_count=ai_call_count,
             chunk_count=len(chunks),
-            modules=tuple(modules),
+            modules=tuple(complete_modules(normalized_segments, modules)),
         )
         return await self._repository.store(
             request=request,
@@ -518,7 +524,14 @@ class ContentParsingService:
                 }
             )
             return segment
-        return replace(segment, depth_variants=variants.payload(model=model))
+        return replace(
+            segment,
+            depth_variants=variants.payload(model=model),
+            needs_review=True,
+            review_reasons=tuple(
+                dict.fromkeys((*segment.review_reasons, "depth_variant_review_required"))
+            ),
+        )
 
     async def _generate_segment_audio(
         self,
@@ -967,7 +980,26 @@ def _modules_from_payload(payload, segments) -> list[ParsedLessonModule]:
                 preview=_optional_string(item.get("preview")),
             )
         )
-    return modules if used == available else []
+    return complete_modules(segments, modules if used == available else [])
+
+
+def complete_modules(segments, modules):
+    """Keep authored grouping, or group intact sections under their source titles."""
+    keys = [key for module in modules for key in module.segment_keys]
+    available = {segment.segment_key for segment in segments}
+    if modules and len(keys) == len(set(keys)) and set(keys) == available:
+        return list(modules)
+    if len(segments) < 6:
+        return []
+    return [
+        ParsedLessonModule(
+            title=group[0].title or "Exploring this idea",
+            segment_keys=tuple(segment.segment_key for segment in group),
+            preview=group[0].body.split("\n", 1)[0][:240] or None,
+        )
+        for index in range(0, len(segments), 3)
+        if (group := segments[index : index + 3])
+    ]
 
 
 def _segment_from_payload(
@@ -1253,6 +1285,9 @@ def _calculation_scaffold(value: object) -> dict[str, object] | None:
     legacy_kinds = {"fraction_bar": "bar", "counters": "dots"}
     kind = legacy_kinds.get(kind, kind)
     if kind not in {"bar", "number_line", "dots", "array", "place_value"}:
+        logger.warning(
+            "Unsupported calculation scaffold kind %r; keeping the calculation steps", kind
+        )
         return None
     try:
         parts = int(value.get("parts") or 0)

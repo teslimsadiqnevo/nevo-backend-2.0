@@ -11,6 +11,7 @@ from nevo.api.product_common import (
     require_school_actor,
     require_student_access,
 )
+from nevo.db.models.product import LessonQuestionAttempt
 from nevo.domain.mastery.vocabulary import FailureAttribution
 from nevo.mastery.entities import (
     ConceptMasteryAggregate,
@@ -35,6 +36,14 @@ class MasteryUpdateRequest(BaseModel):
         default_factory=list,
         alias="relatedConceptIds",
         max_length=50,
+    )
+    answer_attempt_id: UUID | None = Field(
+        default=None,
+        alias="answerAttemptId",
+        description=(
+            "A saved, server-marked attempt. Student writes require this; "
+            "attempts already update mastery transactionally."
+        ),
     )
 
 
@@ -139,6 +148,35 @@ async def update_mastery(
     session: DatabaseSession,
 ) -> MasteryUpdateResponse:
     await require_student_access(session, principal, payload.student_id)
+    if principal.role == "student":
+        if payload.answer_attempt_id is None:
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "server_marked_attempt_required",
+                    "message": "Save the answer attempt first and send its id.",
+                },
+            )
+        attempt = await session.get(LessonQuestionAttempt, payload.answer_attempt_id)
+        if (
+            attempt is None
+            or attempt.student_id != principal.user_id
+            or str(attempt.question_snapshot.get("conceptId")) != str(payload.concept_id)
+        ):
+            raise HTTPException(404, detail="Answer attempt not found")
+        records = await service.student_mastery(payload.student_id)
+        state = next((row for row in records if row.concept_id == payload.concept_id), None)
+        if state is None:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "answer_not_marked",
+                    "message": "This answer carries no marked learning evidence.",
+                },
+            )
+        return MasteryUpdateResponse.from_result(
+            MasteryUpdateResult(state=state, attention_transfer=0, recommended_modality_shift=False)
+        )
     result = await service.update(
         MasteryUpdate(
             student_id=payload.student_id,

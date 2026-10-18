@@ -408,6 +408,8 @@ class SqlAlchemyContentParsingRepository:
                                 else None
                             ),
                             source="lesson_parser",
+                            curriculum_position=(segment.sequence_order - 1)
+                            / max(1, len(parsed.segments) - 1),
                         )
                         session.add(concept)
                         await session.flush()
@@ -440,10 +442,35 @@ class SqlAlchemyContentParsingRepository:
                                     difficulty=0.5,
                                 )
                             )
+                if not checkpoints:
+                    name = segment.title or parsed.title
+                    subject = str(request.source_metadata.get("subject") or "") or None
+                    concept = await session.scalar(
+                        select(Concept).where(
+                            Concept.school_id == school_id,
+                            Concept.name == name,
+                            Concept.subject == subject,
+                        )
+                    )
+                    if concept is None:
+                        concept = Concept(
+                            school_id=school_id,
+                            lesson_id=lesson_id,
+                            name=name,
+                            subject=subject,
+                            source="lesson_parser",
+                            curriculum_position=(segment.sequence_order - 1)
+                            / max(1, len(parsed.segments) - 1),
+                        )
+                        session.add(concept)
+                        await session.flush()
                 row = LessonSegment(
                     lesson_id=lesson_id,
                     parse_run_id=parse_run_id,
                     segment_key=segment.segment_key,
+                    concept_id=(
+                        UUID(str(checkpoints[0]["conceptId"])) if checkpoints else concept.id
+                    ),
                     content_type=segment.content_type,
                     sequence_order=segment.sequence_order,
                     title=segment.title,

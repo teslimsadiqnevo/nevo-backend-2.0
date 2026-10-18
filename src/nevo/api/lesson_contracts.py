@@ -49,6 +49,9 @@ class ComprehensionCheckpoint(BaseModel):
     options: list[CheckpointOption] = Field(default_factory=list)
     answer_key: ScalarAnswer | list[ScalarAnswer] | None = Field(default=None, alias="answerKey")
     explanation: str | None = None
+    hint: str | None = None
+    guided_questions: list[str] = Field(default_factory=list, alias="guidedQuestions", max_length=5)
+    text_density: float | None = Field(default=None, alias="textDensity", ge=0, le=1)
     position: str = "after_segment"
     #: How the check is put to the child. Decided here and not on the device:
     #: choosing it client-side would mean keeping a preferred modality against

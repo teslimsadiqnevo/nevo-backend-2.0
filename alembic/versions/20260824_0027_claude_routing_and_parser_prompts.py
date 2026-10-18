@@ -47,7 +47,7 @@ def upgrade() -> None:
             'content_parse.lesson_boundaries',
             1,
             'Identify lesson boundaries in teacher-provided Nigerian school content. Return strict JSON only. Use the source as the only factual authority. Use Zero-Tag, functional language only. Never rank learners.',
-            'Input may be textbook pages, scheme-of-work text, teacher notes, OCR text from scans, or mixed formatting. Identify lesson boundaries and proposed lesson titles. Return exactly {"lessons":[{"title":"string","start_page":1,"end_page":1,"segment_hint_count":1}]}. Do not invent lessons beyond the source. If the block appears to exceed 40 pages or 15 lessons, return {"lessons":[],"error":"ceiling_exceeded"}. Source follows. {source_text}',
+            'Input may be textbook pages, scheme-of-work text, teacher notes, OCR text from scans, or mixed formatting. Identify lesson boundaries and proposed lesson titles. Return exactly {"lessons":[{"title":"string","start_page": 1,"end_page": 1,"segment_hint_count": 1}]}. Do not invent lessons beyond the source. If the block appears to exceed 40 pages or 15 lessons, return {"lessons":[],"error":"ceiling_exceeded"}. Source follows. {source_text}',
             '["source_text"]'::jsonb,
             true
         ),

@@ -111,7 +111,7 @@ class PostLessonProcessingWorker:
 
         if self._accommodation_service is None:
             return
-        analysis = await self._accommodation_service.analyse_student(student_id=student_id)
+        analysis = await self._accommodation_service.analyse_next_session(student_id=student_id)
         async with self._sessions.begin() as session:
             await record_accommodation_changes(
                 session,

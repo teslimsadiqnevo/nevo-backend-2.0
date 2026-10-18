@@ -483,6 +483,8 @@ def test_slower_is_returned_when_pacing_and_comprehension_are_strained() -> None
 
 def test_expand_is_returned_when_learner_is_excelling() -> None:
     excelling_signals = RuntimeSignals(
+        engagement_score=0.95,
+        engagement_baseline=0.7,
         current_segment_id="text-1",
         current_modality=ContentModality.TEXT,
         available_modalities=(ContentModality.TEXT,),
@@ -542,4 +544,3 @@ def test_expand_is_withheld_when_no_expanded_depth_available() -> None:
         profile=balanced_profile(),
     )
     assert plan.proactive_adjustment is None
-

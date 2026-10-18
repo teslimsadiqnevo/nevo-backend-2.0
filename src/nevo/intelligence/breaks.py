@@ -12,6 +12,8 @@ def monitor_break_thresholds(
     profile: LearnerProfileSnapshot,
 ) -> BreakThresholdResult:
     thresholds: list[BreakThreshold] = []
+    if signals.session_adaptation_count >= 2 and signals.consecutive_errors >= 2:
+        thresholds.append(BreakThreshold.PERSISTENT_STALL)
     if signals.continuous_minutes >= 20:
         thresholds.append(BreakThreshold.TIME_THRESHOLD)
     if signals.engagement_below_baseline_seconds >= 180:

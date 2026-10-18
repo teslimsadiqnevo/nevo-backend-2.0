@@ -127,6 +127,9 @@ def accept(variant: str | None, *, source: str, shorter: bool) -> str | None:
         # version of a worked example must not be reading a different sum.
         logger.warning("Depth variant invented figures %s; dropped", sorted(stray))
         return None
+    if numbers_in(source) - numbers_in(text):
+        logger.warning("Depth variant omitted source figures; dropped")
+        return None
     if shorter and len(text) > len(source) * LENGTH_MARGIN:
         return None
     if not shorter and len(text) * LENGTH_MARGIN < len(source):

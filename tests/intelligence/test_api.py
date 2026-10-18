@@ -1,9 +1,12 @@
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from nevo.api.auth import authenticated_principal
+from nevo.api.consent import require_learning_consent_if_student
+from nevo.api.dependencies import database_session
 from nevo.api.intelligence import router
 from nevo.auth.entities import AuthPrincipal
 from nevo.domain.intelligence.vocabulary import (
@@ -19,6 +22,23 @@ from nevo.intelligence.entities import (
     BreakThresholdResult,
     SegmentAdaptation,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_context(monkeypatch):
+    async def prepare(session, principal, payload, signals):
+        from nevo.api.intelligence import _segment_from_request
+
+        return AdaptationRequest(
+            student_id=principal.user_id,
+            lesson_id=payload.lesson_id,
+            session_id=payload.session_id,
+            mode=payload.mode,
+            signals=signals,
+            segments=tuple(_segment_from_request(item) for item in payload.segments),
+        )
+
+    monkeypatch.setattr("nevo.intelligence.adaptation_context.prepare_adaptation", prepare)
 
 
 class FakeAdaptationEngineService(AdaptationEngineService):
@@ -65,6 +85,8 @@ def client_for() -> tuple[TestClient, FakeAdaptationEngineService, AuthPrincipal
     app = FastAPI()
     app.state.adaptation_engine_service = service
     app.dependency_overrides[authenticated_principal] = lambda: principal
+    app.dependency_overrides[database_session] = lambda: object()
+    app.dependency_overrides[require_learning_consent_if_student] = lambda: None
     app.include_router(router)
     return TestClient(app), service, principal
 

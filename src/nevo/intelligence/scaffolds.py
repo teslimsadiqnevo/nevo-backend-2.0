@@ -73,11 +73,7 @@ class ProgressiveScaffoldFadingEngine:
             outcome=outcome,
             level_changed=next_intensity != intensity_used,
             change_reason=reason,
-            student_message=(
-                "Support adjusted for the next problem."
-                if next_intensity != intensity_used
-                else "Support level kept steady for the next problem."
-            ),
+            student_message="",
         )
 
 

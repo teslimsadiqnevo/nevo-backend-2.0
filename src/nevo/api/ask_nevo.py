@@ -151,6 +151,7 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
     "/",
     response_model=AskResponse,
     responses={
+        409: {"description": "use_lesson_guidance: in-lesson help uses the Socratic panel."},
         403: {
             "description": (
                 "ask_role_forbidden, or consent_withdrawn when learner processing "
@@ -188,10 +189,21 @@ async def ask_nevo(
         context_student_id = payload.context_ids.student_id or principal.user_id
         if context_student_id != principal.user_id:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                403,
                 detail={
                     "code": "student_context_forbidden",
                     "message": "Student Ask Nevo must use the current student.",
+                },
+            )
+        if payload.current_page in {"lesson_player", "calculation_player", "student_lesson"}:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "use_lesson_guidance",
+                    "message": (
+                        "Use this lesson's guided questions. Ask Nevo is available "
+                        "on Home and after the lesson."
+                    ),
                 },
             )
     try:

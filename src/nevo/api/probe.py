@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import actor_user
 from nevo.api.response_models import CamelResponse
@@ -104,7 +105,8 @@ async def _state(session: DatabaseSession, *, student_id: UUID, subject_id: UUID
     ).all()
     state = start()
     for (correct,) in rows:
-        state = after(state, correct=correct)
+        if correct is not None:
+            state = after(state, correct=correct)
     return state
 
 
@@ -126,10 +128,13 @@ async def next_question(
     subject_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> ProbeQuestion | ProbeFinished | ProbeEmpty:
     """The next item for this child in this subject, or what the probe concluded."""
 
     student = await actor_user(session, principal)
+    if student.role != "student":
+        raise HTTPException(403, detail="Student account required")
     subject = await session.get(SchoolSubject, subject_id)
     if subject is None or subject.school_id != student.school_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
@@ -153,6 +158,10 @@ async def next_question(
         )
 
     asked = await _asked(session, student_id=student.id, subject_id=subject_id)
+    if len(asked) >= MAX_QUESTIONS:
+        return ProbeFinished(
+            subject_id=subject_id, entry_point=entry_point(state), asked=len(asked)
+        )
     pool: list[tuple[object, float]] = [(row[0], row[1]) for row in available]
     chosen = choose(state, available=pool, already_asked=set(asked))
     if chosen is None:
@@ -173,7 +182,7 @@ async def next_question(
             ProbeOption(value=str(option.get("value")), label=str(option.get("label")))
             for option in item.options
         ],
-        asked=state.asked + 1,
+        asked=len(asked) + 1,
     )
 
 
@@ -183,6 +192,7 @@ async def submit_answer(
     payload: ProbeAnswer,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> ProbeQuestion | ProbeFinished:
     """Record what the child picked, and hand back the next item.
 
@@ -192,11 +202,28 @@ async def submit_answer(
     """
 
     student = await actor_user(session, principal)
+    if student.role != "student":
+        raise HTTPException(403, detail="Student account required")
+    await session.refresh(student, with_for_update=True)
     item = await session.get(ProbeItem, payload.item_id)
     if item is None or item.school_subject_id != subject_id or item.school_id != student.school_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
 
-    correct = payload.chosen_option == item.correct_option
+    declined = payload.chosen_option == "not_sure"
+    if not declined and payload.chosen_option not in {
+        str(option.get("value")) for option in item.options
+    }:
+        raise HTTPException(422, detail="Choose one of the supplied options")
+    if item.id in await _asked(session, student_id=student.id, subject_id=subject_id):
+        return await next_question(subject_id, principal, session)
+    expected = await next_question(subject_id, principal, session)
+    if isinstance(expected, ProbeFinished):
+        return expected
+    if not isinstance(expected, ProbeQuestion) or expected.item_id != item.id:
+        raise HTTPException(
+            409, detail={"code": "probe_item_stale", "message": "Read the current question again."}
+        )
+    correct = None if declined else payload.chosen_option == item.correct_option
     session.add(
         ProbeResponse(
             student_id=student.id,
@@ -209,15 +236,33 @@ async def submit_answer(
     )
     # Difficulty is learned from how children actually answer, so every answer
     # moves it - weighted so one run cannot rewrite a well-sat item.
-    item.times_answered += 1
-    item.times_correct += int(correct)
-    item.difficulty = recalibrate(
-        item.difficulty,
-        times_answered=item.times_answered,
-        times_correct=item.times_correct,
-    )
+    if correct is not None:
+        item.times_answered += 1
+        item.times_correct += int(correct)
+        item.difficulty = recalibrate(
+            item.difficulty,
+            times_answered=item.times_answered,
+            times_correct=item.times_correct,
+        )
+    await session.flush()
+    result = await next_question(subject_id, principal, session)
+    if isinstance(result, ProbeFinished):
+        from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
+
+        subject = await session.get(SchoolSubject, subject_id)
+        baseline = dict(student.baseline_profile or {})
+        placements = dict(baseline.get("subject_placements") or {})
+        placements[str(subject_id)] = result.entry_point
+        placements[subject.name.casefold()] = result.entry_point
+        completed = onboarding_modules(baseline) | {"domain_probe"}
+        baseline.update(subject_placements=placements, completed_modules=sorted(completed))
+        if set(ONBOARDING_MODULES).issubset(completed):
+            from datetime import UTC, datetime
+
+            baseline.setdefault("onboarding_completed_at", datetime.now(UTC).isoformat())
+        student.baseline_profile = baseline
     await session.commit()
-    return await next_question(subject_id, principal, session)  # type: ignore[return-value]
+    return result  # type: ignore[return-value]
 
 
 __all__ = ["STARTING_DIFFICULTY", "STARTING_STEP", "router"]

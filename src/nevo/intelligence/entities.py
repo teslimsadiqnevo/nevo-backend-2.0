@@ -66,6 +66,7 @@ class ContentSegment:
     #: carry out. Ask B18.
     hints: tuple[str, ...] = ()
     guided_questions: tuple[str, ...] = ()
+    scaffold_intensity: ScaffoldIntensity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +92,8 @@ class RuntimeSignals:
     current_segment_elapsed_seconds: int | None = None
     seconds_since_last_adaptation: int | None = None
     session_modality_shift_count: int | None = None
+    session_adaptation_count: int = 0
+    misconception_confirmed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

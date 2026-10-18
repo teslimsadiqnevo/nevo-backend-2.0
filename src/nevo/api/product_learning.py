@@ -80,6 +80,7 @@ from nevo.content_parsing.failures import (
     failure_reason,
     new_incident,
 )
+from nevo.content_parsing.modules import delivery_modules
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag, InterventionRecommendation
@@ -108,6 +109,12 @@ from nevo.domain.intelligence.vocabulary import (
     UploadStage,
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
+from nevo.intelligence.learning_runtime import (
+    apply_marked_attempt,
+    ensure_prerequisites,
+    require_onboarding,
+)
+from nevo.intelligence.session_delivery import delivery_snapshot
 from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 from nevo.ops.background import spawn
 from nevo.sso.service import SsoService
@@ -215,9 +222,20 @@ class LessonQuestionAttemptWrite(BaseModel):
         description="The server-issued question/problem id. The server marks the answer.",
     )
     segment_id: UUID | None = Field(default=None, alias="segmentId")
-    source: Literal["checkpoint", "assessment"] = "checkpoint"
+    source: Literal["checkpoint", "assessment", "calculation"] = "checkpoint"
     answer: JsonValue
     client_attempt_id: UUID | None = Field(default=None, alias="clientAttemptId")
+    response_time_ms: int | None = Field(
+        default=None,
+        alias="responseTimeMs",
+        ge=0,
+        le=3_600_000,
+        description=(
+            "Observed answer time in milliseconds. Missing or implausibly short "
+            "timing cannot raise mastery."
+        ),
+    )
+    hint_count: int = Field(default=0, alias="hintCount", ge=0, le=100)
 
 
 class ClassCodeConnectionRequest(BaseModel):
@@ -580,10 +598,43 @@ async def _question_for_attempt(
         segment = await session.get(LessonSegment, payload.segment_id)
         if segment is None or segment.lesson_id != lesson.id:
             raise HTTPException(status_code=404, detail="Lesson question not found")
-        questions = checkpoint_payloads(
-            segment.comprehension_checkpoints,
-            segment_key=segment.segment_key,
-        )
+        if payload.source == "calculation":
+            variant = segment.calculation_variant or {}
+            concept_id = segment.concept_id or variant.get("conceptId")
+            questions = [
+                {
+                    "id": str(step.get("stepId")),
+                    "prompt": str(step.get("prompt") or ""),
+                    "answerKey": step.get("answer"),
+                    "hint": step.get("hint"),
+                    "conceptId": str(concept_id) if concept_id else None,
+                    "answerType": "numeric"
+                    if isinstance(step.get("answer"), int | float)
+                    else "text",
+                    "textDensity": 0.1,
+                    "calculationComplete": False,
+                }
+                for step in variant.get("steps", [])
+            ]
+            questions.append(
+                {
+                    "id": str(segment.id),
+                    "prompt": variant.get("expression")
+                    or segment.title
+                    or "Complete the calculation.",
+                    "answerKey": variant.get("answer"),
+                    "conceptId": str(concept_id) if concept_id else None,
+                    "answerType": "text",
+                    "textDensity": 0.1,
+                    "calculationComplete": True,
+                }
+            )
+        else:
+            questions = checkpoint_payloads(
+                segment.comprehension_checkpoints,
+                segment_key=segment.segment_key,
+                concept_id=segment.concept_id,
+            )
         segment_id = segment.id
     question = next(
         (item for item in questions if str(item.get("id")) == payload.question_id),
@@ -591,6 +642,26 @@ async def _question_for_attempt(
     )
     if question is None:
         raise HTTPException(status_code=404, detail="Lesson question not found")
+    if not question.get("conceptId"):
+        concepts = list(
+            await session.scalars(
+                select(Concept).where(
+                    Concept.school_id == lesson.school_id,
+                    Concept.lesson_id == lesson.id,
+                )
+            )
+        )
+        named = next(
+            (
+                item
+                for item in concepts
+                if item.name.casefold() == str(question.get("conceptName", "")).casefold()
+            ),
+            None,
+        )
+        bound = named or (concepts[0] if len(concepts) == 1 else None)
+        if bound is not None:
+            question = {**question, "conceptId": str(bound.id), "conceptName": bound.name}
     return question, segment_id
 
 
@@ -638,6 +709,7 @@ async def _lesson_for_actor(
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
     if actor.role == UserRole.STUDENT:
+        require_onboarding(actor)
         assignment = await session.scalar(
             select(LessonAssignment.id).where(
                 LessonAssignment.student_id == actor.id,
@@ -736,6 +808,7 @@ async def lesson_detail(
             LessonAssignment.status != "cancelled",
         )
     )
+    modules = delivery_modules(lesson.id, segments, modules)
     return {
         **_lesson_summary(
             lesson,
@@ -1116,6 +1189,8 @@ async def start_lesson_session(
     actor, _ = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
+    await session.refresh(actor, with_for_update=True)
+    await ensure_prerequisites(session, actor.id, lesson_id)
     progress = await session.scalar(
         select(LessonProgress).where(
             LessonProgress.student_id == actor.id,
@@ -1131,7 +1206,16 @@ async def start_lesson_session(
         )
         .order_by(LessonSession.started_at.desc())
     )
+    if existing and (
+        existing.started_at.date() != datetime.now(UTC).date()
+        or datetime.now(UTC) - existing.started_at >= timedelta(hours=10)
+    ):
+        existing.completion_status = LessonCompletionStatus.EXITED
+        existing.ended_at = datetime.now(UTC)
+        existing = None
     if existing:
+        await delivery_snapshot(session, actor, existing)
+        await session.commit()
         return {
             "sessionId": str(existing.id),
             "resumed": True,
@@ -1139,6 +1223,8 @@ async def start_lesson_session(
             "reroutedFromSessionId": existing.rerouted_from_session_id,
             "checkPosition": progress.check_position if progress else None,
             "checkResumableUntil": progress.check_resumable_until if progress else None,
+            "deliveryState": existing.delivery_state,
+            "segmentPosition": progress.segment_position if progress else 0,
         }
     if (
         progress is not None
@@ -1149,6 +1235,8 @@ async def start_lesson_session(
     ):
         check_session = await session.get(LessonSession, progress.session_id)
         if check_session is not None:
+            await delivery_snapshot(session, actor, check_session)
+            await session.commit()
             return {
                 "sessionId": str(check_session.id),
                 "resumed": True,
@@ -1156,6 +1244,8 @@ async def start_lesson_session(
                 "reroutedFromSessionId": check_session.rerouted_from_session_id,
                 "checkPosition": progress.check_position,
                 "checkResumableUntil": progress.check_resumable_until,
+                "deliveryState": check_session.delivery_state,
+                "segmentPosition": progress.segment_position,
             }
     record = LessonSession(
         id=uuid4(),
@@ -1165,12 +1255,32 @@ async def start_lesson_session(
         completion_status=LessonCompletionStatus.IN_PROGRESS,
     )
     session.add(record)
+    await delivery_snapshot(session, actor, record)
+    if progress is None:
+        from nevo.intelligence.progression import next_work
+
+        starting = await next_work(session, actor, lesson_id=lesson_id)
+        progress = LessonProgress(
+            student_id=actor.id,
+            lesson_id=lesson_id,
+            session_id=record.id,
+            status="in_progress",
+            segment_position=starting["segmentPosition"] if starting else 0,
+            module_position=0,
+            started_at=record.started_at,
+        )
+        session.add(progress)
+    else:
+        progress.session_id = record.id
+        progress.status = "in_progress"
     await session.commit()
     return {
         "sessionId": str(record.id),
         "resumed": False,
         "depth": record.delivery_depth,
         "reroutedFromSessionId": record.rerouted_from_session_id,
+        "deliveryState": record.delivery_state,
+        "segmentPosition": progress.segment_position,
     }
 
 
@@ -1197,6 +1307,7 @@ async def save_lesson_question_attempt(
     actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role is not UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
+    await session.refresh(actor, with_for_update=True)
     lesson_session = await session.get(LessonSession, payload.session_id)
     if (
         lesson_session is None
@@ -1212,8 +1323,23 @@ async def save_lesson_question_attempt(
             )
         )
         if existing is not None:
+            if (
+                existing.lesson_id != lesson_id
+                or existing.session_id != payload.session_id
+                or existing.question_id != payload.question_id
+                or _normalise_answer(existing.answer) != _normalise_answer(payload.answer)
+            ):
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "answer_attempt_conflict",
+                        "message": "That attempt id belongs to a different answer.",
+                    },
+                )
             return await _attempt_payload_with_outcome(session, existing)
     question, segment_id = await _question_for_attempt(session, lesson, payload)
+    if question.get("conceptId"):
+        await ensure_prerequisites(session, actor.id, lesson.id, UUID(str(question["conceptId"])))
     attempt_number = int(
         await session.scalar(
             select(func.coalesce(func.max(LessonQuestionAttempt.attempt_number), 0) + 1).where(
@@ -1244,8 +1370,12 @@ async def save_lesson_question_attempt(
             if answer_key is None
             else _normalise_answer(payload.answer) == _normalise_answer(answer_key)
         ),
+        response_time_ms=payload.response_time_ms,
+        hint_count=payload.hint_count,
     )
     session.add(record)
+    await session.flush()
+    await apply_marked_attempt(session, actor, record)
     await session.commit()
     await session.refresh(record)
     return await _attempt_payload_with_outcome(session, record)
@@ -1298,8 +1428,13 @@ async def save_lesson_progress(
     actor, _ = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
+    await session.refresh(actor, with_for_update=True)
     lesson_session = await session.get(LessonSession, payload.session_id)
-    if lesson_session is None or lesson_session.student_id != actor.id:
+    if (
+        lesson_session is None
+        or lesson_session.student_id != actor.id
+        or lesson_session.lesson_id != lesson_id
+    ):
         raise HTTPException(status_code=404, detail="Lesson session not found")
     progress = await session.scalar(
         select(LessonProgress).where(
@@ -1320,6 +1455,15 @@ async def save_lesson_progress(
             _end_of_day() if payload.check_position is not None else None
         )
     progress.status = payload.status
+    if payload.status is LessonCompletionStatus.IN_PROGRESS:
+        target = await session.scalar(
+            select(LessonSegment).where(
+                LessonSegment.lesson_id == lesson_id,
+                LessonSegment.sequence_order == payload.segment_position + 1,
+            )
+        )
+        if target is not None and target.concept_id is not None:
+            await ensure_prerequisites(session, actor.id, lesson_id, target.concept_id)
     progress.started_at = progress.started_at or lesson_session.started_at
     lesson_session.exit_position = str(payload.segment_position)
     derived_result = await _derive_result_state(session, lesson_session.id)
@@ -1348,16 +1492,27 @@ async def save_lesson_progress(
             assignment.status = "completed"
             assignment.completed_at = datetime.now(UTC)
     if nothing_landed:
-        lower_session = LessonSession(
-            id=uuid4(),
-            student_id=actor.id,
-            lesson_id=lesson_id,
-            started_at=datetime.now(UTC),
-            completion_status=LessonCompletionStatus.IN_PROGRESS,
-            delivery_depth="lower",
-            rerouted_from_session_id=lesson_session.id,
+        lower_session = await session.scalar(
+            select(LessonSession)
+            .where(
+                LessonSession.rerouted_from_session_id == lesson_session.id,
+                LessonSession.student_id == actor.id,
+            )
+            .order_by(LessonSession.started_at.desc())
+            .limit(1)
         )
-        session.add(lower_session)
+        if lower_session is None:
+            lower_session = LessonSession(
+                id=uuid4(),
+                student_id=actor.id,
+                lesson_id=lesson_id,
+                started_at=datetime.now(UTC),
+                completion_status=LessonCompletionStatus.IN_PROGRESS,
+                delivery_depth="lower",
+                rerouted_from_session_id=lesson_session.id,
+            )
+            session.add(lower_session)
+        await delivery_snapshot(session, actor, lower_session)
         progress.session_id = lower_session.id
         progress.status = LessonCompletionStatus.IN_PROGRESS
         progress.module_position = 0
@@ -1369,6 +1524,7 @@ async def save_lesson_progress(
             "depth": "lower",
             "segmentPosition": 0,
             "reason": "nothing_landed",
+            "deliveryState": lower_session.delivery_state,
         }
     elif not_attempted:
         reroute = {
@@ -1544,7 +1700,13 @@ async def student_dashboard(
     for item in recent:
         if item.session_id is not None:
             outcomes[item.session_id] = await _check_in_outcome(session, item.session_id)
+    from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
+    from nevo.intelligence.progression import next_work
+
+    ready = set(ONBOARDING_MODULES).issubset(onboarding_modules(actor.baseline_profile or {}))
     return {
+        "onboardingComplete": ready,
+        "nextWork": await next_work(session, actor) if ready else None,
         "student": {
             "id": str(actor.id),
             "firstName": actor.first_name,
@@ -2487,6 +2649,7 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
     ).all()
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
+    modules = delivery_modules(lesson.id, segments, modules)
     # Built as a dict and then validated through OfflinePackage, so the shape
     # the spec publishes is the shape that actually ships. Ask B60.
     payload: dict[str, object] = {

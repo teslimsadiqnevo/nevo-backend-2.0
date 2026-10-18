@@ -68,4 +68,4 @@ def test_review_reason_and_both_shapes_are_named_in_schema():
     assert "interactive_activity_missing" in schema["$defs"]["SegmentReviewReason"]["enum"]
     assert "LegacyInteractiveQuestionVariant" in schema["$defs"]
     assert "InteractiveActivityVariant" in schema["$defs"]
-    assert len(SegmentReviewReason) == 17
+    assert len(SegmentReviewReason) == 18

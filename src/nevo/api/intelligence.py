@@ -1,5 +1,5 @@
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -7,7 +7,10 @@ from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.api.consent import StudentLearningConsent
+from nevo.api.dependencies import DatabaseSession
 from nevo.db.models.content import LessonSegment
+from nevo.db.models.signal_event import AdaptationDecision
 from nevo.domain.intelligence.vocabulary import (
     AccommodationType,
     AdaptationMode,
@@ -29,7 +32,6 @@ from nevo.intelligence.entities import (
     AccommodationAnalysis,
     AccommodationSignal,
     AdaptationPlan,
-    AdaptationRequest,
     BreakThresholdResult,
     ContentSegment,
     ModalitySuggestion,
@@ -214,7 +216,7 @@ class BreakSuggestionResponse(BaseModel):
             triggered_thresholds=list(result.triggered_thresholds),
             severity=result.severity,
             break_type=result.break_type,
-            reason=result.reason,
+            reason="You can pause here, or keep going." if result.break_type is not None else None,
         )
 
 
@@ -334,7 +336,13 @@ class ProactiveAdjustmentResponse(BaseModel):
     ) -> "ProactiveAdjustmentResponse":
         return cls(
             action=ProactiveAction(adjustment.action),
-            reason=adjustment.reason,
+            reason={
+                "simplify": "Here is another way to read this.",
+                "expand": "Here is more about the same idea.",
+                "slower": "Let's take this one piece at a time.",
+                "offer_hint": "Here is something to try.",
+                "show_socratic_panel": "Let's work through this together.",
+            }[adjustment.action],
             hint=adjustment.hint,
             guidedQuestions=list(adjustment.guided_questions),
             guidedPrompts=[
@@ -397,6 +405,8 @@ class AdaptResponse(BaseModel):
     break_suggestion: BreakSuggestionResponse
     proactive_adjustment: ProactiveAdjustmentResponse | None
     modality_suggestion: ModalitySuggestionResponse | None
+    suppressed_attempt: "SuppressedAdaptationResponse | None" = None
+    decision_id: UUID | None = None
 
     @classmethod
     def from_plan(cls, plan: AdaptationPlan) -> "AdaptResponse":
@@ -418,7 +428,29 @@ class AdaptResponse(BaseModel):
                 if plan.modality_suggestion is not None
                 else None
             ),
+            suppressed_attempt=(
+                SuppressedAdaptationResponse(
+                    reason=plan.suppressed_attempt.reason,
+                    attempted_type=plan.suppressed_attempt.attempted_type,
+                    confidence=plan.suppressed_attempt.confidence,
+                    trigger_signals=[
+                        TriggerSignalResponse.from_signal(item)
+                        for item in plan.suppressed_attempt.trigger_signals
+                    ],
+                )
+                if plan.suppressed_attempt
+                else None
+            ),
         )
+
+
+class SuppressedAdaptationResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    reason: str
+    attempted_type: str
+    confidence: float
+    trigger_signals: list[TriggerSignalResponse]
 
 
 class AccommodationSignalResponse(BaseModel):
@@ -663,6 +695,8 @@ async def adapt_lesson(
     payload: AdaptRequest,
     principal: PrincipalDependency,
     service: AdaptationEngineDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> AdaptResponse:
     student_id = payload.student_id or principal.user_id
     if student_id != principal.user_id:
@@ -673,18 +707,38 @@ async def adapt_lesson(
                 "message": "Adaptation requests must use the current student.",
             },
         )
+    from nevo.intelligence.adaptation_context import prepare_adaptation
+
+    context = await prepare_adaptation(
+        session, principal, payload, _signals_from_request(payload.signals)
+    )
     plan = await service.adapt(
-        request=AdaptationRequest(
-            student_id=student_id,
-            lesson_id=payload.lesson_id,
-            mode=payload.mode,
-            segments=tuple(_segment_from_request(segment) for segment in payload.segments),
-            signals=_signals_from_request(payload.signals),
-            session_id=payload.session_id,
-        ),
+        request=context,
         requested_by_user_id=principal.user_id,
     )
-    return AdaptResponse.from_plan(plan)
+    response = AdaptResponse.from_plan(plan)
+    action = plan.proactive_adjustment
+    suggestion = plan.modality_suggestion
+    if context.session_id and (action is not None or suggestion is not None):
+        response.decision_id = uuid4()
+        evidence = action.trigger_signals if action else suggestion.trigger_signals
+        session.add(
+            AdaptationDecision(
+                id=response.decision_id,
+                student_id=context.student_id,
+                session_id=context.session_id,
+                lesson_id=context.lesson_id,
+                segment_id=context.signals.current_segment_id,
+                action=action.action if action else "modality_suggestion",
+                confidence=action.confidence if action else suggestion.adaptation_confidence,
+                trigger_signals=[
+                    {"category": item.category, "name": item.name, "confidence": item.confidence}
+                    for item in evidence
+                ],
+            )
+        )
+        await session.commit()
+    return response
 
 
 @router.get(

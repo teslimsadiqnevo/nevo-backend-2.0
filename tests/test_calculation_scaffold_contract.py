@@ -74,6 +74,10 @@ def test_the_scaffold_carries_what_the_drawing_needs() -> None:
         "rows": 1,
         "marks": [3, 1],
         "labels": ["3/5", "1/5"],
+        "start": None,
+        "markIds": ["mark-1", "mark-2"],
+        "labelIds": ["label-1", "label-2"],
+        "pieceIds": ["piece-1", "piece-2", "piece-3", "piece-4", "piece-5"],
     }
 
 

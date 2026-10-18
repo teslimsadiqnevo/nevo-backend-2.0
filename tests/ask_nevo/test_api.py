@@ -67,7 +67,7 @@ def test_student_ask_nevo_returns_answer() -> None:
         "/api/v1/ask-nevo/",
         json={
             "role": "student",
-            "currentPage": "lesson_player",
+            "currentPage": "lesson_completed",
             "contextIds": {
                 "studentId": str(principal.user_id),
                 "lessonId": str(uuid4()),
@@ -81,7 +81,23 @@ def test_student_ask_nevo_returns_answer() -> None:
     body = response.json()
     assert body["questionCategory"] == "lesson_help"
     assert body["interactionId"] == str(INTERACTION_ID)
-    assert service.requests[0][1].current_page == "lesson_player"
+    assert service.requests[0][1].current_page == "lesson_completed"
+
+
+def test_student_uses_guided_help_instead_of_chat_inside_a_lesson() -> None:
+    client, service, _ = client_for()
+    response = client.post(
+        "/api/v1/ask-nevo/",
+        json={
+            "role": "student",
+            "currentPage": "lesson_player",
+            "contextIds": {},
+            "question": "Can you help?",
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "use_lesson_guidance"
+    assert service.requests == []
 
 
 def test_student_ask_nevo_rejects_other_student_context() -> None:
@@ -162,7 +178,7 @@ def test_the_answer_says_which_conversation_it_belongs_to() -> None:
         "/api/v1/ask-nevo/",
         json={
             "role": "student",
-            "currentPage": "lesson_player",
+            "currentPage": "home",
             "contextIds": {},
             "question": "What is a fraction?",
         },

@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.db.models.account import User
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.signal_event import SignalEvent
 from nevo.domain.intelligence.vocabulary import (
@@ -15,6 +16,7 @@ from nevo.domain.intelligence.vocabulary import (
     ContentSegmentType,
     DensityLevel,
     ScaffoldingLevel,
+    ScaffoldIntensity,
 )
 from nevo.domain.learner_profiles.vocabulary import (
     ChannelPreferenceStrength,
@@ -53,15 +55,13 @@ ADAPTATION_HISTORY_EVENT_TYPES = {
     SignalEventType.SIMPLIFY_TRIGGER,
     SignalEventType.EXPAND_TRIGGER,
     SignalEventType.SLOWER_TRIGGER,
-    SignalEventType.BREAK_SUGGESTED,
-    SignalEventType.MODALITY_SUGGESTION_SHOWN,
     SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
-    SignalEventType.MODALITY_SWITCH_OUTCOME,
     SignalEventType.MODALITY_MANUAL_SWITCH,
+    SignalEventType.HINT_OFFERED,
+    SignalEventType.GUIDED_QUESTION_SHOWN,
 }
 MODALITY_SHIFT_EVENT_TYPES = {
     SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
-    SignalEventType.MODALITY_SWITCH_OUTCOME,
     SignalEventType.MODALITY_MANUAL_SWITCH,
 }
 CHANNEL_BY_MODALITY = {modality: channel for channel, modality in MODALITY_BY_CHANNEL.items()}
@@ -140,6 +140,20 @@ class AdaptationEngineService:
         profile = await self._profiles.get_profile(request.student_id)
         fallback_plan = rule_based_adaptation_plan(request=request, profile=profile)
         if request.mode is AdaptationMode.IN_LESSON:
+            candidate = _proactive_adjustment(
+                signals=request.signals, profile=profile, segment=_current_segment(request)
+            )
+            if candidate and fallback_plan.proactive_adjustment is None:
+                attempt = _suppression_attempt(
+                    request=request,
+                    plan=replace(fallback_plan, proactive_adjustment=candidate),
+                    reason="depth_variant_unavailable",
+                )
+                if self._rate_limits is not None and request.session_id:
+                    await self._rate_limits.log_suppressed(
+                        request=request, attempt=attempt, timestamp=datetime.now(UTC)
+                    )
+                fallback_plan = replace(fallback_plan, suppressed_attempt=attempt)
             return await self._apply_rate_limits(request=request, plan=fallback_plan)
         return fallback_plan
 
@@ -202,11 +216,15 @@ def rule_based_adaptation_plan(
                 segment=_current_segment(request),
             ),
             request=request,
-        ),
+        )
+        if request.mode is AdaptationMode.IN_LESSON
+        else None,
         modality_suggestion=_modality_suggestion(
             signals=request.signals,
             profile=profile,
-        ),
+        )
+        if request.mode is AdaptationMode.IN_LESSON
+        else None,
         source="rule_based",
     )
 
@@ -220,8 +238,16 @@ class SqlAlchemyLearnerProfileRepository:
             profile = await session.scalar(
                 select(LearnerProfile).where(LearnerProfile.learner_id == student_id)
             )
-        if profile is None:
-            return balanced_profile()
+            if profile is None:
+                user = await session.get(User, student_id)
+                baseline = (user.baseline_profile or {}) if user else {}
+                return replace(
+                    balanced_profile(),
+                    working_memory_capacity=baseline.get("working_memory_capacity"),
+                    attention_span=round(baseline["attention_span_minutes"])
+                    if baseline.get("attention_span_minutes")
+                    else None,
+                )
         return LearnerProfileSnapshot(
             visual_spatial_preference=ChannelPreference(
                 value=profile.visual_spatial_preference,
@@ -489,6 +515,13 @@ def _adapt_segment(
     if profile.working_memory_capacity is not None and profile.working_memory_capacity <= 2:
         scaffolding = ScaffoldingLevel.STRONG
         density = DensityLevel.LOW
+    if segment.scaffold_intensity is not None:
+        scaffolding = {
+            ScaffoldIntensity.FULL_SUPPORT: ScaffoldingLevel.STRONG,
+            ScaffoldIntensity.PARTIAL_SUPPORT: ScaffoldingLevel.STANDARD,
+            ScaffoldIntensity.HINTS_ONLY: ScaffoldingLevel.LIGHT,
+            ScaffoldIntensity.INDEPENDENT: ScaffoldingLevel.NONE,
+        }[segment.scaffold_intensity]
     return SegmentAdaptation(
         segment_id=segment.id,
         modality=modality,
@@ -614,6 +647,7 @@ def _stuck_adjustment(
     stepping_through = (
         signals.consecutive_errors >= ERRORS_BEFORE_STEPPING_THROUGH
         or signals.replay_count_on_segment >= 1
+        or signals.misconception_confirmed
     )
     if stepping_through and segment.guided_questions:
         return ProactiveAdjustment(
@@ -642,7 +676,10 @@ def _proactive_adjustment(
 ) -> ProactiveAdjustment | None:
     positive_evidence = _positive_trigger_signals(signals)
     if (
-        len(positive_evidence) >= 2
+        len(positive_evidence) >= MIN_ALIGNED_SIGNAL_COUNT
+        and signals.comprehension_score is not None
+        and signals.session_average_comprehension is not None
+        and signals.comprehension_score >= signals.session_average_comprehension + 10
         and len(_evidence_by_category(positive_evidence)) >= 2
         and _combined_confidence(positive_evidence) >= _confidence_threshold(signals)
     ):
@@ -897,13 +934,17 @@ def _positive_trigger_signals(signals: RuntimeSignals) -> tuple[TriggerSignal, .
     if (
         signals.comprehension_score is not None
         and signals.session_average_comprehension is not None
-        and signals.comprehension_score >= signals.session_average_comprehension
+        and signals.comprehension_score >= signals.session_average_comprehension + 10
     ):
         evidence.append(
             TriggerSignal(
                 category="comprehension",
                 name="comprehension_at_or_above_session_average",
-                confidence=0.70,
+                confidence=min(
+                    0.95,
+                    0.70
+                    + (signals.comprehension_score - signals.session_average_comprehension) / 100,
+                ),
             )
         )
     if signals.consecutive_errors == 0 and signals.replay_count_on_segment == 0:
@@ -940,7 +981,7 @@ def _evidence_by_category(evidence: tuple[TriggerSignal, ...]) -> set[str]:
 
 
 def _confidence_threshold(signals: RuntimeSignals) -> float:
-    if (
+    if signals.session_adaptation_count > 0 or (
         signals.session_modality_shift_count is not None
         and signals.session_modality_shift_count > 0
     ):

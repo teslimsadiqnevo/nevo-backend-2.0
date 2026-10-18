@@ -107,7 +107,7 @@ class ProbeResponse(Base):
         Uuid, ForeignKey("probe_items.id", ondelete="CASCADE"), nullable=False
     )
     chosen_option: Mapped[str] = mapped_column(String(80), nullable=False)
-    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     #: The difficulty of the item when it was served, so a later recalibration
     #: does not rewrite the history of what this child was actually asked.
     difficulty_at_the_time: Mapped[float] = mapped_column(Float, nullable=False)

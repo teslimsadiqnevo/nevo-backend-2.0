@@ -16,6 +16,26 @@ def reading_chunks(
     # A paragraph is already a unit identified by the lesson pipeline. For
     # single-paragraph legacy prose, sentence boundaries provide the units.
     grouped = paragraphs if len(paragraphs) > 1 else re.split(r"(?<=[.!?])\s+|\n+", text)
+    bounded = []
+    for paragraph in grouped:
+        if len(paragraph.split()) <= 80:
+            bounded.append(paragraph)
+            continue
+        words = list(re.finditer(r"\S+", paragraph))
+        index = 0
+        while index < len(words):
+            end = min(index + 80, len(words))
+            if end < len(words):
+                boundaries = [
+                    position + 1
+                    for position in range(index + 39, end)
+                    if words[position].group().endswith((".", "!", "?"))
+                ]
+                if boundaries:
+                    end = boundaries[-1]
+            bounded.append(paragraph[words[index].start() : words[end - 1].end()])
+            index = end
+    grouped = bounded
     chunks: list[dict[str, object]] = []
     cursor = 0
     occurrences: dict[str, int] = defaultdict(int)

@@ -34,6 +34,10 @@ BODY = (
     "100. If Ada saves 5000 naira at a rate of 4 per cent for 3 years, the "
     "interest is 600 naira, so she ends the period with 5600 naira in total."
 )
+SHORTER = (
+    "Multiply principal, rate and years, then divide by 100. "
+    "5000 naira at 4 per cent for 3 years earns 600 naira, making 5600 naira."
+)
 
 
 class Gateway:
@@ -90,7 +94,8 @@ def test_a_rewrite_that_invents_a_figure_is_dropped() -> None:
 def test_a_simpler_version_has_to_be_shorter_and_a_longer_one_longer() -> None:
     assert accept(BODY + " More words here.", source=BODY, shorter=True) is None
     assert accept("Short.", source=BODY, shorter=False) is None
-    assert accept("Interest is 600 naira.", source=BODY, shorter=True) is not None
+    assert accept("Interest is 600 naira.", source=BODY, shorter=True) is None
+    assert accept(SHORTER, source=BODY, shorter=True) is not None
 
 
 def test_a_rewrite_identical_to_the_body_is_not_a_rewrite() -> None:
@@ -99,7 +104,7 @@ def test_a_rewrite_identical_to_the_body_is_not_a_rewrite() -> None:
 
 
 async def test_both_versions_are_written_and_keyed_by_the_engines_actions() -> None:
-    shorter = "Interest uses the principal, the rate and the time in years."
+    shorter = SHORTER
     longer = BODY + " " + BODY + " Work through each of the 3 years in turn."
     depth, gateway = service(f'{{"simplified": "{shorter}", "expanded": "{longer}"}}')
 
@@ -119,7 +124,7 @@ async def test_both_versions_are_written_and_keyed_by_the_engines_actions() -> N
 
 
 async def test_a_fenced_answer_is_still_read() -> None:
-    shorter = "Interest uses the principal, the rate and the time."
+    shorter = SHORTER
     depth, _ = service(f'```json\n{{"simplified": "{shorter}"}}\n```')
 
     variants, _ = await depth.generate(title=None, body=BODY, requested_by_user_id=ACTOR)
@@ -147,14 +152,14 @@ async def test_an_unreadable_answer_is_refused_rather_than_stored() -> None:
 async def test_invalid_json_gets_one_larger_strict_json_retry() -> None:
     class RecoveringGateway(Gateway):
         async def generate(self, request):
-            self.text = "{" if not self.requests else '{"simplified":"Use the rate and time."}'
+            self.text = "{" if not self.requests else f'{{"simplified":"{SHORTER}"}}'
             return await super().generate(request)
 
     gateway = RecoveringGateway("")
     variants, _ = await DepthVariantService(ai_gateway=gateway).generate(
         title=None, body=BODY, requested_by_user_id=ACTOR
     )
-    assert variants.simplified == "Use the rate and time."
+    assert variants.simplified == SHORTER
     assert len(gateway.requests) == 2
     assert gateway.requests[1].max_output_tokens > gateway.requests[0].max_output_tokens
     assert gateway.requests[0].json_output is True
@@ -220,4 +225,3 @@ def test_normalize_segment_preserves_depth_variants() -> None:
         "simplified": {"body": "Shorter."},
         "expanded": {"body": "Longer."},
     }
-

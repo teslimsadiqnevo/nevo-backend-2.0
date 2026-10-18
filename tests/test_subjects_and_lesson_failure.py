@@ -75,6 +75,7 @@ def test_the_break_thresholds_are_named_on_the_wire() -> None:
 
     assert schemas["BreakThreshold"]["enum"] == [
         "time_threshold",
+        "persistent_stall",
         "engagement_decline",
         "comprehension_drop",
         "repeated_errors",

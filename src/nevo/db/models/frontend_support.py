@@ -3,7 +3,9 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -14,6 +16,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nevo.db.base import Base
@@ -23,6 +26,9 @@ from nevo.domain.accounts.vocabulary import notification_category
 class Concept(Base):
     __tablename__ = "concepts"
     __table_args__ = (
+        CheckConstraint(
+            "curriculum_position BETWEEN 0 AND 1", name="ck_concept_curriculum_position"
+        ),
         Index("ix_concepts_school_name", "school_id", "name"),
         Index("ix_concepts_subject_name", "subject", "name"),
         Index("ix_concepts_lesson_id", "lesson_id"),
@@ -45,6 +51,12 @@ class Concept(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    curriculum_position: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, server_default="0"
+    )
+    prerequisite_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
     source: Mapped[str] = mapped_column(
         String(80),
         nullable=False,

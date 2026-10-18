@@ -6,6 +6,10 @@ from nevo.intelligence.entities import AccommodationAnalysis, BehaviourPatternAg
 
 
 class AccommodationPatternRepository(Protocol):
+    async def current_session_analysis(
+        self, *, student_id: UUID
+    ) -> AccommodationAnalysis | None: ...
+
     async def aggregate_for_student(
         self,
         *,
@@ -29,5 +33,11 @@ class AccommodationInferenceService:
         *,
         student_id: UUID,
     ) -> AccommodationAnalysis:
+        current = await self._repository.current_session_analysis(student_id=student_id)
+        if current is not None:
+            return current
+        return await self.analyse_next_session(student_id=student_id)
+
+    async def analyse_next_session(self, *, student_id: UUID) -> AccommodationAnalysis:
         aggregate = await self._repository.aggregate_for_student(student_id=student_id)
         return self._engine.analyse(student_id=student_id, aggregate=aggregate)

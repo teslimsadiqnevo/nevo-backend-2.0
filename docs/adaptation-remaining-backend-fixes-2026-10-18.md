@@ -33,3 +33,13 @@ This follow-up addresses the two 17 October engineering notes, not just the orig
 No frontend files were changed. Site routing and CI API URLs, the calculation player's final-tap behaviour, consent-screen Back navigation, rendered annotation boxes and visible support changes still require frontend acceptance. The old Render service's suspension reason cannot be established from this codebase. Product decisions about retired screens/pills are not silently reversed by this patch.
 
 The backend does not manufacture a simplified rewrite when fidelity checks reject a model output. Backfill completion counts, rejected content, migration results and deployment verification belong in the final release report, rather than being assumed from a successful script exit.
+
+## Verified Release Status
+
+- Backend implementation pushed in `1ee4320`; deployment confirmed and new public contract observed.
+- Production database independently reports `20261018_0104 (head)`. Current profile and history tables contain zero preference columns.
+- Verification: 1,681 non-integration tests passed; a focused 69-test run passed, including 21 PostgreSQL-backed HTTP scenarios. A fresh database migrated from base through 0104, and all 24 stored lessons passed the updated lesson-detail response validation.
+- Historical content inventory after generation: 402 sections total; 101 have both depth bodies; 324 contain at least one pending rewrite (425 pending variants). These groups overlap. There are 269 eligible sections still missing at least one depth body, plus 32 short sections intentionally skipped. These are stored-content gaps, not completed rewrites.
+- Pending variants remain unavailable to students until approved. Corrected review markers on 53 sections written by the earlier-running backfill process; original approval identities and saved progress were not reset.
+- Generation has stopped. Missing bodies require further faithful generation or author correction; accepted pending versions require teacher review. The report does not claim every historical section is ready for Simplify/Expand.
+- Frontend browser acceptance and external audio/image account recovery are not included in the backend verification above.

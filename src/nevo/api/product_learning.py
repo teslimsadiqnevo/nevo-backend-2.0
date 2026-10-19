@@ -39,7 +39,7 @@ from nevo.api.frontend_unblockers import (
     _title_from_filename,
 )
 from nevo.api.learning_support import require_learning_support_if_admin
-from nevo.api.lesson_contracts import checkpoint_payloads, depth_payloads
+from nevo.api.lesson_contracts import checkpoint_payloads, depth_payloads, depth_reviewer_names
 from nevo.api.product_common import (
     actor_user,
     require_approved_lessons,
@@ -816,6 +816,9 @@ async def lesson_detail(
         )
     )
     modules = delivery_modules(lesson.id, segments, modules)
+    reviewer_names = (
+        await depth_reviewer_names(session, segments, lesson.school_id) if for_teacher else {}
+    )
     return {
         **_lesson_summary(
             lesson,
@@ -851,7 +854,10 @@ async def lesson_detail(
                 "interactiveVariant": item.interactive_variant,
                 "calculationVariant": item.calculation_variant,
                 "depthVariants": depth_payloads(
-                    item.depth_variants, item.text_variant, for_student=not for_teacher
+                    item.depth_variants,
+                    item.text_variant,
+                    for_student=not for_teacher,
+                    reviewer_names=reviewer_names,
                 ),
                 **(
                     {

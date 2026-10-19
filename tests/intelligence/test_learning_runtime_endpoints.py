@@ -1180,6 +1180,11 @@ def test_depth_backfill_review_keeps_original_approval_and_hides_pending_text(ru
     runtime.client.app.dependency_overrides[authenticated_principal] = lambda: teacher
     approved = runtime.client.post(f"{lesson_url}/segments/{runtime.ids['segment']}/approve")
     assert approved.status_code == 200, approved.text
+    staff_read = runtime.client.get(lesson_url)
+    assert staff_read.status_code == 200, staff_read.text
+    rewrite = staff_read.json()["segments"][0]["depthVariants"]["simplified"]
+    assert rewrite["reviewedByName"] == "Teacher"
+    assert rewrite["reviewedBy"] == str(runtime.ids["teacher"])
 
     async def inspect():
         async with runtime.sessions() as session:

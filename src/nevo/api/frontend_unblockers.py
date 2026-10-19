@@ -1285,6 +1285,13 @@ async def lesson_detail(
         await _lesson_for_actor(lesson_id, principal, session)
         await ensure_onboarding(session, actor)
     modules = delivery_modules(lesson.id, segments, modules)
+    from nevo.api.lesson_contracts import depth_reviewer_names
+
+    reviewer_names = (
+        await depth_reviewer_names(session, segments, lesson.school_id)
+        if actor.role != UserRole.STUDENT
+        else {}
+    )
     from nevo.intelligence.session_delivery import lesson_delivery_config
 
     reading_config = (
@@ -1327,6 +1334,7 @@ async def lesson_detail(
                     item.depth_variants,
                     item.text_variant,
                     for_student=actor.role == UserRole.STUDENT,
+                    reviewer_names=reviewer_names,
                 ),
                 needsReview=item.needs_review,
                 reviewReasons=list(item.review_reasons),

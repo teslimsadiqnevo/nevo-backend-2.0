@@ -94,6 +94,7 @@ class DepthVariantBody(BaseModel):
     review_status: Literal["approved", "pending"] = Field(default="pending", alias="reviewStatus")
     source_claims: list[str] = Field(default_factory=list, alias="sourceClaims")
     reviewed_by: UUID | None = Field(default=None, alias="reviewedBy")
+    reviewed_by_name: str | None = Field(default=None, alias="reviewedByName")
     reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
     key_terms: list["KeyTerm"] = Field(default_factory=list, alias="keyTerms")
     equation_callouts: list["EquationCallout"] = Field(
@@ -101,7 +102,33 @@ class DepthVariantBody(BaseModel):
     )
 
 
-def depth_payloads(values, text_variant, *, for_student=False):
+async def depth_reviewer_names(session, segments, school_id):
+    """Resolve staff provenance in one school-scoped query, never trust saved names."""
+    from sqlalchemy import select
+
+    from nevo.db.models.account import User
+
+    ids = set()
+    for segment in segments:
+        if not isinstance(segment.depth_variants, dict):
+            continue
+        for key in ("simplified", "expanded"):
+            item = (segment.depth_variants or {}).get(key)
+            if isinstance(item, dict) and item.get("reviewedBy"):
+                try:
+                    ids.add(UUID(str(item["reviewedBy"])))
+                except (ValueError, TypeError):
+                    continue
+    if not ids:
+        return {}
+    users = await session.scalars(select(User).where(User.id.in_(ids), User.school_id == school_id))
+    return {
+        str(user.id): " ".join(part for part in (user.first_name, user.last_name) if part)
+        for user in users
+    }
+
+
+def depth_payloads(values, text_variant, *, for_student=False, reviewer_names=None):
     """Source annotations survive a rewrite; pending backfills stay staff-only."""
     if not isinstance(values, dict):
         return None
@@ -117,6 +144,9 @@ def depth_payloads(values, text_variant, *, for_student=False):
             continue
         result[key] = {
             **item,
+            "reviewedByName": None
+            if for_student
+            else (reviewer_names or {}).get(str(item.get("reviewedBy"))),
             "keyTerms": source.get("keyTerms") or [],
             "equationCallouts": source.get("equationCallouts") or [],
         }

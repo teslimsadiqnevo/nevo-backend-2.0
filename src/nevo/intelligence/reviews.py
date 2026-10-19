@@ -53,8 +53,14 @@ async def record_session_reviews(session, student_id, session_id):
             continue
         first, last = {}, {}
         for row in rows:
-            first.setdefault(row.question_id, row)
-            last[row.question_id] = row
+            # Bulk/offline saves can share timestamps; the stored attempt number
+            # determines which answer came first, never the random row UUID.
+            previous = first.get(row.question_id)
+            if previous is None or row.attempt_number < previous.attempt_number:
+                first[row.question_id] = row
+            previous = last.get(row.question_id)
+            if previous is None or row.attempt_number > previous.attempt_number:
+                last[row.question_id] = row
         from nevo.intelligence.learning_runtime import minimum_reading_time
 
         unaided = all(

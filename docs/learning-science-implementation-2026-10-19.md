@@ -122,6 +122,13 @@ authored answer feedback and delivery settings remain available.
 
 ## AKT reuse assessment
 
+Deployment decision: reuse pyKT as a pinned dependency in a separate, locally
+hosted ML worker, not by copying its entire repository into the FastAPI app.
+The project supplies model/training code, not a managed prediction API. Any
+internal inference API would be hosted by Nevo; learner sequences need not be
+sent to an external model provider. Do not enable neural inference until a
+compatible checkpoint, vocabulary and evaluation results exist.
+
 Recommended implementation base: [pyKT](https://github.com/pykt-team/pykt-toolkit),
 an MIT-licensed toolkit with an AKT implementation and training/evaluation
 workflow. The [authors' AKT implementation](https://github.com/arghosh/AKT) is the
@@ -169,6 +176,10 @@ implementations. The earlier audit PDF remains a dated pre-fix snapshot; use
 this disposition alongside it, not as evidence that all twelve items are closed.
 
 ## Verification
+
+Follow-up: the live OpenAPI now exposes curriculum readiness. Review evidence
+also uses persisted attempt numbers rather than timestamp/UUID ordering to
+identify first and last answers, including bulk/offline saves.
 
 - 161 selected tests passed, including real FastAPI/HTTP and disposable PostgreSQL
   tests for calculation marking, scaffold receipts, warm-up idempotency, review

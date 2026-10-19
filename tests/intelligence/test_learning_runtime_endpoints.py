@@ -499,6 +499,51 @@ def test_completed_review_updates_existing_schedule_once(runtime):
     run(inspect())
 
 
+def test_review_uses_attempt_numbers_when_save_timestamps_are_reversed(runtime):
+    from uuid import UUID
+
+    from nevo.db.models.product import LessonQuestionAttempt
+    from nevo.db.models.review_evidence import ConceptReviewEvidence
+
+    sitting = start(runtime)
+    assert answer(runtime, sitting, 4).status_code == 201
+    assert answer(runtime, sitting, 5).status_code == 201
+
+    async def reverse_timestamps():
+        async with runtime.sessions.begin() as session:
+            rows = list(
+                await session.scalars(
+                    select(LessonQuestionAttempt)
+                    .where(LessonQuestionAttempt.session_id == UUID(sitting))
+                    .order_by(LessonQuestionAttempt.attempt_number)
+                )
+            )
+            rows[0].submitted_at = rows[1].submitted_at + timedelta(seconds=1)
+
+    run(reverse_timestamps())
+    response = runtime.client.put(
+        f"/api/v1/lessons/{runtime.ids['lesson']}/progress",
+        json={
+            "sessionId": sitting,
+            "status": "completed",
+            "segmentPosition": 0,
+            "modulePosition": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    async def inspect():
+        async with runtime.sessions() as session:
+            evidence = await session.scalar(
+                select(ConceptReviewEvidence).where(
+                    ConceptReviewEvidence.session_id == UUID(sitting)
+                )
+            )
+            assert evidence.outcome == "second_attempt"
+
+    run(inspect())
+
+
 def test_scaffold_compatibility_receipt_cannot_apply_a_second_update(runtime):
     from nevo.intelligence.wiring import build_scaffold_fading_service
 

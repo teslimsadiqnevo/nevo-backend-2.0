@@ -217,6 +217,45 @@ def test_reading_speed_is_derived_not_a_fixed_measurement():
     assert "reading_wpm" not in profile
 
 
+def test_unmarked_skipped_and_declined_trials_do_not_become_misses():
+    assert (
+        reduce_trials(
+            [
+                {"dimension": "reading", "correct": None, "responseTimeMs": 3000},
+                {"dimension": "wmc", "correct": False, "skipped": True},
+                {"dimension": "ans", "correct": False, "response": "not_sure"},
+            ]
+        )
+        == []
+    )
+
+
+def test_ans_warmup_changes_numerical_support_without_resetting_other_support():
+    previous = {"working_memory_capacity": 4, "comprehension_accuracy": 0.9}
+    held = {"support": {"initialScaffoldLevel": "light", "shorterTextBlocks": True}}
+    _, config = build_baseline_profile(
+        session_id="ans",
+        previous_profile=previous,
+        previous_engine_config=held,
+        features=reduce_trials([{"dimension": "ans", "correct": False}] * 3),
+    )
+    assert config["support"] == {**held["support"], "numericalVisuals": True}
+
+
+def test_untimed_speed_result_does_not_replace_measured_speed_with_a_default():
+    previous = {"processing_speed": 2, "response_time_ms": 4000}
+    held = {"pacing": {"responseTimeTargetMs": 4000}}
+    profile, config = build_baseline_profile(
+        session_id="untimed",
+        previous_profile=previous,
+        previous_engine_config=held,
+        features=reduce_trials([{"dimension": "ps", "correct": True}]),
+    )
+    assert profile["processing_speed"] == 2
+    assert profile["response_time_ms"] == 4000
+    assert config["pacing"]["responseTimeTargetMs"] == 4000
+
+
 @pytest.mark.parametrize(
     "stored,expected",
     [

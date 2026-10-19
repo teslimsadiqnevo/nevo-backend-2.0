@@ -928,6 +928,20 @@ def test_strong_and_weak_placement_select_different_assigned_concepts(runtime):
                 curriculum_position=0.9,
             )
             session.add(advanced)
+            await session.flush()
+            session.add(
+                LessonSegment(
+                    lesson_id=runtime.ids["lesson"],
+                    parse_run_id=runtime.ids["parse"],
+                    segment_key="adding-fifths",
+                    concept_id=advanced.id,
+                    content_type="explanatory_text",
+                    sequence_order=2,
+                    title="Adding fifths",
+                    body="Combine equal fifths to add them.",
+                    available_modalities=["text"],
+                )
+            )
             user = await session.get(User, runtime.ids["student"])
             user.baseline_profile = {**user.baseline_profile, "subject_placements": {"maths": 0.1}}
 
@@ -945,6 +959,120 @@ def test_strong_and_weak_placement_select_different_assigned_concepts(runtime):
     response = runtime.client.get("/api/v1/students/me/next-work?subject=Maths")
     assert response.status_code == 200, response.text
     assert response.json()["conceptName"] == "Adding fifths"
+    assert response.json()["segmentPosition"] == 1
+
+
+@pytest.mark.parametrize("problem", ["cancelled", "future", "unreviewed", "unmapped", "processing"])
+def test_next_work_never_returns_undeliverable_content(runtime, problem):
+    async def prepare():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            assignment = await session.scalar(
+                select(LessonAssignment).where(
+                    LessonAssignment.student_id == runtime.ids["student"]
+                )
+            )
+            if problem == "cancelled":
+                assignment.status = "cancelled"
+            elif problem == "future":
+                assignment.available_from = datetime.now(UTC) + timedelta(days=1)
+            elif problem == "unreviewed":
+                segment.needs_review, segment.approved_at = True, None
+            elif problem == "unmapped":
+                segment.concept_id = None
+                segment.calculation_variant = None
+                segment.comprehension_checkpoints = []
+            else:
+                lesson = await session.get(Lesson, runtime.ids["lesson"])
+                lesson.status = "processing"
+
+    run(prepare())
+    response = runtime.client.get("/api/v1/students/me/next-work")
+    assert response.status_code == 200, response.text
+    assert response.json() is None
+
+
+def test_next_work_uses_explicit_question_mapping_when_segment_mapping_is_missing(runtime):
+    async def prepare():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.concept_id = None
+            segment.calculation_variant = None
+
+    run(prepare())
+    response = runtime.client.get("/api/v1/students/me/next-work")
+    assert response.status_code == 200, response.text
+    assert response.json()["segmentId"] == str(runtime.ids["segment"])
+
+
+def test_next_work_uses_assigned_section_not_the_concepts_unassigned_origin(runtime):
+    async def prepare():
+        async with runtime.sessions.begin() as session:
+            origin = Lesson(
+                school_id=runtime.ids["school"],
+                created_by_user_id=runtime.ids["teacher"],
+                title="Unassigned origin",
+                subject="Maths",
+                source_type="text",
+                status="completed",
+            )
+            session.add(origin)
+            await session.flush()
+            concept = await session.get(Concept, runtime.ids["concept"])
+            concept.lesson_id = origin.id
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.concept_id = None
+
+    run(prepare())
+    response = runtime.client.get("/api/v1/students/me/next-work")
+    assert response.status_code == 200, response.text
+    assert response.json()["lessonId"] == str(runtime.ids["lesson"])
+    assert response.json()["segmentId"] == str(runtime.ids["segment"])
+
+
+def test_baseline_unmarked_trials_are_not_stored_as_failed_measurements(runtime):
+    response = runtime.client.post(
+        "/api/baseline/trials",
+        json={
+            "sessionId": "unmarked",
+            "trials": [
+                {"dimension": "reading", "responseTimeMs": 3000},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    async def inspect():
+        async with runtime.sessions() as session:
+            student = await session.get(User, runtime.ids["student"])
+            assert "reading" not in (student.baseline_profile.get("measurements") or {})
+
+    run(inspect())
+
+
+def test_session_keeps_existing_delivery_support_without_new_accommodation_evidence(runtime):
+    async def prepare():
+        async with runtime.sessions.begin() as session:
+            user = await session.get(User, runtime.ids["student"])
+            user.engine_config = {
+                "support": {
+                    "shorterTextBlocks": True,
+                    "pauseBetweenSegments": True,
+                    "numberProblemsStepByStep": True,
+                }
+            }
+
+    run(prepare())
+    response = runtime.client.post(f"/api/v1/lessons/{runtime.ids['lesson']}/session")
+    assert response.status_code == 201, response.text
+    response = runtime.client.get(
+        f"/api/session/state/{runtime.ids['student']}?sessionId={response.json()['sessionId']}"
+    )
+    assert response.status_code == 200, response.text
+    support = response.json()["engineConfig"]["support"]
+    assert support["shorterTextBlocks"] is True
+    assert support["pauseBetweenSegments"] is True
+    assert support["numberProblemsStepByStep"] is True
 
 
 def test_new_child_first_pin_four_modules_then_lesson_with_real_bearer(runtime):

@@ -158,9 +158,15 @@ def build_baseline_profile(
             "working_memory_capacity": "wmc" in dimensions
             or "grid_span" in modules
             or bool(values.get("wmc_accuracy")),
-            "processing_speed": "ps" in dimensions
-            or "pattern_flanker" in modules
-            or any(key in values for key in ("response_time_ms", "ps_median_response_ms")),
+            "processing_speed": any(
+                key in values
+                for key in (
+                    "response_time_ms",
+                    "mean_response_time_ms",
+                    "latency_ms",
+                    "ps_median_response_ms",
+                )
+            ),
             "attention_span_minutes": "attention" in dimensions
             or bool(values.get("attention_minutes")),
             "comprehension_accuracy": "domain" in dimensions
@@ -168,8 +174,15 @@ def build_baseline_profile(
                 key in values for key in ("accuracy", "comprehension_accuracy", "domain_accuracy")
             ),
             "reading_wpm": measured_reading,
-            "response_time_ms": "ps" in dimensions
-            or any(key in values for key in ("response_time_ms", "ps_median_response_ms")),
+            "response_time_ms": any(
+                key in values
+                for key in (
+                    "response_time_ms",
+                    "mean_response_time_ms",
+                    "latency_ms",
+                    "ps_median_response_ms",
+                )
+            ),
         }
         profile = {
             **previous,
@@ -210,6 +223,10 @@ def build_baseline_profile(
                 else ScaffoldingLevel.STANDARD.value,
                 comprehensionCheckInterval=2 if memory <= 2 else 3,
             )
+        if "ans" in dimensions and "ans" in measurements:
+            engine_config["support"]["numericalVisuals"] = (
+                measurements["ans"]["trial_count"] >= 3 and measurements["ans"]["accuracy"] < 0.7
+            )
     return profile, engine_config
 
 
@@ -247,6 +264,12 @@ def reduce_trials(
 
     buckets: dict[tuple[str, str | None], list[Mapping[str, object]]] = defaultdict(list)
     for trial in trials:
+        if (
+            trial.get("skipped")
+            or trial.get("correct") is None
+            or str(trial.get("response") or "").strip().casefold() == "not_sure"
+        ):
+            continue
         dimension = str(trial.get("dimension") or "unknown").casefold()
         condition = trial.get("condition")
         buckets[(dimension, str(condition).casefold() if condition else None)].append(trial)
@@ -260,6 +283,9 @@ def reduce_trials(
             float(value)
             for row in rows
             if isinstance(value := row.get("responseTimeMs"), int | float)
+            and not isinstance(value, bool)
+            and isfinite(value)
+            and value >= 0
         ]
         feature: dict[str, object] = {
             "dimension": dimension,

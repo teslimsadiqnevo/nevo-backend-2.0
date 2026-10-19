@@ -2057,17 +2057,19 @@ async def submit_baseline_trials(
         if set(item_ids) != set(answers):
             raise HTTPException(404, detail="Probe item not found")
     for trial in payload.trials:
-        if trial.skipped or (
-            (trial.response or "").strip().casefold() == "not_sure" and trial.correct is None
-        ):
+        if trial.skipped or (trial.response or "").strip().casefold() == "not_sure":
             # A skipped step and an explicit "not sure" are declines. Neither
             # is evidence that the child answered incorrectly.
             continue
         correct = trial.correct
         expected = answers.get(trial.probe_item_id) if trial.probe_item_id else None
         if expected is not None:
+            if not (trial.response or "").strip():
+                continue
             # We hold the answer, so the client's verdict is not consulted.
             correct = (trial.response or "").strip().casefold() == expected.strip().casefold()
+        if correct is None:
+            continue
         marked.append(
             {
                 "dimension": trial.dimension,

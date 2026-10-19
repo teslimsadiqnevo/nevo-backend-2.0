@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy import or_, select
 
-from nevo.db.models.content import LessonSegment
+from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import Concept, LessonAssignment
 from nevo.db.models.mastery import StudentConceptMastery, StudentConceptScheduling
 from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
@@ -11,27 +12,47 @@ from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
 async def next_work(session, student, subject=None, lesson_id=None):
     """Choose only assigned, available content with satisfied prerequisites."""
     now = datetime.now(UTC)
-    assignment = select(LessonAssignment.lesson_id).where(
-        LessonAssignment.student_id == student.id,
-        LessonAssignment.status != "cancelled",
-        or_(LessonAssignment.available_from.is_(None), LessonAssignment.available_from <= now),
+    assignment = (
+        select(LessonAssignment.lesson_id)
+        .join(Lesson, Lesson.id == LessonAssignment.lesson_id)
+        .where(
+            LessonAssignment.student_id == student.id,
+            LessonAssignment.status != "cancelled",
+            or_(LessonAssignment.available_from.is_(None), LessonAssignment.available_from <= now),
+            Lesson.school_id == student.school_id,
+            Lesson.status == "completed",
+        )
     )
-    mapped = select(LessonSegment.concept_id).where(LessonSegment.lesson_id.in_(assignment))
+    from nevo.api.lesson_review import outstanding_key_points
+
+    segments_query = select(LessonSegment).where(LessonSegment.lesson_id.in_(assignment))
+    if lesson_id is not None:
+        segments_query = segments_query.where(LessonSegment.lesson_id == lesson_id)
+    segments = list(
+        await session.scalars(
+            segments_query.order_by(LessonSegment.lesson_id, LessonSegment.sequence_order)
+        )
+    )
+    blocked = {row.lesson_id for row in segments if row.needs_review and row.approved_at is None}
+    blocked.update(await outstanding_key_points(session, {row.lesson_id for row in segments}))
+    targets = {}
+    for segment in segments:
+        if segment.lesson_id in blocked:
+            continue
+        keys = [segment.concept_id, (segment.calculation_variant or {}).get("conceptId")]
+        keys.extend(item.get("conceptId") for item in segment.comprehension_checkpoints or [])
+        for key in keys:
+            try:
+                concept_id = UUID(str(key))
+            except (ValueError, TypeError):
+                continue
+            targets.setdefault(concept_id, segment)
     query = select(Concept).where(
         Concept.school_id == student.school_id,
-        or_(Concept.lesson_id.in_(assignment), Concept.id.in_(mapped)),
+        Concept.id.in_(targets),
     )
     if subject:
         query = query.where(Concept.subject.ilike(subject))
-    if lesson_id:
-        query = query.where(
-            or_(
-                Concept.lesson_id == lesson_id,
-                Concept.id.in_(
-                    select(LessonSegment.concept_id).where(LessonSegment.lesson_id == lesson_id)
-                ),
-            )
-        )
     concepts = list(await session.scalars(query.order_by(Concept.curriculum_position, Concept.id)))
     states = {
         row.concept_id: row
@@ -85,46 +106,14 @@ async def next_work(session, student, subject=None, lesson_id=None):
         )
     if concept is None:
         return None
-    available_segments = list(
-        await session.scalars(
-            select(LessonSegment)
-            .where(
-                LessonSegment.lesson_id.in_(assignment),
-                LessonSegment.concept_id == concept.id,
-            )
-            .order_by(LessonSegment.sequence_order)
-        )
-    )
-    target_lesson_id = available_segments[0].lesson_id if available_segments else concept.lesson_id
-    if lesson_id is not None:
-        target_lesson_id = lesson_id
-    segments = list(
-        await session.scalars(
-            select(LessonSegment)
-            .where(
-                LessonSegment.lesson_id == target_lesson_id,
-            )
-            .order_by(LessonSegment.sequence_order)
-        )
-    )
-    target = next(
-        (
-            row
-            for row in segments
-            if row.concept_id == concept.id
-            or str((row.calculation_variant or {}).get("conceptId")) == str(concept.id)
-            or any(
-                str(item.get("conceptId")) == str(concept.id)
-                for item in row.comprehension_checkpoints or []
-            )
-        ),
-        segments[0] if segments else None,
-    )
+    target = targets[concept.id]
+    target_lesson_id = target.lesson_id
+    lesson_segments = [row for row in segments if row.lesson_id == target_lesson_id]
     return {
         "lessonId": target_lesson_id,
         "conceptId": concept.id,
         "conceptName": concept.name,
-        "segmentId": target.id if target else None,
-        "segmentPosition": segments.index(target) if target else 0,
+        "segmentId": target.id,
+        "segmentPosition": lesson_segments.index(target),
         "kind": "review" if review else "new_work",
     }

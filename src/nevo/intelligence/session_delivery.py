@@ -39,10 +39,16 @@ async def delivery_snapshot(session, student, lesson_session=None):
     analysis = UdlAccommodationInferenceEngine().analyse(student_id=student.id, aggregate=aggregate)
     active = [signal.accommodation.value for signal in analysis.active]
     config = EngineConfig.model_validate(student.engine_config or {})
-    config.support.number_problems_step_by_step = "numerical" in active
+    config.support.number_problems_step_by_step = (
+        config.support.number_problems_step_by_step or "numerical" in active
+    )
     config.support.numerical_visuals = config.support.numerical_visuals or "numerical" in active
-    config.support.shorter_text_blocks = bool({"reading", "attention"} & set(active))
-    config.support.pause_between_segments = "attention" in active
+    config.support.shorter_text_blocks = config.support.shorter_text_blocks or bool(
+        {"reading", "attention"} & set(active)
+    )
+    config.support.pause_between_segments = (
+        config.support.pause_between_segments or "attention" in active
+    )
     if "reading" in active:
         config.reading.font_scale = 1.15
         config.reading.line_spacing = 1.8

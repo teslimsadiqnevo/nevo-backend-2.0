@@ -5,6 +5,44 @@ from nevo.intelligence.entities import ScaffoldProblemAttempt
 from nevo.intelligence.scaffolds import ProgressiveScaffoldFadingEngine
 
 
+def test_repeated_hint_dependence_never_fades_support():
+    engine = ProgressiveScaffoldFadingEngine()
+    student, concept = uuid4(), uuid4()
+    state = engine.initial_state(student_id=student, concept_id=concept)
+    for index in range(6):
+        state = engine.record_attempt(
+            state=state,
+            attempt=ScaffoldProblemAttempt(
+                student_id=student,
+                concept_id=concept,
+                problem_id=str(index),
+                response_correct=True,
+                hint_count=2,
+            ),
+        ).state
+    assert state.current_intensity is ScaffoldIntensity.FULL_SUPPORT
+    assert state.consecutive_correct == 0
+
+
+def test_methodical_correct_work_is_not_a_struggle():
+    engine = ProgressiveScaffoldFadingEngine()
+    student, concept = uuid4(), uuid4()
+    state = engine.initial_state(student_id=student, concept_id=concept)
+    decision = engine.record_attempt(
+        state=state,
+        attempt=ScaffoldProblemAttempt(
+            student_id=student,
+            concept_id=concept,
+            problem_id="slow",
+            response_correct=True,
+            response_time_ms=60_000,
+            expected_response_time_ms=2_000,
+            hint_count=0,
+        ),
+    )
+    assert decision.outcome is ScaffoldOutcome.CORRECT
+
+
 def test_three_correct_full_support_problems_fade_to_partial_on_problem_four() -> None:
     engine = ProgressiveScaffoldFadingEngine()
     student_id = uuid4()

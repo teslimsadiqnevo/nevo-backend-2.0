@@ -84,14 +84,22 @@ class DepthVariants:
     def empty(self) -> bool:
         return self.simplified is None and self.expanded is None
 
-    def payload(self, *, model: str | None) -> dict[str, object]:
+    def payload(self, *, model: str | None, source_body: str = "") -> dict[str, object]:
         """The stored shape, keyed by the engine's own action names."""
 
         variants: dict[str, object] = {}
         if self.simplified is not None:
-            variants[SIMPLIFIED] = {"body": self.simplified}
+            variants[SIMPLIFIED] = {
+                "body": self.simplified,
+                "reviewStatus": "pending",
+                "sourceClaims": source_claims(source_body),
+            }
         if self.expanded is not None:
-            variants[EXPANDED] = {"body": self.expanded}
+            variants[EXPANDED] = {
+                "body": self.expanded,
+                "reviewStatus": "pending",
+                "sourceClaims": source_claims(source_body),
+            }
         if model:
             variants["model"] = model
         return variants
@@ -109,6 +117,28 @@ def invented_numbers(variant: str, source: str) -> set[str]:
     return numbers_in(variant) - numbers_in(source)
 
 
+def source_claims(source):
+    return [piece.strip() for piece in re.split(r"(?<=[.!?])\s+|\n+", source) if piece.strip()]
+
+
+def missing_claim_anchors(source, variant):
+    """Conservative screening, not a claim of automatic semantic equivalence."""
+    stop = set(
+        (
+            "a an the is are was were be been to of in on at and or it this that these those "
+            "for from as by with into its their them they we you your can will has have had "
+            "which what how"
+        ).split()
+    )
+    words = set(re.findall(r"[a-z]+", variant.casefold()))
+    missing = []
+    for claim in source_claims(source):
+        anchors = set(re.findall(r"[a-z]+", claim.casefold())) - stop
+        if len(anchors) >= 3 and len(anchors & words) / len(anchors) < 0.5:
+            missing.append(claim)
+    return missing
+
+
 def accept(variant: str | None, *, source: str, shorter: bool) -> str | None:
     """Keep the rewrite, or None with the reason logged.
 
@@ -120,6 +150,9 @@ def accept(variant: str | None, *, source: str, shorter: bool) -> str | None:
         return None
     text = variant.strip()
     if not text or text == source.strip():
+        return None
+    if missing_claim_anchors(source, text):
+        logger.warning("Depth variant lost source claim anchors; held for source fallback")
         return None
     stray = invented_numbers(text, source)
     if stray:

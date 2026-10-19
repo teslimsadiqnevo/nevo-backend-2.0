@@ -97,7 +97,7 @@ def runtime(monkeypatch):
                             "comprehension_accuracy": 0.8,
                             "response_time_ms": 2000,
                         },
-                        engine_config={"version": 1},
+                        engine_config={"version": 1, "support": {"initialScaffoldLevel": "strong"}},
                     ),
                 ]
             )
@@ -273,6 +273,29 @@ def test_answers_update_mastery_and_schedule_once_with_retries(runtime):
         response = answer(runtime, sitting, 5)
         assert response.status_code == 201, response.text
 
+    async def add_questions():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            original = segment.comprehension_checkpoints[0]
+            segment.comprehension_checkpoints = [
+                original,
+                *[{**original, "id": key} for key in ("q2", "q3")],
+            ]
+
+    run(add_questions())
+    for key in ("q2", "q3"):
+        response = runtime.client.post(
+            f"/api/v1/lessons/{runtime.ids['lesson']}/attempts",
+            json={
+                "sessionId": sitting,
+                "segmentId": str(runtime.ids["segment"]),
+                "questionId": key,
+                "answer": 5,
+                "responseTimeMs": 3000,
+            },
+        )
+        assert response.status_code == 201, response.text
+
     async def inspect():
         async with runtime.sessions() as session:
             state = await session.scalar(
@@ -287,13 +310,228 @@ def test_answers_update_mastery_and_schedule_once_with_retries(runtime):
                     )
                 )
             )
-            assert state.practice_count == 4
+            assert state.practice_count == 3
             assert state.mastery_probability_concept >= 0.7
             assert len(schedules) == 1
 
     run(inspect())
     response = runtime.client.get("/api/v1/students/me/next-work")
     assert response.status_code == 200 and response.json() is None
+
+
+def test_warmup_recalibrates_once_without_exposing_measurements(runtime, monkeypatch):
+    monkeypatch.setattr("nevo.api.frontend_unblockers._today_dimension", lambda _: "reading")
+    url = f"/api/baseline/recalibrate-prompt/{runtime.ids['student']}/response"
+    payload = {
+        "trials": [
+            {
+                "dimension": "reading",
+                "correct": True,
+                "responseTimeMs": 30_000,
+                "readingWordCount": 30,
+            }
+        ]
+    }
+    response = runtime.client.post(url, json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["measurementStatus"] == "recalibrated"
+    assert "baselineProfile" not in response.json()
+    payload["trials"][0]["responseTimeMs"] = 10_000
+    assert runtime.client.post(url, json=payload).status_code == 200
+
+    async def inspect():
+        async with runtime.sessions() as session:
+            student = await session.get(User, runtime.ids["student"])
+            assert student.baseline_profile["reading_wpm"] == 60
+            assert student.baseline_profile["subject_placements"] == {"maths": 0.6}
+
+    run(inspect())
+
+
+def test_curriculum_mapping_reports_and_repairs_assessed_gaps(runtime):
+    async def unmap():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.concept_id = None
+            segment.calculation_variant = None
+            segment.comprehension_checkpoints = [
+                {**question, "conceptId": None} for question in segment.comprehension_checkpoints
+            ]
+
+    run(unmap())
+    teacher = AuthPrincipal(user_id=runtime.ids["teacher"], role="teacher", session_id=uuid4())
+    runtime.client.app.dependency_overrides[authenticated_principal] = lambda: teacher
+    response = runtime.client.get("/api/v1/curriculum/readiness")
+    assert response.status_code == 200, response.text
+    assert response.json()["prerequisiteReviewRequired"] is True
+    assert any(row["code"] == "assessed_concept_missing" for row in response.json()["findings"])
+    response = runtime.client.put(
+        f"/api/v1/segments/{runtime.ids['segment']}/concept",
+        json={"conceptId": str(runtime.ids["concept"])},
+    )
+    assert response.status_code == 200, response.text
+    response = runtime.client.get("/api/v1/curriculum/readiness")
+    assert not any(row["code"] == "assessed_concept_missing" for row in response.json()["findings"])
+
+
+def test_offline_delivery_contains_the_same_stable_reading_anchors(runtime):
+    start(runtime)
+    online = runtime.client.get(f"/api/v1/lessons/{runtime.ids['lesson']}")
+    offline = runtime.client.get(f"/api/v1/lessons/{runtime.ids['lesson']}/offline-package.json")
+    assert online.status_code == 200, online.text
+    assert offline.status_code == 200, offline.text
+    assert (
+        offline.json()["segments"][0]["readingChunks"]
+        == online.json()["segments"][0]["readingChunks"]
+    )
+    assert (
+        offline.json()["segments"][0]["readingGroups"]
+        == online.json()["segments"][0]["readingGroups"]
+    )
+
+
+def test_calculation_marking_rejects_distractor_alias_in_historical_data(runtime):
+    async def change():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.calculation_variant = {
+                "steps": [
+                    {
+                        "stepId": "choice",
+                        "prompt": "Choose four",
+                        "answer": "a",
+                        "acceptedAnswers": ["b", "4"],
+                        "options": [{"value": "a", "label": "4"}, {"value": "b", "label": "7"}],
+                    }
+                ],
+                "conceptId": str(runtime.ids["concept"]),
+                "answer": 4,
+            }
+
+    run(change())
+    sitting = start(runtime)
+    response = runtime.client.post(
+        f"/api/v1/lessons/{runtime.ids['lesson']}/attempts",
+        json={
+            "sessionId": sitting,
+            "segmentId": str(runtime.ids["segment"]),
+            "questionId": "choice",
+            "source": "calculation",
+            "answer": "b",
+            "responseTimeMs": 3000,
+        },
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["correct"] is False
+
+
+def test_completed_review_updates_existing_schedule_once(runtime):
+    from nevo.api.scheduler import router as scheduler_router
+    from nevo.db.models.review_evidence import ConceptReviewEvidence
+    from nevo.scheduler.wiring import build_scheduler_service
+
+    runtime.client.app.include_router(scheduler_router)
+    runtime.client.app.state.scheduler_service = build_scheduler_service(runtime.sessions)
+    sitting = start(runtime)
+    assert answer(runtime, sitting, 5).status_code == 201
+
+    async def old_schedule():
+        async with runtime.sessions.begin() as session:
+            existing = await session.scalar(
+                select(StudentConceptScheduling).where(
+                    StudentConceptScheduling.student_id == runtime.ids["student"],
+                    StudentConceptScheduling.concept_id == runtime.ids["concept"],
+                )
+            )
+            if existing is None:
+                existing = StudentConceptScheduling(
+                    student_id=runtime.ids["student"], concept_id=runtime.ids["concept"]
+                )
+                session.add(existing)
+            existing.stability, existing.difficulty, existing.review_count = 10, 5, 1
+            existing.last_review = datetime.now(UTC) - timedelta(days=2)
+            existing.next_review_due = datetime.now(UTC) - timedelta(hours=1)
+
+    run(old_schedule())
+    payload = {
+        "sessionId": sitting,
+        "status": "completed",
+        "segmentPosition": 0,
+        "modulePosition": 0,
+    }
+    for _ in range(2):
+        response = runtime.client.put(
+            f"/api/v1/lessons/{runtime.ids['lesson']}/progress", json=payload
+        )
+        assert response.status_code == 200, response.text
+    for _ in range(2):
+        response = runtime.client.post(
+            "/api/scheduler/record-review",
+            json={
+                "studentId": str(runtime.ids["student"]),
+                "conceptId": str(runtime.ids["concept"]),
+                "sessionId": sitting,
+                "outcome": "not_recalled",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["schedule"]["stability"] is None
+
+    async def inspect():
+        async with runtime.sessions() as session:
+            current = await session.scalar(
+                select(StudentConceptScheduling).where(
+                    StudentConceptScheduling.student_id == runtime.ids["student"],
+                )
+            )
+            assert current.review_count == 2
+            assert current.stability > 10
+            evidence = list(
+                await session.scalars(
+                    select(ConceptReviewEvidence).where(
+                        ConceptReviewEvidence.student_id == runtime.ids["student"],
+                    )
+                )
+            )
+            assert len(evidence) == 1
+            assert evidence[0].outcome == "first_time"
+
+    run(inspect())
+
+
+def test_scaffold_compatibility_receipt_cannot_apply_a_second_update(runtime):
+    from nevo.intelligence.wiring import build_scaffold_fading_service
+
+    runtime.client.app.state.scaffold_fading_service = build_scaffold_fading_service(
+        runtime.sessions
+    )
+    sitting = start(runtime)
+    attempt = answer(runtime, sitting, 5)
+    assert attempt.status_code == 201, attempt.text
+    payload = {
+        "studentId": str(runtime.ids["student"]),
+        "conceptId": str(runtime.ids["concept"]),
+        "problemId": "invented",
+        "answerAttemptId": attempt.json()["id"],
+        "responseCorrect": True,
+        "scaffoldIntensity": "independent",
+    }
+    for _ in range(3):
+        response = runtime.client.post("/api/intelligence/scaffolds/attempt", json=payload)
+        assert response.status_code == 200, response.text
+        assert response.json()["nextIntensity"] == "full_support"
+        assert response.json()["levelChanged"] is False
+
+    async def inspect():
+        async with runtime.sessions() as session:
+            state = await session.scalar(
+                select(StudentConceptScaffoldState).where(
+                    StudentConceptScaffoldState.student_id == runtime.ids["student"],
+                )
+            )
+            assert state.consecutive_correct == 1
+
+    run(inspect())
 
 
 def test_fast_taps_cannot_increase_mastery(runtime):
@@ -372,7 +610,13 @@ def test_timed_reading_then_warmup_preserves_the_rest_of_the_baseline(runtime):
         },
     )
     assert response.status_code == 200, response.text
-    profile = response.json()["baselineProfile"]
+
+    async def saved_profile():
+        async with runtime.sessions() as session:
+            return (await session.get(User, runtime.ids["student"])).baseline_profile
+
+    assert response.json()["baselineProfile"] == {}
+    profile = run(saved_profile())
     assert profile["reading_wpm"] == 60
     assert profile["reading_wpm_source"] == "measured"
     later = runtime.client.post(
@@ -383,7 +627,7 @@ def test_timed_reading_then_warmup_preserves_the_rest_of_the_baseline(runtime):
         },
     )
     assert later.status_code == 200, later.text
-    saved = later.json()["baselineProfile"]
+    saved = run(saved_profile())
     assert saved["reading_wpm"] == 60
     assert saved["comprehension_accuracy"] == profile["comprehension_accuracy"]
     assert saved["subject_placements"] == profile["subject_placements"]

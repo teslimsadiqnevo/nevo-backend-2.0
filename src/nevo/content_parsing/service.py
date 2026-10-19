@@ -526,7 +526,7 @@ class ContentParsingService:
             return segment
         return replace(
             segment,
-            depth_variants=variants.payload(model=model),
+            depth_variants=variants.payload(model=model, source_body=segment.body),
             needs_review=True,
             review_reasons=tuple(
                 dict.fromkeys((*segment.review_reasons, "depth_variant_review_required"))

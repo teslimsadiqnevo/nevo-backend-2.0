@@ -149,10 +149,7 @@ async def test_parses_ai_segments_and_normalizes_calculation_variant() -> None:
     assert result.status is ContentParseStatus.COMPLETED
     segment = repository.parsed.segments[0]  # type: ignore[union-attr]
     assert segment.content_type is LessonContentType.CALCULATION
-    assert segment.available_modalities == (
-        ContentModality.INTERACTIVE,
-        ContentModality.VISUAL,
-    )
+    assert segment.available_modalities == (ContentModality.INTERACTIVE,)
     assert segment.calculation_variant is not None
     steps = segment.calculation_variant["steps"]
     assert steps[0]["narrationAudio"]["provider"] == "tts_provider_tbd"

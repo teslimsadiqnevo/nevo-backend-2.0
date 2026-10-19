@@ -23,12 +23,20 @@ TRANSFER_RATE = 0.08
 ATTENTION_LEARNING_RATE = 0.04
 
 
-class HybridAktMasteryEngine:
-    """Pragmatic v1 Hybrid AKT with separate concept and reading tracks.
+def bkt_update(prior, *, correct, guess, slip, transition):
+    """Four-parameter knowledge tracing: observation posterior, then learning."""
+    prior, guess, slip, transition = map(_clamp, (prior, guess, slip, transition))
+    known = prior * (1 - slip if correct else slip)
+    unknown = (1 - prior) * (guess if correct else 1 - guess)
+    posterior = known / (known + unknown) if known + unknown else prior
+    return _clamp(posterior + (1 - posterior) * transition)
 
-    This is not the deferred transformer DKT. It keeps the AKT properties the
-    ticket needs now: attention-weighted inter-skill transfer, exponential
-    updates, and decoupled reading attribution for text-heavy items.
+
+class HybridAktMasteryEngine:
+    """Local BKT with heuristic reading attribution and related-skill transfer.
+
+    The public class name is retained for compatibility, not a claim that this
+    is a trained deep AKT model.
     """
 
     def initial_state(
@@ -87,10 +95,12 @@ class HybridAktMasteryEngine:
         modality_shift = False
 
         if interaction.response_correct:
-            likelihood = max(0.01, 1 - state.slip_probability)
-            concept = _exponential_increase(
+            concept = bkt_update(
                 concept,
-                CONCEPT_LEARNING_RATE * likelihood,
+                correct=True,
+                guess=state.guess_probability,
+                slip=state.slip_probability,
+                transition=state.transition_probability,
             )
             if interaction.item_text_density >= TEXT_HEAVY_THRESHOLD:
                 reading = _exponential_increase(reading, READING_LEARNING_RATE)
@@ -109,7 +119,13 @@ class HybridAktMasteryEngine:
                     NEGATIVE_READING_RATE * interaction.item_text_density,
                 )
             elif attribution is FailureAttribution.CONCEPT:
-                concept = _exponential_decrease(concept, NEGATIVE_CONCEPT_RATE)
+                concept = bkt_update(
+                    concept,
+                    correct=False,
+                    guess=state.guess_probability,
+                    slip=state.slip_probability,
+                    transition=state.transition_probability,
+                )
             else:
                 reading_weight = interaction.item_text_density
                 concept_weight = 1 - reading_weight
@@ -117,10 +133,14 @@ class HybridAktMasteryEngine:
                     reading,
                     NEGATIVE_READING_RATE * reading_weight,
                 )
-                concept = _exponential_decrease(
+                posterior = bkt_update(
                     concept,
-                    NEGATIVE_CONCEPT_RATE * concept_weight,
+                    correct=False,
+                    guess=state.guess_probability,
+                    slip=state.slip_probability,
+                    transition=state.transition_probability,
                 )
+                concept += (posterior - concept) * concept_weight
 
         attention_weights = _updated_attention_weights(
             current=state.attention_weights,
@@ -140,6 +160,8 @@ class HybridAktMasteryEngine:
             last_response_correct=interaction.response_correct,
             last_failure_attribution=attribution,
             seeding_source=state.seeding_source,
+            transition_probability=state.transition_probability,
+            model_version="bkt_reading_v2",
         )
         return MasteryUpdateResult(
             state=new_state,

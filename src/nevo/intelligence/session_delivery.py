@@ -1,9 +1,30 @@
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from nevo.intelligence.accommodation_repositories import SqlAlchemyAccommodationPatternRepository
 from nevo.intelligence.accommodations import UdlAccommodationInferenceEngine
+
+
+async def lesson_delivery_config(session, student, lesson_id):
+    from nevo.db.models.signal_event import LessonSession
+
+    sitting = await session.scalar(
+        select(LessonSession)
+        .where(
+            LessonSession.student_id == student.id,
+            LessonSession.lesson_id == lesson_id,
+            LessonSession.completion_status == "in_progress",
+        )
+        .order_by(LessonSession.started_at.desc())
+        .limit(1)
+    )
+    return (
+        ((sitting.delivery_state or {}).get("engineConfig") if sitting else None)
+        or student.engine_config
+        or {}
+    )
 
 
 async def delivery_snapshot(session, student, lesson_session=None):
@@ -19,7 +40,7 @@ async def delivery_snapshot(session, student, lesson_session=None):
     active = [signal.accommodation.value for signal in analysis.active]
     config = EngineConfig.model_validate(student.engine_config or {})
     config.support.number_problems_step_by_step = "numerical" in active
-    config.support.numerical_visuals = "numerical" in active
+    config.support.numerical_visuals = config.support.numerical_visuals or "numerical" in active
     config.support.shorter_text_blocks = bool({"reading", "attention"} & set(active))
     config.support.pause_between_segments = "attention" in active
     if "reading" in active:

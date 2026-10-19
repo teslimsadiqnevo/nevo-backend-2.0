@@ -552,6 +552,7 @@ class ScaffoldAttemptRequest(BaseModel):
     student_id: UUID = Field(alias="studentId")
     concept_id: UUID = Field(alias="conceptId")
     problem_id: str = Field(alias="problemId", min_length=1, max_length=120)
+    answer_attempt_id: UUID | None = Field(default=None, alias="answerAttemptId")
     #: Where the problem came from, so the server can find the answer rather
     #: than being told the mark. Send these and leave responseCorrect out.
     #: Ask B27.
@@ -560,15 +561,13 @@ class ScaffoldAttemptRequest(BaseModel):
     #: What the child actually picked or typed. Marked here against the stored
     #: calculation, which is where the answer lives.
     answer: str | None = Field(default=None, max_length=400)
-    #: The older shape. A client deciding whether a child was right is the
-    #: client deciding a measure, so it is accepted only where the server has
-    #: no answer of its own to mark against - a problem generated on the
-    #: device, which scaffolded practice still does for some concepts.
+    #: Legacy staff recording only. Student requests require answerAttemptId
+    #: and cannot use this verdict or choose their scaffold intensity.
     response_correct: bool | None = Field(default=None, alias="responseCorrect")
 
     @model_validator(mode="after")
     def _something_to_mark(self) -> "ScaffoldAttemptRequest":
-        if self.answer is None and self.response_correct is None:
+        if self.answer is None and self.response_correct is None and self.answer_attempt_id is None:
             raise ValueError("Send answer with lessonId and segmentId, or responseCorrect.")
         return self
 
@@ -829,22 +828,75 @@ async def record_scaffold_attempt(
     principal: PrincipalDependency,
     service: ScaffoldFadingDependency,
 ) -> ScaffoldDecisionResponse:
-    """Record one scaffolded practice attempt, and mark it here where we can.
+    """Return an already-recorded state for student answerAttemptId receipts.
 
-    The scaffold log took ``responseCorrect`` from the device, so for this one
-    surface the client decided whether a child had got it right - and that
-    decision feeds the scaffold ladder, which is a measure of the child. Ask
-    B27.
-
-    So the child's own answer is now accepted, and where the attempt names a
-    lesson segment we hold, it is marked against the answer stored on that
-    segment's calculation. Where it does not - scaffolded practice still
-    generates some problems on the device - ``responseCorrect`` is still
-    taken, because refusing it would be refusing the attempt rather than
-    marking it, and losing the evidence is worse than the client's verdict.
+    Lesson answers apply support transactionally. A student compatibility call
+    never applies another fade and never trusts a device verdict. Staff retain
+    the separately authorised legacy practice-recording path.
     """
 
     _ensure_student_or_staff(principal=principal, student_id=payload.student_id)
+    if principal.role == "student":
+        if payload.answer_attempt_id is None:
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "server_marked_attempt_required",
+                    "message": "Save the answer first and send its attempt id.",
+                },
+            )
+        sessions = getattr(request.app.state, "db_sessions", None)
+        if sessions is None:
+            raise HTTPException(503, detail="Learning evidence is temporarily unavailable")
+        import hashlib
+
+        from nevo.db.models.mastery import ScaffoldProblemLog
+        from nevo.db.models.product import LessonQuestionAttempt
+
+        async with sessions() as session:
+            attempt = await session.get(LessonQuestionAttempt, payload.answer_attempt_id)
+            if (
+                attempt is None
+                or attempt.student_id != principal.user_id
+                or str(attempt.question_snapshot.get("conceptId")) != str(payload.concept_id)
+            ):
+                raise HTTPException(404, detail="Answer attempt not found")
+            key = hashlib.sha256(f"{attempt.session_id}:{attempt.question_id}".encode()).hexdigest()
+            log = await session.scalar(
+                select(ScaffoldProblemLog).where(
+                    ScaffoldProblemLog.student_id == principal.user_id,
+                    ScaffoldProblemLog.problem_id == key,
+                )
+            )
+            if log is None:
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "scaffold_evidence_pending",
+                        "message": "Finish the problem before recording its support state.",
+                    },
+                )
+        state = await service.current_state(
+            student_id=principal.user_id, concept_id=payload.concept_id
+        )
+        return ScaffoldDecisionResponse.from_decision(
+            ScaffoldDecision(
+                state=state,
+                previous_intensity=state.current_intensity,
+                next_intensity=state.current_intensity,
+                outcome=log.outcome,
+                level_changed=False,
+                change_reason=None,
+                student_message="",
+            )
+        )
+    sessions = getattr(request.app.state, "db_sessions", None)
+    if sessions is None:
+        raise HTTPException(503, detail="Learning evidence is temporarily unavailable")
+    from nevo.api.product_common import require_student_access
+
+    async with sessions() as session:
+        await require_student_access(session, principal, payload.student_id)
     correct = await _mark_scaffold_answer(request, payload)
     decision = await service.record_attempt(
         ScaffoldProblemAttempt(

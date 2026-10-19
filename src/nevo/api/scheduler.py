@@ -5,8 +5,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor, require_student_access
 from nevo.scheduler.entities import ConceptSchedule, ReviewResult
@@ -20,9 +22,9 @@ class ConceptScheduleResponse(BaseModel):
 
     student_id: UUID = Field(alias="studentId")
     concept_id: UUID = Field(alias="conceptId")
-    stability: float
-    difficulty: float
-    retrievability: float
+    stability: float | None
+    difficulty: float | None
+    retrievability: float | None
     last_review: datetime = Field(alias="lastReview")
     review_count: int = Field(alias="reviewCount")
     next_review_due: datetime = Field(alias="nextReviewDue")
@@ -42,6 +44,11 @@ class ConceptScheduleResponse(BaseModel):
             review_count=schedule.review_count,
             next_review_due=schedule.next_review_due,
             lesson_id=lesson_id if lesson_id is not None else schedule.lesson_id,
+        )
+
+    def for_student(self):
+        return self.model_copy(
+            update={"stability": None, "difficulty": None, "retrievability": None}
         )
 
 
@@ -75,17 +82,25 @@ class RecordReviewRequest(BaseModel):
 
     student_id: UUID = Field(alias="studentId")
     concept_id: UUID = Field(alias="conceptId")
-    #: Preferred. Send this and leave recallSuccessful out.
+    #: Compatibility staff recording; student outcomes come from stored answers.
     outcome: ReviewOutcome | None = None
     #: The older shape, still accepted so nothing in flight breaks. Ignored
     #: when ``outcome`` is sent.
     recall_successful: bool | None = Field(default=None, alias="recallSuccessful")
     reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
+    session_id: UUID | None = Field(
+        default=None,
+        alias="sessionId",
+        description=(
+            "Completed session with marked evidence. "
+            "Student outcomes and time are derived server-side."
+        ),
+    )
 
     @model_validator(mode="after")
     def one_of_the_two(self) -> "RecordReviewRequest":
-        if self.outcome is None and self.recall_successful is None:
-            raise ValueError("Send outcome, or recallSuccessful.")
+        if self.outcome is None and self.recall_successful is None and self.session_id is None:
+            raise ValueError("Send sessionId, outcome, or recallSuccessful.")
         return self
 
     @property
@@ -101,7 +116,7 @@ class RecordReviewResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     schedule: ConceptScheduleResponse
-    recall_successful: bool = Field(alias="recallSuccessful")
+    recall_successful: bool | None = Field(alias="recallSuccessful")
     #: Echoed back so a client can see which outcome the server scored, rather
     #: than inferring it from the bool.
     outcome: ReviewOutcome | None = None
@@ -148,10 +163,12 @@ async def due_reviews(
     principal: PrincipalDependency,
     service: SchedulerDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> list[ConceptScheduleResponse]:
     await require_student_access(session, principal, student_id)
     schedules = await service.due_reviews(student_id=student_id)
-    return [ConceptScheduleResponse.from_schedule(schedule) for schedule in schedules]
+    responses = [ConceptScheduleResponse.from_schedule(schedule) for schedule in schedules]
+    return [row.for_student() for row in responses] if principal.role == "student" else responses
 
 
 @router.post("/record-review", response_model=RecordReviewResponse)
@@ -160,8 +177,53 @@ async def record_review(
     principal: PrincipalDependency,
     service: SchedulerDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> RecordReviewResponse:
     await require_student_access(session, principal, payload.student_id)
+    if principal.role == "student":
+        from nevo.db.models.product import LessonQuestionAttempt
+        from nevo.db.models.signal_event import LessonSession
+        from nevo.intelligence.reviews import record_session_reviews
+
+        query = (
+            select(LessonSession)
+            .join(LessonQuestionAttempt, LessonQuestionAttempt.session_id == LessonSession.id)
+            .where(
+                LessonSession.student_id == principal.user_id,
+                LessonSession.completion_status == "completed",
+                LessonQuestionAttempt.question_snapshot["conceptId"].astext
+                == str(payload.concept_id),
+            )
+        )
+        if payload.session_id:
+            query = query.where(LessonSession.id == payload.session_id)
+        sitting = await session.scalar(query.order_by(LessonSession.ended_at.desc()).limit(1))
+        if sitting is None:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "review_evidence_required",
+                    "message": "Complete the review before recording its outcome.",
+                },
+            )
+        results = await record_session_reviews(session, principal.user_id, sitting.id)
+        evidence = results.get(payload.concept_id)
+        if evidence is None:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "review_evidence_required",
+                    "message": "There are no marked answers for this concept.",
+                },
+            )
+        await session.commit()
+        return RecordReviewResponse(
+            schedule=ConceptScheduleResponse.model_validate(
+                evidence.schedule_snapshot
+            ).for_student(),
+            recall_successful=None,
+            outcome=None,
+        )
     reviewed_at = payload.reviewed_at
     if reviewed_at is not None and reviewed_at.tzinfo is None:
         reviewed_at = reviewed_at.replace(tzinfo=UTC)

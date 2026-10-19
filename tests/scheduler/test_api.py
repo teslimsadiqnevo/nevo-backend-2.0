@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from nevo.api.auth import authenticated_principal
+from nevo.api.consent import require_learning_consent_if_student
 from nevo.api.dependencies import database_session
 from nevo.api.scheduler import router
 from nevo.auth.entities import AuthPrincipal
@@ -69,6 +70,7 @@ def client_for(*, role="student", user_id=None):
     app.state.scheduler_service = service
     app.dependency_overrides[authenticated_principal] = lambda: principal
     app.dependency_overrides[database_session] = lambda: object()
+    app.dependency_overrides[require_learning_consent_if_student] = lambda: None
     app.include_router(router)
     return TestClient(app), service, principal
 
@@ -96,7 +98,7 @@ def test_due_reviews_endpoint_returns_concepts_due_for_student() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body[0]["studentId"] == str(principal.user_id)
-    assert body[0]["retrievability"] == 0.82
+    assert body[0]["retrievability"] is None
 
 
 def test_student_cannot_view_another_students_due_reviews() -> None:
@@ -108,7 +110,7 @@ def test_student_cannot_view_another_students_due_reviews() -> None:
 
 
 def test_record_review_endpoint_updates_schedule() -> None:
-    client, service, principal = client_for()
+    client, service, principal = client_for(role="teacher")
     concept_id = uuid4()
 
     response = client.post(

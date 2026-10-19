@@ -72,7 +72,7 @@ from nevo.api.response_models import (
     UploadStructureDocument,
     UploadStructureResponse,
 )
-from nevo.content_parsing.chunks import reading_chunks
+from nevo.content_parsing.chunks import reading_chunks, reading_groups
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.failures import (
     UploadReasonCode,
@@ -606,7 +606,8 @@ async def _question_for_attempt(
                     "id": str(step.get("stepId")),
                     "prompt": str(step.get("prompt") or ""),
                     "answerKey": step.get("answer"),
-                    "acceptedAnswers": step.get("acceptedAnswers") or [],
+                    "acceptedAnswers": step.get("acceptedAnswers") or step.get("accepted") or [],
+                    "options": step.get("options") or [],
                     "hint": step.get("hint"),
                     "conceptId": str(concept_id) if concept_id else None,
                     "answerType": "numeric"
@@ -789,6 +790,11 @@ async def lesson_detail(
     # anywhere it is not needed is how it ends up rendered somewhere it should
     # not be. One route serves both, so it is omitted rather than removed.
     for_teacher = actor.role is not UserRole.STUDENT
+    from nevo.intelligence.session_delivery import lesson_delivery_config
+
+    reading_config = (
+        await lesson_delivery_config(session, actor, lesson_id) if not for_teacher else {}
+    )
     segments = (
         await session.scalars(
             select(LessonSegment)
@@ -831,6 +837,10 @@ async def lesson_detail(
                 "title": item.title,
                 "body": item.body,
                 "readingChunks": item.reading_chunks or reading_chunks(item.segment_key, item.body),
+                "readingGroups": reading_groups(
+                    item.reading_chunks or reading_chunks(item.segment_key, item.body),
+                    reading_config,
+                ),
                 "availableModalities": item.available_modalities,
                 "comprehensionCheckpoints": checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
@@ -1471,7 +1481,7 @@ async def save_lesson_progress(
     if not_attempted:
         progress.status = LessonCompletionStatus.IN_PROGRESS
     elif payload.status in {"completed", "exited"}:
-        lesson_session.ended_at = datetime.now(UTC)
+        lesson_session.ended_at = lesson_session.ended_at or datetime.now(UTC)
         lesson_session.completion_status = LessonCompletionStatus(payload.status)
     reroute: dict[str, object] | None = None
     nothing_landed = (
@@ -1905,7 +1915,7 @@ async def read_offline_manifest(
 
     del consent
     _actor, _lesson = await _lesson_for_actor(lesson_id, principal, session)
-    package = await _offline_package_payload(session, lesson_id)
+    package = await _offline_package_payload(session, lesson_id, _actor)
     archive = _offline_archive(package, lesson_id)
     return {
         "lessonId": str(lesson_id),
@@ -1942,8 +1952,8 @@ async def read_offline_package_json(
     """
 
     del consent
-    await _lesson_for_actor(lesson_id, principal, session)
-    return await _offline_package_payload(session, lesson_id)
+    actor, _ = await _lesson_for_actor(lesson_id, principal, session)
+    return await _offline_package_payload(session, lesson_id, actor)
 
 
 @router.post(
@@ -1967,7 +1977,7 @@ async def create_offline_download(
             OfflineDownload.lesson_id == lesson_id,
         )
     )
-    package = await _offline_package_payload(session, lesson_id)
+    package = await _offline_package_payload(session, lesson_id, actor)
     # Built here as well as on the GET, because a size the Downloads screen
     # can show has to be measured rather than estimated, and the only honest
     # measure is the archive itself. Ask B31.
@@ -2056,7 +2066,7 @@ async def offline_package(
     actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
-    payload = await _offline_package_payload(session, lesson_id)
+    payload = await _offline_package_payload(session, lesson_id, actor)
     content = _offline_archive(payload, lesson.id)
     filename = f"nevo-lesson-{lesson.id}.zip"
     return Response(
@@ -2634,7 +2644,16 @@ async def _names_for(session: DatabaseSession, user_ids: set[UUID | None]) -> di
     return named
 
 
-async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) -> dict[str, object]:
+async def _offline_package_payload(
+    session: DatabaseSession, lesson_id: UUID, actor: User | None = None
+) -> dict[str, object]:
+    from nevo.intelligence.session_delivery import lesson_delivery_config
+
+    config = (
+        await lesson_delivery_config(session, actor, lesson_id)
+        if actor and actor.role == UserRole.STUDENT
+        else {}
+    )
     lesson = await session.get(Lesson, lesson_id)
     modules = list(
         await session.scalars(
@@ -2658,7 +2677,7 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
     payload: dict[str, object] = {
         "id": str(lesson.id),
         "title": lesson.title,
-        "version": lesson.parser_version,
+        "version": str(lesson.parser_version),
         "modules": [
             {
                 "id": str(module.id),
@@ -2679,6 +2698,10 @@ async def _offline_package_payload(session: DatabaseSession, lesson_id: UUID) ->
                 "title": item.title,
                 "body": item.body,
                 "contentType": item.content_type.value,
+                "readingChunks": item.reading_chunks or reading_chunks(item.segment_key, item.body),
+                "readingGroups": reading_groups(
+                    item.reading_chunks or reading_chunks(item.segment_key, item.body), config
+                ),
                 "sequenceOrder": item.sequence_order,
                 "availableModalities": item.available_modalities,
                 "modalityVariants": {

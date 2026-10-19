@@ -46,7 +46,12 @@ def test_depth_delivery_retains_annotations_and_withholds_unreviewed_backfill():
     }
     values = {
         "simplified": {"body": "A part.", "reviewStatus": "pending"},
-        "expanded": {"body": "A part of the original whole."},
+        "expanded": {
+            "body": "A part of the original whole.",
+            "reviewStatus": "approved",
+            "reviewedBy": "e95735bc-85c7-4c82-bac4-401a564333c2",
+            "reviewedAt": "2026-10-19T09:00:00Z",
+        },
     }
     teacher = depth_payloads(values, annotation)
     assert teacher["simplified"]["equationCallouts"][0]["equation"] == "a + b = c"
@@ -60,6 +65,66 @@ def test_depth_rewrite_cannot_drop_a_source_equation():
 
     source = "An equation connects the quantities.\nx + y = z\n" + "Read the parts carefully. " * 12
     assert accept("An equation connects quantities.", source=source, shorter=True) is None
+
+
+def test_depth_rewrite_cannot_drop_substantive_nonnumeric_claims():
+    from nevo.content_parsing.depth import accept
+
+    source = (
+        "Photosynthesis uses light energy to turn water and carbon dioxide into food. "
+        "Chlorophyll captures light. Oxygen is released as a by-product."
+    )
+    assert (
+        accept(
+            "Plants use light to make food from water and carbon dioxide.",
+            source=source,
+            shorter=True,
+        )
+        is None
+    )
+
+
+def test_a_missing_depth_review_is_not_an_approval():
+    from nevo.api.lesson_contracts import depth_payloads
+
+    assert "simplified" not in depth_payloads(
+        {"simplified": {"body": "Short text."}}, {}, for_student=True
+    )
+
+
+def test_reading_groups_change_pace_without_changing_anchors():
+    from nevo.content_parsing.chunks import reading_groups
+
+    chunks = [{"id": str(index), "text": "word " * 40} for index in range(6)]
+    normal = reading_groups(chunks, {"reading": {"segmentWordTarget": 180}})
+    smaller = reading_groups(chunks, {"support": {"shorterTextBlocks": True}})
+    assert len(smaller) > len(normal)
+    assert [key for group in smaller for key in group["chunkIds"]] == [str(i) for i in range(6)]
+    assert max(group["wordCount"] for group in smaller) <= 80
+
+
+def test_attention_and_number_results_change_only_their_delivery_settings():
+    from nevo.intelligence.baseline import build_baseline_profile, reduce_trials
+
+    def infer(correct):
+        rows = [
+            {
+                "dimension": "attention",
+                "condition": condition,
+                "correct": correct,
+                "responseTimeMs": timing,
+            }
+            for condition, timing in [("congruent", 400), ("incongruent", 1200)]
+        ]
+        rows.extend({"dimension": "ans", "correct": correct, "dotRatio": 1.2} for _ in range(3))
+        return build_baseline_profile(session_id="test", features=reduce_trials(rows))
+
+    weaker, support = infer(False)
+    stronger, normal = infer(True)
+    assert weaker["attention_span_minutes"] < stronger["attention_span_minutes"]
+    assert support["support"]["numericalVisuals"] is True
+    assert normal["support"]["numericalVisuals"] is False
+    assert weaker["measurements"]["ans"]["mean_dot_ratio"] == 1.2
 
 
 @pytest.mark.parametrize(

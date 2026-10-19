@@ -20,6 +20,7 @@ from nevo.api.lesson_contracts import (
     DepthVariants,
     InteractiveVariant,
     ReadingChunk,
+    ReadingGroup,
     TextVariant,
     VisualVariant,
     segment_modalities,
@@ -513,6 +514,7 @@ class LessonSegmentResponse(CamelResponse):
     title: str | None
     body: str
     reading_chunks: list[ReadingChunk] = Field(default_factory=list)
+    reading_groups: list[ReadingGroup] = Field(default_factory=list)
     #: Which concept this segment teaches. SCRUM-177, ask B25.
     concept_id: UUID | None = None
     available_modalities: list[str]
@@ -1000,6 +1002,7 @@ class OfflinePackageSegment(CamelResponse):
     title: str | None = None
     body: str
     reading_chunks: list[ReadingChunk] = Field(default_factory=list)
+    reading_groups: list[ReadingGroup] = Field(default_factory=list)
     content_type: LessonContentType
     sequence_order: int
     available_modalities: list[str] = Field(default_factory=list)
@@ -1461,8 +1464,8 @@ class ConceptProgressResponse(CamelResponse):
     lesson_id: UUID | None
     name: str
     subject: str | None
-    understanding: float
-    reading: float
+    understanding: float | None
+    reading: float | None
     practice_count: int
 
 

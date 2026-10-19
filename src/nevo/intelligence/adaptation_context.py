@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 
-from nevo.api.lesson_contracts import segment_modalities
+from nevo.api.lesson_contracts import depth_approved, segment_modalities
 from nevo.api.product_common import actor_user
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import LessonAssignment
@@ -145,7 +145,7 @@ async def prepare_adaptation(session, principal, payload, signals):
                     if key in {"simplified", "expanded"}
                     and isinstance(value, dict)
                     and value.get("body")
-                    and value.get("reviewStatus") != "pending"
+                    and depth_approved(value)
                 ),
                 hints=hints,
                 guided_questions=questions,

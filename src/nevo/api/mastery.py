@@ -53,8 +53,8 @@ class MasteryStateResponse(BaseModel):
     student_id: UUID = Field(alias="studentId")
     concept_id: UUID = Field(alias="conceptId")
     concept_name: str | None = Field(default=None, alias="conceptName")
-    mastery_probability_concept: float = Field(alias="masteryProbabilityConcept")
-    mastery_probability_reading: float = Field(alias="masteryProbabilityReading")
+    mastery_probability_concept: float | None = Field(alias="masteryProbabilityConcept")
+    mastery_probability_reading: float | None = Field(alias="masteryProbabilityReading")
     attention_weights: dict[str, float] = Field(alias="attentionWeights")
     practice_count: int = Field(alias="practiceCount")
     last_response_correct: bool | None = Field(alias="lastResponseCorrect")
@@ -82,6 +82,18 @@ class MasteryStateResponse(BaseModel):
             last_response_correct=state.last_response_correct,
             last_failure_attribution=state.last_failure_attribution,
             seeding_source=state.seeding_source,
+        )
+
+    def for_student(self):
+        return self.model_copy(
+            update={
+                "mastery_probability_concept": None,
+                "mastery_probability_reading": None,
+                "attention_weights": {},
+                "last_response_correct": None,
+                "last_failure_attribution": FailureAttribution.NONE,
+                "seeding_source": "server_marked",
+            }
         )
 
 
@@ -174,9 +186,11 @@ async def update_mastery(
                     "message": "This answer carries no marked learning evidence.",
                 },
             )
-        return MasteryUpdateResponse.from_result(
+        receipt = MasteryUpdateResponse.from_result(
             MasteryUpdateResult(state=state, attention_transfer=0, recommended_modality_shift=False)
         )
+        receipt.mastery = receipt.mastery.for_student()
+        return receipt
     result = await service.update(
         MasteryUpdate(
             student_id=payload.student_id,
@@ -198,7 +212,8 @@ async def student_mastery(
 ) -> list[MasteryStateResponse]:
     await require_student_access(session, principal, student_id)
     records = await service.student_mastery(student_id)
-    return [MasteryStateResponse.from_state(record) for record in records]
+    responses = [MasteryStateResponse.from_state(record) for record in records]
+    return [row.for_student() for row in responses] if principal.role == "student" else responses
 
 
 @router.get("/class/{class_id}", response_model=list[ConceptMasteryAggregateResponse])
@@ -208,6 +223,8 @@ async def class_mastery(
     service: MasteryDependency,
     session: DatabaseSession,
 ) -> list[ConceptMasteryAggregateResponse]:
+    if principal.role not in {"teacher", "senco_admin", "other_admin"}:
+        raise HTTPException(403, detail="Staff account required")
     await require_class_access(session, principal, class_id)
     records = await service.class_mastery(class_id)
     return [ConceptMasteryAggregateResponse.from_aggregate(record) for record in records]
@@ -220,6 +237,8 @@ async def school_mastery(
     service: MasteryDependency,
     session: DatabaseSession,
 ) -> list[ConceptMasteryAggregateResponse]:
+    if principal.role not in {"senco_admin", "other_admin"}:
+        raise HTTPException(403, detail="School administrator required")
     actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
     if actor.school_id != school_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="School not found")

@@ -16,6 +16,18 @@ INTENSITY_ORDER = (
 )
 
 
+def initial_scaffold_intensity(config):
+    return {
+        "strong": ScaffoldIntensity.FULL_SUPPORT,
+        "standard": ScaffoldIntensity.PARTIAL_SUPPORT,
+        "light": ScaffoldIntensity.HINTS_ONLY,
+        "none": ScaffoldIntensity.INDEPENDENT,
+    }.get(
+        (config.get("support") or {}).get("initialScaffoldLevel", "standard"),
+        ScaffoldIntensity.PARTIAL_SUPPORT,
+    )
+
+
 class ProgressiveScaffoldFadingEngine:
     def initial_state(
         self,
@@ -82,11 +94,8 @@ def _mastery_signal_met(
     state: ScaffoldConceptState,
     attempt: ScaffoldProblemAttempt,
 ) -> bool:
-    if not attempt.response_correct:
+    if not attempt.response_correct or attempt.hint_count > 0:
         return False
-    if attempt.expected_response_time_ms and attempt.response_time_ms:
-        if attempt.response_time_ms > attempt.expected_response_time_ms * 1.5:
-            return False
     if state.last_hint_count is not None and attempt.hint_count > state.last_hint_count:
         return False
     return True

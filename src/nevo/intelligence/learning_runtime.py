@@ -17,8 +17,9 @@ from nevo.db.models.mastery import (
     StudentConceptScheduling,
 )
 from nevo.db.models.product import LessonQuestionAttempt
+from nevo.db.models.signal_event import LessonSession
 from nevo.intelligence.entities import ScaffoldConceptState, ScaffoldProblemAttempt
-from nevo.intelligence.scaffolds import ProgressiveScaffoldFadingEngine
+from nevo.intelligence.scaffolds import ProgressiveScaffoldFadingEngine, initial_scaffold_intensity
 from nevo.mastery.engine import HybridAktMasteryEngine, reading_seed_from_wpm
 from nevo.mastery.entities import BaselineMasterySeed, MasteryState, MasteryUpdate
 from nevo.scheduler.fsrs import initial_schedule
@@ -28,62 +29,9 @@ MASTERY_THRESHOLD = 0.7
 
 
 async def seed_completed_lesson_reviews(session, student_id, session_id):
-    attempts = list(
-        await session.scalars(
-            select(LessonQuestionAttempt)
-            .where(
-                LessonQuestionAttempt.student_id == student_id,
-                LessonQuestionAttempt.session_id == session_id,
-                LessonQuestionAttempt.correct.is_not(None),
-            )
-            .order_by(LessonQuestionAttempt.submitted_at)
-        )
-    )
-    outcomes = {}
-    for attempt in attempts:
-        key = (attempt.question_snapshot or {}).get("conceptId")
-        if key:
-            outcomes[UUID(str(key))] = bool(attempt.correct)
-    existing = set(
-        await session.scalars(
-            select(StudentConceptScheduling.concept_id).where(
-                StudentConceptScheduling.student_id == student_id,
-                StudentConceptScheduling.concept_id.in_(outcomes),
-            )
-        )
-    )
-    valid = set(
-        await session.scalars(
-            select(Concept.id)
-            .join(User, User.school_id == Concept.school_id)
-            .where(User.id == student_id, Concept.id.in_(outcomes))
-        )
-    )
-    for concept_id, successful in outcomes.items():
-        if concept_id in existing or concept_id not in valid:
-            continue
-        schedule = initial_schedule(
-            student_id=student_id,
-            concept_id=concept_id,
-            recall_successful=successful,
-            reviewed_at=datetime.now(UTC),
-        )
-        session.add(
-            StudentConceptScheduling(
-                **{
-                    name: getattr(schedule, name)
-                    for name in (
-                        "student_id",
-                        "concept_id",
-                        "stability",
-                        "difficulty",
-                        "last_review",
-                        "review_count",
-                        "next_review_due",
-                    )
-                }
-            )
-        )
+    from nevo.intelligence.reviews import record_session_reviews
+
+    return await record_session_reviews(session, student_id, session_id)
 
 
 def onboarding_modules(profile: dict) -> set[str]:
@@ -226,6 +174,18 @@ async def apply_marked_attempt(
     """Run once in the answer transaction; retries return the existing attempt."""
     if attempt.correct is None:
         return
+    if attempt.correct and await session.scalar(
+        select(LessonQuestionAttempt.id)
+        .where(
+            LessonQuestionAttempt.session_id == attempt.session_id,
+            LessonQuestionAttempt.question_id == attempt.question_id,
+            LessonQuestionAttempt.source == attempt.source,
+            LessonQuestionAttempt.attempt_number < attempt.attempt_number,
+            LessonQuestionAttempt.correct.is_(True),
+        )
+        .limit(1)
+    ):
+        return
     question = attempt.question_snapshot
     concept_id = question.get("conceptId")
     if not concept_id:
@@ -242,6 +202,34 @@ async def apply_marked_attempt(
         .with_for_update()
     )
     engine = HybridAktMasteryEngine()
+    effective_hints = attempt.hint_count
+    if question.get("calculationComplete") is True:
+        parts = list(
+            await session.scalars(
+                select(LessonQuestionAttempt).where(
+                    LessonQuestionAttempt.session_id == attempt.session_id,
+                    LessonQuestionAttempt.segment_id == attempt.segment_id,
+                    LessonQuestionAttempt.source == "calculation",
+                )
+            )
+        )
+        hints = {}
+        for part in parts:
+            hints[part.question_id] = max(hints.get(part.question_id, 0), part.hint_count)
+        effective_hints = sum(hints.values())
+    related_ids = tuple(UUID(value) for value in (concept.prerequisite_ids or []))
+    related_mastery = {
+        item.concept_id: item.mastery_probability_concept
+        for item in await session.scalars(
+            select(StudentConceptMastery)
+            .join(Concept, Concept.id == StudentConceptMastery.concept_id)
+            .where(
+                StudentConceptMastery.student_id == user.id,
+                StudentConceptMastery.concept_id.in_(related_ids),
+                Concept.school_id == user.school_id,
+            )
+        )
+    }
     if row is None:
         placements = (user.baseline_profile or {}).get("subject_placements") or {}
         placement = placements.get((concept.subject or "").casefold(), 0.15)
@@ -257,6 +245,7 @@ async def apply_marked_attempt(
                 if (concept.subject or "").casefold() in placements
                 else "baseline_profile",
             ),
+            related_concept_ids=related_ids,
         )
     else:
         state = MasteryState(
@@ -280,9 +269,10 @@ async def apply_marked_attempt(
             ),
             response_time_ms=attempt.response_time_ms,
             minimum_response_time_ms=minimum_reading_time(question),
-            hint_count=attempt.hint_count,
+            hint_count=effective_hints,
+            related_concept_ids=related_ids,
         ),
-        related_mastery={},
+        related_mastery=related_mastery,
     )
     values = {
         name: getattr(result.state, name)
@@ -302,7 +292,7 @@ async def apply_marked_attempt(
     if attempt.correct and not trusted:
         return
     if attempt.source != "calculation" or question.get("calculationComplete") is True:
-        await _scaffold_attempt(session, user.id, concept.id, attempt)
+        await _scaffold_attempt(session, user, concept.id, attempt)
     if (
         result.state.mastery_probability_concept >= MASTERY_THRESHOLD
         and result.state.practice_count >= 3
@@ -338,7 +328,8 @@ async def apply_marked_attempt(
             )
 
 
-async def _scaffold_attempt(session, student_id, concept_id, attempt):
+async def _scaffold_attempt(session, user, concept_id, attempt):
+    student_id = user.id
     problem_id = hashlib.sha256(f"{attempt.session_id}:{attempt.question_id}".encode()).hexdigest()
     recorded = await session.scalar(
         select(ScaffoldProblemLog.id).where(
@@ -357,22 +348,45 @@ async def _scaffold_attempt(session, student_id, concept_id, attempt):
         .with_for_update()
     )
     engine = ProgressiveScaffoldFadingEngine()
+    sitting = await session.get(LessonSession, attempt.session_id)
+    config = (sitting.delivery_state or {}).get("engineConfig") if sitting else None
+    config = config or user.engine_config or {}
+    initial = initial_scaffold_intensity(config)
     state = (
         ScaffoldConceptState(
             **{name: getattr(row, name) for name in ScaffoldConceptState.__dataclass_fields__}
         )
         if row
-        else engine.initial_state(student_id=student_id, concept_id=concept_id)
+        else ScaffoldConceptState(
+            student_id=student_id, concept_id=concept_id, current_intensity=initial
+        )
     )
+    hint_count = attempt.hint_count
+    independent = bool(attempt.correct) and attempt.attempt_number == 1
+    if attempt.source == "calculation":
+        steps = list(
+            await session.scalars(
+                select(LessonQuestionAttempt).where(
+                    LessonQuestionAttempt.session_id == attempt.session_id,
+                    LessonQuestionAttempt.segment_id == attempt.segment_id,
+                    LessonQuestionAttempt.source == "calculation",
+                )
+            )
+        )
+        hints = {}
+        for step in steps:
+            hints[step.question_id] = max(hints.get(step.question_id, 0), step.hint_count)
+        hint_count = sum(hints.values())
+        independent = independent and not any(step.correct is False for step in steps)
     decision = engine.record_attempt(
         state=state,
         attempt=ScaffoldProblemAttempt(
             student_id=student_id,
             concept_id=concept_id,
             problem_id=f"{attempt.session_id}:{attempt.question_id}",
-            response_correct=bool(attempt.correct),
+            response_correct=independent,
             response_time_ms=attempt.response_time_ms,
-            hint_count=attempt.hint_count,
+            hint_count=hint_count,
         ),
     )
     values = {
@@ -397,7 +411,7 @@ async def _scaffold_attempt(session, student_id, concept_id, attempt):
             outcome=decision.outcome,
             response_time_ms=attempt.response_time_ms,
             expected_response_time_ms=None,
-            hint_count=attempt.hint_count,
+            hint_count=hint_count,
             level_changed=decision.level_changed,
             change_reason=decision.change_reason,
         )

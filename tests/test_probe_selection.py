@@ -18,6 +18,7 @@ from nevo.probe.selection import (
     after,
     choose,
     entry_point,
+    item_information,
     recalibrate,
     start,
 )
@@ -33,6 +34,13 @@ def run(answers: list[bool]):
 def test_a_right_answer_goes_harder_and_a_wrong_one_goes_easier() -> None:
     assert after(start(), correct=True).estimate > start().estimate
     assert after(start(), correct=False).estimate < start().estimate
+
+
+def test_rasch_posterior_uses_observed_item_difficulty():
+    easy = after(start(), correct=True, difficulty=0.2)
+    hard = after(start(), correct=True, difficulty=0.8)
+    assert hard.estimate > easy.estimate
+    assert abs(sum(hard.posterior) - 1) < 1e-12
 
 
 def test_the_step_halves_so_the_run_narrows_rather_than_oscillating() -> None:
@@ -76,8 +84,8 @@ def test_the_entry_point_is_bounded_away_from_certainty() -> None:
     assert entry_point(run([False] * 8)) >= 0.15
 
 
-def test_the_next_item_is_the_one_nearest_the_current_estimate() -> None:
-    state = after(start(), correct=True)  # estimate 0.75
+def test_the_next_item_maximises_posterior_expected_information() -> None:
+    state = after(start(), correct=True)
 
     chosen = choose(
         state,
@@ -85,7 +93,10 @@ def test_the_next_item_is_the_one_nearest_the_current_estimate() -> None:
         already_asked=set(),
     )
 
-    assert chosen == "hard"
+    difficulties = {"easy": 0.1, "middle": 0.5, "hard": 0.8}
+    assert item_information(state, difficulties[chosen]) == max(
+        item_information(state, value) for value in difficulties.values()
+    )
 
 
 def test_nothing_is_asked_twice_in_one_run() -> None:

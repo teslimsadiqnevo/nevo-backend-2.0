@@ -298,6 +298,10 @@ class LessonQuestionAttempt(Base):
     __tablename__ = "lesson_question_attempts"
     __table_args__ = (
         CheckConstraint(
+            "source IN ('checkpoint', 'assessment', 'calculation')",
+            name="lesson_question_attempt_source_valid",
+        ),
+        CheckConstraint(
             "response_time_ms IS NULL OR response_time_ms >= 0", name="ck_attempt_response_time"
         ),
         CheckConstraint("hint_count >= 0", name="ck_attempt_hint_count"),

@@ -5,6 +5,21 @@ from nevo.mastery.engine import HybridAktMasteryEngine
 from nevo.mastery.entities import BaselineMasterySeed, MasteryUpdate
 
 
+def test_bkt_uses_guess_slip_and_transition():
+    from nevo.mastery.engine import bkt_update
+
+    assert (
+        abs(
+            bkt_update(0.5, correct=True, guess=0.2, slip=0.1, transition=0.16)
+            - (0.45 / 0.55 + (1 - 0.45 / 0.55) * 0.16)
+        )
+        < 1e-9
+    )
+    assert bkt_update(0.5, correct=True, guess=0.9, slip=0.1, transition=0.16) < bkt_update(
+        0.5, correct=True, guess=0.2, slip=0.1, transition=0.16
+    )
+
+
 def test_text_heavy_failure_with_low_reading_does_not_depress_concept_mastery() -> None:
     engine = HybridAktMasteryEngine()
     student_id = uuid4()

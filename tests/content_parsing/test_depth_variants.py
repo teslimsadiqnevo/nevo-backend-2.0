@@ -35,8 +35,10 @@ BODY = (
     "interest is 600 naira, so she ends the period with 5600 naira in total."
 )
 SHORTER = (
-    "Multiply principal, rate and years, then divide by 100. "
-    "5000 naira at 4 per cent for 3 years earns 600 naira, making 5600 naira."
+    "Simple interest uses principal (money you start with), rate (percentage charged "
+    "each year), and time in years. Multiply principal, rate and time; divide by 100. "
+    "Ada saves 5000 naira at 4 per cent for 3 years: interest is 600 naira; "
+    "the period ends with 5600 naira in total."
 )
 
 
@@ -119,8 +121,10 @@ async def test_both_versions_are_written_and_keyed_by_the_engines_actions() -> N
     # made while a child is waiting.
     assert gateway.requests[0].service is AiService.LESSON_GENERATION
     payload = variants.payload(model=model)
-    assert payload["simplified"] == {"body": shorter}
-    assert payload["expanded"] == {"body": longer}
+    assert payload["simplified"]["body"] == shorter
+    assert payload["expanded"]["body"] == longer
+    assert payload["simplified"]["reviewStatus"] == "pending"
+    assert payload["expanded"]["reviewStatus"] == "pending"
 
 
 async def test_a_fenced_answer_is_still_read() -> None:

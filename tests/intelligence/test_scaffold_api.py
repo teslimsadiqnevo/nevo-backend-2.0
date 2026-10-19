@@ -84,7 +84,7 @@ def test_current_scaffold_state_endpoint_returns_level_for_student() -> None:
     assert response.json()["currentIntensity"] == "full_support"
 
 
-def test_record_attempt_endpoint_returns_next_scaffold_level() -> None:
+def test_student_cannot_set_support_from_a_client_verdict() -> None:
     client, service, principal = client_for()
     concept_id = uuid4()
 
@@ -101,11 +101,9 @@ def test_record_attempt_endpoint_returns_next_scaffold_level() -> None:
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["nextIntensity"] == "partial_support"
-    assert body["changeReason"] == "mastery_signals_accumulated"
-    assert service.recorded[0].concept_id == concept_id
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "server_marked_attempt_required"
+    assert service.recorded == []
 
 
 def test_student_cannot_write_another_students_scaffold_state() -> None:

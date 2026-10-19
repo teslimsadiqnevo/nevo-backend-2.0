@@ -62,7 +62,7 @@ class ProbeFinished(CamelResponse):
     subject_id: UUID
     #: 0 to 1, bounded away from certainty at both ends. The starting mastery
     #: estimate the knowledge graph is seeded with.
-    entry_point: float
+    entry_point: float | None = None
     asked: int
 
 
@@ -95,7 +95,7 @@ async def _state(session: DatabaseSession, *, student_id: UUID, subject_id: UUID
 
     rows = (
         await session.execute(
-            select(ProbeResponse.correct)
+            select(ProbeResponse.correct, ProbeResponse.difficulty_at_the_time)
             .where(
                 ProbeResponse.student_id == student_id,
                 ProbeResponse.school_subject_id == subject_id,
@@ -104,9 +104,9 @@ async def _state(session: DatabaseSession, *, student_id: UUID, subject_id: UUID
         )
     ).all()
     state = start()
-    for (correct,) in rows:
+    for correct, difficulty in rows:
         if correct is not None:
-            state = after(state, correct=correct)
+            state = after(state, correct=correct, difficulty=difficulty)
     return state
 
 
@@ -133,6 +133,13 @@ async def _finish(session, student, result):
         placements[str(result.subject_id)] = result.entry_point
         placements[subject.name.casefold()] = result.entry_point
         baseline["subject_placements"] = placements
+        models = dict(baseline.get("subject_placement_models") or {})
+        models[str(result.subject_id)] = {
+            "model": "rasch_1pl_eap_v1",
+            "standard_error_logit": state.step * 6,
+            "item_calibration": "provisional",
+        }
+        baseline["subject_placement_models"] = models
     baseline["domain_probe_status"] = (
         "completed" if state.asked else "completed_without_scored_answers"
     )
@@ -142,7 +149,7 @@ async def _finish(session, student, result):
         baseline.setdefault("onboarding_completed_at", datetime.now(UTC).isoformat())
     student.baseline_profile = baseline
     await session.commit()
-    return result
+    return result.model_copy(update={"entry_point": None})
 
 
 @router.get(

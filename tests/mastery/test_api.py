@@ -167,9 +167,8 @@ def test_get_endpoints_return_mastery_data() -> None:
     school_response = client.get(f"/api/mastery/school/{uuid4()}")
 
     assert student_response.status_code == 200
-    assert student_response.json()[0]["masteryProbabilityConcept"] == 0.42
-    assert class_response.status_code == 200
-    assert class_response.json()[0]["studentCount"] == 12
-    assert class_response.json()[0]["conceptName"] == "Fractions"
-    assert school_response.status_code == 200
-    assert school_response.json()[0]["studentCount"] == 120
+    assert student_response.json()[0]["masteryProbabilityConcept"] is None
+    assert student_response.json()[0]["masteryProbabilityReading"] is None
+    assert student_response.json()[0]["attentionWeights"] == {}
+    assert class_response.status_code == 403
+    assert school_response.status_code == 403

@@ -3,6 +3,35 @@ import re
 from collections import defaultdict
 
 
+def reading_groups(chunks, config):
+    """Group immutable source anchors; never invalidate saved annotations."""
+    reading, support = config.get("reading") or {}, config.get("support") or {}
+    target = 80 if support.get("shorterTextBlocks") else reading.get("segmentWordTarget", 180)
+    target = max(80, min(260, int(target)))
+    groups, held, words = [], [], 0
+    for chunk in chunks:
+        size = len(str(chunk["text"]).split())
+        if held and words + size > target:
+            groups.append(held)
+            held, words = [], 0
+        held.append(chunk)
+        words += size
+    if held:
+        groups.append(held)
+    return [
+        {
+            "id": "group-"
+            + hashlib.sha256(":".join(str(chunk["id"]) for chunk in group).encode()).hexdigest()[
+                :20
+            ],
+            "chunkIds": [chunk["id"] for chunk in group],
+            "wordCount": sum(len(str(chunk["text"]).split()) for chunk in group),
+            "pauseAfter": bool(support.get("pauseBetweenSegments")),
+        }
+        for group in groups
+    ]
+
+
 def reading_chunks(
     segment_key: str,
     body: str,

@@ -42,7 +42,14 @@ scaffold_outcome_enum = Enum(
 
 class StudentConceptMastery(Base):
     __tablename__ = "student_concept_mastery"
+    model_version: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="bkt_reading_v2", server_default="legacy_v1"
+    )
+    transition_probability: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.16, server_default="0.16"
+    )
     __table_args__ = (
+        CheckConstraint("transition_probability BETWEEN 0 AND 1", name="mastery_transition_range"),
         UniqueConstraint(
             "student_id",
             "concept_id",

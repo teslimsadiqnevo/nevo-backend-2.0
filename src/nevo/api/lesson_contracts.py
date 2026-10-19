@@ -38,6 +38,15 @@ class ReadingChunk(BaseModel):
     end_offset: int = Field(alias="endOffset", ge=0)
 
 
+class ReadingGroup(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    chunk_ids: list[str] = Field(alias="chunkIds")
+    word_count: int = Field(alias="wordCount", ge=0)
+    pause_after: bool = Field(default=False, alias="pauseAfter")
+
+
 class CheckpointOption(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -82,7 +91,8 @@ class DepthVariantBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     body: str = ""
-    review_status: Literal["approved", "pending"] = Field(default="approved", alias="reviewStatus")
+    review_status: Literal["approved", "pending"] = Field(default="pending", alias="reviewStatus")
+    source_claims: list[str] = Field(default_factory=list, alias="sourceClaims")
     reviewed_by: UUID | None = Field(default=None, alias="reviewedBy")
     reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
     key_terms: list["KeyTerm"] = Field(default_factory=list, alias="keyTerms")
@@ -103,7 +113,7 @@ def depth_payloads(values, text_variant, *, for_student=False):
         item = values.get(key)
         if not isinstance(item, dict) or not item.get("body"):
             continue
-        if for_student and item.get("reviewStatus") == "pending":
+        if for_student and not depth_approved(item):
             continue
         result[key] = {
             **item,
@@ -111,6 +121,14 @@ def depth_payloads(values, text_variant, *, for_student=False):
             "equationCallouts": source.get("equationCallouts") or [],
         }
     return result
+
+
+def depth_approved(value):
+    return (
+        isinstance(value, dict)
+        and value.get("reviewStatus") == "approved"
+        and bool(value.get("reviewedBy") and value.get("reviewedAt"))
+    )
 
 
 class DepthVariants(BaseModel):
@@ -425,6 +443,8 @@ class CalculationStep(BaseModel):
             return value
         item = dict(value)
         expected = str(item.get("expectedInput") or item.get("expected_input") or "")
+        if not item.get("acceptedAnswers") and not item.get("accepted_answers"):
+            item["acceptedAnswers"] = item.get("accepted") or []
         item.setdefault(
             "input",
             {"selection": "choice", "numeric": "number", "drag": "tap", "text": "choice"}.get(

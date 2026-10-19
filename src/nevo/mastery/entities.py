@@ -25,6 +25,8 @@ class MasteryState:
     last_response_correct: bool | None
     last_failure_attribution: FailureAttribution
     seeding_source: str = "default"
+    transition_probability: float = 0.16
+    model_version: str = "bkt_reading_v2"
 
 
 @dataclass(frozen=True, slots=True)

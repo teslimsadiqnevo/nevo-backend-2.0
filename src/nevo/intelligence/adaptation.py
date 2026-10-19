@@ -206,9 +206,9 @@ class SqlAlchemyLearnerProfileRepository:
             profile = await session.scalar(
                 select(LearnerProfile).where(LearnerProfile.learner_id == student_id)
             )
+            user = await session.get(User, student_id)
+            baseline = (user.baseline_profile or {}) if user else {}
             if profile is None:
-                user = await session.get(User, student_id)
-                baseline = (user.baseline_profile or {}) if user else {}
                 return replace(
                     balanced_profile(),
                     working_memory_capacity=baseline.get("working_memory_capacity"),
@@ -217,8 +217,12 @@ class SqlAlchemyLearnerProfileRepository:
                     else None,
                 )
         return LearnerProfileSnapshot(
-            working_memory_capacity=profile.working_memory_capacity,
-            attention_span=profile.attention_span,
+            working_memory_capacity=baseline.get(
+                "working_memory_capacity", profile.working_memory_capacity
+            ),
+            attention_span=round(baseline["attention_span_minutes"])
+            if baseline.get("attention_span_minutes")
+            else profile.attention_span,
         )
 
 

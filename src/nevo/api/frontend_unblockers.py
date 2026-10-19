@@ -77,7 +77,7 @@ from nevo.api.response_models import (
 from nevo.api.response_models import (
     LessonModuleResponse as SharedLessonModuleResponse,
 )
-from nevo.content_parsing.chunks import reading_chunks
+from nevo.content_parsing.chunks import reading_chunks, reading_groups
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
@@ -102,6 +102,7 @@ from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.probe import ProbeItem
 from nevo.db.models.product import LessonModule
 from nevo.db.models.signal_event import LessonSession, SignalEvent
+from nevo.db.models.subject import ClassSubject, SchoolSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.age_bands import AgeBand
 from nevo.domain.accounts.vocabulary import (
@@ -436,6 +437,8 @@ class BaselineTrial(BaseModel):
     #: generated on the device and we hold no key for them; where an item came
     #: from the probe bank the server has the answer and marks it itself.
     correct: bool | None = None
+    sequence_length: int | None = Field(default=None, alias="sequenceLength", ge=1, le=30)
+    dot_ratio: float | None = Field(default=None, alias="dotRatio", gt=1, le=100)
     response_time_ms: int | None = Field(default=None, alias="responseTimeMs", ge=0, le=600_000)
     probe_item_id: UUID | None = Field(default=None, alias="probeItemId")
     #: One tile-memory trial is one completed recall, not one tap. ``skipped``
@@ -499,6 +502,12 @@ class BaselineSubmitResponse(BaseModel):
     baseline_profile: dict[str, object] = Field(alias="baselineProfile")
     engine_config: dict[str, object] = Field(alias="engineConfig")
 
+    @field_validator("baseline_profile", mode="before")
+    @classmethod
+    def withhold_measurements(cls, value):
+        """Compatibility field, not a way to send an estimate to a learner."""
+        return {}
+
 
 class BaselinePromptResponse(BaseModel):
     duration_seconds: Literal[45] = Field(default=45, alias="durationSeconds")
@@ -545,6 +554,8 @@ class BaselinePromptAnswer(BaseModel):
     #: answered the served question.
     item_id: str | None = Field(default=None, alias="itemId", max_length=80)
     value: str | None = Field(default=None, max_length=200)
+    trials: list[BaselineTrial] = Field(default_factory=list, max_length=100)
+    form_factor: BaselineFormFactor | None = Field(default=None, alias="formFactor")
 
     @model_validator(mode="after")
     def _an_answer_or_a_completion(self) -> "BaselinePromptAnswer":
@@ -563,6 +574,9 @@ class BaselinePromptResult(BaseModel):
     dimension: BaselineDimension
     done_today: bool = Field(default=True, alias="doneToday")
     answered_at: datetime = Field(alias="answeredAt")
+    measurement_status: Literal["recalibrated", "unavailable", "receipt_only"] = Field(
+        default="receipt_only", alias="measurementStatus"
+    )
 
 
 class BaselinePromptOption(BaseModel):
@@ -1271,6 +1285,13 @@ async def lesson_detail(
         await _lesson_for_actor(lesson_id, principal, session)
         await ensure_onboarding(session, actor)
     modules = delivery_modules(lesson.id, segments, modules)
+    from nevo.intelligence.session_delivery import lesson_delivery_config
+
+    reading_config = (
+        await lesson_delivery_config(session, actor, lesson_id)
+        if actor.role == UserRole.STUDENT
+        else {}
+    )
     return LessonDetailResponse(
         **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)).model_dump(
             by_alias=True
@@ -1289,6 +1310,10 @@ async def lesson_detail(
                 title=item.title,
                 body=item.body,
                 readingChunks=item.reading_chunks or reading_chunks(item.segment_key, item.body),
+                readingGroups=reading_groups(
+                    item.reading_chunks or reading_chunks(item.segment_key, item.body),
+                    reading_config,
+                ),
                 availableModalities=list(item.available_modalities),
                 comprehensionCheckpoints=checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
@@ -1664,7 +1689,11 @@ async def approve_segment(
         segment.approved_by = user.id
     variants = dict(segment.depth_variants or {})
     for key in ("simplified", "expanded"):
-        if isinstance(variants.get(key), dict) and variants[key].get("reviewStatus") == "pending":
+        if isinstance(variants.get(key), dict) and not (
+            variants[key].get("reviewStatus") == "approved"
+            and variants[key].get("reviewedBy")
+            and variants[key].get("reviewedAt")
+        ):
             variants[key] = {
                 **variants[key],
                 "reviewStatus": "approved",
@@ -2038,6 +2067,8 @@ async def submit_baseline_trials(
                 "correct": bool(correct),
                 "responseTimeMs": trial.response_time_ms,
                 "readingWordCount": trial.reading_word_count,
+                "sequenceLength": trial.sequence_length,
+                "dotRatio": trial.dot_ratio,
             }
         )
     user = await session.get(User, principal.user_id)
@@ -2069,7 +2100,7 @@ async def submit_baseline_trials(
     selected_motor = held_baselines.get(payload.form_factor) if payload.form_factor else None
     if selected_motor:
         for trial in marked:
-            if trial["responseTimeMs"] is not None:
+            if trial["responseTimeMs"] is not None and trial["dimension"] in {"ps", "attention"}:
                 trial["responseTimeMs"] = max(
                     0, trial["responseTimeMs"] - selected_motor["motorBaselineMs"]
                 )
@@ -2113,7 +2144,7 @@ async def submit_baseline_trials(
         # The number of reduced features, not the number of trials sent: the
         # trials are the input and this is what the engine actually reads.
         featureCount=len(features),
-        baselineProfile=baseline_profile,
+        baselineProfile={},
         engineConfig=engine_config,
     )
 
@@ -2179,7 +2210,7 @@ async def submit_baseline(
     return BaselineSubmitResponse(
         status="accepted",
         featureCount=len(features),
-        baselineProfile=baseline_profile,
+        baselineProfile={},
         engineConfig=engine_config,
     )
 
@@ -2196,6 +2227,7 @@ async def recalibrate_prompt(
     consent: StudentLearningConsent = None,
 ) -> BaselinePromptResponse:
     del consent
+    await require_student_access(session, principal, student_id)
     if principal.role == "student" and principal.user_id != student_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2243,6 +2275,7 @@ async def record_recalibrate_answer(
     """
 
     del consent
+    await require_student_access(session, principal, student_id)
     if principal.role == "student" and principal.user_id != student_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2267,18 +2300,95 @@ async def record_recalibrate_answer(
                 "message": "That is not today's warm-up. Read the prompt again.",
             },
         )
-    user = await session.get(User, student_id)
+    user = await session.get(User, student_id, with_for_update=True)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
     # A device task carries no answer to mark. It is still a completed
     # warm-up, and the point of recording it is that the next tablet knows.
     correct = (
         payload.value.strip().casefold() == str(item["answer"]).strip().casefold()
-        if served and payload.item_id is not None and payload.value is not None
+        if served
+        and payload.item_id is not None
+        and payload.value is not None
+        and payload.value.strip().casefold() != "not_sure"
         else None
     )
     done, answered_at = await _warm_up_state(session, student_id)
+    measurement_status = (
+        ((user.preferences or {}).get(_WARM_UP_KEY) or {}).get("measurementStatus", "receipt_only")
+        if done
+        else "receipt_only"
+    )
     if not done:
+        if any(trial.dimension != dimension for trial in payload.trials):
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "warm_up_dimension_mismatch",
+                    "message": "Send results for today's activity only.",
+                },
+            )
+        features = []
+        if served and correct is not None:
+            features = reduce_trials([{"dimension": "domain", "correct": correct}])
+        elif payload.trials:
+            motor = (
+                ((user.baseline_profile or {}).get("motor_baselines") or {})
+                .get(
+                    "phone_touch" if payload.form_factor == "mobile_touch" else payload.form_factor,
+                    {},
+                )
+                .get("motorBaselineMs", 0)
+            )
+            features = reduce_trials(
+                [
+                    {
+                        "dimension": trial.dimension,
+                        "condition": trial.condition,
+                        "correct": trial.correct,
+                        "responseTimeMs": max(
+                            0,
+                            trial.response_time_ms
+                            - (motor if trial.dimension in {"ps", "attention"} else 0),
+                        )
+                        if trial.response_time_ms is not None
+                        else None,
+                        "readingWordCount": trial.reading_word_count,
+                        "sequenceLength": trial.sequence_length,
+                        "dotRatio": trial.dot_ratio,
+                    }
+                    for trial in payload.trials
+                    if not trial.skipped
+                    and trial.correct is not None
+                    and (trial.response or "").strip().casefold() != "not_sure"
+                ]
+            )
+        if features:
+            baseline, config = build_baseline_profile(
+                session_id=f"warmup:{student_id}:{datetime.now(UTC).date().isoformat()}",
+                features=features,
+                previous_profile=user.baseline_profile,
+                previous_engine_config=user.engine_config,
+            )
+            if served and item.get("subjectId"):
+                from nevo.mastery.engine import bkt_update
+
+                subject = await session.get(SchoolSubject, UUID(str(item["subjectId"])))
+                placements = dict(baseline.get("subject_placements") or {})
+                key = subject.name.casefold()
+                placements[key] = bkt_update(
+                    float(placements.get(key, 0.5)),
+                    correct=correct,
+                    guess=1 / max(2, len(item.get("options") or [])),
+                    slip=0.1,
+                    transition=0,
+                )
+                placements[str(subject.id)] = placements[key]
+                baseline["subject_placements"] = placements
+            user.baseline_profile, user.engine_config = baseline, config
+            measurement_status = "recalibrated"
+        elif served or payload.trials or dimension == "domain":
+            measurement_status = "unavailable"
         answered_at = datetime.now(UTC)
         user.preferences = {
             **dict(user.preferences or {}),
@@ -2287,7 +2397,7 @@ async def record_recalibrate_answer(
                 "itemId": payload.item_id,
                 "dimension": dimension,
                 "served": served,
-                "correct": correct,
+                "measurementStatus": measurement_status,
                 "answeredAt": answered_at.isoformat(),
             },
         }
@@ -2295,6 +2405,7 @@ async def record_recalibrate_answer(
     return BaselinePromptResult(
         dimension=dimension,
         answeredAt=answered_at or datetime.now(UTC),
+        measurementStatus=measurement_status,
     )
 
 
@@ -2325,10 +2436,14 @@ async def _todays_prompt(
     probes = list(
         await session.scalars(
             select(ProbeItem)
+            .join(ClassSubject, ClassSubject.school_subject_id == ProbeItem.school_subject_id)
+            .join(StudentClassEnrollment, StudentClassEnrollment.class_id == ClassSubject.class_id)
             .where(
+                StudentClassEnrollment.student_id == student_id,
                 ProbeItem.school_id == student.school_id,
                 ProbeItem.retired.is_(False),
             )
+            .distinct()
             .order_by(ProbeItem.id)
         )
     )

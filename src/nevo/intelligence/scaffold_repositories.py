@@ -3,12 +3,15 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.db.models.account import User
 from nevo.db.models.mastery import ScaffoldProblemLog, StudentConceptScaffoldState
+from nevo.db.models.signal_event import LessonSession
 from nevo.intelligence.entities import (
     ScaffoldConceptState,
     ScaffoldDecision,
     ScaffoldProblemLogEntry,
 )
+from nevo.intelligence.scaffolds import initial_scaffold_intensity
 
 
 class SqlAlchemyScaffoldRepository:
@@ -28,6 +31,28 @@ class SqlAlchemyScaffoldRepository:
                     StudentConceptScaffoldState.concept_id == concept_id,
                 )
             )
+            if record is None:
+                user = await session.get(User, student_id)
+                if user is not None:
+                    sitting = await session.scalar(
+                        select(LessonSession)
+                        .where(
+                            LessonSession.student_id == student_id,
+                            LessonSession.completion_status == "in_progress",
+                        )
+                        .order_by(LessonSession.started_at.desc())
+                        .limit(1)
+                    )
+                    config = (
+                        ((sitting.delivery_state or {}).get("engineConfig") if sitting else None)
+                        or user.engine_config
+                        or {}
+                    )
+                    return ScaffoldConceptState(
+                        student_id=student_id,
+                        concept_id=concept_id,
+                        current_intensity=initial_scaffold_intensity(config),
+                    )
         return _state_from_record(record) if record else None
 
     async def save_decision(

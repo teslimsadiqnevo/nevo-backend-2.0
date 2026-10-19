@@ -82,6 +82,7 @@ from nevo.db.models.product import (
     UploadSourceBlob,
     UserConnection,
 )
+from nevo.db.models.review_evidence import ConceptReviewEvidence
 from nevo.db.models.scheduled_job import ScheduledJobRun
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.sso import (
@@ -119,6 +120,7 @@ __all__ = [
     "Class",
     "ClassSubject",
     "Concept",
+    "ConceptReviewEvidence",
     "ConsentInvitation",
     "ConsentInvitationItem",
     "ConsentNotificationOutbox",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
+from math import isfinite
 from statistics import fmean
 
 from nevo.domain.intelligence.vocabulary import ScaffoldingLevel
@@ -22,7 +23,7 @@ def build_baseline_profile(
         for key, value in row.items():
             if isinstance(value, bool):
                 values[key.casefold()].append(float(value))
-            elif isinstance(value, int | float):
+            elif isinstance(value, int | float) and isfinite(value):
                 values[key.casefold()].append(float(value))
 
     def average(*names: str, default: float) -> float:
@@ -51,6 +52,53 @@ def build_baseline_profile(
     working_memory = round(_clamp(1.0 + average("wmc_accuracy", default=accuracy) * 4.0, 1.0, 5.0))
     processing_speed = round(_clamp(6.0 - response_ms / 1000.0, 1.0, 5.0))
     confidence = "medium" if len(rows) >= 3 else "low"
+    measurements = dict((previous_profile or {}).get("measurements") or {})
+    for dimension in ("wmc", "ps", "reading", "ans", "attention", "domain"):
+        observed = [
+            row
+            for row in rows
+            if row.get("dimension") == dimension and float(row.get(f"{dimension}_trials") or 0) > 0
+        ]
+        if not observed:
+            continue
+        count = sum(int(row[f"{dimension}_trials"]) for row in observed)
+        measurements[dimension] = {
+            "trial_count": count,
+            "accuracy": sum(
+                float(row.get(f"{dimension}_accuracy") or 0) * int(row[f"{dimension}_trials"])
+                for row in observed
+            )
+            / count,
+            "source": "reduced_task_results",
+            "calibration": "provisional",
+        }
+        if dimension == "ans":
+            ratios = [
+                float(row["ans_mean_dot_ratio"])
+                for row in observed
+                if row.get("ans_mean_dot_ratio")
+            ]
+            if ratios:
+                measurements[dimension]["mean_dot_ratio"] = fmean(ratios)
+    spans = [float(row["wmc_successful_span"]) for row in rows if row.get("wmc_successful_span")]
+    if spans:
+        measurements["wmc"]["successful_span"] = max(spans)
+        working_memory = round(_clamp(max(spans), 1, 5))
+    attention_rows = [row for row in rows if row.get("dimension") == "attention"]
+    conditions = {str(row.get("condition")): row for row in attention_rows}
+    congruent = conditions.get("congruent", {}).get("attention_median_response_ms")
+    incongruent = conditions.get("incongruent", {}).get("attention_median_response_ms")
+    if "attention" in measurements and attention_rows:
+        interference = (
+            max(0, (float(incongruent) - float(congruent)) / max(1, float(congruent)))
+            if congruent and incongruent
+            else None
+        )
+        measurements["attention"]["interference_ratio"] = interference
+        # This is a conservative delivery window, not a measured attention span.
+        attention_minutes = _clamp(
+            8 + 10 * measurements["attention"]["accuracy"] - 4 * min(1, interference or 0), 5, 20
+        )
     now = datetime.now(UTC).isoformat()
 
     profile: dict[str, object] = {
@@ -64,6 +112,7 @@ def build_baseline_profile(
         "comprehension_accuracy": round(accuracy, 4),
         "response_time_ms": round(response_ms),
         "confidence": confidence,
+        "measurements": measurements,
         "updated_at": now,
     }
     engine_config: dict[str, object] = {
@@ -90,6 +139,10 @@ def build_baseline_profile(
         },
         "generatedFromBaselineAt": now,
     }
+    if "ans" in measurements:
+        engine_config["support"]["numericalVisuals"] = (
+            measurements["ans"]["trial_count"] >= 3 and measurements["ans"]["accuracy"] < 0.7
+        )
     measured_reading = bool(values.get("reading_wpm") or values.get("words_per_minute"))
     if not measured_reading:
         profile.pop("reading_wpm", None)
@@ -233,6 +286,18 @@ def reduce_trials(
             ]
             if measured:
                 feature["reading_wpm"] = sum(measured) / len(measured)
+        if dimension == "wmc":
+            spans = [
+                float(row["sequenceLength"])
+                for row in rows
+                if row.get("correct") is True and row.get("sequenceLength")
+            ]
+            if spans:
+                feature["wmc_successful_span"] = max(spans)
+        if dimension == "ans":
+            ratios = [float(row["dotRatio"]) for row in rows if row.get("dotRatio")]
+            if ratios:
+                feature["ans_mean_dot_ratio"] = fmean(ratios)
         if condition:
             feature["condition"] = condition
             feature[f"{dimension}_{condition}_accuracy"] = feature[f"{dimension}_accuracy"]

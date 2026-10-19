@@ -814,7 +814,9 @@ async def student_progress(
     student_id: UUID, principal: PrincipalDependency, session: DatabaseSession
 ) -> dict[str, object]:
     await require_student_access(session, principal, student_id)
-    return await _progress_payload(session, student_id, subject=None)
+    return await _progress_payload(
+        session, student_id, subject=None, student_view=principal.role == "student"
+    )
 
 
 @router.get("/students/{student_id}/progress/{subject}", response_model=StudentProgressResponse)
@@ -825,7 +827,9 @@ async def student_subject_progress(
     session: DatabaseSession,
 ) -> dict[str, object]:
     await require_student_access(session, principal, student_id)
-    return await _progress_payload(session, student_id, subject=subject)
+    return await _progress_payload(
+        session, student_id, subject=subject, student_view=principal.role == "student"
+    )
 
 
 async def _scope_students(scope, student_id, cohort_id, actor, principal, session):
@@ -861,7 +865,7 @@ async def _student_count(session, school_id):
     )
 
 
-async def _progress_payload(session, student_id, subject):
+async def _progress_payload(session, student_id, subject, *, student_view=False):
     mastery_query = (
         select(StudentConceptMastery, Concept)
         .outerjoin(Concept, Concept.id == StudentConceptMastery.concept_id)
@@ -896,7 +900,9 @@ async def _progress_payload(session, student_id, subject):
     return {
         "studentId": str(student_id),
         "subject": subject,
-        "masteryAverage": round(mastery_average, 4) if mastery_average is not None else None,
+        "masteryAverage": round(mastery_average, 4)
+        if mastery_average is not None and not student_view
+        else None,
         **_topic_counts(mastery),
         "concepts": [
             {
@@ -904,8 +910,10 @@ async def _progress_payload(session, student_id, subject):
                 "lessonId": concept.lesson_id if concept else None,
                 "name": concept.name if concept else "Concept",
                 "subject": concept.subject if concept else None,
-                "understanding": round(item.mastery_probability_concept, 4),
-                "reading": round(item.mastery_probability_reading, 4),
+                "understanding": round(item.mastery_probability_concept, 4)
+                if not student_view
+                else None,
+                "reading": round(item.mastery_probability_reading, 4) if not student_view else None,
                 "practiceCount": item.practice_count,
             }
             for item, concept in mastery

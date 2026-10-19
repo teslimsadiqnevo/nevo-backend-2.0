@@ -103,6 +103,8 @@ class SqlAlchemyMasteryRepository:
                 "last_response_correct": state.last_response_correct,
                 "last_failure_attribution": state.last_failure_attribution,
                 "seeding_source": state.seeding_source,
+                "transition_probability": state.transition_probability,
+                "model_version": state.model_version,
                 "last_updated": func.now(),
             }
             if record is None:
@@ -133,8 +135,7 @@ class SqlAlchemyMasteryRepository:
             ).all()
         concept_names = await self._concept_names(tuple(row.concept_id for row in rows))
         return tuple(
-            _state_from_record(row, concept_name=concept_names.get(row.concept_id))
-            for row in rows
+            _state_from_record(row, concept_name=concept_names.get(row.concept_id)) for row in rows
         )
 
     async def class_mastery(
@@ -151,18 +152,13 @@ class SqlAlchemyMasteryRepository:
                         StudentConceptMastery.concept_id,
                         Concept.name,
                         func.count(StudentConceptMastery.student_id),
-                        func.avg(
-                            StudentConceptMastery.mastery_probability_concept
-                        ),
-                        func.avg(
-                            StudentConceptMastery.mastery_probability_reading
-                        ),
+                        func.avg(StudentConceptMastery.mastery_probability_concept),
+                        func.avg(StudentConceptMastery.mastery_probability_reading),
                     )
                     .outerjoin(Concept, Concept.id == StudentConceptMastery.concept_id)
                     .join(
                         StudentClassEnrollment,
-                        StudentClassEnrollment.student_id
-                        == StudentConceptMastery.student_id,
+                        StudentClassEnrollment.student_id == StudentConceptMastery.student_id,
                     )
                     .where(StudentClassEnrollment.class_id == class_id)
                     .group_by(StudentConceptMastery.concept_id, Concept.name)
@@ -182,12 +178,8 @@ class SqlAlchemyMasteryRepository:
                         StudentConceptMastery.concept_id,
                         Concept.name,
                         func.count(StudentConceptMastery.student_id),
-                        func.avg(
-                            StudentConceptMastery.mastery_probability_concept
-                        ),
-                        func.avg(
-                            StudentConceptMastery.mastery_probability_reading
-                        ),
+                        func.avg(StudentConceptMastery.mastery_probability_concept),
+                        func.avg(StudentConceptMastery.mastery_probability_reading),
                     )
                     .outerjoin(Concept, Concept.id == StudentConceptMastery.concept_id)
                     .join(User, User.id == StudentConceptMastery.student_id)
@@ -197,7 +189,6 @@ class SqlAlchemyMasteryRepository:
                 )
             ).all()
         return tuple(_aggregate_from_row(row) for row in rows)
-
 
     async def _concept_names(self, concept_ids: tuple[UUID, ...]) -> dict[UUID, str]:
         if not concept_ids:
@@ -229,6 +220,8 @@ def _state_from_record(
         last_response_correct=record.last_response_correct,
         last_failure_attribution=record.last_failure_attribution,
         seeding_source=record.seeding_source,
+        transition_probability=record.transition_probability,
+        model_version=record.model_version,
     )
 
 

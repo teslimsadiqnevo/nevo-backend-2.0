@@ -55,12 +55,14 @@ class SqlAlchemyMasteryRepository:
                     reading_wpm,
                     age_band=str(age_band) if age_band else None,
                 ),
-                source="baseline_profile",
+                source="baseline_profile"
+                if theta_domain is not None
+                else "unestablished_conservative",
             )
         return BaselineMasterySeed(
             concept_probability=concept_seed_from_theta(None),
             reading_probability=reading_seed_from_wpm(None, age_band=None),
-            source="default_until_scrum_104",
+            source="unestablished_conservative",
         )
 
     async def related_mastery(

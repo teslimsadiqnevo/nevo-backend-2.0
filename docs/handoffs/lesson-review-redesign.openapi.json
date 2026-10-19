@@ -1,0 +1,756 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Nevo staged lesson review redesign",
+    "version": "feature-0109",
+    "description": "Feature branch only. Not deployed to production. Demo hold applies."
+  },
+  "paths": {
+    "/api/v1/lessons/{lesson_id}/review": {
+      "get": {
+        "tags": [
+          "learning product"
+        ],
+        "summary": "Read Lesson Review",
+        "description": "Everything the lesson page's needs-review state renders.\n\nOne read rather than one per card: the screen shows the cards and the\nremaining count together, and a teacher opening a card should not cost a\nrequest to find out what Nevo read.",
+        "operationId": "learning_product_read_lesson_review",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lesson_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lesson Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonReviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "session_expired when the session has simply run out, session_revoked when somebody signed this device out, session_replaced when the same account signed in somewhere else, account_paused when the account has been suspended, account_closed when the account has been closed. invalid_session covers a token that was never valid."
+          }
+        }
+      }
+    },
+    "/api/v1/lessons/{lesson_id}/key-points/approve-all": {
+      "post": {
+        "tags": [
+          "learning product"
+        ],
+        "summary": "Approve All Key Points",
+        "description": "One professional sign-off over the lesson's complete key-point set.",
+        "operationId": "learning_product_approve_all_key_points",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lesson_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lesson Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonReviewResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "review_content_changed or key_point_decision_required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "session_expired when the session has simply run out, session_revoked when somebody signed this device out, session_replaced when the same account signed in somewhere else, account_paused when the account has been suspended, account_closed when the account has been closed. invalid_session covers a token that was never valid."
+          }
+        }
+      }
+    },
+    "/api/v1/lessons/{lesson_id}/rewrites/approve-all": {
+      "post": {
+        "tags": [
+          "learning product"
+        ],
+        "summary": "Approve All Rewrites",
+        "description": "One sign-off over all existing Simplify/Expand rewrites; no generation.",
+        "operationId": "learning_product_approve_all_rewrites",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lesson_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lesson Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonReviewResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "review_content_changed or no_rewrites_to_approve"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "session_expired when the session has simply run out, session_revoked when somebody signed this device out, session_replaced when the same account signed in somewhere else, account_paused when the account has been suspended, account_closed when the account has been closed. invalid_session covers a token that was never valid."
+          }
+        }
+      }
+    },
+    "/api/v1/lessons/{lesson_id}/segments/{segment_id}/key-point": {
+      "put": {
+        "tags": [
+          "learning product"
+        ],
+        "summary": "Resolve Missing Key Point",
+        "description": "Persist an authored point or an explicit omission where extraction found none.",
+        "operationId": "learning_product_resolve_missing_key_point",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lesson_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lesson Id"
+            }
+          },
+          {
+            "name": "segment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Segment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MissingKeyPointWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonReviewResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "key_point_already_exists"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "session_expired when the session has simply run out, session_revoked when somebody signed this device out, session_replaced when the same account signed in somewhere else, account_paused when the account has been suspended, account_closed when the account has been closed. invalid_session covers a token that was never valid."
+          }
+        }
+      }
+    },
+    "/api/v1/lessons/{lesson_id}/segments/{segment_id}/rewrites/{variant}": {
+      "patch": {
+        "tags": [
+          "learning product"
+        ],
+        "summary": "Edit Rewrite",
+        "description": "Save wording as pending; only the lesson-wide act approves it.",
+        "operationId": "learning_product_edit_rewrite",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lesson_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lesson Id"
+            }
+          },
+          {
+            "name": "segment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Segment Id"
+            }
+          },
+          {
+            "name": "variant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "simplified",
+                "expanded"
+              ],
+              "type": "string",
+              "title": "Variant"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewriteEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonReviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "session_expired when the session has simply run out, session_revoked when somebody signed this device out, session_replaced when the same account signed in somewhere else, account_paused when the account has been suspended, account_closed when the account has been closed. invalid_session covers a token that was never valid."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "LessonReviewResponse": {
+        "properties": {
+          "lessonId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lessonid"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "outstandingCount": {
+            "type": "integer",
+            "title": "Outstandingcount"
+          },
+          "keyPointCount": {
+            "type": "integer",
+            "title": "Keypointcount"
+          },
+          "readyToAssign": {
+            "type": "boolean",
+            "title": "Readytoassign"
+          },
+          "keyPoints": {
+            "items": {
+              "$ref": "#/components/schemas/KeyPointResponse"
+            },
+            "type": "array",
+            "title": "Keypoints"
+          },
+          "keyPointsContentHash": {
+            "type": "string",
+            "title": "Keypointscontenthash",
+            "default": ""
+          },
+          "rewritesContentHash": {
+            "type": "string",
+            "title": "Rewritescontenthash",
+            "default": ""
+          },
+          "keyPointApproval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewSignoffResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rewriteApproval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewSignoffResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missingKeyPointSegmentIds": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Missingkeypointsegmentids"
+          },
+          "rewriteCount": {
+            "type": "integer",
+            "title": "Rewritecount",
+            "default": 0
+          },
+          "pendingRewriteCount": {
+            "type": "integer",
+            "title": "Pendingrewritecount",
+            "default": 0
+          },
+          "reviewComplete": {
+            "type": "boolean",
+            "title": "Reviewcomplete",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "lessonId",
+          "title",
+          "outstandingCount",
+          "keyPointCount",
+          "readyToAssign",
+          "keyPoints"
+        ],
+        "title": "LessonReviewResponse",
+        "description": "The lesson's review state, which is what LR-04 counts down."
+      },
+      "KeyPointResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "segmentId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Segmentid"
+          },
+          "segmentTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segmenttitle"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "extractedText": {
+            "type": "string",
+            "title": "Extractedtext"
+          },
+          "amendedText": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amendedtext"
+          },
+          "sourceText": {
+            "type": "string",
+            "title": "Sourcetext"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/KeyPointConfidence"
+          },
+          "reviewState": {
+            "$ref": "#/components/schemas/KeyPointReviewState"
+          },
+          "outstanding": {
+            "type": "boolean",
+            "title": "Outstanding"
+          },
+          "resolvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolvedat"
+          },
+          "resolvedBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolvedby"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "segmentId",
+          "segmentTitle",
+          "position",
+          "text",
+          "extractedText",
+          "amendedText",
+          "sourceText",
+          "confidence",
+          "reviewState",
+          "outstanding",
+          "resolvedAt",
+          "resolvedBy"
+        ],
+        "title": "KeyPointResponse",
+        "description": "One key point, and everything the card needs when it is expanded."
+      },
+      "KeyPointConfidence": {
+        "type": "string",
+        "enum": [
+          "high",
+          "medium",
+          "low"
+        ],
+        "title": "KeyPointConfidence",
+        "description": "How well a key point is grounded in the text it was drawn from.\n\nNot the model's own estimate: it was never asked for one, and a number a\nmodel volunteers about its own output is not evidence. This is measured -\nhow much of the key point can be found in the segment it came from - so a\nteacher reviewing a LOW point is looking at something demonstrably absent\nfrom the source rather than at a mood."
+      },
+      "KeyPointReviewState": {
+        "type": "string",
+        "enum": [
+          "settled",
+          "unsure",
+          "accepted",
+          "amended",
+          "removed"
+        ],
+        "title": "KeyPointReviewState",
+        "description": "Where a key point stands in a teacher's review.\n\nOnly UNSURE blocks assignment. A teacher never has to click through points\nNevo could ground, or the review becomes a tax on the common case."
+      },
+      "ReviewSignoffResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "key_points",
+              "rewrites"
+            ],
+            "title": "Kind"
+          },
+          "approvedBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approvedby"
+          },
+          "approvedByName": {
+            "type": "string",
+            "title": "Approvedbyname"
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Approvedat"
+          },
+          "contentHash": {
+            "type": "string",
+            "title": "Contenthash"
+          },
+          "current": {
+            "type": "boolean",
+            "title": "Current"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "approvedBy",
+          "approvedByName",
+          "approvedAt",
+          "contentHash",
+          "current"
+        ],
+        "title": "ReviewSignoffResponse"
+      },
+      "HTTPValidationError": {
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "errors"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "const": "validation_error"
+              },
+              "message": {
+                "type": "string"
+              },
+              "errors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "location",
+                    "message"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "location": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "integer"
+                          }
+                        ]
+                      }
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "BulkReviewRequest": {
+        "properties": {
+          "expectedContentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expectedcontenthash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expectedContentHash"
+        ],
+        "title": "BulkReviewRequest"
+      },
+      "MissingKeyPointWrite": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "add",
+              "omit"
+            ],
+            "title": "Action"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 400
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "MissingKeyPointWrite"
+      },
+      "RewriteEdit": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "maxLength": 50000,
+            "minLength": 1,
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "title": "RewriteEdit"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

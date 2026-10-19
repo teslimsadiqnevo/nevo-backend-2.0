@@ -96,6 +96,9 @@ class DepthVariantBody(BaseModel):
     reviewed_by: UUID | None = Field(default=None, alias="reviewedBy")
     reviewed_by_name: str | None = Field(default=None, alias="reviewedByName")
     reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
+    original_body: str | None = Field(default=None, alias="originalBody")
+    edited_by: UUID | None = Field(default=None, alias="editedBy")
+    edited_at: datetime | None = Field(default=None, alias="editedAt")
     key_terms: list["KeyTerm"] = Field(default_factory=list, alias="keyTerms")
     equation_callouts: list["EquationCallout"] = Field(
         default_factory=list, alias="equationCallouts"

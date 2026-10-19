@@ -1659,6 +1659,7 @@ async def acknowledge_escalation(
 @router.post(
     "/api/v1/lessons/{lesson_id}/segments/{segment_id}/approve",
     response_model=SegmentApprovalResponse,
+    deprecated=True,
     tags=["learning product"],
     responses={404: {"description": "No such segment in this school's lesson"}},
 )

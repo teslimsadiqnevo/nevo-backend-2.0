@@ -31,6 +31,7 @@ class OnboardingSubject(CamelResponse):
     subject_id: UUID
     name: str
     probe_available: bool
+    placement_status: Literal["established", "unestablished"] = "unestablished"
 
 
 class LearningReadiness(CamelResponse):
@@ -71,7 +72,22 @@ async def readiness(
         ],
         subjects=[
             OnboardingSubject(
-                subject_id=subject.id, name=subject.name, probe_available=subject.id in available
+                subject_id=subject.id,
+                name=subject.name,
+                probe_available=subject.id in available,
+                placement_status="established"
+                if (
+                    (student.baseline_profile or {})
+                    .get("subject_placement_statuses", {})
+                    .get(str(subject.id), {})
+                    .get("status")
+                    == "established"
+                    or str(subject.id)
+                    in ((student.baseline_profile or {}).get("subject_placements") or {})
+                    or subject.name.casefold()
+                    in ((student.baseline_profile or {}).get("subject_placements") or {})
+                )
+                else "unestablished",
             )
             for subject in subjects
         ],

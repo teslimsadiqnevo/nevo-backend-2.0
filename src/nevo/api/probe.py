@@ -126,6 +126,7 @@ async def _finish(session, student, result):
     from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
 
     baseline = dict(student.baseline_profile or {})
+    statuses = dict(baseline.get("subject_placement_statuses") or {})
     state = await _state(session, student_id=student.id, subject_id=result.subject_id)
     if state.asked:
         subject = await session.get(SchoolSubject, result.subject_id)
@@ -143,6 +144,11 @@ async def _finish(session, student, result):
     baseline["domain_probe_status"] = (
         "completed" if state.asked else "completed_without_scored_answers"
     )
+    statuses[str(result.subject_id)] = {
+        "status": "established" if state.asked else "unestablished",
+        "reason": "subject_probe" if state.asked else "no_scored_answers",
+    }
+    baseline["subject_placement_statuses"] = statuses
     completed = onboarding_modules(baseline) | {"domain_probe"}
     baseline["completed_modules"] = sorted(completed)
     if set(ONBOARDING_MODULES).issubset(completed):

@@ -20,6 +20,7 @@ from nevo.api.frontend_unblockers import router as product_router
 from nevo.api.insights import router as insights_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.learning_readiness import router as readiness_router
+from nevo.api.lesson_review import router as review_router
 from nevo.api.probe import router as probe_router
 from nevo.api.product_learning import router as learning_router
 from nevo.api.student_entry import router as entry_router
@@ -218,6 +219,7 @@ def runtime(monkeypatch):
         learning_router,
         intelligence_router,
         readiness_router,
+        review_router,
         insights_router,
         entry_router,
         probe_router,
@@ -1322,3 +1324,318 @@ def test_depth_backfill_review_keeps_original_approval_and_hides_pending_text(ru
             assert row.depth_variants["simplified"]["reviewedBy"] == str(runtime.ids["teacher"])
 
     run(inspect())
+
+
+def review_as_teacher(runtime):
+    principal = AuthPrincipal(user_id=runtime.ids["teacher"], role="teacher", session_id=uuid4())
+    runtime.client.app.dependency_overrides[authenticated_principal] = lambda: principal
+    return f"/api/v1/lessons/{runtime.ids['lesson']}"
+
+
+def test_missing_key_point_add_omit_and_bulk_signoff_survive_reload(runtime):
+    url = review_as_teacher(runtime)
+    before = runtime.client.get(url + "/review")
+    assert before.status_code == 200, before.text
+    assert before.json()["missingKeyPointSegmentIds"] == [str(runtime.ids["segment"])]
+    blocked = runtime.client.post(
+        url + "/key-points/approve-all",
+        json={
+            "expectedContentHash": before.json()["keyPointsContentHash"],
+        },
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "key_point_decision_required"
+    point_url = url + f"/segments/{runtime.ids['segment']}/key-point"
+    omitted = runtime.client.put(point_url, json={"action": "omit"})
+    assert omitted.status_code == 200, omitted.text
+    assert omitted.json()["keyPoints"][0]["reviewState"] == "removed"
+    assert omitted.json()["missingKeyPointSegmentIds"] == []
+    added = runtime.client.put(
+        point_url, json={"action": "add", "text": "Five fifths make a whole."}
+    )
+    assert added.status_code == 200, added.text
+    current = runtime.client.get(url + "/review")
+    assert current.json()["keyPoints"][0]["text"] == "Five fifths make a whole."
+    assert current.json()["keyPoints"][0]["extractedText"] == ""
+    stale = runtime.client.post(
+        url + "/key-points/approve-all",
+        json={
+            "expectedContentHash": before.json()["keyPointsContentHash"],
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "review_content_changed"
+    payload = {"expectedContentHash": current.json()["keyPointsContentHash"]}
+    approved = runtime.client.post(url + "/key-points/approve-all", json=payload)
+    assert approved.status_code == 200, approved.text
+    record = approved.json()["keyPointApproval"]
+    assert record["approvedBy"] == str(runtime.ids["teacher"])
+    assert record["approvedByName"] == "Teacher"
+    assert record["approvedAt"] and record["current"]
+    again = runtime.client.post(url + "/key-points/approve-all", json=payload)
+    assert again.json()["keyPointApproval"] == record
+    assert runtime.client.get(url + "/review").json()["keyPointApproval"] == record
+    assert runtime.client.get(url).json()["segments"][0]["textVariant"]["keyPoints"] == [
+        "Five fifths make a whole."
+    ]
+
+
+def test_rewrite_edit_invalidates_bulk_approval_until_new_signoff(runtime):
+    from nevo.db.models.lesson_signoff import LessonReviewSignoff
+
+    url = review_as_teacher(runtime)
+    read = runtime.client.get(url + "/review")
+    approved = runtime.client.post(
+        url + "/rewrites/approve-all",
+        json={
+            "expectedContentHash": read.json()["rewritesContentHash"],
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["pendingRewriteCount"] == 0
+    first = approved.json()["rewriteApproval"]
+    changed = runtime.client.patch(
+        url + f"/segments/{runtime.ids['segment']}/rewrites/simplified",
+        json={"body": "One whole has five equal fifths."},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["rewriteApproval"]["current"] is False
+    assert changed.json()["pendingRewriteCount"] == 1
+    second = runtime.client.post(
+        url + "/rewrites/approve-all",
+        json={
+            "expectedContentHash": changed.json()["rewritesContentHash"],
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["rewriteApproval"]["current"] is True
+    assert second.json()["rewriteApproval"]["id"] != first["id"]
+
+    async def inspect():
+        async with runtime.sessions() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            assert (
+                segment.depth_variants["simplified"]["originalBody"]
+                == "Five equal parts make a whole."
+            )
+            assert segment.depth_variants["simplified"]["reviewedBy"] == str(runtime.ids["teacher"])
+            history = list(
+                await session.scalars(
+                    select(LessonReviewSignoff).where(
+                        LessonReviewSignoff.lesson_id == runtime.ids["lesson"]
+                    )
+                )
+            )
+            assert len(history) == 2
+            assert history[0].content_snapshot
+
+    run(inspect())
+
+
+def test_reverting_rewrite_text_does_not_resurrect_a_previous_signoff(runtime):
+    url = review_as_teacher(runtime)
+    read = runtime.client.get(url + "/review")
+    approved = runtime.client.post(
+        url + "/rewrites/approve-all",
+        json={
+            "expectedContentHash": read.json()["rewritesContentHash"],
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    edit_url = url + f"/segments/{runtime.ids['segment']}/rewrites/simplified"
+    assert (
+        runtime.client.patch(
+            edit_url, json={"body": "One whole contains five equal fifths."}
+        ).status_code
+        == 200
+    )
+    reverted = runtime.client.patch(edit_url, json={"body": "Five equal parts make a whole."})
+    assert reverted.status_code == 200, reverted.text
+    assert reverted.json()["rewriteApproval"]["current"] is False
+    refreshed = runtime.client.post(
+        url + "/rewrites/approve-all",
+        json={
+            "expectedContentHash": reverted.json()["rewritesContentHash"],
+        },
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["rewriteApproval"]["id"] != approved.json()["rewriteApproval"]["id"]
+
+
+def test_review_edits_reject_blank_text_and_nonexistent_variants(runtime):
+    url = review_as_teacher(runtime)
+    segment = f"/segments/{runtime.ids['segment']}"
+    assert (
+        runtime.client.put(
+            url + segment + "/key-point", json={"action": "add", "text": "   "}
+        ).status_code
+        == 422
+    )
+    assert (
+        runtime.client.patch(
+            url + segment + "/rewrites/simplified", json={"body": "   "}
+        ).status_code
+        == 422
+    )
+    assert (
+        runtime.client.patch(url + segment + "/rewrites/unknown", json={"body": "Text"}).status_code
+        == 422
+    )
+
+
+def test_bulk_key_point_approval_handles_seventy_three_sections_in_one_act(runtime):
+    from nevo.db.models.content import LessonKeyPoint
+
+    async def prepare():
+        async with runtime.sessions.begin() as session:
+            for index in range(73):
+                if index == 0:
+                    segment_id = runtime.ids["segment"]
+                else:
+                    segment = LessonSegment(
+                        lesson_id=runtime.ids["lesson"],
+                        parse_run_id=runtime.ids["parse"],
+                        segment_key=f"section-{index}",
+                        content_type="explanatory_text",
+                        sequence_order=index + 1,
+                        title=f"Section {index}",
+                        body="Five equal fifths make a whole.",
+                        available_modalities=["text"],
+                    )
+                    session.add(segment)
+                    await session.flush()
+                    segment_id = segment.id
+                session.add(
+                    LessonKeyPoint(
+                        lesson_id=runtime.ids["lesson"],
+                        segment_id=segment_id,
+                        position=0,
+                        extracted_text="Five fifths make a whole.",
+                        source_text="Five equal fifths make a whole.",
+                        confidence="low",
+                        review_state="unsure",
+                    )
+                )
+
+    run(prepare())
+    url = review_as_teacher(runtime)
+    review = runtime.client.get(url + "/review")
+    assert review.json()["outstandingCount"] == 73
+    approved = runtime.client.post(
+        url + "/key-points/approve-all",
+        json={
+            "expectedContentHash": review.json()["keyPointsContentHash"],
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["outstandingCount"] == 0
+    assert approved.json()["keyPointCount"] == 73
+    assert approved.json()["keyPointApproval"]["current"] is True
+
+
+def test_new_review_routes_refuse_students_and_cross_school_staff(runtime):
+    url = f"/api/v1/lessons/{runtime.ids['lesson']}"
+    refused = runtime.client.post(
+        url + "/rewrites/approve-all", json={"expectedContentHash": "0" * 64}
+    )
+    assert refused.status_code == 403
+
+    async def move_teacher():
+        async with runtime.sessions.begin() as session:
+            other = School(
+                name="Other school",
+                school_code=uuid4().hex[:8],
+                school_url_slug=uuid4().hex,
+                auth_method="email_password",
+            )
+            session.add(other)
+            await session.flush()
+            teacher = await session.get(User, runtime.ids["teacher"])
+            teacher.school_id = other.id
+
+    run(move_teacher())
+    review_as_teacher(runtime)
+    assert runtime.client.get(url + "/review").status_code == 404
+
+
+def test_no_bank_is_unestablished_and_new_bank_reopens_only_module_four(runtime):
+    from nevo.db.models.account import Class, StudentClassEnrollment
+    from nevo.db.models.probe import ProbeItem
+    from nevo.db.models.subject import ClassSubject, SchoolSubject
+
+    subject_id = uuid4()
+
+    async def prepare():
+        async with runtime.sessions.begin() as session:
+            student = await session.get(User, runtime.ids["student"])
+            student.baseline_profile = {"completed_modules": list(ONBOARDING_MODULES[:3])}
+            subject = SchoolSubject(
+                id=subject_id,
+                school_id=student.school_id,
+                name="Maths",
+                normalised_name="maths",
+                origin="school",
+                review_state="pending",
+            )
+            classroom = Class(
+                school_id=student.school_id,
+                name="P5",
+                normalised_name="p5",
+                academic_session="2026/2027",
+            )
+            session.add_all([subject, classroom])
+            await session.flush()
+            session.add(StudentClassEnrollment(student_id=student.id, class_id=classroom.id))
+            session.add(ClassSubject(class_id=classroom.id, school_subject_id=subject.id))
+
+    run(prepare())
+    ready = runtime.client.get("/api/v1/students/me/onboarding")
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["complete"] is True
+    assert ready.json()["subjects"][0]["placementStatus"] == "unestablished"
+    assert (
+        runtime.client.post(f"/api/v1/lessons/{runtime.ids['lesson']}/session").status_code == 201
+    )
+
+    async def add_bank():
+        async with runtime.sessions.begin() as session:
+            student = await session.get(User, runtime.ids["student"])
+            assert not student.baseline_profile.get("subject_placements")
+            assert (
+                student.baseline_profile["subject_placement_statuses"][str(subject_id)]["status"]
+                == "unestablished"
+            )
+            for index in range(5):
+                session.add(
+                    ProbeItem(
+                        school_id=student.school_id,
+                        school_subject_id=subject_id,
+                        question=f"Which is {index + 1} fifths?",
+                        options=[
+                            {"value": "a", "label": "Equal fifths"},
+                            {"value": "b", "label": "Unequal parts"},
+                        ],
+                        correct_option="a",
+                        difficulty=0.5,
+                        concept_id=runtime.ids["concept"],
+                        lesson_id=runtime.ids["lesson"],
+                    )
+                )
+
+    run(add_bank())
+    ready = runtime.client.get("/api/v1/students/me/onboarding")
+    assert ready.json()["complete"] is False
+    assert ready.json()["nextModule"] == "domain_probe"
+    assert all(row["completed"] for row in ready.json()["modules"][:3])
+    blocked = runtime.client.post(f"/api/v1/lessons/{runtime.ids['lesson']}/session")
+    assert blocked.status_code == 409, blocked.text
+    probe = runtime.client.get(f"/api/v1/probe/{subject_id}/next")
+    while not probe.json().get("finished"):
+        probe = runtime.client.post(
+            f"/api/v1/probe/{subject_id}/answer",
+            json={"itemId": probe.json()["itemId"], "chosenOption": "a"},
+        )
+        assert probe.status_code == 200, probe.text
+    ready = runtime.client.get("/api/v1/students/me/onboarding")
+    assert ready.json()["complete"] is True
+    assert ready.json()["subjects"][0]["placementStatus"] == "established"

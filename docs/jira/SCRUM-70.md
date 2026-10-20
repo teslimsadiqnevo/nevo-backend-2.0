@@ -1,5 +1,11 @@
 # SCRUM-70: Affective inference compliance guard
 
+> Historical client-inference notes below are not the current architecture.
+> Use `docs/handoffs/signal-wording-backend-response-2026-10-20.md` (20 October).
+> Inference is server-side; permitted evidence is persisted. Anxiety is retired
+> for v1. The API rejects raw-input measurements, but that does not verify browser
+> capture or purge. Do not use the old device-only or memory-only wording in filings.
+
 ## v1 guard
 
 Raw touch signals never surface outside the client affective inference module.

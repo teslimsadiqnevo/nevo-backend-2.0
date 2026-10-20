@@ -1,5 +1,10 @@
 # SCRUM-26: Adaptation engine API
 
+> Historical ticket specification. The channel-profile and client-derived-state
+> wording below is superseded: learning-style classifications were removed in
+> migration 0104. For current signal capture, server inference and retention use
+> `docs/handoffs/signal-wording-backend-response-2026-10-20.md` (20 October).
+
 ## Scope
 
 Build `/api/intelligence/adapt` for lesson-load adaptation and in-lesson

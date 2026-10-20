@@ -1,5 +1,16 @@
 # Frontend Handoff Backend Contract
 
+## Current signal-path correction: 20 October 2026
+
+Section 04 below is retained as historical field-definition context, not a
+description of the deployed system. Its client-side inference and session-end
+purge statements are superseded. Use
+`docs/handoffs/signal-wording-backend-response-2026-10-20.md` for current wording:
+permitted events and answers reach the backend, inference is server-side, and
+accepted evidence is persisted. Local capture and abandoned/sign-out purge need
+frontend verification. Do not implement additional lesson capture from this old
+section or promise that the backend receives only inferred states.
+
 ## Section 04: Ephemeral interaction signals
 
 The frontend captures high-resolution interaction timing locally for the active

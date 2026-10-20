@@ -1,5 +1,12 @@
 # SCRUM-53: Signal collection compliance guard
 
+> Historical ticket notes below are superseded for signal-path wording by
+> `docs/handoffs/signal-wording-backend-response-2026-10-20.md` (20 October).
+> The backend receives and persists permitted timestamped learning events and
+> answers, not only aggregates. Raw-input rejection is recursive; missing consent
+> service fails closed. The old session-end browser purge is a frontend requirement,
+> not a verified implementation guarantee.
+
 ## v1 guard
 
 Raw touch signals never surface outside the browser collection layer. The

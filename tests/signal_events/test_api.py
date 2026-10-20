@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -22,6 +24,7 @@ def client_for() -> tuple[TestClient, MemorySignalIngestionRepository, AuthPrinc
     )
     app = FastAPI()
     app.state.signal_ingestion_service = SignalIngestionService(repository)
+    app.state.consent_service = SimpleNamespace(require_student_consent=AsyncMock())
     app.dependency_overrides[authenticated_principal] = lambda: principal
     app.include_router(router)
     return TestClient(app), repository, principal

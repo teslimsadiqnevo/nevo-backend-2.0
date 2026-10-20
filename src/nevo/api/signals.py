@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import public_consent_error
-from nevo.api.privacy import is_private_interaction_key
+from nevo.api.privacy import validate_signal_privacy
 from nevo.auth.entities import AuthPrincipal
 from nevo.consent.errors import ConsentError
 from nevo.domain.signal_events.catalogue import SIGNAL_CONTRACTS
@@ -138,16 +138,14 @@ class SignalEventRequest(BaseModel):
     def bound_event_data(cls, value: dict[str, Any]) -> dict[str, Any]:
         if len(value) > 64:
             raise ValueError("Signal event data cannot contain more than 64 keys.")
-        leaked_keys = {key for key in value if is_private_interaction_key(key)}
-        if leaked_keys:
-            joined = ", ".join(sorted(leaked_keys))
-            raise ValueError(f"Ephemeral interaction signals cannot leave the device: {joined}.")
+        validate_signal_privacy(value)
         return value
 
     @model_validator(mode="after")
     def merge_extra_event_fields(self) -> "SignalEventRequest":
         if self.model_extra:
             self.event_data = {**self.model_extra, **self.event_data}
+        self.bound_event_data(self.event_data)
         self._validate_ask_nevo_signal_payload()
         self._validate_modality_outcome()
         self._validate_learning_signal_payload()
@@ -166,10 +164,14 @@ class SignalEventRequest(BaseModel):
             break_type = self.event_data.get("breakType")
             if break_type is not None and break_type not in BREAK_TYPES:
                 raise ValueError("breakType must be micro, movement, consolidation, or full.")
-        if self.event_type in {
-            SignalEventType.SCROLL,
-            SignalEventType.TIME_ON_SEGMENT,
-        } and "depthRatio" in self.event_data:
+        if (
+            self.event_type
+            in {
+                SignalEventType.SCROLL,
+                SignalEventType.TIME_ON_SEGMENT,
+            }
+            and "depthRatio" in self.event_data
+        ):
             ratio = self.event_data.get("depthRatio")
             if not isinstance(ratio, int | float) or not 0 <= float(ratio) <= 1:
                 raise ValueError("depthRatio must be a number from 0 to 1.")
@@ -198,9 +200,7 @@ class SignalEventRequest(BaseModel):
                 raise ValueError("formFactor must be phone, tablet, or desktop.")
             duration = self.event_data.get("durationMs")
             if duration is not None and (
-                not isinstance(duration, int | float)
-                or isinstance(duration, bool)
-                or duration < 0
+                not isinstance(duration, int | float) or isinstance(duration, bool) or duration < 0
             ):
                 raise ValueError("durationMs must be a non-negative number.")
 
@@ -224,9 +224,7 @@ class SignalEventRequest(BaseModel):
                 raise ValueError(f"{key} must be a number from 0 to 100.")
         elapsed = self.event_data.get("timeOnSegment")
         if elapsed is not None and (
-            not isinstance(elapsed, int | float)
-            or isinstance(elapsed, bool)
-            or elapsed < 0
+            not isinstance(elapsed, int | float) or isinstance(elapsed, bool) or elapsed < 0
         ):
             raise ValueError("timeOnSegment must be milliseconds as a non-negative number.")
         if outcome is None:
@@ -433,22 +431,42 @@ async def _refuse_a_withdrawn_child(request: Request, principal: AuthPrincipal) 
     should have refused with 403 or 422 on its own terms - the second time a
     route-level gate has turned a client's own mistake into a server fault.
 
-    An unconfigured service is not a withdrawal, so the batch is taken: the
-    gate exists to stop processing a child nobody may process, and refusing
-    every child because one service is down would lose a lesson's evidence
-    to protect nobody.
+    A missing consent service is not permission to collect evidence. An
+    unavailable gate fails closed before the ingestion service is called.
     """
 
     service = getattr(request.app.state, "consent_service", None)
     if service is None:
-        return
+        raise HTTPException(
+            503,
+            detail={
+                "code": "consent_service_unavailable",
+                "message": "Consent could not be checked. No learning events were accepted.",
+            },
+        )
     try:
         await service.require_student_consent(principal)
     except ConsentError as error:
         raise public_consent_error(error) from error
+    except Exception as error:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "consent_service_unavailable",
+                "message": "Consent could not be checked. No learning events were accepted.",
+            },
+        ) from error
 
 
-@router.post("/", response_model=SignalBatchResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/",
+    response_model=SignalBatchResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        403: {"description": "consent_withdrawn or student_required"},
+        503: {"description": "consent_service_unavailable; no events are accepted"},
+    },
+)
 async def ingest_signal_batch(
     payload: SignalBatchRequest,
     principal: PrincipalDependency,

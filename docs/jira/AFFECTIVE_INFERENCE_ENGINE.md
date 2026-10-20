@@ -1,5 +1,11 @@
 # Non-invasive affective inference engine
 
+> Historical prototype description, not the current deployed architecture.
+> The device-only inference claim below is superseded by the server-side signal
+> path in `docs/handoffs/signal-wording-backend-response-2026-10-20.md`.
+> The existence of this repository's prototype does not verify the released
+> frontend. Do not reuse its purge or inference claims in the legal pack.
+
 ## Scope
 
 This ticket is implemented as a client-side browser module in

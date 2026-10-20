@@ -56,7 +56,7 @@ from nevo.api.pagination import (
     set_page_headers,
 )
 from nevo.api.permissions import RequireScope
-from nevo.api.privacy import is_private_interaction_key
+from nevo.api.privacy import validate_signal_privacy
 from nevo.api.product_admin import merge_preferences
 from nevo.api.product_common import (
     actor_user,
@@ -2195,15 +2195,16 @@ async def submit_baseline(
     if principal.role != "student":
         raise HTTPException(403, detail="Student account required")
     features = payload.features
-    leaked = {key for feature in features for key in feature if is_private_interaction_key(key)}
-    if leaked:
+    try:
+        validate_signal_privacy(features)
+    except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
                 "Raw interaction fields are device-only. Submit reduced "
                 "aggregate baseline features."
             ),
-        )
+        ) from error
     user = await session.get(User, principal.user_id, with_for_update=True)
     baseline_profile, engine_config = build_baseline_profile(
         session_id=payload.session_id,

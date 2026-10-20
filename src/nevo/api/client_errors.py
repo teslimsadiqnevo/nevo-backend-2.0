@@ -11,7 +11,9 @@ quote and that we can find afterwards.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
@@ -78,31 +80,53 @@ async def report_client_error(
 
     Unauthenticated on purpose: a crash on the sign-in screen is a crash, and
     requiring a session would lose exactly the reports we most want. The
-    account is recorded when there is one.
+    account is not included in the application log, even when signed in.
 
     Accepted rather than created - this is a log line, not a record anybody
     can read back. There is deliberately no endpoint to list these: a store of
     client crashes that staff can browse becomes a store of whatever those
-    crashes happened to contain.
+    crashes happened to contain. Raw messages, routes and stacks are discarded
+    by this handler rather than sent to application logging.
     """
 
-    incident = payload.incident_id or new_incident()
+    incident = (
+        payload.incident_id
+        if payload.incident_id and re.fullmatch(r"[0-9a-f]{12}", payload.incident_id)
+        else new_incident()
+    )
     received = datetime.now(UTC)
-    # Logged, not stored. The one structured field is the reference; the rest
-    # is for a person reading the log while they look into it.
+    # Browser-controlled exception text can contain answers or identifiers.
+    # Log only closed metadata and fingerprints, never raw text or account IDs.
+    error_kind = next(
+        (
+            kind
+            for kind in (
+                "TypeError",
+                "ReferenceError",
+                "RangeError",
+                "SyntaxError",
+                "NetworkError",
+                "AbortError",
+                "Error",
+            )
+            if payload.message.startswith(kind + ":")
+        ),
+        "client_error",
+    )
     logger.error(
-        "client error %s on %s (%s): %s",
+        "client error %s (%s, %s)",
         incident,
-        payload.route or "unknown route",
         payload.surface,
-        payload.message,
+        error_kind,
         extra={
             "incident_id": incident,
-            "route": payload.route,
             "surface": payload.surface,
-            "app_version": payload.app_version,
-            "user_id": str(principal.user_id) if principal else None,
-            "stack": payload.stack,
+            "error_kind": error_kind,
+            "route_fingerprint": hashlib.sha256((payload.route or "").encode()).hexdigest()[:16],
+            "build_fingerprint": hashlib.sha256((payload.app_version or "").encode()).hexdigest()[
+                :16
+            ],
+            "has_stack": bool(payload.stack),
         },
     )
     return ClientErrorAccepted(incidentId=incident, receivedAt=received)

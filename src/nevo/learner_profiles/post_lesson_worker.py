@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.api.learning_support_records import record_accommodation_changes
 from nevo.attention_flags.service import AttentionFlagDetectionService
+from nevo.db.models.account import ConsentRecord
 from nevo.db.models.product import PostLessonProcessing
+from nevo.domain.accounts.vocabulary import ConsentStatus
+from nevo.domain.consent.vocabulary import REQUIRED_LEARNING_CONSENT
 from nevo.intelligence.accommodation_service import AccommodationInferenceService
 from nevo.learner_profiles.profile_updates import PostLessonProfileUpdateService
 from nevo.notifications.digests import notify_modality_shifts
@@ -76,6 +79,8 @@ class PostLessonProcessingWorker:
             return False
         session_id, student_id, profile_updated, flags_evaluated = job
         try:
+            if not await self._check_consent(session_id, student_id):
+                return True
             if not profile_updated:
                 await self._profile_service.update_after_lesson(
                     student_id=student_id,
@@ -84,11 +89,15 @@ class PostLessonProcessingWorker:
                 )
                 await self._mark_stage(session_id, profile_updated=True)
             if not flags_evaluated:
+                if not await self._check_consent(session_id, student_id):
+                    return True
                 await self._flag_service.evaluate_student(
                     student_id=student_id,
                     requested_by_user_id=student_id,
                 )
                 await self._mark_stage(session_id, flags_evaluated=True)
+            if not await self._check_consent(session_id, student_id):
+                return True
             await self._record_accommodation_changes(student_id)
             async with self._sessions.begin() as session:
                 await notify_modality_shifts(
@@ -100,6 +109,28 @@ class PostLessonProcessingWorker:
         except Exception as error:
             await self._retry(session_id, error)
         return True
+
+    async def _check_consent(self, session_id: UUID, student_id: UUID) -> bool:
+        async with self._sessions.begin() as session:
+            consent = await session.scalar(
+                select(ConsentRecord.status).where(
+                    ConsentRecord.subject_user_id == student_id,
+                    ConsentRecord.consent_type == REQUIRED_LEARNING_CONSENT,
+                )
+            )
+            if consent is ConsentStatus.CONFIRMED:
+                return True
+            record = await session.get(PostLessonProcessing, session_id, with_for_update=True)
+            if record is not None:
+                record.status = "consent_blocked"
+                record.last_error = (
+                    "consent_withdrawn"
+                    if consent is ConsentStatus.WITHDRAWN
+                    else "consent_required"
+                )
+                record.next_attempt_at = datetime.now(UTC) + timedelta(minutes=15)
+                record.attempt_count = max(0, record.attempt_count - 1)
+            return False
 
     async def _record_accommodation_changes(self, student_id: UUID) -> None:
         """Write down any accommodation that started or stopped this lesson.
@@ -141,7 +172,7 @@ class PostLessonProcessingWorker:
                     PostLessonProcessing.attempt_count < MAX_ATTEMPTS,
                     PostLessonProcessing.next_attempt_at <= now,
                     or_(
-                        PostLessonProcessing.status.in_(("pending", "failed")),
+                        PostLessonProcessing.status.in_(("pending", "failed", "consent_blocked")),
                         PostLessonProcessing.status == "processing",
                     ),
                 )

@@ -22,6 +22,7 @@ from nevo.consent.entities import (
 from nevo.consent.errors import (
     ConsentError,
     ConsentRequiredError,
+    ConsentUnavailableError,
     ConsentWithdrawnError,
     InvalidConsentInvitationError,
     ParentAccountConflictError,
@@ -278,7 +279,7 @@ class ConsentGateResponse(BaseModel):
 
     student_id: UUID
     granted: bool
-    blocked: bool
+    blocked: bool = Field(description="True unless required processing consent is confirmed.")
     required_type: ConsentType
     status: ConsentStatus
 
@@ -293,7 +294,7 @@ def get_consent_service(request: Request) -> ConsentService:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "code": "service_unavailable",
+                "code": "consent_service_unavailable",
                 "message": "Consent services are temporarily unavailable.",
             },
         )
@@ -606,18 +607,11 @@ async def require_learning_consent_if_student(
     request: Request,
     principal: PrincipalDependency,
 ) -> ConsentGate | None:
-    """Stop a withdrawn learner, and nobody else.
+    """SCRUM-257: processing requires confirmed consent, not merely no withdrawal.
 
-    A parent who withdraws is told it suspends their child's access
-    immediately, so something has to act on that, and until now nothing did:
-    the gate was readable and never enforced. It goes on the endpoints that
-    do the processing - starting a lesson, recording progress, taking a
-    lesson offline, asking Nevo a question - and not on reads, so the client
-    can still load the screen that explains why learning has stopped.
-
-    Only an explicit withdrawal blocks. A learner whose consent nobody has
-    recorded yet carries on, which is the standing ruling: that gap belongs
-    to the school, not to the child.
+    Consent and account-management reads remain available so the learner can
+    reach the explanation and the school can record consent. Other roles keep
+    their separate authorisation checks.
     """
 
     if principal.role != "student":
@@ -631,6 +625,14 @@ async def require_learning_consent_if_student(
         return await service.require_student_consent(principal)
     except ConsentError as error:
         raise public_consent_error(error) from error
+    except Exception as error:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "consent_service_unavailable",
+                "message": "Consent could not be checked. Please try again later.",
+            },
+        ) from error
 
 
 StudentLearningConsent = Annotated[
@@ -656,7 +658,9 @@ def consent_actor(snapshot: PermissionSnapshot) -> ConsentActor:
 
 def public_consent_error(error: ConsentError) -> HTTPException:
     status_code = status.HTTP_400_BAD_REQUEST
-    if isinstance(error, StudentNotFoundError):
+    if isinstance(error, ConsentUnavailableError):
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif isinstance(error, StudentNotFoundError):
         status_code = status.HTTP_404_NOT_FOUND
     elif isinstance(
         error,

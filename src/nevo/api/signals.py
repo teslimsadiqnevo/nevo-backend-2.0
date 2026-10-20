@@ -422,8 +422,8 @@ SignalIngestionDependency = Annotated[
 ]
 
 
-async def _refuse_a_withdrawn_child(request: Request, principal: AuthPrincipal) -> None:
-    """Stop the stream for a child whose consent has been withdrawn. Ask B44.
+async def _require_confirmed_consent(request: Request, principal: AuthPrincipal) -> None:
+    """Stop collection unless the child's processing consent is confirmed.
 
     Resolved here rather than injected as a route dependency, and that is the
     point rather than a detail. A dependency resolves before the handler, so
@@ -463,7 +463,7 @@ async def _refuse_a_withdrawn_child(request: Request, principal: AuthPrincipal) 
     response_model=SignalBatchResponse,
     status_code=status.HTTP_202_ACCEPTED,
     responses={
-        403: {"description": "consent_withdrawn or student_required"},
+        403: {"description": "consent_required, consent_withdrawn or student_required"},
         503: {"description": "consent_service_unavailable; no events are accepted"},
     },
 )
@@ -475,12 +475,9 @@ async def ingest_signal_batch(
 ) -> SignalBatchResponse:
     """Take a batch of signals for the child who sent them.
 
-    Refused for a child whose consent has been withdrawn. The client stops
-    the stream itself on a withdrawal, and this is what backs that up: the
-    gate was on starting a lesson, recording progress, taking one offline and
-    asking Nevo, and not on the stream - so a client that missed the
-    withdrawal, or never knew, went on reporting a child nobody may process.
-    Ask B44.
+    Confirmed processing consent is checked on every batch, independently of
+    any browser gate. Pending, not-sent, missing and withdrawn consent refuse
+    ingestion; unavailable consent checks fail closed.
     """
 
     if principal.role != "student":
@@ -488,7 +485,7 @@ async def ingest_signal_batch(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "student_required", "message": "Student account required."},
         )
-    await _refuse_a_withdrawn_child(request, principal)
+    await _require_confirmed_consent(request, principal)
     try:
         receipt = await service.ingest(
             SignalIngestionBatch(

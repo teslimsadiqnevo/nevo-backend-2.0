@@ -130,10 +130,11 @@ router = APIRouter(prefix="/api/v1", tags=["learning product"])
 CONSENT_WITHDRAWN_RESPONSE = {
     403: {
         "description": (
-            "consent_withdrawn: the learner's consent was withdrawn and this "
-            "processing operation is suspended"
+            "consent_required unless processing consent is confirmed; "
+            "consent_withdrawn for explicit withdrawal. No learning write is accepted."
         )
-    }
+    },
+    503: {"description": "consent_service_unavailable: processing fails closed"},
 }
 ParsingService = Annotated[ContentParsingService, Depends(get_content_parsing_service)]
 LessonUpload = Annotated[UploadFile, File()]
@@ -785,11 +786,16 @@ async def _author_names(session: DatabaseSession, lessons: list[Lesson]) -> dict
     }
 
 
-@router.get("/lessons/{lesson_id}", response_model=LessonDetailResponse)
+@router.get(
+    "/lessons/{lesson_id}",
+    response_model=LessonDetailResponse,
+    responses=CONSENT_WITHDRAWN_RESPONSE,
+)
 async def lesson_detail(
     lesson_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> dict[str, object]:
     actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
     # A child's device has no use for a teacher's review state, and sending it
@@ -2065,19 +2071,21 @@ def _offline_archive(payload: dict[str, object], lesson_id: UUID) -> bytes:
     # a zip, and the shape inside it is the lesson package. Ask B31.
     response_class=Response,
     responses={
+        **CONSENT_WITHDRAWN_RESPONSE,
         200: {
             "description": (
                 "A zip holding lesson.json (the lesson package) and "
                 "manifest.json. Media is referenced by URL, not bundled."
             ),
             "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
-        }
+        },
     },
 )
 async def offline_package(
     lesson_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> Response:
     actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:

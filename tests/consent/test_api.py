@@ -215,5 +215,7 @@ def test_student_gate_reports_pending_and_confirmed() -> None:
 
     assert pending.status_code == 200
     assert not pending.json()["granted"]
+    assert pending.json()["blocked"] is True
     assert confirmed.status_code == 200
     assert confirmed.json()["granted"]
+    assert confirmed.json()["blocked"] is False

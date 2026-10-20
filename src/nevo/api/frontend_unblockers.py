@@ -1251,11 +1251,16 @@ async def _author_names(session: DatabaseSession, lessons: list[Lesson]) -> dict
     response_model=LessonDetailResponse,
     operation_id="content_lesson_detail_compatibility",
     tags=["content"],
+    responses={
+        403: {"description": "Student: consent_required or consent_withdrawn"},
+        503: {"description": "consent_service_unavailable: processing fails closed"},
+    },
 )
 async def lesson_detail(
     lesson_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> LessonDetailResponse:
     actor = await require_school_actor(session, principal)
     lesson = await session.get(Lesson, lesson_id)

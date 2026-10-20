@@ -821,12 +821,20 @@ async def _mark_scaffold_answer(request: Request, payload: ScaffoldAttemptReques
     return payload.answer.strip().casefold() == expected.casefold()
 
 
-@router.post("/scaffolds/attempt", response_model=ScaffoldDecisionResponse)
+@router.post(
+    "/scaffolds/attempt",
+    response_model=ScaffoldDecisionResponse,
+    responses={
+        403: {"description": "Student: consent_required or consent_withdrawn"},
+        503: {"description": "consent_service_unavailable"},
+    },
+)
 async def record_scaffold_attempt(
     payload: ScaffoldAttemptRequest,
     request: Request,
     principal: PrincipalDependency,
     service: ScaffoldFadingDependency,
+    consent: StudentLearningConsent = None,
 ) -> ScaffoldDecisionResponse:
     """Return an already-recorded state for student answerAttemptId receipts.
 
@@ -974,10 +982,18 @@ def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:
     )
 
 
-@router.post("/guided-questions/answer", response_model=GuidedAnswerResponse)
+@router.post(
+    "/guided-questions/answer",
+    response_model=GuidedAnswerResponse,
+    responses={
+        403: {"description": "Student: consent_required or consent_withdrawn"},
+        503: {"description": "consent_service_unavailable"},
+    },
+)
 async def answer_guided_question(
     payload: GuidedAnswerRequest,
     principal: PrincipalDependency,
+    consent: StudentLearningConsent = None,
 ) -> GuidedAnswerResponse:
     """Record what a child said back to a guided question.
 

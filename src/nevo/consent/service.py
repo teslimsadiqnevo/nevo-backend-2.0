@@ -19,6 +19,9 @@ from nevo.consent.entities import (
     QueuedParentConsentRequest,
 )
 from nevo.consent.errors import (
+    ConsentError,
+    ConsentRequiredError,
+    ConsentUnavailableError,
     ConsentWithdrawnError,
     InvalidConsentMethodError,
     InvalidParentContactError,
@@ -232,17 +235,22 @@ class ConsentService:
     ) -> ConsentGate:
         if principal.role != "student":
             raise StudentConsentAccessError
-        status = await self._repository.consent_status(
-            student_id=principal.user_id,
-            consent_type=REQUIRED_LEARNING_CONSENT,
-        )
+        try:
+            status = await self._repository.consent_status(
+                student_id=principal.user_id,
+                consent_type=REQUIRED_LEARNING_CONSENT,
+            )
+        except ConsentError:
+            raise
+        except Exception as error:
+            raise ConsentUnavailableError from error
         # Report the stored status rather than collapsing everything that is
         # not confirmed into "pending". A withdrawn learner and one nobody has
         # asked about yet need different screens.
         return ConsentGate(
             student_id=principal.user_id,
             granted=status is ConsentStatus.CONFIRMED,
-            blocked=status is ConsentStatus.WITHDRAWN,
+            blocked=status is not ConsentStatus.CONFIRMED,
             required_type=REQUIRED_LEARNING_CONSENT,
             status=status,
         )
@@ -252,12 +260,10 @@ class ConsentService:
         principal: AuthPrincipal,
     ) -> ConsentGate:
         gate = await self.student_gate(principal)
-        if gate.blocked:
-            # Only an explicit withdrawal stops processing. A learner nobody
-            # has recorded consent for yet carries on: that is an
-            # administrative gap at the school, not a reason to lock a child
-            # out of their lessons.
+        if gate.status is ConsentStatus.WITHDRAWN:
             raise ConsentWithdrawnError
+        if not gate.granted:
+            raise ConsentRequiredError
         return gate
 
     async def initialize_roster_student(self, student_id: UUID) -> None:

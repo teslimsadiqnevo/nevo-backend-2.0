@@ -43,6 +43,11 @@ class ConsentRequiredError(ConsentError):
     public_message = "Parent or school consent is required to continue."
 
 
+class ConsentUnavailableError(ConsentError):
+    code = "consent_service_unavailable"
+    public_message = "Consent could not be checked. Please try again later."
+
+
 class ConsentWithdrawnError(ConsentError):
     code = "consent_withdrawn"
     public_message = "A parent or guardian has withdrawn consent for this learner."

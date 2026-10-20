@@ -156,7 +156,8 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
         409: {"description": "use_lesson_guidance: in-lesson help uses the Socratic panel."},
         403: {
             "description": (
-                "content_safety_blocked, ask_role_forbidden, or consent_withdrawn "
+                "content_safety_blocked, ask_role_forbidden, consent_required, "
+                "or consent_withdrawn "
                 "when learner processing "
                 "has been suspended"
             ),
@@ -170,8 +171,8 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
         },
         503: {
             "description": (
-                "safety_check_unavailable: no answer is delivered without "
-                "a completed safety review."
+                "safety_check_unavailable or consent_service_unavailable: "
+                "no answer is delivered without completed checks."
             )
         },
     },
@@ -422,13 +423,21 @@ async def delete_thread(
         )
 
 
-@router.post("/{interaction_id}/helpfulness", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/{interaction_id}/helpfulness",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        403: {"description": "Student: consent_required or consent_withdrawn"},
+        503: {"description": "consent_service_unavailable"},
+    },
+)
 async def record_helpfulness(
     interaction_id: UUID,
     payload: HelpfulnessRequest,
     principal: PrincipalDependency,
     service: AskNevoDependency,
     session: DatabaseSession,
+    consent: StudentLearningConsent = None,
 ) -> None:
     interaction = await session.get(AskNevoInteraction, interaction_id)
     if interaction is None or interaction.actor_user_id != principal.user_id:

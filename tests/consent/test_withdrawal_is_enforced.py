@@ -30,6 +30,15 @@ GATED = (
     ("put", "/api/v1/lessons/{lesson_id}/progress"),
     ("post", "/api/v1/lessons/{lesson_id}/download"),
     ("post", "/api/v1/ask-nevo/"),
+    ("post", "/api/v1/lessons/{lesson_id}/attempts"),
+    ("get", "/api/v1/lessons/{lesson_id}"),
+    ("get", "/api/content/lessons/{lesson_id}"),
+    ("get", "/api/v1/lessons/{lesson_id}/offline-package"),
+    ("get", "/api/v1/lessons/{lesson_id}/offline-package.json"),
+    ("get", "/api/v1/lessons/{lesson_id}/offline-manifest"),
+    ("post", "/api/intelligence/guided-questions/answer"),
+    ("post", "/api/intelligence/scaffolds/attempt"),
+    ("post", "/api/v1/ask-nevo/{interaction_id}/helpfulness"),
 )
 
 

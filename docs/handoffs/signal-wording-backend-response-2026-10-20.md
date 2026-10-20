@@ -1,5 +1,10 @@
 # Signal-path wording: backend response
 
+Update: the pending-consent policy described in point 3 below was subsequently
+superseded by SCRUM-257. Confirmed consent is now required; see
+`docs/jira/SCRUM-257.md` and the twelve-item reply of 20 October. The rest of this
+document remains the dated signal-path response.
+
 20 October 2026. Response to `Nevo_Signals_Wording_19Oct.md`.
 
 This is the signal-path wording review, not a replacement for the twelve-item engine work list. The source document reports frontend behaviour at commit `12f103e`; that browser build has not been independently verified in this backend task. No frontend code was changed.

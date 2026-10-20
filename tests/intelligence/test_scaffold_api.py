@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from nevo.api.auth import authenticated_principal
+from nevo.api.consent import require_learning_consent_if_student
 from nevo.api.intelligence import router
 from nevo.auth.entities import AuthPrincipal
 from nevo.domain.intelligence.vocabulary import ScaffoldIntensity, ScaffoldOutcome
@@ -70,6 +71,8 @@ def client_for(*, role="student", user_id=None):
     app = FastAPI()
     app.state.scaffold_fading_service = service
     app.dependency_overrides[authenticated_principal] = lambda: principal
+    # Consent enforcement is exercised with the real service in the HTTP runtime tests.
+    app.dependency_overrides[require_learning_consent_if_student] = lambda: None
     app.include_router(router)
     return TestClient(app), service, principal
 

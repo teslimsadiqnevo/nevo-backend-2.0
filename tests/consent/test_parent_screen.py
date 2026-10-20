@@ -222,9 +222,7 @@ def _gate_for(status: ConsentStatus):  # type: ignore[no-untyped-def]
     return service, principal, anyio.run(lambda: service.student_gate(principal))
 
 
-def test_only_a_withdrawal_blocks_a_learner() -> None:
-    """Lydia's ruling: an unrecorded consent is the school's task, not the
-    child's problem. Three statuses report granted=False; only one stops them."""
+def test_only_confirmed_consent_unblocks_a_learner() -> None:
     blocked = {
         status: _gate_for(status)[2].blocked
         for status in (
@@ -236,15 +234,14 @@ def test_only_a_withdrawal_blocks_a_learner() -> None:
     }
 
     assert blocked == {
-        ConsentStatus.NOT_SENT: False,
-        ConsentStatus.PENDING: False,
+        ConsentStatus.NOT_SENT: True,
+        ConsentStatus.PENDING: True,
         ConsentStatus.CONFIRMED: False,
         ConsentStatus.WITHDRAWN: True,
     }
 
 
-def test_granted_is_false_for_three_statuses_so_it_is_not_the_access_answer() -> None:
-    """The trap this guards: granted is about consent, blocked is about access."""
+def test_unconfirmed_statuses_are_not_granted() -> None:
     not_granted = [
         status
         for status in (
@@ -260,14 +257,16 @@ def test_granted_is_false_for_three_statuses_so_it_is_not_the_access_answer() ->
     assert ConsentStatus.CONFIRMED not in not_granted
 
 
-def test_a_pending_learner_may_still_learn() -> None:
+def test_a_pending_learner_cannot_process_learning_evidence() -> None:
     import anyio
+    import pytest
+
+    from nevo.consent.errors import ConsentRequiredError
 
     service, principal, _ = _gate_for(ConsentStatus.PENDING)
 
-    gate = anyio.run(lambda: service.require_student_consent(principal))
-
-    assert gate.blocked is False
+    with pytest.raises(ConsentRequiredError):
+        anyio.run(lambda: service.require_student_consent(principal))
 
 
 def test_a_withdrawn_learner_is_stopped_and_told_why() -> None:

@@ -138,6 +138,7 @@ def service_with(
         scheduler=scheduler,
         compliance=compliance,
         renderer=PromptRenderer(),
+        safety=type("AllowSafety", (), {"check": AsyncMock()})(),
         max_compliance_retries=max_retries,
         input_cost_usd_per_million=Decimal("1"),
         output_cost_usd_per_million=Decimal("2"),

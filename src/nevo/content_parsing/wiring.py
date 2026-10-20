@@ -15,5 +15,7 @@ def build_content_parsing_service(
         repository=SqlAlchemyContentParsingRepository(sessions),
         ai_gateway=ai_gateway,
         audio_generation=AudioGenerationService(AudioSettings()),
-        visual_generation=EducationalImageService(VisualGenerationSettings()),
+        visual_generation=EducationalImageService(
+            VisualGenerationSettings(), safety=ai_gateway.safety_guard
+        ),
     )

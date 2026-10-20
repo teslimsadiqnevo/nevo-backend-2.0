@@ -81,9 +81,9 @@ def test_a_working_co_construction_is_still_interactive() -> None:
     )
 
 
-def test_a_picture_alone_is_enough_to_keep_the_segment_visual() -> None:
+def test_a_calculation_picture_is_not_offered_as_delivery() -> None:
     segment = _normalize_segment(_calculation(calculation_variant=None, visual_variant=IMAGE))
-    assert ContentModality.VISUAL in segment.available_modalities
+    assert ContentModality.VISUAL not in segment.available_modalities
 
 
 def test_every_content_type_ends_up_with_a_modality() -> None:
@@ -109,5 +109,5 @@ def test_a_picture_of_a_sum_is_not_a_lesson_on_its_own() -> None:
     segment = _normalize_segment(_calculation(calculation_variant=None, visual_variant=IMAGE))
 
     assert ContentModality.TEXT in segment.available_modalities
-    assert ContentModality.VISUAL in segment.available_modalities
+    assert ContentModality.VISUAL not in segment.available_modalities
     assert segment.needs_review

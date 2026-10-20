@@ -10,6 +10,7 @@ from nevo.ai_gateway.repositories import (
     SqlAlchemyAiCallRepository,
     SqlAlchemyPromptTemplateRepository,
 )
+from nevo.ai_gateway.safety import safety_from_settings
 from nevo.ai_gateway.scheduler import PriorityRateLimitedScheduler
 from nevo.ai_gateway.service import AiGatewayService
 
@@ -35,6 +36,7 @@ def build_ai_gateway(
         output_cost_usd_per_million=settings.output_cost_usd_per_million,
         cache_write_cost_usd_per_million=settings.cache_write_cost_usd_per_million,
         cache_read_cost_usd_per_million=settings.cache_read_cost_usd_per_million,
+        safety=safety_from_settings(settings, sessions=sessions),
     )
 
 

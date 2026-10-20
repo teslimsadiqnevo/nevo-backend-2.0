@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -63,6 +64,7 @@ def test_authenticated_generation_returns_version_and_call_id() -> None:
         scheduler=ImmediateScheduler(),
         compliance=compliance,
         renderer=PromptRenderer(),
+        safety=type("AllowSafety", (), {"check": AsyncMock()})(),
         max_compliance_retries=1,
         input_cost_usd_per_million=Decimal("0"),
         output_cost_usd_per_million=Decimal("0"),

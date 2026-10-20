@@ -49,6 +49,7 @@ from nevo.api.product_admin import router as product_admin_router
 from nevo.api.product_auth import router as product_auth_router
 from nevo.api.product_learning import router as product_learning_router
 from nevo.api.request_context import set_request
+from nevo.api.safety_retention import router as safety_retention_router
 from nevo.api.scheduler import router as scheduler_router
 from nevo.api.signals import router as signals_router
 from nevo.api.sso import router as sso_router
@@ -212,7 +213,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         delivery=app.state.email_delivery,
     )
-    app.state.retention_service = RetentionService(sessions)
+    from nevo.storage.wiring import build_supabase_storage
+
+    app.state.retention_service = RetentionService(
+        sessions,
+        storage=build_supabase_storage(),
+        receipt_key=auth_settings.auth_session_pepper.get_secret_value(),
+    )
     app.state.scheduled_job_runner = ScheduledJobRunner(
         sessions=sessions,
         jobs=build_scheduled_jobs(
@@ -349,6 +356,7 @@ async def request_timing(request: Request, call_next):  # type: ignore[no-untype
     return response
 
 
+app.include_router(safety_retention_router)
 app.include_router(admin_router)
 app.include_router(ai_gateway_router)
 app.include_router(age_check_router)

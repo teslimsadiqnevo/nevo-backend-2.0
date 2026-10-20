@@ -166,8 +166,8 @@ class School(TimestampMixin, Base):
     data_retention_days: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
-        default=365,
-        server_default="365",
+        default=180,
+        server_default="180",
     )
     #: Admin-console seats. Five is the standard allowance; a commercial
     #: exception changes this value for one school without changing product
@@ -345,6 +345,15 @@ class User(TimestampMixin, Base):
     anonymised_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    purpose_ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    retention_due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    retention_purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     deactivated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),

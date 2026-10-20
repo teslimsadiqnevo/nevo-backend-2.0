@@ -4,10 +4,27 @@ from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.content_parsing.chunks import reading_chunks as reading_chunks
 from nevo.domain.intelligence.vocabulary import ManipulativeKind
 
 ScalarAnswer = str | int | float | bool
+
+
+def safety_reviewed_visual(value):
+    return (
+        value
+        if isinstance(value, dict) and value.get("safetyPolicyVersion") == POLICY_VERSION
+        else None
+    )
+
+
+def student_modalities(segment):
+    return [
+        value
+        for value in (segment.available_modalities or [])
+        if value != "visual" or safety_reviewed_visual(segment.visual_variant)
+    ]
 
 
 def segment_modalities(content_type, available, calculation):
@@ -158,6 +175,7 @@ def depth_approved(value):
         isinstance(value, dict)
         and value.get("reviewStatus") == "approved"
         and bool(value.get("reviewedBy") and value.get("reviewedAt"))
+        and value.get("safetyPolicyVersion") == POLICY_VERSION
     )
 
 

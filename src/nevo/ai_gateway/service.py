@@ -28,6 +28,7 @@ from nevo.ai_gateway.ports import (
 )
 from nevo.ai_gateway.privacy import AiPrivacyGuard
 from nevo.ai_gateway.prompts import PromptRenderer
+from nevo.ai_gateway.safety import ContentSafetyGuard
 from nevo.domain.ai_gateway.vocabulary import (
     SERVICE_PRIORITIES,
     AiCallStatus,
@@ -54,6 +55,7 @@ class AiGatewayService:
         cache_write_cost_usd_per_million: Decimal,
         cache_read_cost_usd_per_million: Decimal,
         privacy: AiPrivacyGuard | None = None,
+        safety: ContentSafetyGuard | None = None,
     ) -> None:
         self._prompts = prompts
         self._calls = calls
@@ -68,6 +70,23 @@ class AiGatewayService:
         self._cache_write_cost = cache_write_cost_usd_per_million
         self._cache_read_cost = cache_read_cost_usd_per_million
         self._privacy = privacy or AiPrivacyGuard()
+        self._safety = safety or ContentSafetyGuard()
+
+    @property
+    def safety_guard(self):
+        return self._safety
+
+    async def check_content(self, text, *, requester_user_id, student_id=None, phase="source"):
+        context = await self._calls.resolve_context(
+            requester_user_id=requester_user_id, student_id=student_id
+        )
+        safe = self._privacy.sanitize_text(
+            text,
+            pseudonym=self._privacy.pseudonym(student_id or requester_user_id),
+            sensitive_terms=context.sensitive_terms,
+        )
+        await self._safety.check(safe, phase=phase, context=context)
+        return context
 
     @property
     def configured(self) -> bool:
@@ -155,14 +174,17 @@ class AiGatewayService:
             async def generate_once(
                 provider_request: ProviderRequest = provider_request,
             ) -> ProviderResponse:
+                provider = _SafetyReviewedProvider(
+                    self._provider, self._safety, context, request.prompt_name, self._privacy
+                )
                 if provider_request.tools and request.tool_executor is not None:
                     outcome = await run_tool_loop(
-                        provider=self._provider,
+                        provider=provider,
                         request=provider_request,
                         execute=request.tool_executor,
                     )
                     return outcome.response_with_text()
-                return await self._provider.generate(provider_request)
+                return await provider.generate(provider_request)
 
             try:
                 response = await self._scheduler.execute(
@@ -201,6 +223,18 @@ class AiGatewayService:
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
         )
+        text = accepted.text
+        for alias, original in lesson_characters.items():
+            text = text.replace(alias, original)
+        await self._safety.check(
+            self._privacy.sanitize_text(
+                text,
+                pseudonym=self._privacy.pseudonym(request.student_id or request.requester_user_id),
+                sensitive_terms=context.sensitive_terms,
+            ),
+            phase="final:" + request.prompt_name,
+            context=context,
+        )
         call_id = await self._calls.record(
             AiCallAudit(
                 context=context,
@@ -220,9 +254,6 @@ class AiGatewayService:
                 error_code=error_code,
             )
         )
-        text = accepted.text
-        for alias, original in lesson_characters.items():
-            text = text.replace(alias, original)
         return AiGenerationResult(
             text=text,
             provider=accepted.provider,
@@ -262,3 +293,45 @@ def public_ai_error(error: Exception) -> AiGatewayError:
     if isinstance(error, AiGatewayError):
         return error
     return AiGatewayError()
+
+
+class _SafetyReviewedProvider:
+    def __init__(self, provider, safety, context, prompt_name, privacy):
+        self.provider, self.safety, self.context, self.prompt_name, self.privacy = (
+            provider,
+            safety,
+            context,
+            prompt_name,
+            privacy,
+        )
+
+    async def generate(self, request):
+        import json
+
+        material = request.user_content + "\n" + json.dumps(request.history, default=str)
+        material = self.privacy.sanitize_text(
+            material,
+            pseudonym=self.privacy.pseudonym(
+                self.context.student_id or self.context.requester_user_id
+            ),
+            sensitive_terms=self.context.sensitive_terms,
+        )
+        await self.safety.check(material, phase="input:" + self.prompt_name, context=self.context)
+        response = await self.provider.generate(request)
+        output = (
+            response.text
+            + "\n"
+            + json.dumps([call.arguments for call in response.tool_calls], default=str)
+        )
+        await self.safety.check(
+            self.privacy.sanitize_text(
+                output,
+                pseudonym=self.privacy.pseudonym(
+                    self.context.student_id or self.context.requester_user_id
+                ),
+                sensitive_terms=self.context.sensitive_terms,
+            ),
+            phase="output:" + self.prompt_name,
+            context=self.context,
+        )
+        return response

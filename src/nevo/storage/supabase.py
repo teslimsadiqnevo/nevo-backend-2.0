@@ -68,6 +68,58 @@ class SupabaseStorage:
         if response.is_error:
             raise StorageError(f"Supabase upload failed with status {response.status_code}")
 
+    async def download(self, path: str) -> bytes:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(self._object_endpoint(path), headers=self._headers())
+        if response.is_error:
+            raise StorageError(f"Supabase download failed with status {response.status_code}")
+        return response.content
+
+    async def delete(self, path: str) -> None:
+        if not path or path.startswith("/") or ".." in path.split("/") or "://" in path:
+            raise StorageError("Invalid object path")
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.delete(self._object_endpoint(path), headers=self._headers())
+        if response.status_code not in {200, 204, 404}:
+            raise StorageError(f"Supabase delete failed with status {response.status_code}")
+
+    async def list_paths(self, prefix: str) -> list[str]:
+        if not prefix or ".." in prefix.split("/") or "://" in prefix:
+            raise StorageError("Invalid object prefix")
+        result = []
+        offset = 0
+        while True:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    f"{self._require_base_url()}/storage/v1/object/list/"
+                    f"{quote(self._bucket, safe='')}",
+                    headers=self._headers(),
+                    json={
+                        "prefix": prefix,
+                        "limit": 1000,
+                        "offset": offset,
+                        "sortBy": {"column": "name", "order": "asc"},
+                    },
+                )
+            if response.is_error:
+                raise StorageError(f"Supabase list failed with status {response.status_code}")
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise StorageError("Invalid storage list response")
+            for row in rows:
+                if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+                    raise StorageError("Invalid storage object")
+                if row["name"] in {"", ".", ".."} or "/" in row["name"]:
+                    raise StorageError("Invalid storage object name")
+                path = f"{prefix.rstrip('/')}/{row['name']}"
+                if row.get("id") is None:
+                    result.extend(await self.list_paths(path))
+                else:
+                    result.append(path)
+            if len(rows) < 1000:
+                return result
+            offset += 1000
+
     async def url_for(self, path: str) -> str:
         """Return a URL a client can fetch directly.
 

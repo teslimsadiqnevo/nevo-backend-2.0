@@ -46,7 +46,10 @@ def build_scheduled_jobs(
         return await send_attention_digests(sessions)
 
     async def retention_sweep() -> str:
-        return (await retention_service.sweep()).summary()
+        result = await retention_service.sweep()
+        if result.failed:
+            raise RuntimeError(result.summary())
+        return result.summary()
 
     async def consent_expiry_sweep() -> str:
         return (await ConsentExpiryService(sessions).sweep()).summary()
@@ -127,7 +130,7 @@ def build_scheduled_jobs(
             interval=WEEKLY,
             run=attention_digests,
         ),
-        ScheduledJob(name="retention.anonymise", interval=DAILY, run=retention_sweep),
+        ScheduledJob(name="retention.anonymise", interval=HOURLY, run=retention_sweep),
         ScheduledJob(name="consent.expire_unanswered", interval=DAILY, run=consent_expiry_sweep),
         ScheduledJob(name="scheduler.refresh_due_dates", interval=DAILY, run=refresh_due_dates),
         ScheduledJob(name="sso.roster_sync", interval=DAILY, run=roster_sync),

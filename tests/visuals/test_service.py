@@ -61,12 +61,22 @@ class _Fake:
         url = str(request.url)
         if request.method == "HEAD":
             return httpx.Response(200 if self.object_exists else 404)
+        if request.method == "GET" and "/storage/" in url:
+            return httpx.Response(200, content=PNG)
         if "openai.com" in url:
             self.image_prompts.append(json.loads(request.content)["prompt"])
             return httpx.Response(200, json={"data": [{"b64_json": ENCODED_PNG}]})
         if "api.anthropic.com" in url:
             assert request.headers["x-api-key"] == "anthropic-secret"
             body = json.loads(request.content)
+            if "child-content safety reviewer" in str(body.get("system", "")):
+                return httpx.Response(
+                    200,
+                    json={
+                        "stop_reason": "end_turn",
+                        "content": [{"type": "text", "text": '{"action":"allow","categories":[]}'}],
+                    },
+                )
             self.review_images.append(body["messages"][0]["content"][0]["source"]["data"])
             return self.reviews.pop(0)
         self.uploads.append(request.content)
@@ -174,6 +184,39 @@ async def test_existing_object_skips_generation(monkeypatch: pytest.MonkeyPatch)
     assert result["reviewAttempts"] == 0
 
 
+@pytest.mark.parametrize("blocked_phase", ["image_prompt", "image_output", "image_cached"])
+async def test_safety_blocks_images_before_delivery(monkeypatch, blocked_phase):
+    fake = _Fake([_review(True)], object_exists=blocked_phase == "image_cached")
+
+    def handler(request):
+        if "anthropic.com" in str(request.url):
+            body = json.loads(request.content)
+            if "child-content safety reviewer" in str(body.get("system", "")):
+                phase = json.loads(body["messages"][0]["content"][0]["text"])["phase"]
+                if phase == blocked_phase:
+                    return httpx.Response(
+                        200,
+                        json={
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": '{"action":"block","categories":["violence"]}',
+                                }
+                            ]
+                        },
+                    )
+        return fake(request)
+
+    _install(monkeypatch, handler)
+    with pytest.raises(VisualGenerationError, match="cannot help"):
+        await EducationalImageService(_settings()).generate(
+            title="Lesson", lesson_text="text", requested_prompt=None
+        )
+    assert fake.uploads == []
+    if blocked_phase == "image_prompt":
+        assert fake.image_prompts == []
+
+
 async def test_private_bucket_returns_a_signed_url(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if "/object/sign/" in str(request.url):
@@ -210,6 +253,8 @@ async def test_lesson_text_is_redacted_before_leaving_the_backend(
 
 async def test_image_provider_failure_is_surfaced(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if "anthropic.com" in str(request.url):
+            return _Fake([])(request)
         if request.method == "HEAD":
             return httpx.Response(404)
         return httpx.Response(429)
@@ -228,6 +273,8 @@ async def test_a_dropped_connection_costs_the_picture_not_the_lesson(
     """A raw network error must arrive as the error the parse already catches."""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if "anthropic.com" in str(request.url):
+            return _Fake([])(request)
         if request.method == "HEAD":
             return httpx.Response(404)
         raise httpx.ReadTimeout("slow", request=request)

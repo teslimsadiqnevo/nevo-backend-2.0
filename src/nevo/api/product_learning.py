@@ -39,7 +39,13 @@ from nevo.api.frontend_unblockers import (
     _title_from_filename,
 )
 from nevo.api.learning_support import require_learning_support_if_admin
-from nevo.api.lesson_contracts import checkpoint_payloads, depth_payloads, depth_reviewer_names
+from nevo.api.lesson_contracts import (
+    checkpoint_payloads,
+    depth_payloads,
+    depth_reviewer_names,
+    safety_reviewed_visual,
+    student_modalities,
+)
 from nevo.api.product_common import (
     actor_user,
     require_approved_lessons,
@@ -844,12 +850,16 @@ async def lesson_detail(
                     item.reading_chunks or reading_chunks(item.segment_key, item.body),
                     reading_config,
                 ),
-                "availableModalities": item.available_modalities,
+                "availableModalities": item.available_modalities
+                if for_teacher
+                else student_modalities(item),
                 "comprehensionCheckpoints": checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
                 ),
                 "textVariant": item.text_variant,
-                "visualVariant": item.visual_variant,
+                "visualVariant": item.visual_variant
+                if for_teacher
+                else safety_reviewed_visual(item.visual_variant),
                 "audioVariant": item.audio_variant,
                 "interactiveVariant": item.interactive_variant,
                 "calculationVariant": item.calculation_variant,
@@ -2709,10 +2719,10 @@ async def _offline_package_payload(
                     item.reading_chunks or reading_chunks(item.segment_key, item.body), config
                 ),
                 "sequenceOrder": item.sequence_order,
-                "availableModalities": item.available_modalities,
+                "availableModalities": student_modalities(item),
                 "modalityVariants": {
                     "text": item.text_variant,
-                    "visual": item.visual_variant,
+                    "visual": safety_reviewed_visual(item.visual_variant),
                     "audio": item.audio_variant,
                     "interactive": item.interactive_variant,
                     "calculation": item.calculation_variant,

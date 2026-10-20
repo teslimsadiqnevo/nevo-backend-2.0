@@ -11,6 +11,12 @@ import httpx
 from PIL import Image
 
 from nevo.ai_gateway.privacy import AiPrivacyGuard
+from nevo.ai_gateway.safety import (
+    POLICY_VERSION,
+    SafetyBlocked,
+    SafetyUnavailable,
+    safety_from_settings,
+)
 from nevo.storage import StorageError, SupabaseStorage
 from nevo.visuals.config import VisualGenerationSettings
 
@@ -67,9 +73,10 @@ class EducationalImageService:
     correction appended, up to ``max_attempts`` times.
     """
 
-    def __init__(self, settings: VisualGenerationSettings) -> None:
+    def __init__(self, settings: VisualGenerationSettings, *, safety=None) -> None:
         self._settings = settings
         self._privacy = AiPrivacyGuard()
+        self._safety = safety or safety_from_settings(settings)
         key = settings.supabase_service_role_key
         self._storage = SupabaseStorage(
             base_url=str(settings.supabase_url) if settings.supabase_url else None,
@@ -93,12 +100,19 @@ class EducationalImageService:
         title: str | None,
         lesson_text: str,
         requested_prompt: str | None,
+        context=None,
     ) -> dict[str, object]:
         if not self.configured:
             raise VisualGenerationError("Image generation, review, or storage is not configured")
         safe_text = self._privacy.sanitize_text(lesson_text, pseudonym="the learner")[:4_000]
         prompt = self._prompt(title, safe_text, requested_prompt)
-        digest = hashlib.sha256(f"{self._settings.image_model}\0{prompt}".encode()).hexdigest()
+        try:
+            await self._safety.check(prompt, phase="image_prompt", context=context)
+        except (SafetyBlocked, SafetyUnavailable) as error:
+            raise VisualGenerationError(error.public_message) from error
+        digest = hashlib.sha256(
+            f"{POLICY_VERSION}\0{self._settings.image_model}\0{prompt}".encode()
+        ).hexdigest()
         object_path = f"images/lessons/{digest}.webp"
         preview_path = f"images/lessons/{digest}-preview.webp"
         attempts = 0
@@ -106,14 +120,31 @@ class EducationalImageService:
         try:
             if not await self._storage.exists(object_path):
                 accepted, attempts = await self._draw_until_approved(prompt, safe_text)
+                await self._safety.check(
+                    safe_text, phase="image_output", context=context, image=accepted
+                )
                 display, preview, width, height = _encode(accepted)
                 byte_size = len(display)
                 await self._storage.upload(object_path, display, content_type="image/webp")
                 await self._storage.upload(preview_path, preview, content_type="image/webp")
+            else:
+                cached = await self._storage.download(object_path)
+                with Image.open(io.BytesIO(cached)) as picture:
+                    buffer = io.BytesIO()
+                    picture.convert("RGB").save(buffer, format="PNG")
+                await self._safety.check(
+                    safe_text, phase="image_cached", context=context, image=buffer.getvalue()
+                )
             image_url = await self._storage.url_for(object_path)
             preview_url = await self._storage.url_for(preview_path)
+        except (SafetyBlocked, SafetyUnavailable) as error:
+            raise VisualGenerationError(error.public_message) from error
         except StorageError as error:
             raise VisualGenerationError(str(error)) from error
+        except (OSError, ValueError) as error:
+            raise VisualGenerationError(
+                "The image could not be decoded for safety review"
+            ) from error
         except httpx.HTTPError as error:
             # A dropped connection costs this segment its picture, not the
             # lesson every segment it has. The same gap in audio failed a
@@ -136,6 +167,7 @@ class EducationalImageService:
             "generatedAt": datetime.now(UTC).isoformat(),
             "caption": title or "Lesson visual",
             "qualityValidated": True,
+            "safetyPolicyVersion": POLICY_VERSION,
             "urlExpiresInSeconds": (
                 None if self._storage.public else self._storage.signed_url_ttl_seconds
             ),

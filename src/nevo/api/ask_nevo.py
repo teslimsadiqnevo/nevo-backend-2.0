@@ -5,6 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from nevo.ai_gateway.errors import AiGatewayError
+from nevo.api.ai_gateway import public_ai_error
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
@@ -154,7 +156,8 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
         409: {"description": "use_lesson_guidance: in-lesson help uses the Socratic panel."},
         403: {
             "description": (
-                "ask_role_forbidden, or consent_withdrawn when learner processing "
+                "content_safety_blocked, ask_role_forbidden, or consent_withdrawn "
+                "when learner processing "
                 "has been suspended"
             ),
         },
@@ -164,6 +167,12 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
                 "body carries a message written for the reader and resetsAt, "
                 "so the screen can say when rather than only no."
             ),
+        },
+        503: {
+            "description": (
+                "safety_check_unavailable: no answer is delivered without "
+                "a completed safety review."
+            )
         },
     },
 )
@@ -234,6 +243,8 @@ async def ask_nevo(
                 "resetsAt": limit.allowance.resets_at.isoformat(),
             },
         ) from limit
+    except AiGatewayError as error:
+        raise public_ai_error(error) from error
     return AskResponse.from_result(result)
 
 

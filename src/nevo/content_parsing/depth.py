@@ -32,6 +32,7 @@ from uuid import UUID
 
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.errors import AiGatewayError
+from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.ai_gateway.service import AiGatewayService
 from nevo.domain.ai_gateway.vocabulary import AiService
 
@@ -92,12 +93,14 @@ class DepthVariants:
             variants[SIMPLIFIED] = {
                 "body": self.simplified,
                 "reviewStatus": "pending",
+                "safetyPolicyVersion": POLICY_VERSION,
                 "sourceClaims": source_claims(source_body),
             }
         if self.expanded is not None:
             variants[EXPANDED] = {
                 "body": self.expanded,
                 "reviewStatus": "pending",
+                "safetyPolicyVersion": POLICY_VERSION,
                 "sourceClaims": source_claims(source_body),
             }
         if model:

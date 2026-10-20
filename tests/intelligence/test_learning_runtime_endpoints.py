@@ -4,6 +4,7 @@ import asyncio
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -196,6 +197,9 @@ def runtime(monkeypatch):
 
     run(seed())
     app = FastAPI()
+    from nevo.api.ai_gateway import get_ai_gateway
+
+    app.dependency_overrides[get_ai_gateway] = lambda: SimpleNamespace(check_content=AsyncMock())
     app.state.db_sessions = sessions
     from nevo.auth.config import AuthSettings
     from nevo.auth.wiring import build_auth_service, build_credential_hasher

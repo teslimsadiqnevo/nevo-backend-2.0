@@ -234,6 +234,10 @@ class ContentParsingService:
         lose a lesson.
         """
         source = _source_for_prompt(request)
+        if isinstance(self._ai_gateway, AiGatewayService):
+            await self._ai_gateway.check_content(
+                source, requester_user_id=requested_by_user_id, phase="lesson_source"
+            )
         missing_pages = _missing_text_pages(source)
         source, navigation_pages = _without_contents_pages(source)
         modules = []
@@ -449,7 +453,9 @@ class ContentParsingService:
         audio_limit = asyncio.Semaphore(AUDIO_CONCURRENCY)
         visual_pass = (
             _in_parallel(
-                lambda segment: self._generate_segment_visual(segment, notes),
+                lambda segment: self._generate_segment_visual(
+                    segment, notes, requested_by_user_id=requested_by_user_id
+                ),
                 segments,
                 limit=VISUAL_CONCURRENCY,
             )
@@ -621,6 +627,8 @@ class ContentParsingService:
         self,
         segment: ParsedLessonSegment,
         notes: list[dict[str, object]],
+        *,
+        requested_by_user_id=None,
     ) -> ParsedLessonSegment:
         generator = self._visual_generation
         # Calculation drawings are deterministic scaffold data. A generated
@@ -635,10 +643,18 @@ class ContentParsingService:
             requested_prompt = _optional_string(segment.visual_variant.get("prompt"))
         started = time.perf_counter()
         try:
+            kwargs = {}
+            if isinstance(generator, EducationalImageService) and requested_by_user_id is not None:
+                kwargs["context"] = await self._ai_gateway.check_content(
+                    segment.body,
+                    requester_user_id=requested_by_user_id,
+                    phase="illustration_source",
+                )
             visual = await generator.generate(
                 title=segment.title,
                 lesson_text=segment.body,
                 requested_prompt=requested_prompt,
+                **kwargs,
             )
             PROVIDERS.record(LESSON_IMAGES, ok=True)
         except VisualGenerationError as error:

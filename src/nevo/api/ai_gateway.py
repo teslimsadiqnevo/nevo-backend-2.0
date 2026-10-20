@@ -119,11 +119,17 @@ async def generate(
 
 
 def public_ai_error(error: AiGatewayError) -> HTTPException:
+    from nevo.ai_gateway.safety import SafetyBlocked, SafetyUnavailable
+
     status_code = status.HTTP_400_BAD_REQUEST
     if isinstance(error, PromptTemplateNotFoundError):
         status_code = status.HTTP_404_NOT_FOUND
     elif isinstance(error, InvalidAiContextError):
         status_code = status.HTTP_403_FORBIDDEN
+    elif isinstance(error, SafetyBlocked):
+        status_code = status.HTTP_403_FORBIDDEN
+    elif isinstance(error, SafetyUnavailable):
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return HTTPException(
         status_code=status_code,
         detail={

@@ -26,6 +26,9 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from nevo.access import accessible_lessons_page, accessible_lessons_query
+from nevo.ai_gateway.errors import AiGatewayError
+from nevo.ai_gateway.safety import POLICY_VERSION
+from nevo.api.ai_gateway import AiGatewayDependency, public_ai_error
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
@@ -41,6 +44,8 @@ from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     checkpoint_payloads,
     depth_payloads,
+    safety_reviewed_visual,
+    student_modalities,
 )
 from nevo.api.pagination import (
     DEFAULT_LIMIT,
@@ -1321,12 +1326,20 @@ async def lesson_detail(
                     item.reading_chunks or reading_chunks(item.segment_key, item.body),
                     reading_config,
                 ),
-                availableModalities=list(item.available_modalities),
+                availableModalities=(
+                    student_modalities(item)
+                    if actor.role == UserRole.STUDENT
+                    else list(item.available_modalities)
+                ),
                 comprehensionCheckpoints=checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
                 ),
                 textVariant=item.text_variant,
-                visualVariant=item.visual_variant,
+                visualVariant=(
+                    safety_reviewed_visual(item.visual_variant)
+                    if actor.role == UserRole.STUDENT
+                    else item.visual_variant
+                ),
                 audioVariant=item.audio_variant,
                 interactiveVariant=item.interactive_variant,
                 calculationVariant=item.calculation_variant,
@@ -1667,6 +1680,7 @@ async def approve_segment(
     segment_id: UUID,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    gateway: AiGatewayDependency,
 ) -> SegmentApprovalResponse:
     """Approve one segment's variants for children to see.
 
@@ -1697,6 +1711,14 @@ async def approve_segment(
         segment.approved_by = user.id
     variants = dict(segment.depth_variants or {})
     for key in ("simplified", "expanded"):
+        if isinstance(variants.get(key), dict) and variants[key].get("body"):
+            try:
+                await gateway.check_content(
+                    variants[key]["body"], requester_user_id=user.id, phase="rewrite_approval"
+                )
+            except AiGatewayError as error:
+                raise public_ai_error(error) from error
+            variants[key] = {**variants[key], "safetyPolicyVersion": POLICY_VERSION}
         if isinstance(variants.get(key), dict) and not (
             variants[key].get("reviewStatus") == "approved"
             and variants[key].get("reviewedBy")

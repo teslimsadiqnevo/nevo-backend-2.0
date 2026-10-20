@@ -1406,6 +1406,33 @@ async def _set_student_status(
     student = await db.get(User, student_id)
     if student is None or student.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Student not found")
+    if active:
+        if student.retention_purged_at is not None:
+            raise HTTPException(
+                410,
+                detail={
+                    "code": "learner_retention_purged",
+                    "message": "This learner's records have been erased and cannot be restored.",
+                },
+            )
+        from nevo.db.models.account import ConsentRecord
+
+        withdrawn = await db.scalar(
+            select(ConsentRecord.id).where(
+                ConsentRecord.subject_user_id == student.id,
+                ConsentRecord.consent_type == "data_processing",
+                ConsentRecord.status == "withdrawn",
+            )
+        )
+        if withdrawn is not None:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "consent_withdrawn",
+                    "message": "Processing consent must be renewed before restoring access.",
+                },
+            )
+        student.purpose_ended_at = None
     student.status = UserStatus.ACTIVE if active else UserStatus.DEACTIVATED
     student.deactivated_at = None if active else datetime.now(UTC)
     await db.commit()

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 
-from nevo.api.lesson_contracts import depth_approved, segment_modalities
+from nevo.api.lesson_contracts import depth_approved, segment_modalities, student_modalities
 from nevo.api.product_common import actor_user
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import LessonAssignment
@@ -110,7 +110,7 @@ async def prepare_adaptation(session, principal, payload, signals):
             or next((item.get("conceptId") for item in checkpoints if item.get("conceptId")), None)
         )
         steps = calculation.get("steps") or []
-        modes = segment_modalities(row.content_type, row.available_modalities, calculation)
+        modes = segment_modalities(row.content_type, student_modalities(row), calculation)
         hints = tuple(str(item["hint"]) for item in [*steps, *checkpoints] if item.get("hint"))
         questions = tuple(str(item["prompt"]) for item in steps if item.get("prompt"))
         if not questions:
@@ -268,7 +268,7 @@ async def prepare_adaptation(session, principal, payload, signals):
         )
         current_modes = (
             segment_modalities(
-                current.content_type, current.available_modalities, current.calculation_variant
+                current.content_type, student_modalities(current), current.calculation_variant
             )
             if current
             else []

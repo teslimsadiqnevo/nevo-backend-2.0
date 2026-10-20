@@ -431,7 +431,7 @@ async def _review_result(session, lesson):
 
 async def _bulk_approve(session, lesson, actor, payload, kind):
     rows, segments, points, rewrites = await _review_material(session, lesson)
-    if lesson.status != "completed" or not segments:
+    if lesson.status not in {"completed", "completed_with_review"} or not segments:
         raise HTTPException(
             409,
             detail={

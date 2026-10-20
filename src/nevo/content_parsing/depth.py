@@ -267,6 +267,9 @@ class DepthVariantService:
                                 "claim, technical term, example, figure, equation "
                                 "and safety warning. "
                                 "Use shorter, plainer sentences without omitting content. "
+                                f"The source alone contains {len(body.strip())} characters. "
+                                f"Keep simplified below {len(body.strip())} characters; "
+                                "do not count these instructions as source content. "
                                 "Keep questions as questions, with the same item numbering. "
                                 "Preserve every procedural step and its safety warning. "
                                 + (

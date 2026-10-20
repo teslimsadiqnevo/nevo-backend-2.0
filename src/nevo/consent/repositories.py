@@ -32,7 +32,6 @@ from nevo.db.models.consent import (
     ConsentNotificationOutbox,
     ParentLink,
 )
-from nevo.db.models.consent_assurance import AgeCheck
 from nevo.db.models.product import ParentDataRequest
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
@@ -823,28 +822,15 @@ class SqlAlchemyConsentRepository:
         parent_date_of_birth: date | None,
         now: datetime,
     ) -> AgeCheckState:
-        """Record a difference; only a school roster correction clears it."""
+        from nevo.consent.age_assurance import record_parent_date
 
-        student = await session.get(User, student_id)
-        school_date = student.date_of_birth if student else None
-        check = await session.scalar(select(AgeCheck).where(AgeCheck.student_id == student_id))
-        if check is None:
-            check = AgeCheck(school_id=school_id, student_id=student_id)
-            session.add(check)
-        already_differed = check.state is AgeCheckState.MISMATCH
-        check.school_date_of_birth = school_date
-        check.parent_date_of_birth = parent_date_of_birth
-        if already_differed:
-            check.state = AgeCheckState.MISMATCH
-        elif parent_date_of_birth is None:
-            check.state = AgeCheckState.AWAITING_PARENT
-        elif school_date is None or school_date != parent_date_of_birth:
-            check.state = AgeCheckState.MISMATCH
-        else:
-            check.state = AgeCheckState.MATCHED
-        check.updated_at = now
-        await session.flush()
-        return check.state
+        return await record_parent_date(
+            session,
+            school_id=school_id,
+            student_id=student_id,
+            born=parent_date_of_birth,
+            now=now,
+        )
 
     @staticmethod
     async def _require_student(

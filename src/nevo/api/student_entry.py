@@ -174,24 +174,39 @@ async def _consent_state(
 
 
 async def _has_consent(session: AsyncSession, student_id: UUID) -> bool:
+    if await _age_hold(session, student_id):
+        raise HTTPException(
+            403,
+            detail={
+                "code": "age_check_pending",
+                "message": "The school and your parent need to recheck your account details.",
+            },
+        )
     return await _consent_state(session, student_id) == "given"
+
+
+async def _age_hold(session: AsyncSession, student_id: UUID) -> bool:
+    from nevo.consent.age_assurance import age_check_blocks
+
+    return await age_check_blocks(session, student_id)
 
 
 async def _state(session: AsyncSession, grant: StudentOnboardingGrant) -> StudentEntryState:
     student = await _student(session, grant)
     school_class = await session.get(Class, grant.class_id)
+    held = await _age_hold(session, student.id)
     return StudentEntryState(
         first_name=student.first_name or "",
         class_name=school_class.name if school_class else None,
         consent_state=await _consent_state(session, student.id),
-        age_check_pending=False,
+        age_check_pending=held,
         age=age_on(student.date_of_birth),
         age_band=(
             band_for_date_of_birth(student.date_of_birth)
             or band_for_year_group(school_class.year_group if school_class else None)
         ),
         year_group=school_class.year_group if school_class else None,
-        account_ready=student.pin_hash is not None,
+        account_ready=student.pin_hash is not None and not held,
         pin_cleared=student.pin_cleared_at is not None,
         pin_state=_pin_state(student),
     )
@@ -560,6 +575,7 @@ async def lookup_entry(
             .limit(1)
         )
         consent_state = await _consent_state(session, student.id)
+        held = await _age_hold(session, student.id)
     except SQLAlchemyError as error:
         await session.rollback()
         raise _entry_check_failed() from error
@@ -570,14 +586,14 @@ async def lookup_entry(
         first_name=student.first_name or "",
         class_name=enrolled_class.name if enrolled_class else None,
         consent_state=consent_state,
-        age_check_pending=False,
+        age_check_pending=held,
         age=age_on(student.date_of_birth),
         age_band=(
             band_for_date_of_birth(student.date_of_birth)
             or band_for_year_group(enrolled_class.year_group if enrolled_class else None)
         ),
         year_group=enrolled_class.year_group if enrolled_class else None,
-        account_ready=student.pin_hash is not None,
+        account_ready=student.pin_hash is not None and not held,
         pin_cleared=student.pin_cleared_at is not None,
         pin_state=_pin_state(student),
     )

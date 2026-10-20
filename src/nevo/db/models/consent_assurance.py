@@ -27,6 +27,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nevo.db.base import Base
@@ -54,6 +55,11 @@ class AgeCheck(Base):
             "ix_age_checks_school_state",
             "school_id",
             "state",
+            postgresql_where=text("state = 'mismatch'"),
+        ),
+        Index(
+            "ix_age_checks_notification_deadline",
+            "school_notified_at",
             postgresql_where=text("state = 'mismatch'"),
         ),
         CheckConstraint(
@@ -88,11 +94,9 @@ class AgeCheck(Base):
         default=AgeCheckState.AWAITING_PARENT,
         server_default=AgeCheckState.AWAITING_PARENT.value,
     )
-    #: The date both sides settled on, written back to the roster when it is
-    #: resolved.
+    #: The parent's operative date after the school recheck and parent reconfirmation.
     agreed_date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
-    #: How it was settled, in the words of whoever settled it. A mismatch is
-    #: an exception a person closes, not a rule the software applies.
+    #: Records the policy-based resolution; staff cannot override hard exceptions.
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
@@ -114,12 +118,25 @@ class AgeCheck(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    school_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    school_rechecked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    school_rechecked_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    parent_reconfirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    parent_reconfirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    enrolled_age_band: Mapped[str | None] = mapped_column(String(40))
+    band_checked_on: Mapped[date | None] = mapped_column(Date)
+    hold_reasons: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
 
     @property
     def blocks_access(self) -> bool:
-        """Age-check differences are roster notes and never access gates."""
-
-        return False
+        """A disagreement cannot be bypassed by consent or account activation."""
+        return self.state is AgeCheckState.MISMATCH
 
 
 class ConsentRefusal(Base):

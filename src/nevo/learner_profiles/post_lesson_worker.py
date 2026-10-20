@@ -118,15 +118,22 @@ class PostLessonProcessingWorker:
                     ConsentRecord.consent_type == REQUIRED_LEARNING_CONSENT,
                 )
             )
-            if consent is ConsentStatus.CONFIRMED:
+            from nevo.consent.age_assurance import age_check_blocks
+
+            held = await age_check_blocks(session, student_id)
+            if consent is ConsentStatus.CONFIRMED and not held:
                 return True
             record = await session.get(PostLessonProcessing, session_id, with_for_update=True)
             if record is not None:
                 record.status = "consent_blocked"
                 record.last_error = (
-                    "consent_withdrawn"
-                    if consent is ConsentStatus.WITHDRAWN
-                    else "consent_required"
+                    "age_check_pending"
+                    if held
+                    else (
+                        "consent_withdrawn"
+                        if consent is ConsentStatus.WITHDRAWN
+                        else "consent_required"
+                    )
                 )
                 record.next_attempt_at = datetime.now(UTC) + timedelta(minutes=15)
                 record.attempt_count = max(0, record.attempt_count - 1)

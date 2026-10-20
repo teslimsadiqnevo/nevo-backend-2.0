@@ -126,7 +126,11 @@ async def test_parent_resubmission_cannot_clear_a_recorded_date_difference():
         get=AsyncMock(return_value=SimpleNamespace(date_of_birth=school_date)),
         scalar=AsyncMock(return_value=check),
         flush=AsyncMock(),
+        refresh=AsyncMock(),
     )
+    check.enrolled_age_band = "upper_primary"
+    check.band_checked_on = datetime.now(UTC).date()
+    check.school_notified_at = datetime.now(UTC)
     state = await SqlAlchemyConsentRepository._run_age_check(
         session,
         school_id=uuid4(),

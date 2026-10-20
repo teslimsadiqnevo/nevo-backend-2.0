@@ -127,32 +127,32 @@ def test_the_two_sources_are_kept_apart() -> None:
     assert {"school_date_of_birth", "parent_date_of_birth", "agreed_date_of_birth"} <= columns
 
 
-def test_age_check_notes_never_block_a_child() -> None:
-    assert not AgeCheck(state=AgeCheckState.MISMATCH).blocks_access
+def test_age_check_mismatches_block_until_reconfirmed() -> None:
+    assert AgeCheck(state=AgeCheckState.MISMATCH).blocks_access
     assert not AgeCheck(state=AgeCheckState.MATCHED).blocks_access
     assert not AgeCheck(state=AgeCheckState.RESOLVED).blocks_access
 
 
 def test_a_roster_with_no_date_of_birth_is_not_treated_as_agreement() -> None:
-    from nevo.consent.repositories import SqlAlchemyConsentRepository
+    from nevo.consent.age_assurance import blocking_reasons
 
-    source = inspect.getsource(SqlAlchemyConsentRepository._run_age_check)
+    check = AgeCheck(school_date_of_birth=None, parent_date_of_birth=None)
+    assert "date_missing" in blocking_reasons(check)
 
-    assert "school_date is None or school_date != parent_date_of_birth" in source
 
-
-def test_the_child_is_never_asked_or_blocked_over_the_note(spec: dict) -> None:
+def test_only_adults_recheck_and_entry_reports_the_hold(spec: dict) -> None:
     assert "get" in spec["paths"]["/api/v1/age-checks"]
     assert "/api/v1/age-checks/{age_check_id}/resolve" not in spec["paths"]
     fields = spec["components"]["schemas"]["AgeCheckResponse"]["properties"]
     assert "parentDateOfBirth" not in fields
-    assert fields["blocksAccess"]["default"] is False
+    assert "default" not in fields["blocksAccess"]
+    assert "/api/v1/age-checks/{age_check_id}/school-recheck" in spec["paths"]
+    assert "/api/v1/age-checks/{age_check_id}/parent-reconfirm" in spec["paths"]
 
-    from nevo.api.student_entry import set_pin_and_start
+    from nevo.api.student_entry import _has_consent
 
-    entry = inspect.getsource(set_pin_and_start)
-    assert "age_check_blocks" not in entry
-    assert "age_check_pending" not in entry
+    entry = inspect.getsource(_has_consent)
+    assert "age_check_pending" in entry
 
 
 def test_resolving_records_who_closed_it() -> None:

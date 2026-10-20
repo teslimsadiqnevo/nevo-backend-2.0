@@ -52,6 +52,9 @@ class RetentionService:
         batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> RetentionSweepResult:
         current_time = now or datetime.now(UTC)
+        from nevo.consent.age_assurance import prepare_pending_holds
+
+        await prepare_pending_holds(self._sessions, current_time)
         async with self._sessions() as session:
             wanted = list(
                 await session.scalars(

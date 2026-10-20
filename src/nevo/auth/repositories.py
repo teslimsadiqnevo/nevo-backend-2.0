@@ -100,10 +100,20 @@ class SqlAlchemyUserRepository:
         async with self._sessions() as session:
             result = await session.execute(statement)
             row = result.one_or_none()
+            held = False
+            if row is not None and row[0].role is UserRole.STUDENT:
+                from nevo.consent.age_assurance import age_check_blocks
+
+                held = await age_check_blocks(session, row[0].id)
         if row is None:
             return None
         user, school_auth_method = row
-        return self._to_auth_user(user, school_auth_method)
+        account = self._to_auth_user(user, school_auth_method)
+        if held:
+            from dataclasses import replace
+
+            account = replace(account, status="pending")
+        return account
 
     @staticmethod
     def _to_auth_user(user: User, school_auth_method: AuthMethod | None) -> AuthUser:

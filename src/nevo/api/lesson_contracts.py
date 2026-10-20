@@ -790,7 +790,8 @@ def checkpoint_payloads(
             item["explanation"] = str(item["explanation"])
         item.setdefault("position", "after_segment")
         if concept_id is not None:
-            item.setdefault("conceptId", str(concept_id))
+            if item.get("conceptId") is None:
+                item["conceptId"] = str(concept_id)
         # mode="json" because this payload is written straight into a JSONB
         # column. A plain dump leaves conceptId as a UUID object, and the
         # insert then fails on every segment that carries a checkpoint - which

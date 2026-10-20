@@ -2211,6 +2211,7 @@ def _parse_into_job(
                     job.error_message = str(error)[:1000]
                     job.incident_id = incident
                     job.failure_reason = failure_reason(error)
+                    job.completed_at = datetime.now(UTC)
             raise
         async with sessions.begin() as session:
             job = await session.get(UploadJob, job_id)

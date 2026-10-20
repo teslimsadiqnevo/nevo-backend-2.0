@@ -17,6 +17,7 @@ from nevo.content_parsing.entities import (
     ParseRunState,
     StoredParsedLesson,
 )
+from nevo.content_parsing.failures import new_incident
 from nevo.content_parsing.key_points import confidence as key_point_confidence
 from nevo.db.models.account import User
 from nevo.db.models.content import (
@@ -27,7 +28,7 @@ from nevo.db.models.content import (
 )
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.probe import ProbeItem
-from nevo.db.models.product import LessonModule
+from nevo.db.models.product import LessonModule, UploadJob
 from nevo.db.models.subject import SchoolSubject
 from nevo.domain.accounts.vocabulary import UserStatus
 from nevo.domain.intelligence.vocabulary import (
@@ -206,10 +207,30 @@ class SqlAlchemyContentParsingRepository:
                     "The parse did not finish. It was most likely interrupted by a "
                     "restart; start it again."
                 )
+                run.failure_reason = "Preparation was interrupted. Please upload the file again."
+                run.incident_id = new_incident()
                 lesson = await session.get(Lesson, run.lesson_id)
                 if lesson is not None and lesson.status is ContentParseStatus.PROCESSING:
                     lesson.status = ContentParseStatus.FAILED
-        return len(runs)
+                    lesson.failure_reason = run.failure_reason
+                    lesson.incident_id = run.incident_id
+            jobs = list(
+                await session.scalars(
+                    select(UploadJob)
+                    .where(
+                        UploadJob.status.in_(("processing", "pending")),
+                        UploadJob.created_at < cutoff,
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            for job in jobs:
+                job.status = "failed"
+                job.completed_at = datetime.now(UTC)
+                job.failure_reason = "Preparation was interrupted. Please upload the file again."
+                job.error_message = "Upload preparation timed out after worker interruption."
+                job.incident_id = new_incident()
+        return len(runs) + len(jobs)
 
     async def run_state(self, parse_run_id: UUID) -> ParseRunState | None:
         async with self._sessions() as session:
@@ -261,10 +282,20 @@ class SqlAlchemyContentParsingRepository:
     ) -> StoredParsedLesson:
         # Never publish a completed parse whose variants cannot be read back.
         # Validation runs before opening the write transaction or replacing rows.
+        unbound_segments = tuple(
+            replace(
+                segment,
+                comprehension_checkpoints=tuple(
+                    {**checkpoint, "conceptId": None}
+                    for checkpoint in segment.comprehension_checkpoints
+                ),
+            )
+            for segment in parsed.segments
+        )
         parsed = replace(
             parsed,
             description=clean_lesson_description(parsed.description),
-            segments=tuple(validated_delivery(segment) for segment in parsed.segments),
+            segments=tuple(validated_delivery(segment) for segment in unbound_segments),
             assessment=tuple(
                 checkpoint_payloads(list(parsed.assessment), segment_key="lesson-assessment")
             ),
@@ -416,7 +447,8 @@ class SqlAlchemyContentParsingRepository:
                     elif concept.lesson_id is None:
                         concept.lesson_id = lesson_id
                     normalized = checkpoint_payloads(
-                        [checkpoint],
+                        # Database concept ownership is never supplied by the model.
+                        [{**checkpoint, "conceptId": str(concept.id)}],
                         segment_key=f"{segment.segment_key}-{index}",
                         concept_id=concept.id,
                     )

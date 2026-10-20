@@ -91,7 +91,7 @@ def build_scheduled_jobs(
 
     async def close_stale_parse_runs() -> str:
         failed = await content_parsing_service.fail_stale_runs()
-        return f"closed {failed} stale parse runs"
+        return f"closed {failed} stale parses and uploads"
 
     async def close_stale_roster_syncs() -> str:
         failed = await sso_service.fail_stale_roster_syncs()
@@ -137,7 +137,7 @@ def build_scheduled_jobs(
         ScheduledJob(name="sso.health_probe", interval=HOURLY, run=sso_health_probe),
         ScheduledJob(
             name="content.close_stale_parse_runs",
-            interval=HOURLY,
+            interval=timedelta(minutes=5),
             run=close_stale_parse_runs,
         ),
         ScheduledJob(

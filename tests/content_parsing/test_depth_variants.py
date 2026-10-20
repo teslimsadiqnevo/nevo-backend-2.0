@@ -6,6 +6,7 @@ is refused when it cannot be trusted, and that refusing never costs the
 lesson the text the teacher uploaded.
 """
 
+import json
 from uuid import uuid4
 
 import pytest
@@ -103,6 +104,49 @@ def test_a_simpler_version_has_to_be_shorter_and_a_longer_one_longer() -> None:
 def test_a_rewrite_identical_to_the_body_is_not_a_rewrite() -> None:
     assert accept(BODY, source=BODY, shorter=True) is None
     assert accept("   ", source=BODY, shorter=True) is None
+
+
+def test_a_faithful_simplification_is_not_dropped_for_missing_ten_percent_by_a_few_chars():
+    source = "A partially permeable membrane lets water pass through, but blocks larger particles."
+    rewrite = "A partially permeable membrane lets water through, but blocks larger particles."
+    assert 0.9 < len(rewrite) / len(source) < 1
+    assert accept(rewrite, source=source, shorter=True) == rewrite
+
+
+async def test_partial_depth_failure_has_a_segment_and_variant_review_note():
+    longer = BODY + " " + BODY
+    parsing = ContentParsingService(
+        repository=FakeRepository(),
+        ai_gateway=Gateway(json.dumps({"simplified": "Invented 9000 naira.", "expanded": longer})),
+    )
+    notes = []
+    [result] = await parsing._generate_media([segment()], notes, requested_by_user_id=ACTOR)
+    assert result.depth_variants["expanded"]["body"] == longer
+    assert "simplified" not in result.depth_variants
+    assert notes[0]["segment"] == "a" and notes[0]["variant"] == "simplified"
+    assert notes[0]["code"] == "depth_variants_rejected"
+
+
+async def test_rejected_simplification_is_retried_without_replacing_valid_expansion():
+    longer = BODY + " " + BODY
+
+    class CorrectingGateway(Gateway):
+        async def generate(self, request):
+            self.text = json.dumps(
+                {
+                    "simplified": BODY if not self.requests else SHORTER,
+                    "expanded": longer if not self.requests else "Invalid later expansion.",
+                }
+            )
+            return await super().generate(request)
+
+    gateway = CorrectingGateway("")
+    variants, _ = await DepthVariantService(ai_gateway=gateway).generate(
+        title=None, body=BODY, requested_by_user_id=ACTOR
+    )
+    assert variants.simplified == SHORTER and variants.expanded == longer
+    assert len(gateway.requests) == 2
+    assert "not_shorter" not in variants.rejection_reasons.values()
 
 
 async def test_both_versions_are_written_and_keyed_by_the_engines_actions() -> None:

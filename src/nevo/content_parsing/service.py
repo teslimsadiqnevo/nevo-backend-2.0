@@ -530,6 +530,33 @@ class ContentParsingService:
                 }
             )
             return segment
+        for kind in ("simplified", "expanded"):
+            if getattr(variants, kind) is None:
+                reason = variants.rejection_reasons.get(kind, "missing_rewrite")
+                explanations = {
+                    "missing_rewrite": "was not generated",
+                    "unchanged_source": "repeated the original text",
+                    "source_claim_anchors_missing": "did not preserve enough source content",
+                    "invented_figures": "introduced numbers absent from the original",
+                    "source_figures_missing": "left out numbers from the original",
+                    "source_equation_missing": "left out an equation from the original",
+                    "not_shorter": "was not shorter than the original",
+                    "not_expanded": "did not add enough explanation",
+                    "invalid_retry_output": "could not be read on the second attempt",
+                }
+                notes.append(
+                    {
+                        "code": "depth_variants_rejected",
+                        "segment": segment.segment_key,
+                        "variant": kind,
+                        "reasonCode": reason,
+                        "reason": (
+                            f"The {kind} rewrite "
+                            + explanations.get(reason, "did not pass the source checks")
+                            + ". The original section remains available."
+                        ),
+                    }
+                )
         return replace(
             segment,
             depth_variants=variants.payload(model=model, source_body=segment.body),

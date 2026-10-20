@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from nevo.ai_gateway.entities import AiGenerationRequest
@@ -56,9 +56,8 @@ DEPTH_OUTPUT_TOKENS = 2_048
 #: is most of the saving in the measured cost.
 MIN_SOURCE_CHARS = 200
 
-#: The simplified version has to actually be shorter, and the expanded one
-#: longer, or the call did not do what it was asked and the variant is noise
-#: on a screen. Ten per cent, so ordinary variation is not treated as failure.
+#: Expansion needs meaningful extra explanation. Simplification must be shorter,
+#: but a percentage cutoff must not reject otherwise faithful, plainer prose.
 LENGTH_MARGIN = 0.9
 
 #: A number in the variant that is not in the source is an invented fact. This
@@ -80,6 +79,7 @@ class DepthVariants:
 
     simplified: str | None
     expanded: str | None
+    rejection_reasons: dict[str, str] = field(default_factory=dict)
 
     @property
     def empty(self) -> bool:
@@ -142,30 +142,21 @@ def missing_claim_anchors(source, variant):
     return missing
 
 
-def accept(variant: str | None, *, source: str, shorter: bool) -> str | None:
-    """Keep the rewrite, or None with the reason logged.
-
-    Refusing is always safe: the segment still has the body the teacher
-    uploaded, and the client falls back to it.
-    """
-
+def rejection_reason(variant: str | None, *, source: str, shorter: bool) -> str | None:
     if not variant:
-        return None
+        return "missing_rewrite"
     text = variant.strip()
     if not text or text == source.strip():
-        return None
+        return "unchanged_source"
     if missing_claim_anchors(source, text):
-        logger.warning("Depth variant lost source claim anchors; held for source fallback")
-        return None
+        return "source_claim_anchors_missing"
     stray = invented_numbers(text, source)
     if stray:
         # The failure this whole check exists for. A child reading a simpler
         # version of a worked example must not be reading a different sum.
-        logger.warning("Depth variant invented figures %s; dropped", sorted(stray))
-        return None
+        return "invented_figures"
     if numbers_in(source) - numbers_in(text):
-        logger.warning("Depth variant omitted source figures; dropped")
-        return None
+        return "source_figures_missing"
     equations = re.findall(r"\$[^$\n]+\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]", source)
     equations.extend(
         line.strip()
@@ -176,13 +167,21 @@ def accept(variant: str | None, *, source: str, shorter: bool) -> str | None:
     )
     compact = re.sub(r"\s+", "", text)
     if any(re.sub(r"\s+", "", equation) not in compact for equation in equations):
-        logger.warning("Depth variant omitted a source equation; dropped")
-        return None
-    if shorter and len(text) > len(source) * LENGTH_MARGIN:
-        return None
+        return "source_equation_missing"
+    if shorter and len(text) >= len(source.strip()):
+        return "not_shorter"
     if not shorter and len(text) * LENGTH_MARGIN < len(source):
+        return "not_expanded"
+    return None
+
+
+def accept(variant: str | None, *, source: str, shorter: bool) -> str | None:
+    """Reject missing content or invented facts, not a cosmetic percentage miss."""
+    reason = rejection_reason(variant, source=source, shorter=shorter)
+    if reason:
+        logger.info("Depth variant rejected: %s", reason)
         return None
-    return text
+    return variant.strip()
 
 
 class DepthVariantService:
@@ -248,6 +247,9 @@ class DepthVariantService:
             )
 
         token_budget = max(DEPTH_OUTPUT_TOKENS, min(8192, len(body) * 2))
+        accepted = {SIMPLIFIED: None, EXPANDED: None}
+        rejected = {}
+        repair_details = {}
         for attempt in range(2):
             try:
                 result = await self._ai_gateway.generate(
@@ -258,7 +260,26 @@ class DepthVariantService:
                         # calls made while a child is waiting.
                         service=AiService.LESSON_GENERATION,
                         prompt_name=PROMPT_NAME,
-                        variables={"title": title or "", "body": body},
+                        variables={
+                            "title": title or "",
+                            "body": (
+                                "Rewrite instructions (not lesson content): preserve every source "
+                                "claim, technical term, example, figure, equation "
+                                "and safety warning. "
+                                "Use shorter, plainer sentences without omitting content. "
+                                "Keep questions as questions, with the same item numbering. "
+                                "Preserve every procedural step and its safety warning. "
+                                + (
+                                    "Correct these rejected outputs: "
+                                    + json.dumps(repair_details)
+                                    + ". "
+                                    if rejected
+                                    else ""
+                                )
+                                + "\n\nSOURCE SEGMENT:\n"
+                                + body
+                            ),
+                        },
                         max_output_tokens=token_budget,
                         timeout_seconds=90,
                         json_output=True,
@@ -274,23 +295,39 @@ class DepthVariantService:
                 if result.stop_reason == "max_tokens":
                     raise DepthVariantError("The rewrite reached its output token limit")
                 payload = _json_payload(result.text)
-                break
             except DepthVariantError:
                 if attempt == 1:
+                    if any(accepted.values()):
+                        for kind in (SIMPLIFIED, EXPANDED):
+                            if accepted[kind] is None:
+                                rejected[kind] = "invalid_retry_output"
+                        break
                     raise
                 token_budget = min(16384, token_budget * 2)
+                continue
+            for kind in (SIMPLIFIED, EXPANDED):
+                if accepted[kind] is not None:
+                    continue
+                candidate = _text(payload.get(kind))
+                reason = rejection_reason(candidate, source=body, shorter=kind == SIMPLIFIED)
+                if reason:
+                    rejected[kind] = reason
+                    repair_details[kind] = {
+                        "reason": reason,
+                        "sourceClaimsToRetain": missing_claim_anchors(body, candidate or ""),
+                        "sourceFiguresToRetain": sorted(numbers_in(body)),
+                    }
+                else:
+                    accepted[kind] = candidate.strip()
+                    rejected.pop(kind, None)
+                    repair_details.pop(kind, None)
+            if all(accepted.values()):
+                break
         return (
             DepthVariants(
-                simplified=accept(
-                    _text(payload.get(SIMPLIFIED)),
-                    source=body,
-                    shorter=True,
-                ),
-                expanded=accept(
-                    _text(payload.get(EXPANDED)),
-                    source=body,
-                    shorter=False,
-                ),
+                simplified=accepted[SIMPLIFIED],
+                expanded=accepted[EXPANDED],
+                rejection_reasons=rejected,
             ),
             result.model,
         )

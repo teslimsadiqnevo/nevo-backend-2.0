@@ -76,7 +76,7 @@ async def backfill(
                     return None, "rejected"
                 validated = (
                     TypeAdapter(DepthVariants)
-                    .validate_python(variants.payload(model=model))
+                    .validate_python(variants.payload(model=model, source_body=segment.body))
                     .model_dump(by_alias=True, mode="json")
                 )
                 return validated, None

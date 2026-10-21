@@ -99,6 +99,7 @@ from nevo.db.models.product import (
     LessonProgress,
     LessonQuestionAttempt,
     OfflineDownload,
+    PostLessonProcessing,
     StudentOnboardingGrant,
     UploadJob,
     UploadSourceBlob,
@@ -586,14 +587,11 @@ async def _socratic_handoff(
     )
     if len(recent) < 3 or any(attempt.correct is not False for attempt in recent):
         return []
-    concept = str(item.question_snapshot.get("conceptName") or "this idea").strip()
+    guided = item.question_snapshot.get("guidedQuestions") or []
     return [
-        {"id": f"{item.question_id}-notice", "prompt": "What is the question asking you to find?"},
-        {
-            "id": f"{item.question_id}-connect",
-            "prompt": f"What do you already know about {concept} that could help here?",
-        },
-        {"id": f"{item.question_id}-try", "prompt": "What is one small step you could try first?"},
+        {"id": f"{item.question_id}-guided-{index}", "prompt": prompt.strip()}
+        for index, prompt in enumerate(guided, start=1)
+        if isinstance(prompt, str) and prompt.strip()
     ]
 
 
@@ -1246,7 +1244,15 @@ async def cancel_assignment(
     "/lessons/{lesson_id}/session",
     response_model=LessonSessionResponse,
     status_code=status.HTTP_201_CREATED,
-    responses=CONSENT_WITHDRAWN_RESPONSE,
+    responses={
+        **CONSENT_WITHDRAWN_RESPONSE,
+        409: {
+            "description": (
+                "onboarding_incomplete, prerequisite_required, or completed_session_unavailable; "
+                "a missing review sitting never resets a completed lesson."
+            )
+        },
+    },
 )
 async def start_lesson_session(
     lesson_id: UUID,
@@ -1259,13 +1265,47 @@ async def start_lesson_session(
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
     await session.refresh(actor, with_for_update=True)
-    await ensure_prerequisites(session, actor.id, lesson_id)
     progress = await session.scalar(
         select(LessonProgress).where(
             LessonProgress.student_id == actor.id,
             LessonProgress.lesson_id == lesson_id,
         )
     )
+    if progress is not None and (progress.status == "completed" or progress.completed_at):
+        finished = await session.scalar(
+            select(LessonSession)
+            .where(
+                LessonSession.student_id == actor.id,
+                LessonSession.lesson_id == lesson_id,
+                LessonSession.completion_status == LessonCompletionStatus.COMPLETED,
+            )
+            .order_by(LessonSession.ended_at.desc())
+            .limit(1)
+        )
+        if finished is not None:
+            progress.status = "completed"
+            progress.session_id = finished.id
+            await delivery_snapshot(session, actor, finished)
+            await session.commit()
+            return {
+                "sessionId": str(finished.id),
+                "resumed": True,
+                "reviewMode": True,
+                "reviewOfSessionId": str(finished.id),
+                "completedAt": progress.completed_at or finished.ended_at,
+                "depth": finished.delivery_depth,
+                "reroutedFromSessionId": finished.rerouted_from_session_id,
+                "deliveryState": finished.delivery_state,
+                "segmentPosition": 0,
+            }
+        raise HTTPException(
+            409,
+            detail={
+                "code": "completed_session_unavailable",
+                "message": "This lesson is complete, but its review session could not be found.",
+            },
+        )
+    await ensure_prerequisites(session, actor.id, lesson_id)
     existing = await session.scalar(
         select(LessonSession)
         .where(
@@ -1586,6 +1626,28 @@ async def save_lesson_progress(
             or assignment.status == "cancelled"
         ):
             raise HTTPException(404, detail={"code": "assignment_not_found"})
+    if progress is not None and (progress.status == "completed" or progress.completed_at):
+        # A late player save or review visit must never undo a completed lesson.
+        progress.status = "completed"
+        outcome_session = progress.session_id or lesson_session.id
+        job = await session.get(PostLessonProcessing, outcome_session)
+        mastered, revisit = await _check_in_outcome(session, outcome_session)
+        result = await _derive_result_state(session, outcome_session)
+        await session.commit()
+        return {
+            "lessonId": str(lesson_id),
+            "status": "completed",
+            "modulePosition": progress.module_position,
+            "segmentPosition": progress.segment_position,
+            "intelligence": {"status": job.status if job else "not_run"},
+            "resultState": result,
+            "reroute": None,
+            "masteredConcepts": mastered,
+            "revisitConcepts": revisit,
+            "resultNote": _result_note(mastered, revisit),
+            "checkPosition": progress.check_position,
+            "checkResumableUntil": progress.check_resumable_until,
+        }
     if progress is None:
         progress = LessonProgress(student_id=actor.id, lesson_id=lesson_id)
         session.add(progress)
@@ -1866,6 +1928,7 @@ async def student_dashboard(
                 "status": item.status,
                 "segmentPosition": item.segment_position,
                 "updatedAt": item.updated_at,
+                "completedAt": item.completed_at,
                 "title": (lesson.title if (lesson := lessons.get(item.lesson_id)) else ""),
                 "subject": lesson.subject if lesson else None,
                 # The denominator segmentPosition is counted against, so a

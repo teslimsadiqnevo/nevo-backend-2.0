@@ -41,7 +41,7 @@ def reading_chunks(
     text = body.strip()
     if not text:
         return []
-    paragraphs = [piece for piece in re.split(r"\n\s*\n", text) if piece.strip()]
+    paragraphs = [piece for piece in _prose_units(text, r"\n\s*\n") if piece.strip()]
     # A paragraph is already a unit identified by the lesson pipeline. For
     # single-paragraph legacy prose, sentence boundaries provide the units.
     grouped = paragraphs if len(paragraphs) > 1 else sentence_units(text)
@@ -99,4 +99,16 @@ def reading_chunks(
 
 def sentence_units(text: str) -> list[str]:
     """A numbered-list marker is not a sentence ending."""
-    return re.split(r"(?<!\d\.)(?<=[.!?])\s+|\n+", text)
+    return _prose_units(text, r"(?<!\d\.)(?<=[.!?])\s+|\n+")
+
+
+def _prose_units(text: str, pattern: str) -> list[str]:
+    units, start = [], 0
+    for boundary in re.finditer(pattern, text):
+        # PDF extraction can put a blank line between the number and its instruction.
+        if re.search(r"(?<!\w)\d+[.)]\s*$", text[start : boundary.start()]):
+            continue
+        units.append(text[start : boundary.start()])
+        start = boundary.end()
+    units.append(text[start:])
+    return units

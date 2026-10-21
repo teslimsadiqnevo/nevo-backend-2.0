@@ -675,6 +675,14 @@ class LessonSessionResponse(CamelResponse):
     check_resumable_until: datetime | None = None
     delivery_state: "SessionDeliveryResponse | None" = None
     segment_position: int = 0
+    review_mode: bool = Field(
+        default=False,
+        description="Open the completed lesson for review, not as a new adaptive sitting.",
+    )
+    completed_at: datetime | None = None
+    review_of_session_id: UUID | None = Field(
+        default=None, description="Completed sitting whose saved attempts should be shown in review."
+    )
 
 
 class LessonRerouteResponse(CamelResponse):
@@ -764,6 +772,7 @@ class RecentProgressResponse(CamelResponse):
     status: LessonCompletionStatus
     segment_position: int
     updated_at: datetime
+    completed_at: datetime | None = None
     #: Enough to draw the row without a second read per lesson. A lesson a
     #: child started from the library could not appear at all without these.
     #: Ask B52.

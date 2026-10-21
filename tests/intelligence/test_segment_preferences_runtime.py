@@ -134,6 +134,109 @@ def test_choices_survive_reload_and_override_engine_without_inventing_media(runt
     run(events())
 
 
+def test_completed_lesson_reopens_for_review_and_late_save_cannot_undo_it(runtime):
+    sitting = start(runtime)
+    assert answer(runtime, sitting, 5).status_code == 201
+    url = f"/api/v1/lessons/{runtime.ids['lesson']}"
+    finished = runtime.client.put(
+        f"{url}/progress",
+        json={"sessionId": sitting, "status": "completed", "segmentPosition": 4},
+    )
+    assert finished.status_code == 200, finished.text
+    reopened = runtime.client.post(f"{url}/session")
+    assert reopened.status_code == 201, reopened.text
+    assert reopened.json()["reviewMode"] is True
+    assert reopened.json()["sessionId"] == sitting
+    assert reopened.json()["reviewOfSessionId"] == sitting
+    assert reopened.json()["segmentPosition"] == 0
+    assert reopened.json()["completedAt"]
+    late = runtime.client.put(
+        f"{url}/progress", json={"sessionId": sitting, "status": "in_progress"}
+    )
+    assert late.status_code == 200, late.text
+    assert late.json()["status"] == "completed"
+    assert late.json()["segmentPosition"] == 4
+    dashboard = runtime.client.get("/api/v1/students/me/dashboard")
+    assert dashboard.status_code == 200, dashboard.text
+    row = next(
+        r for r in dashboard.json()["recentProgress"]
+        if r["lessonId"] == str(runtime.ids["lesson"])
+    )
+    assert row["status"] == "completed" and row["completedAt"]
+
+
+def test_handoff_uses_that_questions_own_guided_questions(runtime):
+    from nevo.db.models.content import LessonSegment
+
+    expected = ["Which particles can cross this membrane?", "Which side has more water?"]
+
+    async def seed():
+        async with runtime.sessions.begin() as session:
+            row = await session.get(LessonSegment, runtime.ids["segment"])
+            row.comprehension_checkpoints = [
+                {**row.comprehension_checkpoints[0], "guidedQuestions": expected}
+            ]
+
+    run(seed())
+    sitting = start(runtime)
+    for _ in range(3):
+        result = answer(runtime, sitting, 0)
+        assert result.status_code == 201, result.text
+    assert result.json()["handoffTo"] == "socratic_panel"
+    assert [row["prompt"] for row in result.json()["guidedPrompts"]] == expected
+
+
+def test_adaptation_runs_after_three_distinct_unaided_successes(runtime):
+    from nevo.db.models.content import LessonSegment
+    from tests.intelligence.test_learning_runtime_endpoints import adapt
+
+    async def seed():
+        async with runtime.sessions.begin() as session:
+            row = await session.get(LessonSegment, runtime.ids["segment"])
+            question = row.comprehension_checkpoints[0]
+            row.comprehension_checkpoints = [
+                {**question, "id": f"success-{index}"} for index in range(3)
+            ]
+
+    run(seed())
+    sitting = start(runtime)
+    url = f"/api/v1/lessons/{runtime.ids['lesson']}/attempts"
+    for index in range(3):
+        marked = runtime.client.post(
+            url,
+            json={
+                "sessionId": sitting,
+                "segmentId": str(runtime.ids["segment"]),
+                "questionId": f"success-{index}",
+                "answer": 5,
+                "hintCount": 0,
+                "responseTimeMs": 15000,
+            },
+        )
+        assert marked.status_code == 201, marked.text
+        response = adapt(runtime, sitting)
+        assert response.status_code == 200, response.text
+        if index == 0:
+            assert response.json()["segments"][0]["scaffolding"] == "strong"
+    assert response.json()["segments"][0]["scaffolding"] == "standard"
+    for _ in range(14):
+        response = adapt(runtime, sitting)
+        assert response.status_code == 200, response.text
+        assert response.json()["segments"][0]["scaffolding"] == "standard"
+
+
+def test_finishing_without_marked_answers_does_not_invent_completion(runtime):
+    sitting = start(runtime)
+    response = runtime.client.put(
+        f"/api/v1/lessons/{runtime.ids['lesson']}/progress",
+        json={"sessionId": sitting, "status": "completed"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["resultState"] == "not_attempted"
+    assert response.json()["status"] == "in_progress"
+    assert response.json()["intelligence"]["status"] == "not_run"
+
+
 def test_no_bank_is_unestablished_and_only_module_four_reopens_when_bank_arrives(runtime):
     from uuid import uuid4
 

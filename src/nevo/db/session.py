@@ -1,9 +1,13 @@
+from uuid import uuid4
+
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 TRANSACTION_POOLER_PORT = 6543
 """Supabase serves transaction-mode pooling here and session mode on 5432."""
@@ -29,7 +33,7 @@ def _is_transaction_pooler(database_url: str) -> bool:
     direction breaks prepared statements; in the other it throws away the
     statement cache for nothing.
     """
-    return f":{TRANSACTION_POOLER_PORT}/" in database_url
+    return make_url(database_url).port == TRANSACTION_POOLER_PORT
 
 
 def create_engine(database_url: str) -> AsyncEngine:
@@ -39,6 +43,17 @@ def create_engine(database_url: str) -> AsyncEngine:
     every request, so the defaults here trade a little safety margin for not
     paying that repeatedly.
     """
+    if _is_transaction_pooler(database_url):
+        # SQLAlchemy has a separate cache; disabling asyncpg's alone is insufficient.
+        return create_async_engine(
+            database_url,
+            poolclass=NullPool,
+            connect_args={
+                "statement_cache_size": 0,
+                "prepared_statement_cache_size": 0,
+                "prepared_statement_name_func": lambda: f"__nevo_{uuid4().hex}__",
+            },
+        )
     return create_async_engine(
         database_url,
         # A pre-ping is a full round trip before the request's first real

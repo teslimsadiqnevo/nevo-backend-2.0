@@ -13,6 +13,8 @@ from nevo.content_parsing.depth import source_claims
 from nevo.core.config import get_settings
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.probe import ProbeItem
+from nevo.db.models.product import LessonProgress
+from nevo.db.models.signal_event import LessonSession
 from nevo.db.session import create_engine, create_session_factory
 
 
@@ -22,6 +24,27 @@ async def main(apply=False):
     affected = set()
     try:
         async with create_session_factory(engine).begin() as session:
+            for progress in await session.scalars(
+                select(LessonProgress).where(
+                    LessonProgress.completed_at.is_not(None),
+                    LessonProgress.status != "completed",
+                )
+            ):
+                finished = await session.scalar(
+                    select(LessonSession)
+                    .where(
+                        LessonSession.student_id == progress.student_id,
+                        LessonSession.lesson_id == progress.lesson_id,
+                        LessonSession.completion_status == "completed",
+                    )
+                    .order_by(LessonSession.ended_at.desc())
+                    .limit(1)
+                )
+                if finished is not None:
+                    counts["completed_progress_restored"] += 1
+                    if apply:
+                        progress.status = "completed"
+                        progress.session_id = finished.id
             for lesson in await session.scalars(select(Lesson)):
                 normalized = checkpoint_payloads(
                     lesson.assessment or [], segment_key="lesson-assessment"

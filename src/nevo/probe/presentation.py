@@ -1,6 +1,7 @@
 """Standalone placement items and answer-independent presentation order."""
 
 import hashlib
+import json
 import re
 
 
@@ -17,5 +18,11 @@ def ordered_options(options, *, seed):
     """Stable within a pupil/item, independent of the correct answer's value."""
     return sorted(
         options,
-        key=lambda option: hashlib.sha256(f"{seed}:{option.get('value')}".encode()).digest(),
+        key=lambda option: hashlib.sha256(
+            json.dumps(
+                ["question-order-v2", seed, option.get("value"), option.get("label")],
+                ensure_ascii=True,
+                sort_keys=True,
+            ).encode()
+        ).digest(),
     )

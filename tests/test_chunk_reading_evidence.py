@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -23,6 +24,15 @@ def test_duplicate_prose_has_distinct_stable_ids():
     chunks = reading_chunks("segment", "Remember this.\n\nRemember this.")
     assert len({item["id"] for item in chunks}) == 2
     assert chunks == reading_chunks("segment", "Remember this.\n\nRemember this.")
+
+
+def test_extracted_number_with_newline_or_blank_line_stays_with_instruction():
+    for separator in ("\n", "\n\n", " \n\n"):
+        body = f"Stir the salt water.\n5.{separator}Put one strip into each cup.\n6.\nWait."
+        chunks = reading_chunks("segment", body)
+        assert all(not re.search(r"\b\d+[.)]$", row["text"]) for row in chunks)
+        for row in chunks:
+            assert body[row["startOffset"] : row["endOffset"]] == row["text"]
 
 
 def test_reentry_counts_once_until_the_chunk_is_passed_again():

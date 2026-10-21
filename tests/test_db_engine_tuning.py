@@ -4,6 +4,8 @@ Every avoidable round trip here is latency on every request, so these pin the
 choices that were costing one.
 """
 
+from sqlalchemy.pool import NullPool
+
 from nevo.db.session import _is_transaction_pooler, create_engine, statement_cache_size
 
 SESSION_URL = "postgresql+asyncpg://u:p@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
@@ -45,3 +47,18 @@ def test_connections_are_held_open_because_the_handshake_is_costly() -> None:
     engine = create_engine(SESSION_URL)
 
     assert engine.pool.size() == 10
+
+
+def test_transaction_pooler_disables_both_caches_and_uses_unique_statement_names(monkeypatch):
+    captured = {}
+
+    def factory(url, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("nevo.db.session.create_async_engine", factory)
+    create_engine(TRANSACTION_URL)
+    assert captured["poolclass"] is NullPool
+    args = captured["connect_args"]
+    assert args["statement_cache_size"] == args["prepared_statement_cache_size"] == 0
+    assert args["prepared_statement_name_func"]() != args["prepared_statement_name_func"]()

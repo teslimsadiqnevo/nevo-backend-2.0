@@ -53,6 +53,7 @@ from nevo.domain.intelligence.vocabulary import (
     UploadStatus,
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
+from nevo.intelligence.delivery_preferences import SegmentChoice
 
 
 def _camel(value: str) -> str:
@@ -518,6 +519,11 @@ class LessonSegmentResponse(CamelResponse):
     #: Which concept this segment teaches. SCRUM-177, ask B25.
     concept_id: UUID | None = None
     available_modalities: list[str]
+    available_formats: list[Literal["text", "audio", "visual", "interactive"]] = Field(
+        default_factory=list
+    )
+    recommended_format: Literal["text", "audio", "visual", "interactive"] | None = None
+    delivery_preference: SegmentChoice | None = None
     primary_modality: Literal["text", "visual", "audio", "interactive"] | None = None
 
     @model_validator(mode="before")
@@ -531,7 +537,10 @@ class LessonSegmentResponse(CamelResponse):
                 value.get("calculationVariant", value.get("calculation_variant")),
             )
             value["availableModalities"] = modes
-            value["primaryModality"] = modes[0] if modes else None
+            selected = value.get("primaryModality", value.get("primary_modality"))
+            value["primaryModality"] = (
+                selected if selected in modes else modes[0] if modes else None
+            )
         return value
 
     comprehension_checkpoints: list[ComprehensionCheckpoint]
@@ -1017,6 +1026,9 @@ class OfflinePackageSegment(CamelResponse):
     content_type: LessonContentType
     sequence_order: int
     available_modalities: list[str] = Field(default_factory=list)
+    available_formats: list[str] = Field(default_factory=list)
+    recommended_format: Literal["text", "audio", "visual", "interactive"] | None = None
+    delivery_preference: SegmentChoice | None = None
     primary_modality: Literal["text", "visual", "audio", "interactive"] | None = None
 
     @model_validator(mode="before")
@@ -1031,7 +1043,10 @@ class OfflinePackageSegment(CamelResponse):
                 variants.get("calculation"),
             )
             value["availableModalities"] = modes
-            value["primaryModality"] = modes[0] if modes else None
+            selected = value.get("primaryModality", value.get("primary_modality"))
+            value["primaryModality"] = (
+                selected if selected in modes else modes[0] if modes else None
+            )
         return value
 
     modality_variants: OfflinePackageModalityVariants = Field(
@@ -1376,6 +1391,9 @@ class EngineSupportConfig(CamelResponse):
     )
     pause_between_segments: bool = False
     numerical_visuals: bool = False
+    simplified_layout: bool = Field(
+        default=False, description="Reduce competing on-screen material; not a learner label."
+    )
 
 
 class EngineConfig(CamelResponse):
@@ -1397,6 +1415,8 @@ class SessionDeliveryResponse(CamelResponse):
     engine_config: EngineConfig
     accommodations: list[AccommodationType]
     captured_at: datetime
+    segment_choices: dict[str, "SegmentChoice"] = Field(default_factory=dict)
+    recommendations: dict[str, str] = Field(default_factory=dict)
 
 
 class EngineConfigResponse(CamelResponse):

@@ -297,7 +297,9 @@ class SqlAlchemyContentParsingRepository:
             description=clean_lesson_description(parsed.description),
             segments=tuple(validated_delivery(segment) for segment in unbound_segments),
             assessment=tuple(
-                checkpoint_payloads(list(parsed.assessment), segment_key="lesson-assessment")
+                checkpoint_payloads(
+                    list(parsed.assessment), segment_key="lesson-assessment", strict=True
+                )
             ),
         )
         lesson_id = existing_lesson_id or uuid4()
@@ -462,6 +464,10 @@ class SqlAlchemyContentParsingRepository:
                             and not isinstance(answer, list)
                             and isinstance(options, list)
                         ):
+                            from nevo.probe.presentation import standalone_question
+
+                            if not standalone_question(str(probe.get("prompt") or "")):
+                                continue
                             session.add(
                                 ProbeItem(
                                     school_id=school_id,

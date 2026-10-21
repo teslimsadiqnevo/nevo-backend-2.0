@@ -50,7 +50,7 @@ class SafetyUnavailable(AiGatewayError):
 class SafetyBlocked(AiGatewayError):
     code = "content_safety_blocked"
     public_message = (
-        "Nevo cannot help with that request. Please speak with a trusted adult or teacher."
+        "Nevo can\u2019t help with this one. Please talk to a trusted adult or your teacher."
     )
 
 

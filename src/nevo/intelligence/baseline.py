@@ -18,6 +18,9 @@ def build_baseline_profile(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Reduce device-produced baseline aggregates into bounded engine settings."""
     rows = list(features)
+    interference_rows = [row for row in rows if row.get("dimension") == "interference_control"]
+    # This measure must not leak into generic accuracy/processing-speed averages.
+    rows = [row for row in rows if row.get("dimension") != "interference_control"]
     values: dict[str, list[float]] = defaultdict(list)
     for row in rows:
         for key, value in row.items():
@@ -53,6 +56,8 @@ def build_baseline_profile(
     processing_speed = round(_clamp(6.0 - response_ms / 1000.0, 1.0, 5.0))
     confidence = "medium" if len(rows) >= 3 else "low"
     measurements = dict((previous_profile or {}).get("measurements") or {})
+    if interference_rows:
+        measurements["interference_control"] = interference_rows[-1]["measurement"]
     for dimension in ("wmc", "ps", "reading", "ans", "attention", "domain"):
         observed = [
             row
@@ -227,6 +232,14 @@ def build_baseline_profile(
             engine_config["support"]["numericalVisuals"] = (
                 measurements["ans"]["trial_count"] >= 3 and measurements["ans"]["accuracy"] < 0.7
             )
+    interference = measurements.get("interference_control", {})
+    if interference.get("status") == "established":
+        if interference["accuracyCost"] >= 0.15 and interference["relativeLatencyCost"] >= 0.2:
+            engine_config["support"]["shorterTextBlocks"] = True
+            engine_config["support"]["simplifiedLayout"] = True
+            engine_config["reading"]["segmentWordTarget"] = min(
+                100, engine_config["reading"].get("segmentWordTarget", 100)
+            )
     return profile, engine_config
 
 
@@ -262,8 +275,12 @@ def reduce_trials(
 
     from collections import defaultdict
 
+    trials = list(trials)
+    interference_trials = [row for row in trials if row.get("dimension") == "interference_control"]
     buckets: dict[tuple[str, str | None], list[Mapping[str, object]]] = defaultdict(list)
     for trial in trials:
+        if trial.get("dimension") == "interference_control":
+            continue
         if (
             trial.get("skipped")
             or trial.get("correct") is None
@@ -328,4 +345,13 @@ def reduce_trials(
             feature["condition"] = condition
             feature[f"{dimension}_{condition}_accuracy"] = feature[f"{dimension}_accuracy"]
         features.append(feature)
+    if interference_trials:
+        from nevo.intelligence.interference import reduce_interference
+
+        features.append(
+            {
+                "dimension": "interference_control",
+                "measurement": reduce_interference(interference_trials),
+            }
+        )
     return features

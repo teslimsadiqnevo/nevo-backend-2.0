@@ -11,6 +11,10 @@ from nevo.domain.intelligence.vocabulary import ManipulativeKind
 ScalarAnswer = str | int | float | bool
 
 
+class UnclassifiableQuestionError(ValueError):
+    """A question cannot be published without a usable renderer and answer."""
+
+
 def safety_reviewed_visual(value):
     return (
         value
@@ -20,11 +24,18 @@ def safety_reviewed_visual(value):
 
 
 def student_modalities(segment):
-    return [
-        value
-        for value in (segment.available_modalities or [])
-        if value != "visual" or safety_reviewed_visual(segment.visual_variant)
-    ]
+    available = []
+    if segment.body:
+        available.append("text")
+    if (segment.audio_variant or {}).get("audioUrl"):
+        available.append("audio")
+    if safety_reviewed_visual(segment.visual_variant) and segment.visual_variant.get("imageUrl"):
+        available.append("visual")
+    if segment.calculation_variant or (segment.interactive_variant or {}).get("steps"):
+        available.append("interactive")
+    declared = [value for value in (segment.available_modalities or []) if value in available]
+    ordered = list(dict.fromkeys([*declared, *available]))
+    return segment_modalities(segment.content_type, ordered, segment.calculation_variant)
 
 
 def segment_modalities(content_type, available, calculation):
@@ -74,6 +85,28 @@ class CheckpointOption(BaseModel):
 
 class ComprehensionCheckpoint(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonical_choice_type(cls, value):
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        key = value.get("answerKey", value.get("answer_key"))
+        kind = value.get("answerType", value.get("answer_type"))
+        if kind == "multiple_choice" and (
+            isinstance(key, (str, int, float, bool)) or (isinstance(key, list) and len(key) == 1)
+        ):
+            value["answerType"] = "single_choice"
+            value["answerKey"] = key[0] if isinstance(key, list) else key
+        options = value.get("options")
+        if options and all(isinstance(option, dict) and "value" in option for option in options):
+            from nevo.probe.presentation import ordered_options
+
+            value["options"] = ordered_options(
+                options, seed=f"{value.get('id')}:{value.get('prompt')}"
+            )
+        return value
 
     id: str
     concept_id: UUID | None = Field(default=None, alias="conceptId")
@@ -289,6 +322,7 @@ class EquationCallout(BaseModel):
 
 class VisualVariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
+    safety_policy_version: str | None = Field(default=None, alias="safetyPolicyVersion")
 
     type: Literal["ai_generated_image"] = "ai_generated_image"
     #: The image to render. WebP at the resolution it was drawn at, because
@@ -761,12 +795,32 @@ class CalculationVariant(BaseModel):
 
 
 def checkpoint_payloads(
-    values: list[dict[str, object]], *, segment_key: str, concept_id: UUID | None = None
+    values: list[dict[str, object]],
+    *,
+    segment_key: str,
+    concept_id: UUID | None = None,
+    strict: bool = False,
 ) -> list[dict[str, object]]:
     """Normalize older parser output into the documented checkpoint contract."""
     result: list[dict[str, object]] = []
     for index, value in enumerate(values, start=1):
         item = dict(value)
+        if strict:
+            if not str(item.get("prompt") or "").strip() or item.get("answerKey") is None:
+                raise UnclassifiableQuestionError(
+                    f"Unclassifiable question in {segment_key}: prompt and answer required"
+                )
+            kind = item.get("answerType")
+            if kind is not None and kind not in {
+                "single_choice",
+                "multiple_choice",
+                "text",
+                "numeric",
+                "boolean",
+            }:
+                raise UnclassifiableQuestionError(
+                    f"Unsupported question type in {segment_key}: {kind}"
+                )
         item.setdefault("id", f"{segment_key}-check-{index}")
         item.setdefault("prompt", "Check your understanding of this part.")
         if item.get("answerType") not in {
@@ -796,8 +850,25 @@ def checkpoint_payloads(
         # column. A plain dump leaves conceptId as a UUID object, and the
         # insert then fails on every segment that carries a checkpoint - which
         # is why a parse could run to completion and still store nothing.
+        try:
+            question = ComprehensionCheckpoint.model_validate(item)
+        except ValueError as error:
+            if strict:
+                raise UnclassifiableQuestionError(
+                    f"Unclassifiable question in {segment_key}: no supported renderer"
+                ) from error
+            raise
+        if strict and question.answer_type in {"single_choice", "multiple_choice"}:
+            keys = (
+                question.answer_key
+                if isinstance(question.answer_key, list)
+                else [question.answer_key]
+            )
+            options = [option.value for option in question.options]
+            if len(options) < 2 or not keys or any(key not in options for key in keys):
+                raise UnclassifiableQuestionError(f"Unmarkable choice question in {segment_key}")
         result.append(
-            ComprehensionCheckpoint.model_validate(item).model_dump(
+            question.model_dump(
                 by_alias=True,
                 mode="json",
             )
@@ -814,7 +885,10 @@ def _options(value: object) -> list[dict[str, ScalarAnswer]]:
             result.append({"value": option, "label": str(option)})
         elif isinstance(option, dict) and isinstance(option.get("value"), (str, int, float, bool)):
             raw = option["value"]
-            result.append({"value": raw, "label": str(option.get("label") or raw)})
+            normalized = {"value": raw, "label": str(option.get("label") or raw)}
+            if option.get("authoredBy") in {"person", "nevo"}:
+                normalized["authoredBy"] = option["authoredBy"]
+            result.append(normalized)
     return result
 
 

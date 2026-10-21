@@ -39,7 +39,9 @@ def validated_delivery(segment: ParsedLessonSegment) -> ParsedLessonSegment:
         **variants,
         comprehension_checkpoints=tuple(
             checkpoint_payloads(
-                list(segment.comprehension_checkpoints), segment_key=segment.segment_key
+                list(segment.comprehension_checkpoints),
+                segment_key=segment.segment_key,
+                strict=True,
             )
         ),
     )

@@ -10,7 +10,7 @@ from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.db.models.content import LessonSegment
-from nevo.db.models.signal_event import AdaptationDecision
+from nevo.db.models.signal_event import AdaptationDecision, LessonSession
 from nevo.domain.intelligence.vocabulary import (
     AccommodationType,
     AdaptationMode,
@@ -238,6 +238,10 @@ class SegmentAdaptationResponse(BaseModel):
     density: DensityLevel
     scaffolding: ScaffoldingLevel
     priority: int
+    available_formats: list[ContentModality] = Field(default_factory=list)
+    recommended_format: ContentModality | None = None
+    chosen_depth: Literal["original", "simplified", "expanded"] | None = None
+    slower: bool | None = None
 
     @classmethod
     def from_segment(
@@ -414,7 +418,13 @@ class AdaptResponse(BaseModel):
     segments: list[SegmentAdaptationResponse]
     break_suggestion: BreakSuggestionResponse
     proactive_adjustment: ProactiveAdjustmentResponse | None
-    modality_suggestion: ModalitySuggestionResponse | None
+    modality_suggestion: ModalitySuggestionResponse | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Retired separate pill. Use each segment's recommendedFormat in its format control."
+        ),
+    )
     suppressed_attempt: "SuppressedAdaptationResponse | None" = None
     decision_id: UUID | None = None
 
@@ -726,6 +736,50 @@ async def adapt_lesson(
         requested_by_user_id=principal.user_id,
     )
     response = AdaptResponse.from_plan(plan)
+    sitting = await session.get(LessonSession, context.session_id) if context.session_id else None
+    delivery = dict(sitting.delivery_state or {}) if sitting else {}
+    recommendations = dict(delivery.get("recommendations") or {})
+    for item in response.segments:
+        row = await session.scalar(
+            select(LessonSegment).where(
+                LessonSegment.lesson_id == payload.lesson_id,
+                (LessonSegment.id == _segment_uuid(item.segment_id))
+                | (LessonSegment.segment_key == item.segment_id),
+            )
+        )
+        if row is None:
+            raise HTTPException(409, detail={"code": "lesson_content_changed"})
+        from nevo.api.lesson_contracts import student_modalities
+        from nevo.intelligence.delivery_preferences import segment_choice
+
+        item.available_formats = [ContentModality(value) for value in student_modalities(row)]
+        choice = segment_choice(sitting, row)
+        if choice.get("modality") in item.available_formats:
+            item.modality = ContentModality(choice["modality"])
+        item.chosen_depth, item.slower = choice.get("depth"), choice.get("slower")
+        adjustment = response.proactive_adjustment
+        if adjustment and context.signals.current_segment_id in {str(row.id), row.segment_key}:
+            if (
+                choice.get("depth") is not None and adjustment.action in {"simplify", "expand"}
+            ) or (choice.get("slower") is not None and adjustment.action == "slower"):
+                response.proactive_adjustment = None
+        if plan.modality_suggestion and context.signals.current_segment_id in {
+            str(row.id),
+            row.segment_key,
+        }:
+            candidate = plan.modality_suggestion.suggested
+            if candidate in item.available_formats:
+                recommendations[str(row.id)] = candidate.value
+        elif context.signals.current_segment_id in {str(row.id), row.segment_key}:
+            recommendations.pop(str(row.id), None)
+        candidate = recommendations.get(str(row.id))
+        item.recommended_format = (
+            ContentModality(candidate) if candidate in item.available_formats else None
+        )
+    if sitting:
+        sitting.delivery_state = {**delivery, "recommendations": recommendations}
+    # SCRUM-272 replaces the separate pill with the recommendation in the control.
+    response.modality_suggestion = None
     action = plan.proactive_adjustment
     suggestion = plan.modality_suggestion
     if context.session_id and (action is not None or suggestion is not None):
@@ -747,7 +801,15 @@ async def adapt_lesson(
             )
         )
         await session.commit()
+    await session.commit()
     return response
+
+
+def _segment_uuid(value):
+    try:
+        return UUID(value)
+    except (ValueError, TypeError):
+        return UUID(int=0)
 
 
 @router.get(

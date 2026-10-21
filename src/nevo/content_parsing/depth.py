@@ -121,7 +121,9 @@ def invented_numbers(variant: str, source: str) -> set[str]:
 
 
 def source_claims(source):
-    return [piece.strip() for piece in re.split(r"(?<=[.!?])\s+|\n+", source) if piece.strip()]
+    from nevo.content_parsing.chunks import sentence_units
+
+    return [piece.strip() for piece in sentence_units(source) if piece.strip()]
 
 
 def missing_claim_anchors(source, variant):
@@ -272,6 +274,9 @@ class DepthVariantService:
                                 "do not count these instructions as source content. "
                                 "Keep questions as questions, with the same item numbering. "
                                 "Preserve every procedural step and its safety warning. "
+                                "Never reverse a scientific relationship, movement direction, "
+                                "concentration comparison, cause, negation or inequality. "
+                                "Explain only relationships supported by the source. "
                                 + (
                                     "Correct these rejected outputs: "
                                     + json.dumps(repair_details)

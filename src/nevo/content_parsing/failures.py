@@ -29,6 +29,7 @@ class UploadReasonCode(StrEnum):
     SAVE_FAILED = "save_failed"
     OUTPUT_LIMIT = "output_limit"
     PARTIAL_READING = "partial_reading"
+    UNCLASSIFIABLE_QUESTION = "unclassifiable_question"
     UNKNOWN = "unknown"
 
 
@@ -37,6 +38,15 @@ def failure_code(error: BaseException | str) -> UploadReasonCode:
         f"{error.__class__.__name__} {error}" if isinstance(error, BaseException) else str(error)
     ).casefold()
     rules = (
+        (
+            UploadReasonCode.UNCLASSIFIABLE_QUESTION,
+            (
+                "unclassifiablequestionerror",
+                "unclassifiable question",
+                "unmarkable choice question",
+                "unsupported question type",
+            ),
+        ),
         (UploadReasonCode.FILE_TOO_LARGE, ("exceeds 50 mb", "file_too_large")),
         (UploadReasonCode.UNSUPPORTED_FILE_TYPE, ("upload a txt", "unsupported file")),
         (
@@ -69,6 +79,16 @@ GENERIC_FAILURE = (
 #: A small closed list, and it stays small. Every entry earns its place by
 #: naming something a teacher can actually do next.
 FAILURE_REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        (
+            "unclassifiablequestionerror",
+            "unclassifiable question",
+            "unmarkable choice question",
+            "unsupported question type",
+        ),
+        "A question could not be prepared with a usable answer. The lesson has not been "
+        "published. Please retry preparation and share the reference if it happens again.",
+    ),
     (
         ("no readable", "no text", "empty", "no lesson text"),
         "We could not find any lesson text in that file. If it is a scan, a "

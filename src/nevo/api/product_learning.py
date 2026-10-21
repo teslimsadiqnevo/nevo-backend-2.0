@@ -103,7 +103,7 @@ from nevo.db.models.product import (
     UploadJob,
     UploadSourceBlob,
 )
-from nevo.db.models.signal_event import LessonSession
+from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.sso import SchoolSsoConfiguration
 from nevo.domain.accounts.age_bands import band_for_year_group, coerce_band
 from nevo.domain.accounts.vocabulary import SsoConnectionStatus, SsoProvider, UserRole
@@ -114,7 +114,13 @@ from nevo.domain.intelligence.vocabulary import (
     LessonSourceType,
     UploadStage,
 )
-from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
+from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
+from nevo.intelligence.delivery_preferences import (
+    SegmentChoice,
+    SegmentChoiceWrite,
+    save_choice,
+    segment_choice,
+)
 from nevo.intelligence.learning_runtime import (
     apply_marked_attempt,
     ensure_onboarding,
@@ -718,7 +724,6 @@ async def _lesson_for_actor(
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
     if actor.role == UserRole.STUDENT:
-        await ensure_onboarding(session, actor)
         assignment = await session.scalar(
             select(LessonAssignment.id).where(
                 LessonAssignment.student_id == actor.id,
@@ -732,6 +737,15 @@ async def _lesson_for_actor(
         )
         if assignment is None:
             raise HTTPException(status_code=404, detail="Lesson not found")
+        from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
+
+        if not set(ONBOARDING_MODULES).issubset(onboarding_modules(actor.baseline_profile or {})):
+            actor.baseline_profile = {
+                **(actor.baseline_profile or {}),
+                "onboarding_return_lesson_id": str(lesson_id),
+            }
+            await session.commit()
+        await ensure_onboarding(session, actor)
     elif actor.school_id != lesson.school_id:
         raise HTTPException(status_code=404, detail="Lesson not found")
     return actor, lesson
@@ -831,6 +845,20 @@ async def lesson_detail(
     reviewer_names = (
         await depth_reviewer_names(session, segments, lesson.school_id) if for_teacher else {}
     )
+    sitting = (
+        None
+        if for_teacher
+        else await session.scalar(
+            select(LessonSession)
+            .where(
+                LessonSession.student_id == actor.id,
+                LessonSession.lesson_id == lesson_id,
+            )
+            .order_by(LessonSession.started_at.desc())
+            .limit(1)
+        )
+    )
+    recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
     return {
         **_lesson_summary(
             lesson,
@@ -859,6 +887,12 @@ async def lesson_detail(
                 "availableModalities": item.available_modalities
                 if for_teacher
                 else student_modalities(item),
+                "availableFormats": student_modalities(item),
+                "primaryModality": segment_choice(sitting, item).get("modality"),
+                "deliveryPreference": segment_choice(sitting, item) or None,
+                "recommendedFormat": recommendations.get(str(item.id))
+                if recommendations.get(str(item.id)) in student_modalities(item)
+                else None,
                 "comprehensionCheckpoints": checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
                 ),
@@ -1439,6 +1473,79 @@ async def lesson_question_attempts(
     return [await _attempt_payload_with_outcome(session, item) for item in records]
 
 
+class SegmentChoiceResponse(SegmentChoice):
+    available_formats: list[str] = Field(alias="availableFormats")
+    recommended_format: str | None = Field(default=None, alias="recommendedFormat")
+
+
+@router.put(
+    "/lessons/{lesson_id}/sessions/{session_id}/segments/{segment_id}/preferences",
+    response_model=SegmentChoiceResponse,
+    responses={
+        409: {"description": "format_unavailable, depth_unavailable or lesson_session_ended"}
+    },
+)
+async def set_segment_preferences(
+    lesson_id: UUID,
+    session_id: UUID,
+    segment_id: UUID,
+    payload: SegmentChoiceWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
+):
+    actor, _ = await _lesson_for_actor(lesson_id, principal, session)
+    if actor.role != UserRole.STUDENT:
+        raise HTTPException(403, detail={"code": "student_required"})
+    sitting = await session.get(LessonSession, session_id, with_for_update=True)
+    segment = await session.get(LessonSegment, segment_id)
+    if (
+        sitting is None
+        or sitting.student_id != actor.id
+        or sitting.lesson_id != lesson_id
+        or segment is None
+        or segment.lesson_id != lesson_id
+    ):
+        raise HTTPException(404, detail={"code": "lesson_session_not_found"})
+    if sitting.ended_at:
+        raise HTTPException(409, detail={"code": "lesson_session_ended"})
+    available = student_modalities(segment)
+    if payload.modality is not None and payload.modality not in available:
+        raise HTTPException(409, detail={"code": "format_unavailable"})
+    if payload.depth in {"simplified", "expanded"}:
+        from nevo.content_parsing.depth import depth_approved
+
+        variant = (segment.depth_variants or {}).get(payload.depth)
+        if not variant or not depth_approved(variant):
+            raise HTTPException(409, detail={"code": "depth_unavailable"})
+    previous = segment_choice(sitting, segment)
+    await delivery_snapshot(session, actor, sitting)
+    current = save_choice(sitting, segment, payload)
+    if payload.modality is not None and payload.modality != previous.get("modality"):
+        session.add(
+            SignalEvent(
+                id=uuid4(),
+                student_id=actor.id,
+                session_id=sitting.id,
+                event_type=SignalEventType.MODALITY_MANUAL_SWITCH,
+                timestamp=datetime.now(UTC),
+                event_data={
+                    "segmentId": str(segment.id),
+                    "fromModality": previous.get("modality"),
+                    "toModality": payload.modality,
+                    "source": "student_control",
+                },
+            )
+        )
+    recommendation = (sitting.delivery_state or {}).get("recommendations", {}).get(str(segment.id))
+    await session.commit()
+    return {
+        **current,
+        "availableFormats": available,
+        "recommendedFormat": recommendation if recommendation in available else None,
+    }
+
+
 @router.put(
     "/lessons/{lesson_id}/progress",
     response_model=LessonProgressResponse,
@@ -1470,6 +1577,15 @@ async def save_lesson_progress(
             LessonProgress.lesson_id == lesson_id,
         )
     )
+    if payload.assignment_id is not None:
+        assignment = await session.get(LessonAssignment, payload.assignment_id)
+        if (
+            assignment is None
+            or assignment.student_id != actor.id
+            or assignment.lesson_id != lesson_id
+            or assignment.status == "cancelled"
+        ):
+            raise HTTPException(404, detail={"code": "assignment_not_found"})
     if progress is None:
         progress = LessonProgress(student_id=actor.id, lesson_id=lesson_id)
         session.add(progress)
@@ -2708,6 +2824,20 @@ async def _offline_package_payload(
         if actor and actor.role == UserRole.STUDENT
         else {}
     )
+    sitting = (
+        await session.scalar(
+            select(LessonSession)
+            .where(
+                LessonSession.student_id == actor.id,
+                LessonSession.lesson_id == lesson_id,
+            )
+            .order_by(LessonSession.started_at.desc())
+            .limit(1)
+        )
+        if actor
+        else None
+    )
+    recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
     lesson = await session.get(Lesson, lesson_id)
     modules = list(
         await session.scalars(
@@ -2758,6 +2888,12 @@ async def _offline_package_payload(
                 ),
                 "sequenceOrder": item.sequence_order,
                 "availableModalities": student_modalities(item),
+                "availableFormats": student_modalities(item),
+                "recommendedFormat": recommendations.get(str(item.id))
+                if recommendations.get(str(item.id)) in student_modalities(item)
+                else None,
+                "primaryModality": segment_choice(sitting, item).get("modality"),
+                "deliveryPreference": segment_choice(sitting, item) or None,
                 "modalityVariants": {
                     "text": item.text_variant,
                     "visual": safety_reviewed_visual(item.visual_variant),

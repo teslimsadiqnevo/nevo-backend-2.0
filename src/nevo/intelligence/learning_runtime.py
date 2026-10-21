@@ -77,9 +77,33 @@ async def refresh_onboarding(session: AsyncSession, user: User):
     """Record an explicit unmeasured outcome, never a fabricated placement."""
     subjects, available = await onboarding_subjects(session, user)
     profile = dict(user.baseline_profile or {})
+    previous = dict(profile)
+    if available and profile.get("domain_probe_status") == "unavailable_at_onboarding":
+        profile["completed_modules"] = sorted(
+            set(profile.get("completed_modules") or []) - {"domain_probe"}
+        )
+        profile["domain_probe_status"] = "pending_bank_available"
+        profile.pop("onboarding_completed_at", None)
     if "domain_probe" not in onboarding_modules(profile) and not available:
         profile["domain_probe_status"] = "unavailable_at_onboarding"
-        profile["domain_probe_unavailable_at"] = datetime.now(UTC).isoformat()
+        profile.setdefault("domain_probe_unavailable_at", datetime.now(UTC).isoformat())
+    placements = profile.get("subject_placements") or {}
+    statuses = dict(profile.get("subject_placement_statuses") or {})
+    for subject in subjects:
+        if (
+            subject.id in available
+            and statuses.get(str(subject.id), {}).get("reason") == "no_question_bank"
+        ):
+            statuses[str(subject.id)] = {"status": "unestablished", "reason": "probe_pending"}
+        if (
+            subject.id not in available
+            and str(subject.id) not in placements
+            and subject.name.casefold() not in placements
+        ):
+            statuses[str(subject.id)] = {"status": "unestablished", "reason": "no_question_bank"}
+    if statuses:
+        profile["subject_placement_statuses"] = statuses
+    if profile != previous:
         user.baseline_profile = profile
         await session.flush()
     return subjects, available
@@ -243,7 +267,7 @@ async def apply_marked_attempt(
                 ),
                 source="subject_probe"
                 if (concept.subject or "").casefold() in placements
-                else "baseline_profile",
+                else "unestablished_conservative",
             ),
             related_concept_ids=related_ids,
         )

@@ -14,6 +14,7 @@ from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.domain.intelligence.vocabulary import AdaptationMode, ContentModality, ContentSegmentType
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 from nevo.intelligence.adaptation import ADAPTATION_HISTORY_EVENT_TYPES
+from nevo.intelligence.delivery_preferences import segment_choice
 from nevo.intelligence.entities import AdaptationRequest, ContentSegment
 from nevo.intelligence.learning_runtime import ensure_onboarding
 
@@ -150,7 +151,13 @@ async def prepare_adaptation(session, principal, payload, signals):
                 hints=hints,
                 guided_questions=questions,
                 scaffold_intensity=states.get(str(concept_id)),
-                primary_modality=ContentModality(modes[0]) if modes else None,
+                primary_modality=ContentModality(
+                    segment_choice(sitting, row).get("modality")
+                    if segment_choice(sitting, row).get("modality") in modes
+                    else modes[0]
+                )
+                if modes
+                else None,
             )
         )
     if sitting is not None:

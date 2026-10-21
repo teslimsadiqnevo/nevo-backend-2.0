@@ -12,7 +12,7 @@ from uuid import UUID
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
-from nevo.api.lesson_contracts import checkpoint_payloads
+from nevo.api.lesson_contracts import UnclassifiableQuestionError, checkpoint_payloads
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
 from nevo.content_parsing.depth import (
     DEPTH_CONCURRENCY,
@@ -364,6 +364,8 @@ class ContentParsingService:
                 if index == len(chunks):
                     assessment = _assessment_questions(payload)
             except (AiGatewayError, ValueError, json.JSONDecodeError) as error:
+                if isinstance(error, UnclassifiableQuestionError):
+                    raise
                 # Say what went wrong, not just that something did. This note
                 # was the only record that the AI had contributed nothing, and
                 # it named the exception class and no more - which is how a
@@ -874,9 +876,20 @@ def _assessment_questions(payload: dict[str, object]) -> list[dict[str, object]]
     end-of-lesson one without new code.
     """
     return checkpoint_payloads(
-        _dict_list(payload.get("assessment")),
+        _question_list(payload.get("assessment")),
         segment_key="lesson-assessment",
+        strict=True,
     )
+
+
+def _question_list(value):
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise UnclassifiableQuestionError(
+            "Unclassifiable question: expected structured question items"
+        )
+    return value
 
 
 def _segments_from_payload_list(
@@ -1068,7 +1081,7 @@ def _segment_from_payload(
         if calculation_review:
             review_reasons.append(calculation_review)
             needs_review = True
-    checkpoints = _dict_list(
+    checkpoints = _question_list(
         item.get("comprehension_checkpoints") or item.get("comprehensionCheckpoints")
     )
     for checkpoint in checkpoints:
@@ -1076,6 +1089,11 @@ def _segment_from_payload(
             "conceptName",
             str(item.get("concept_name") or item.get("title") or body[:80]),
         )
+    checkpoints = checkpoint_payloads(
+        [{**checkpoint, "conceptId": None} for checkpoint in checkpoints],
+        segment_key=str(item.get("segment_key") or sequence_order),
+        strict=True,
+    )
     return ParsedLessonSegment(
         segment_key=str(item.get("segment_key") or f"segment-{sequence_order}"),
         content_type=content_type,
@@ -1777,7 +1795,9 @@ def _source_activity(body: str, *, title: str | None = None) -> dict[str, object
     source context and observations separately from actionable steps, when
     the source already contains at least two clear procedural instructions.
     """
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", body) if part.strip()]
+    from nevo.content_parsing.chunks import sentence_units
+
+    sentences = [part.strip() for part in sentence_units(body) if part.strip()]
     imperative = re.compile(
         r"^(?:\d+[.)]\s*)?(?:take|place|rinse|add|boil|spread|measure|record|"
         r"observe|mix|pour|cut|draw|label|compare|repeat|collect|stir)\b",

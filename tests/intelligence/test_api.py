@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -84,8 +86,23 @@ def client_for() -> tuple[TestClient, FakeAdaptationEngineService, AuthPrincipal
     service = FakeAdaptationEngineService()
     app = FastAPI()
     app.state.adaptation_engine_service = service
+    from nevo.ai_gateway.safety import POLICY_VERSION
+
+    segment = SimpleNamespace(
+        id=uuid4(),
+        segment_key="intro",
+        body="A lesson.",
+        content_type="explanatory_text",
+        available_modalities=["visual", "text"],
+        visual_variant={"safetyPolicyVersion": POLICY_VERSION, "imageUrl": "https://example.org/a"},
+        audio_variant=None,
+        calculation_variant=None,
+        interactive_variant=None,
+    )
     app.dependency_overrides[authenticated_principal] = lambda: principal
-    app.dependency_overrides[database_session] = lambda: object()
+    app.dependency_overrides[database_session] = lambda: SimpleNamespace(
+        get=AsyncMock(return_value=None), scalar=AsyncMock(return_value=segment), commit=AsyncMock()
+    )
     app.dependency_overrides[require_learning_consent_if_student] = lambda: None
     app.include_router(router)
     return TestClient(app), service, principal
@@ -126,6 +143,10 @@ def test_adapt_endpoint_returns_adaptation_plan() -> None:
         "density": "low",
         "scaffolding": "strong",
         "priority": 80,
+        "availableFormats": ["visual", "text"],
+        "recommendedFormat": None,
+        "chosenDepth": None,
+        "slower": None,
     }
     assert service.requests[0].mode is AdaptationMode.IN_LESSON
     assert service.requests[0].student_id == principal.user_id

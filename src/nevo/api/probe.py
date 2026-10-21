@@ -8,9 +8,10 @@ child's willingness to read the source, which is not what it is for.
 
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -22,6 +23,7 @@ from nevo.api.product_common import actor_user
 from nevo.api.response_models import CamelResponse
 from nevo.db.models.probe import ProbeItem, ProbeResponse
 from nevo.db.models.subject import SchoolSubject
+from nevo.probe.presentation import ordered_options, standalone_question
 from nevo.probe.selection import (
     MAX_QUESTIONS,
     STARTING_DIFFICULTY,
@@ -64,6 +66,7 @@ class ProbeFinished(CamelResponse):
     #: estimate the knowledge graph is seeded with.
     entry_point: float | None = None
     asked: int
+    navigates_to: str | None = None
 
 
 class ProbeEmpty(CamelResponse):
@@ -84,6 +87,7 @@ class ProbeAnswer(BaseModel):
 
     item_id: UUID
     chosen_option: str = Field(min_length=1, max_length=80)
+    lesson_id: UUID | None = None
 
 
 async def _state(session: DatabaseSession, *, student_id: UUID, subject_id: UUID) -> ProbeState:
@@ -126,6 +130,7 @@ async def _finish(session, student, result):
     from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
 
     baseline = dict(student.baseline_profile or {})
+    statuses = dict(baseline.get("subject_placement_statuses") or {})
     state = await _state(session, student_id=student.id, subject_id=result.subject_id)
     if state.asked:
         subject = await session.get(SchoolSubject, result.subject_id)
@@ -143,13 +148,27 @@ async def _finish(session, student, result):
     baseline["domain_probe_status"] = (
         "completed" if state.asked else "completed_without_scored_answers"
     )
+    statuses[str(result.subject_id)] = {
+        "status": "established" if state.asked else "unestablished",
+        "reason": "subject_probe" if state.asked else "no_scored_answers",
+    }
+    baseline["subject_placement_statuses"] = statuses
     completed = onboarding_modules(baseline) | {"domain_probe"}
     baseline["completed_modules"] = sorted(completed)
     if set(ONBOARDING_MODULES).issubset(completed):
         baseline.setdefault("onboarding_completed_at", datetime.now(UTC).isoformat())
     student.baseline_profile = baseline
     await session.commit()
-    return result.model_copy(update={"entry_point": None})
+    return result.model_copy(
+        update={
+            "entry_point": None,
+            "navigates_to": (
+                f"/student/lessons/{baseline['onboarding_return_lesson_id']}"
+                if baseline.get("onboarding_return_lesson_id")
+                else None
+            ),
+        }
+    )
 
 
 @router.get(
@@ -161,6 +180,7 @@ async def next_question(
     principal: PrincipalDependency,
     session: DatabaseSession,
     consent: StudentLearningConsent = None,
+    lesson_id: Annotated[UUID | None, Query(alias="lessonId")] = None,
 ) -> ProbeQuestion | ProbeFinished | ProbeEmpty:
     """The next item for this child in this subject, or what the probe concluded."""
 
@@ -171,15 +191,47 @@ async def next_question(
     if subject is None or subject.school_id != student.school_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
 
+    lesson_concepts = None
+    if lesson_id is not None:
+        from nevo.db.models.content import Lesson, LessonSegment
+        from nevo.db.models.frontend_support import LessonAssignment
+        from nevo.subjects.resolution import normalise
+
+        lesson = await session.get(Lesson, lesson_id)
+        assigned = await session.scalar(
+            select(LessonAssignment.id).where(
+                LessonAssignment.lesson_id == lesson_id,
+                LessonAssignment.student_id == student.id,
+                LessonAssignment.status != "cancelled",
+            )
+        )
+        if lesson is None or lesson.school_id != student.school_id or assigned is None:
+            raise HTTPException(404, detail={"code": "lesson_not_found"})
+        if normalise(lesson.subject or "") != normalise(subject.name):
+            raise HTTPException(409, detail={"code": "probe_subject_mismatch"})
+        lesson_concepts = list(
+            await session.scalars(
+                select(LessonSegment.concept_id).where(
+                    LessonSegment.lesson_id == lesson_id,
+                    LessonSegment.concept_id.is_not(None),
+                )
+            )
+        )
+
     state = await _state(session, student_id=student.id, subject_id=subject_id)
     available = (
         await session.execute(
-            select(ProbeItem.id, ProbeItem.difficulty).where(
+            select(ProbeItem.id, ProbeItem.difficulty, ProbeItem.question).where(
                 ProbeItem.school_subject_id == subject_id,
+                ProbeItem.school_id == student.school_id,
+                (ProbeItem.concept_id.in_(lesson_concepts))
+                if lesson_concepts is not None
+                else True,
                 ProbeItem.retired.is_(False),
             )
         )
     ).all()
+    available = [row for row in available if standalone_question(row[2])]
     if not available:
         from nevo.intelligence.learning_runtime import refresh_onboarding
 
@@ -226,20 +278,22 @@ async def next_question(
         question=item.question,
         options=[
             ProbeOption(value=str(option.get("value")), label=str(option.get("label")))
-            for option in item.options
+            for option in ordered_options(item.options, seed=f"{student.id}:{item.id}")
         ],
         asked=len(asked) + 1,
     )
 
 
-@router.post("/probe/{subject_id}/answer", response_model=ProbeQuestion | ProbeFinished)
+@router.post(
+    "/probe/{subject_id}/answer", response_model=ProbeQuestion | ProbeFinished | ProbeEmpty
+)
 async def submit_answer(
     subject_id: UUID,
     payload: ProbeAnswer,
     principal: PrincipalDependency,
     session: DatabaseSession,
     consent: StudentLearningConsent = None,
-) -> ProbeQuestion | ProbeFinished:
+) -> ProbeQuestion | ProbeFinished | ProbeEmpty:
     """Record what the child picked, and hand back the next item.
 
     The response never says whether they were right. The probe is a placement,
@@ -261,8 +315,8 @@ async def submit_answer(
     }:
         raise HTTPException(422, detail="Choose one of the supplied options")
     if item.id in await _asked(session, student_id=student.id, subject_id=subject_id):
-        return await next_question(subject_id, principal, session)
-    expected = await next_question(subject_id, principal, session)
+        return await next_question(subject_id, principal, session, lesson_id=payload.lesson_id)
+    expected = await next_question(subject_id, principal, session, lesson_id=payload.lesson_id)
     if isinstance(expected, ProbeFinished):
         return expected
     if not isinstance(expected, ProbeQuestion) or expected.item_id != item.id:
@@ -291,7 +345,7 @@ async def submit_answer(
             times_correct=item.times_correct,
         )
     await session.flush()
-    result = await next_question(subject_id, principal, session)
+    result = await next_question(subject_id, principal, session, lesson_id=payload.lesson_id)
     await session.commit()
     return result  # type: ignore[return-value]
 

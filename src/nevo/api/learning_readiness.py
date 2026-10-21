@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import Field
 from sqlalchemy import select
 
@@ -40,16 +40,57 @@ class LearningReadiness(CamelResponse):
     next_module: str | None
     probe_subject_id: UUID | None = None
     probe_policy: Literal["one_available_subject"] = "one_available_subject"
+    return_to: str | None = None
+    lesson_probe_status: Literal["available", "unavailable", "subject_unmapped"] | None = None
 
 
 @router.get("/students/me/onboarding", response_model=LearningReadiness)
 async def readiness(
-    principal: PrincipalDependency, session: DatabaseSession, consent: StudentLearningConsent = None
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
+    lesson_id: Annotated[UUID | None, Query(alias="lessonId")] = None,
 ):
     student = await actor_user(session, principal)
     if student.role != "student":
         raise HTTPException(403, detail="Student account required")
+    if lesson_id is None and (student.baseline_profile or {}).get("onboarding_return_lesson_id"):
+        lesson_id = UUID(student.baseline_profile["onboarding_return_lesson_id"])
     subjects, available = await refresh_onboarding(session, student)
+    preferred = None
+    lesson_status = None
+    if lesson_id is not None:
+        from nevo.db.models.frontend_support import LessonAssignment
+        from nevo.subjects.resolution import normalise
+
+        lesson = await session.get(Lesson, lesson_id)
+        assignment = await session.scalar(
+            select(LessonAssignment.id).where(
+                LessonAssignment.lesson_id == lesson_id,
+                LessonAssignment.student_id == student.id,
+                LessonAssignment.status != "cancelled",
+            )
+        )
+        if lesson is None or lesson.school_id != student.school_id or assignment is None:
+            raise HTTPException(404, detail={"code": "lesson_not_found"})
+        preferred = next(
+            (
+                subject.id
+                for subject in subjects
+                if normalise(subject.name) == normalise(lesson.subject or "")
+            ),
+            None,
+        )
+        lesson_status = (
+            "subject_unmapped"
+            if preferred is None
+            else "available"
+            if preferred in available
+            else "unavailable"
+        )
+        profile = dict(student.baseline_profile or {})
+        profile["onboarding_return_lesson_id"] = str(lesson_id)
+        student.baseline_profile = profile
     completed = onboarding_modules(student.baseline_profile or {})
     unavailable = (student.baseline_profile or {}).get(
         "domain_probe_status"
@@ -76,9 +117,17 @@ async def readiness(
             for subject in subjects
         ],
         next_module=next((name for name in ONBOARDING_MODULES if name not in completed), None),
-        probe_subject_id=next(
-            (subject.id for subject in subjects if subject.id in available), None
+        probe_subject_id=(preferred if preferred in available else None)
+        if lesson_id
+        else next((subject.id for subject in subjects if subject.id in available), None),
+        return_to=f"/student/lessons/{lesson_id}"
+        if lesson_id
+        else (
+            f"/student/lessons/{student.baseline_profile['onboarding_return_lesson_id']}"
+            if student.baseline_profile.get("onboarding_return_lesson_id")
+            else None
         ),
+        lesson_probe_status=lesson_status,
     )
 
 

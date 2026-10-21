@@ -422,6 +422,7 @@ BaselineDimension = Literal[
     "attention",
     "domain",
     "motor_speed",
+    "interference_control",
 ]
 BaselineFormFactor = Literal["tablet_touch", "desktop_cursor", "phone_touch", "mobile_touch"]
 
@@ -432,6 +433,16 @@ class BaselineTrial(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     dimension: BaselineDimension
+
+    @model_validator(mode="after")
+    def interference_conditions(self):
+        if self.dimension == "interference_control" and self.condition not in {
+            "congruent",
+            "incongruent",
+        }:
+            raise ValueError("interference_control requires congruent or incongruent")
+        return self
+
     #: congruent, incongruent, a dot ratio, a reading mode - whatever this
     #: trial varied. The breakdown by condition is derived from these rather
     #: than computed on the device.
@@ -1309,6 +1320,22 @@ async def lesson_detail(
         if actor.role == UserRole.STUDENT
         else {}
     )
+    from nevo.db.models.signal_event import LessonSession
+
+    sitting = (
+        await session.scalar(
+            select(LessonSession)
+            .where(
+                LessonSession.student_id == actor.id,
+                LessonSession.lesson_id == lesson_id,
+            )
+            .order_by(LessonSession.started_at.desc())
+            .limit(1)
+        )
+        if actor.role == UserRole.STUDENT
+        else None
+    )
+    recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
     return LessonDetailResponse(
         **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)).model_dump(
             by_alias=True
@@ -1336,6 +1363,23 @@ async def lesson_detail(
                     if actor.role == UserRole.STUDENT
                     else list(item.available_modalities)
                 ),
+                availableFormats=student_modalities(item),
+                primaryModality=(
+                    (sitting.delivery_state or {})
+                    .get("segmentChoices", {})
+                    .get(str(item.id), {})
+                    .get("modality")
+                    if sitting
+                    else None
+                ),
+                deliveryPreference=(
+                    (sitting.delivery_state or {}).get("segmentChoices", {}).get(str(item.id))
+                    if sitting
+                    else None
+                ),
+                recommendedFormat=recommendations.get(str(item.id))
+                if recommendations.get(str(item.id)) in student_modalities(item)
+                else None,
                 comprehensionCheckpoints=checkpoint_payloads(
                     item.comprehension_checkpoints, segment_key=item.segment_key
                 ),
@@ -2142,6 +2186,21 @@ async def submit_baseline_trials(
                     0, trial["responseTimeMs"] - selected_motor["motorBaselineMs"]
                 )
     features = reduce_trials(marked)
+    interference_trials = [
+        trial for trial in payload.trials if trial.dimension == "interference_control"
+    ]
+    if interference_trials:
+        from nevo.intelligence.interference import reduce_interference
+
+        features = [row for row in features if row.get("dimension") != "interference_control"]
+        features.append(
+            {
+                "dimension": "interference_control",
+                "measurement": reduce_interference(
+                    [trial.model_dump(by_alias=True) for trial in interference_trials]
+                ),
+            }
+        )
     baseline_profile, engine_config = build_baseline_profile(
         session_id=payload.session_id,
         features=features,
@@ -2487,11 +2546,17 @@ async def _todays_prompt(
     )
     if not probes:
         return dimension, {"id": "device:domain-unavailable", "options": []}, False
+    from nevo.probe.presentation import ordered_options, standalone_question
+
+    probes = [probe for probe in probes if standalone_question(probe.question)]
+    if not probes:
+        return dimension, {"id": "device:domain-unavailable", "options": []}, False
     day_number = datetime.now(UTC).date().toordinal()
     student_seed = int.from_bytes(hashlib.sha256(str(student_id).encode()).digest()[:8], "big")
     probe = probes[(day_number + student_seed) % len(probes)]
     options = [
-        (str(option.get("value", "")), str(option.get("label", ""))) for option in probe.options
+        (str(option.get("value", "")), str(option.get("label", "")))
+        for option in ordered_options(probe.options, seed=f"{student_id}:{probe.id}:{day_number}")
     ]
     return (
         dimension,

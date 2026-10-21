@@ -463,7 +463,9 @@ async def _require_confirmed_consent(request: Request, principal: AuthPrincipal)
     response_model=SignalBatchResponse,
     status_code=status.HTTP_202_ACCEPTED,
     responses={
-        403: {"description": "consent_required, consent_withdrawn or student_required"},
+        403: {
+            "description": "consent_pending, consent_required, consent_withdrawn or student_required"
+        },
         503: {"description": "consent_service_unavailable; no events are accepted"},
     },
 )

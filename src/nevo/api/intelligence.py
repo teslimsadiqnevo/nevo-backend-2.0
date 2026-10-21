@@ -825,7 +825,7 @@ async def _mark_scaffold_answer(request: Request, payload: ScaffoldAttemptReques
     "/scaffolds/attempt",
     response_model=ScaffoldDecisionResponse,
     responses={
-        403: {"description": "Student: consent_required or consent_withdrawn"},
+        403: {"description": "Student: consent_pending, consent_required or consent_withdrawn"},
         503: {"description": "consent_service_unavailable"},
     },
 )
@@ -986,7 +986,7 @@ def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:
     "/guided-questions/answer",
     response_model=GuidedAnswerResponse,
     responses={
-        403: {"description": "Student: consent_required or consent_withdrawn"},
+        403: {"description": "Student: consent_pending, consent_required or consent_withdrawn"},
         503: {"description": "consent_service_unavailable"},
     },
 )

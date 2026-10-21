@@ -43,6 +43,11 @@ class ConsentRequiredError(ConsentError):
     public_message = "Parent or school consent is required to continue."
 
 
+class ConsentPendingError(ConsentRequiredError):
+    code = "consent_pending"
+    public_message = "Consent is awaiting confirmation."
+
+
 class ConsentUnavailableError(ConsentError):
     code = "consent_service_unavailable"
     public_message = "Consent could not be checked. Please try again later."

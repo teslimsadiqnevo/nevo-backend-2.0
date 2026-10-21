@@ -41,6 +41,18 @@ async def test_expired_teacher_transcript_cannot_be_read_before_the_sweep():
 
 
 @pytest.mark.asyncio
+async def test_staff_cannot_read_a_childs_transcript_even_with_its_thread_id():
+    thread = SimpleNamespace(actor_user_id=uuid4(), deleted_at=None)
+    session = SimpleNamespace(get=AsyncMock(return_value=thread), scalars=AsyncMock())
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=session)
+    context.__aexit__ = AsyncMock(return_value=False)
+    repository = SqlAlchemyAskNevoRepository(lambda: context)
+    assert await repository.read_thread(actor_user_id=uuid4(), thread_id=uuid4()) is None
+    session.scalars.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_daily_sweep_drains_every_expired_batch(monkeypatch):
     service = RetentionService(None)
     batch = AsyncMock(side_effect=[200, 3])

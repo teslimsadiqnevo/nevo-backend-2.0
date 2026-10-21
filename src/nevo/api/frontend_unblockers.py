@@ -1252,7 +1252,7 @@ async def _author_names(session: DatabaseSession, lessons: list[Lesson]) -> dict
     operation_id="content_lesson_detail_compatibility",
     tags=["content"],
     responses={
-        403: {"description": "Student: consent_required or consent_withdrawn"},
+        403: {"description": "Student: consent_pending, consent_required or consent_withdrawn"},
         503: {"description": "consent_service_unavailable: processing fails closed"},
     },
 )

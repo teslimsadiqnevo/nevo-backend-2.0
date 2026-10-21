@@ -20,6 +20,7 @@ from nevo.consent.entities import (
 )
 from nevo.consent.errors import (
     ConsentError,
+    ConsentPendingError,
     ConsentRequiredError,
     ConsentUnavailableError,
     ConsentWithdrawnError,
@@ -262,6 +263,8 @@ class ConsentService:
         gate = await self.student_gate(principal)
         if gate.status is ConsentStatus.WITHDRAWN:
             raise ConsentWithdrawnError
+        if gate.status is ConsentStatus.PENDING:
+            raise ConsentPendingError
         if not gate.granted:
             raise ConsentRequiredError
         return gate

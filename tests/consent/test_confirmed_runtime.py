@@ -139,7 +139,7 @@ def requests(runtime, sitting):
     "state,code",
     [
         ("missing", "consent_required"),
-        ("pending", "consent_required"),
+        ("pending", "consent_pending"),
         ("not_sent", "consent_required"),
         ("withdrawn", "consent_withdrawn"),
     ],

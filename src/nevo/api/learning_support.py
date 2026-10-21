@@ -15,7 +15,7 @@ from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
-from nevo.db.models.account import User
+from nevo.db.models.account import School, User
 from nevo.db.models.permission import Admin, AdminScopeAssignment, LearningSupportGrant
 from nevo.domain.permissions.vocabulary import PermissionScope
 
@@ -60,9 +60,13 @@ class GrantRequest(BaseModel):
 async def _holders(session: AsyncSession, school_id: UUID | None) -> list[LearningSupportGrant]:
     rows = await session.scalars(
         select(LearningSupportGrant)
+        .join(User, User.id == LearningSupportGrant.holder_user_id)
         .where(
             LearningSupportGrant.school_id == school_id,
             LearningSupportGrant.revoked_at.is_(None),
+            User.school_id == school_id,
+            User.status == "active",
+            User.role.in_(["teacher", "other_admin", "senco_admin"]),
         )
         .order_by(LearningSupportGrant.granted_at)
     )
@@ -161,6 +165,7 @@ async def grant_learning_support(
     """Give another staff member the role, deliberately and on the record."""
 
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
+    await session.scalar(select(School.id).where(School.id == actor.school_id).with_for_update())
     if payload.user_id == actor.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -225,6 +230,7 @@ async def revoke_learning_support(
     """Take the role away, recorded the same way it was given."""
 
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
+    await session.scalar(select(School.id).where(School.id == actor.school_id).with_for_update())
     now = datetime.now(UTC)
     existing = await _holders(session, actor.school_id)
     target = next((grant for grant in existing if grant.holder_user_id == user_id), None)
@@ -263,6 +269,7 @@ async def refuse_last_holder_change(
     operation: str,
 ) -> None:
     """Refuse an operation that would leave an active school with no holder."""
+    await session.scalar(select(School.id).where(School.id == school_id).with_for_update())
     grants = await _holders(session, school_id)
     if len(grants) == 1 and grants[0].holder_user_id == user_id:
         raise HTTPException(

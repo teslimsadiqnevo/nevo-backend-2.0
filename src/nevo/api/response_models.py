@@ -793,10 +793,21 @@ class LearnerProfileSummaryResponse(CamelResponse):
     last_evaluated_at: datetime | None
 
 
+class SafeguardingAcknowledgementResponse(CamelResponse):
+    event_id: UUID
+    acknowledged_at: datetime
+    acknowledged_by: UUID | None
+    acknowledged_by_name: str | None
+    note: str = "Safeguarding entry acknowledged. This is not a resolution."
+
+
 class StudentProfileResponse(CamelResponse):
     student: PersonReferenceResponse
     profile: LearnerProfileSummaryResponse | None
     open_flag_count: int
+    safeguarding_acknowledgements: list[SafeguardingAcknowledgementResponse] = Field(
+        default_factory=list
+    )
 
 
 class TeacherDashboardResponse(CamelResponse):

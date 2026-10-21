@@ -38,7 +38,7 @@ from nevo.api.frontend_unblockers import (
     _source_type,
     _title_from_filename,
 )
-from nevo.api.learning_support import require_learning_support_if_admin
+from nevo.api.learning_support import holds_learning_support, require_learning_support_if_admin
 from nevo.api.lesson_contracts import (
     checkpoint_payloads,
     depth_payloads,
@@ -130,7 +130,7 @@ router = APIRouter(prefix="/api/v1", tags=["learning product"])
 CONSENT_WITHDRAWN_RESPONSE = {
     403: {
         "description": (
-            "consent_required unless processing consent is confirmed; "
+            "consent_pending or consent_required unless processing consent is confirmed; "
             "consent_withdrawn for explicit withdrawal. No learning write is accepted."
         )
     },
@@ -1793,6 +1793,34 @@ async def student_profile(
             AttentionFlag.acknowledged_at.is_(None),
         )
     )
+    acknowledgements = []
+    if await holds_learning_support(session, actor):
+        from nevo.db.models.safety import ContentSafetyEvent
+
+        rows = await session.execute(
+            select(ContentSafetyEvent, User)
+            .outerjoin(User, User.id == ContentSafetyEvent.acknowledged_by)
+            .where(
+                ContentSafetyEvent.student_id == student_id,
+                ContentSafetyEvent.school_id == actor.school_id,
+                ContentSafetyEvent.action.in_(["block", "safeguard"]),
+                ContentSafetyEvent.acknowledged_at.is_not(None),
+            )
+            .order_by(ContentSafetyEvent.acknowledged_at.desc())
+        )
+        acknowledgements = [
+            {
+                "eventId": event.id,
+                "acknowledgedAt": event.acknowledged_at,
+                "acknowledgedBy": event.acknowledged_by,
+                "acknowledgedByName": " ".join(
+                    filter(None, (reviewer.first_name, reviewer.last_name))
+                )
+                if reviewer
+                else None,
+            }
+            for event, reviewer in rows
+        ]
     return {
         "student": {
             "id": str(student.id),
@@ -1813,6 +1841,7 @@ async def student_profile(
             else None
         ),
         "openFlagCount": flags or 0,
+        "safeguardingAcknowledgements": acknowledgements,
     }
 
 

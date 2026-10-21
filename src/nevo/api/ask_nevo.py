@@ -156,7 +156,7 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
         409: {"description": "use_lesson_guidance: in-lesson help uses the Socratic panel."},
         403: {
             "description": (
-                "content_safety_blocked, ask_role_forbidden, consent_required, "
+                "content_safety_blocked, ask_role_forbidden, consent_pending, consent_required, "
                 "or consent_withdrawn "
                 "when learner processing "
                 "has been suspended"
@@ -427,7 +427,7 @@ async def delete_thread(
     "/{interaction_id}/helpfulness",
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
-        403: {"description": "Student: consent_required or consent_withdrawn"},
+        403: {"description": "Student: consent_pending, consent_required or consent_withdrawn"},
         503: {"description": "consent_service_unavailable"},
     },
 )

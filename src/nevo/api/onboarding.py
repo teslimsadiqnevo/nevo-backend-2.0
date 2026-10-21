@@ -34,7 +34,6 @@ from nevo.api.response_models import CamelResponse
 from nevo.billing.entities import PerStudentQuote
 from nevo.billing.issuance import TERM_DATES_KEY
 from nevo.billing.service import quote_per_student
-from nevo.consent.age_assurance import reconcile_school_date
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.billing import Invoice
 from nevo.db.models.onboarding import OnboardingRow, SchoolOnboarding
@@ -1254,9 +1253,7 @@ async def _create_person(
     if is_student and admission_number is not None:
         # The admission number is the school's own name for the child, so a
         # second roster carrying it is the same child again and not a new one.
-        # Merging keeps their history instead of stranding it behind a
-        # duplicate account - and the school's unique index would refuse the
-        # insert anyway. SCRUM-202.
+        # Imports add missing pupils; they are not an edit of an existing record.
         user = await session.scalar(
             select(User).where(
                 User.school_id == school.id,
@@ -1265,12 +1262,7 @@ async def _create_person(
             )
         )
     if user is not None:
-        user.first_name = first_name or user.first_name
-        user.last_name = last_name or user.last_name
-        supplied_date = _parse_date(values.get("date_of_birth", ""))
-        if supplied_date is not None:
-            user.date_of_birth = supplied_date
-            await reconcile_school_date(session, user.id, supplied_date)
+        return
     else:
         user = User(
             school_id=school.id,

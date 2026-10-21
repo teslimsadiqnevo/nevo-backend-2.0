@@ -14,6 +14,7 @@ from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
 from nevo.api.lesson_contracts import UnclassifiableQuestionError, checkpoint_payloads
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
+from nevo.content_parsing.activity import activity_observations as _activity_observations
 from nevo.content_parsing.depth import (
     DEPTH_CONCURRENCY,
     DepthVariantError,
@@ -242,7 +243,7 @@ class ContentParsingService:
         source, navigation_pages = _without_contents_pages(source)
         modules = []
         await _report(on_stage, UploadStage.READING_DOCUMENT)
-        chunks = _bounded_chunks(source.strip(), MAX_CHUNK_CHARS - 1600)
+        chunks = _bounded_chunks(source.strip(), MAX_CHUNK_CHARS - 2100)
         await _report(on_stage, UploadStage.FINDING_SECTIONS)
         segments: list[ParsedLessonSegment] = []
         review_notes: list[dict[str, object]] = (
@@ -284,6 +285,10 @@ class ContentParsingService:
                                     "does not reveal its answer and guidedQuestions with two or "
                                     "three questions grounded in the supplied teaching material. "
                                     "Do not invent facts or add a new topic.\n\n"
+                                    "For activities, inProgress and outcome are optional "
+                                    "source-authored lines. Copy them verbatim from the "
+                                    "upload only when explicitly present. Do not compose, infer, "
+                                    "or default either line; omit absent fields.\n\n"
                                     + _pass_source(chunks, index)
                                 ),
                             },
@@ -309,6 +314,17 @@ class ContentParsingService:
                 ai_call_count += 1
                 payload = _json_payload(result.text)
                 chunk_segments = _segments_from_payload_list(payload, sequence_offset=len(segments))
+                from nevo.content_parsing.activity import source_activity_observations
+
+                chunk_segments = [
+                    replace(
+                        segment,
+                        interactive_variant=source_activity_observations(
+                            segment.interactive_variant, source
+                        ),
+                    )
+                    for segment in chunk_segments
+                ]
                 if len(chunks) > 1:
                     retained = []
                     for segment in chunk_segments:
@@ -1782,9 +1798,7 @@ def _interactive_variant(
         if isinstance(value.get("materials"), list)
         else [],
         "steps": steps[:12],
-        "outcome": (_optional_string(value.get("outcome")) or "You have completed the activity.")[
-            :500
-        ],
+        **_activity_observations(value),
     }
 
 
@@ -1820,7 +1834,7 @@ def _source_activity(body: str, *, title: str | None = None) -> dict[str, object
         for index, sentence in enumerate(sentences)
         if index > actions[-1] and sentence not in warnings
     )
-    if not outcome or len(outcome) > 500:
+    if len(outcome) > 500:
         return None
     instructions = [sentences[index] for index in actions]
     if warnings:
@@ -1836,7 +1850,7 @@ def _source_activity(body: str, *, title: str | None = None) -> dict[str, object
             {"id": f"source-step-{index}", "instruction": sentence}
             for index, sentence in enumerate(instructions, start=1)
         ],
-        "outcome": outcome,
+        **({"outcome": outcome} if outcome else {}),
     }
 
 
@@ -1871,7 +1885,6 @@ def _practice_variant(text: str) -> dict[str, object]:
         "title": "Try this activity",
         "materials": [],
         "steps": [{"id": "step-1", "instruction": text[:500]}],
-        "outcome": "You have completed the activity.",
     }
 
 

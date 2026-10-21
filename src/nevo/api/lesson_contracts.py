@@ -2,7 +2,14 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    model_serializer,
+    model_validator,
+)
 
 from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.content_parsing.chunks import reading_chunks as reading_chunks
@@ -389,7 +396,23 @@ class InteractiveActivityVariant(BaseModel):
     )
     materials: list[str] = Field(default_factory=list, max_length=12)
     steps: list[InteractiveActivityStep] = Field(default_factory=list, max_length=12)
-    outcome: str = "You have completed the activity."
+    in_progress: str | None = Field(
+        default=None,
+        alias="inProgress",
+        description="Optional source-authored observation while working; omitted when absent.",
+    )
+    outcome: str | None = Field(
+        default=None,
+        description="Optional source-authored final observation; omitted when absent.",
+    )
+
+    @model_serializer(mode="wrap")
+    def omit_absent_observations(self, handler):
+        data = handler(self)
+        for key in ("inProgress", "in_progress", "outcome"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -399,6 +422,17 @@ class InteractiveActivityVariant(BaseModel):
             or ("prompt" in value and "steps" not in value)
         ):
             raise ValueError("A stored question must use the legacy question contract.")
+        if isinstance(value, dict):
+            from nevo.content_parsing.activity import activity_observations
+
+            value = {
+                **{
+                    k: v
+                    for k, v in value.items()
+                    if k not in {"inProgress", "in_progress", "outcome"}
+                },
+                **activity_observations(value),
+            }
         return value
 
 

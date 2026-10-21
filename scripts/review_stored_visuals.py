@@ -6,7 +6,6 @@ import io
 import json
 from collections import Counter
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import httpx
@@ -14,6 +13,8 @@ from PIL import Image
 from sqlalchemy import select
 
 from nevo.ai_gateway.config import AiGatewaySettings
+from nevo.ai_gateway.privacy import AiPrivacyGuard
+from nevo.ai_gateway.repositories import SqlAlchemyAiCallRepository
 from nevo.ai_gateway.safety import POLICY_VERSION, safety_from_settings
 from nevo.core.config import get_settings
 from nevo.db.models.content import Lesson, LessonSegment
@@ -25,6 +26,8 @@ async def main(apply=False):
     engine = create_engine(get_settings().database_url)
     sessions = create_session_factory(engine)
     guard = safety_from_settings(AiGatewaySettings(), sessions=sessions)
+    privacy = AiPrivacyGuard()
+    calls = SqlAlchemyAiCallRepository(sessions)
     storage = VisualGenerationSettings()
     allowed_host = urlparse(str(storage.supabase_url)).hostname
     counts = Counter()
@@ -57,16 +60,20 @@ async def main(apply=False):
                     image = Image.open(io.BytesIO(response.content)).convert("RGB")
                     stream = io.BytesIO()
                     image.save(stream, format="PNG")
-                    await guard.check(
+                    context = await calls.resolve_context(
+                        requester_user_id=lesson.created_by_user_id, student_id=None
+                    )
+                    material = privacy.sanitize_text(
                         f"Lesson: {lesson.title}\nSection: {segment.title}\n"
                         f"Teaching content: {segment.body}\nCaption: {original.get('caption', '')}",
+                        pseudonym=privacy.pseudonym(lesson.created_by_user_id),
+                        sensitive_terms=context.sensitive_terms,
+                    )
+                    await guard.check(
+                        material,
                         image=stream.getvalue(),
                         phase="output:stored_lesson_visual",
-                        context=SimpleNamespace(
-                            school_id=lesson.school_id,
-                            student_id=None,
-                            requester_user_id=lesson.created_by_user_id,
-                        ),
+                        context=context,
                     )
                     async with sessions.begin() as session:
                         current = await session.get(LessonSegment, segment.id, with_for_update=True)

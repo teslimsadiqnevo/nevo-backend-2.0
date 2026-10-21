@@ -164,6 +164,9 @@ async def record_parent_date(session, *, school_id, student_id, born, now):
     check = await session.scalar(
         select(AgeCheck).where(AgeCheck.student_id == student_id).with_for_update()
     )
+    # Confirmation is final: later consent submissions cannot re-open activation.
+    if check is not None and check.state in {AgeCheckState.MATCHED, AgeCheckState.RESOLVED}:
+        return check.state
     if check is None:
         check = AgeCheck(
             school_id=school_id,
@@ -176,14 +179,6 @@ async def record_parent_date(session, *, school_id, student_id, born, now):
     if check.state is AgeCheckState.MISMATCH:
         # Consent resubmission is not the explicit reconfirmation workflow.
         check.parent_reconfirmed_at = check.parent_reconfirmed_by = None
-    elif (
-        check.state in {AgeCheckState.MATCHED, AgeCheckState.RESOLVED}
-        and born != check.parent_date_of_birth
-    ):
-        check.school_notified_at = None
-        check.school_rechecked_at = check.parent_reconfirmed_at = None
-        check.school_rechecked_by = check.parent_reconfirmed_by = None
-        check.state = AgeCheckState.MISMATCH
     check.parent_date_of_birth = born
     await apply_check(session, check, student, now)
     return check.state
@@ -201,8 +196,8 @@ async def reconcile_school_date(session, student_id, school_date_of_birth):
             student.date_of_birth = check.agreed_date_of_birth
             student.age_band = band_for_date_of_birth(check.agreed_date_of_birth)
         return
-    if not check.blocks_access and school_date_of_birth != check.school_date_of_birth:
-        check.school_notified_at = None
+    if check.state in {AgeCheckState.MATCHED, AgeCheckState.RESOLVED}:
+        return
     check.school_date_of_birth = school_date_of_birth
     check.school_rechecked_at = check.parent_reconfirmed_at = None
     check.school_rechecked_by = check.parent_reconfirmed_by = None

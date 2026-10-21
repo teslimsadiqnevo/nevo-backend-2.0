@@ -193,6 +193,7 @@ def test_hold_recheck_parent_precedence_and_authorisation_over_http():
             )
             assert response.status_code == 200, response.text
             assert response.json()["blocksAccess"] is True
+            assert response.json()["clearable"] is True
             actor["name"] = "parent"
             response = await client.post(
                 base + "/parent-reconfirm", json={"dateOfBirth": str(parent_date)}
@@ -200,6 +201,7 @@ def test_hold_recheck_parent_precedence_and_authorisation_over_http():
             assert response.status_code == 200, response.text
             assert response.json()["state"] == "resolved" and not response.json()["blocksAccess"]
             assert response.json()["deletionDueAt"] is None
+            assert response.json()["clearable"] is False
         async with sessions() as session:
             student = await session.get(User, ids["child"])
             assert student.date_of_birth == parent_date
@@ -227,6 +229,25 @@ def test_hold_recheck_parent_precedence_and_authorisation_over_http():
             await session.refresh(child)
             assert child.date_of_birth == parent_date
             assert not (await session.get(AgeCheck, check_id)).blocks_access
+            # Later parent submissions and explicit roster corrections do not
+            # re-open a completed confirmation-time check.
+            await record_parent_date(
+                session,
+                school_id=ids["school"],
+                student_id=ids["child"],
+                born=parent_date.replace(year=parent_date.year - 4),
+                now=now,
+            )
+            child.date_of_birth = school_date.replace(month=3)
+            await reconcile_school_date(session, child.id, child.date_of_birth)
+            check = await session.get(AgeCheck, check_id)
+            assert not check.blocks_access
+            assert check.parent_date_of_birth == parent_date
+            assert check.school_notified_at == notified
+            assert child.date_of_birth == school_date.replace(month=3)
+            await session.flush()
+            await session.refresh(child)
+            assert child.retention_due_at is None
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -268,6 +289,7 @@ def test_hard_exceptions_cannot_be_approved(severe):
             )
             assert response.status_code == 200, response.text
             assert response.json()["blocksAccess"]
+            assert response.json()["clearable"] is False
             code = {
                 "gap": "date_gap_exceeds_two_years",
                 "outside_band": "outside_enrolled_age_band",
@@ -420,6 +442,8 @@ def test_no_deletion_clock_before_school_notification_and_expired_recheck_refuse
             check.school_notified_at = now - timedelta(days=30)
         app, _actor = await app_for(sessions, ids)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            checks = await client.get("/api/v1/age-checks")
+            assert checks.json()[0]["clearable"] is False
             response = await client.post(
                 f"/api/v1/age-checks/{check_id}/school-recheck",
                 json={"dateOfBirth": str(school_date)},

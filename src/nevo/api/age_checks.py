@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
@@ -13,6 +13,7 @@ from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.consent.age_assurance import (
     apply_check,
+    blocking_reasons,
     capture_band,
 )
 from nevo.db.models.account import User
@@ -32,6 +33,14 @@ class AgeCheckResponse(CamelResponse):
     state: AgeCheckState
     differs: bool
     blocks_access: bool
+    clearable: bool = Field(
+        description=(
+            "True only for an unexpired open hold with both dates present, at most "
+            "two calendar years apart and inside the captured enrolled age band. "
+            "School recheck and parent reconfirmation are still required; this is "
+            "not permission for an administrator to activate the account."
+        )
+    )
     enrolled_age_band: str | None
     hold_reasons: list[str]
     school_notified_at: datetime | None
@@ -54,6 +63,10 @@ class DateRecheckRequest(CamelResponse):
 
 
 def _view(check, student):
+    expired = bool(
+        check.school_notified_at
+        and datetime.now(UTC) >= check.school_notified_at + timedelta(days=30)
+    )
     return AgeCheckResponse(
         id=check.id,
         student_id=check.student_id,
@@ -62,6 +75,7 @@ def _view(check, student):
         state=check.state,
         differs=check.school_date_of_birth != check.parent_date_of_birth,
         blocks_access=check.blocks_access,
+        clearable=check.blocks_access and not expired and not blocking_reasons(check),
         enrolled_age_band=check.enrolled_age_band,
         hold_reasons=check.hold_reasons or [],
         school_notified_at=check.school_notified_at,

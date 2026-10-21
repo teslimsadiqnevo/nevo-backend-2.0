@@ -20,6 +20,30 @@ from nevo.notifications.digests import notify_modality_shifts
 MAX_ATTEMPTS = 5
 
 
+async def enqueue_post_lesson(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    student_id: UUID,
+    completed_at: datetime | None = None,
+) -> str:
+    """Queue processing in the caller's transaction, without committing progress early."""
+    now = datetime.now(UTC)
+    await session.execute(
+        insert(PostLessonProcessing)
+        .values(
+            session_id=session_id,
+            student_id=student_id,
+            completed_at=completed_at or now,
+            status="pending",
+            next_attempt_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=[PostLessonProcessing.session_id])
+    )
+    record = await session.get(PostLessonProcessing, session_id)
+    return record.status if record is not None else "pending"
+
+
 class PostLessonProcessingWorker:
     def __init__(
         self,
@@ -56,22 +80,13 @@ class PostLessonProcessingWorker:
         student_id: UUID,
         completed_at: datetime | None = None,
     ) -> str:
-        now = datetime.now(UTC)
-        statement = (
-            insert(PostLessonProcessing)
-            .values(
+        async with self._sessions.begin() as session:
+            return await enqueue_post_lesson(
+                session,
                 session_id=session_id,
                 student_id=student_id,
-                completed_at=completed_at or now,
-                status="pending",
-                next_attempt_at=now,
+                completed_at=completed_at,
             )
-            .on_conflict_do_nothing(index_elements=[PostLessonProcessing.session_id])
-        )
-        async with self._sessions.begin() as session:
-            await session.execute(statement)
-            record = await session.get(PostLessonProcessing, session_id)
-            return record.status if record is not None else "pending"
 
     async def process_next(self) -> bool:
         job = await self._claim()

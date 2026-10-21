@@ -127,7 +127,7 @@ from nevo.intelligence.learning_runtime import (
     ensure_prerequisites,
 )
 from nevo.intelligence.session_delivery import delivery_snapshot
-from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
+from nevo.learner_profiles.post_lesson_worker import enqueue_post_lesson
 from nevo.ops.background import spawn
 from nevo.sso.service import SsoService
 
@@ -1681,20 +1681,16 @@ async def save_lesson_progress(
             "segmentPosition": progress.segment_position,
             "reason": "not_attempted",
         }
-    await session.commit()
-
     intelligence: dict[str, object] = {"status": "not_run"}
     if payload.status == "completed" and not not_attempted:
-        worker = getattr(request.app.state, "post_lesson_worker", None)
-        if isinstance(worker, PostLessonProcessingWorker):
-            intelligence["status"] = await worker.enqueue(
-                session_id=lesson_session.id,
-                student_id=actor.id,
-                completed_at=lesson_session.ended_at,
-            )
-        else:
-            intelligence["status"] = "deferred"
+        intelligence["status"] = await enqueue_post_lesson(
+            session,
+            session_id=lesson_session.id,
+            student_id=actor.id,
+            completed_at=lesson_session.ended_at,
+        )
     mastered, revisit = await _check_in_outcome(session, lesson_session.id)
+    await session.commit()
     return {
         "lessonId": str(lesson_id),
         "status": progress.status,

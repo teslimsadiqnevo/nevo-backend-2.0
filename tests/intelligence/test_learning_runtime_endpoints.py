@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -229,8 +229,22 @@ def runtime(monkeypatch):
     ):
         app.include_router(router)
     fixture = SimpleNamespace(client=TestClient(app), sessions=sessions, ids=ids)
-    yield fixture
-    run(engine.dispose())
+    try:
+        yield fixture
+    finally:
+        # The worker claims globally; do not leave another test's queued work behind.
+        from nevo.db.models.product import PostLessonProcessing
+
+        async def clear_jobs():
+            async with sessions.begin() as session:
+                await session.execute(
+                    delete(PostLessonProcessing).where(
+                        PostLessonProcessing.student_id == ids["student"]
+                    )
+                )
+
+        run(clear_jobs())
+        run(engine.dispose())
 
 
 def start(runtime):

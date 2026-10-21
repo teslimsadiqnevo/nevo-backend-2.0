@@ -2,13 +2,82 @@ import pytest
 from sqlalchemy import select
 
 from nevo.db.models.signal_event import SignalEvent
-from tests.intelligence.test_learning_runtime_endpoints import run, start
+from tests.intelligence.test_learning_runtime_endpoints import answer, run, start
 from tests.intelligence.test_learning_runtime_endpoints import runtime as runtime_fixture
 
 
 @pytest.fixture(name="runtime")
 def player_runtime(monkeypatch):
     yield from runtime_fixture.__wrapped__(monkeypatch)
+
+
+def test_completion_queues_durable_work_once_without_an_in_process_worker(runtime):
+    from nevo.db.models.product import PostLessonProcessing
+    from nevo.db.models.signal_event import LessonSession
+
+    sitting = start(runtime)
+    assert answer(runtime, sitting, 5).status_code == 201
+    for _ in range(2):
+        response = runtime.client.put(
+            f"/api/v1/lessons/{runtime.ids['lesson']}/progress",
+            json={"sessionId": sitting, "status": "completed"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["intelligence"]["status"] == "pending"
+
+    async def verify():
+        from uuid import UUID
+
+        async with runtime.sessions() as session:
+            job = await session.get(PostLessonProcessing, UUID(sitting))
+            lesson_session = await session.get(LessonSession, UUID(sitting))
+            assert job.student_id == runtime.ids["student"]
+            assert job.attempt_count == 0
+            assert job.completed_at == lesson_session.ended_at
+
+    run(verify())
+
+
+def test_queue_failure_rolls_back_completion_and_retry_succeeds(runtime, monkeypatch):
+    from uuid import UUID
+
+    from nevo.api import product_learning
+    from nevo.db.models.product import LessonProgress, PostLessonProcessing
+    from nevo.db.models.signal_event import LessonSession
+
+    sitting = start(runtime)
+    assert answer(runtime, sitting, 5).status_code == 201
+    enqueue = product_learning.enqueue_post_lesson
+
+    async def fail_after_insert(*args, **kwargs):
+        await enqueue(*args, **kwargs)
+        raise RuntimeError("simulated queue transaction failure")
+
+    url = f"/api/v1/lessons/{runtime.ids['lesson']}/progress"
+    payload = {"sessionId": sitting, "status": "completed"}
+    with monkeypatch.context() as patch:
+        patch.setattr(product_learning, "enqueue_post_lesson", fail_after_insert)
+        with pytest.raises(RuntimeError, match="simulated queue transaction failure"):
+            runtime.client.put(url, json=payload)
+
+    async def verify():
+        async with runtime.sessions() as session:
+            lesson_session = await session.get(LessonSession, UUID(sitting))
+            assert lesson_session.ended_at is None
+            assert lesson_session.completion_status == "in_progress"
+            assert await session.get(PostLessonProcessing, UUID(sitting)) is None
+            progress = await session.scalar(
+                select(LessonProgress).where(
+                    LessonProgress.student_id == runtime.ids["student"],
+                    LessonProgress.lesson_id == runtime.ids["lesson"],
+                )
+            )
+            assert progress is None or progress.status != "completed"
+
+    run(verify())
+    response = runtime.client.put(url, json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["intelligence"]["status"] == "pending"
 
 
 def test_choices_survive_reload_and_override_engine_without_inventing_media(runtime):

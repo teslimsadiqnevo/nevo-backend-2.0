@@ -2,7 +2,7 @@
 
 ## Release boundary
 
-Backend only. The new contracts require deployment of the pushed main commit through the separate Render account. Existing production lesson data was repaired separately, without replacing lesson/segment IDs or editing the frontend. Production `alembic upgrade head` is run as part of this work; no new database migration is needed because the additional state uses existing JSONB columns.
+Backend only. Production now exposes the format/preference contracts and reports schema current at 20261020_0111. The subsequent atomic completion/queue fix still requires deployment of its pushed commit through the separate Render account. Existing production lesson data was repaired separately, without replacing lesson/segment IDs or editing the frontend. No new database migration is needed because these changes use existing tables and JSONB columns.
 
 ## 1. Questions: SCRUM-264
 
@@ -17,6 +17,8 @@ Stored-contract reprocessing normalised 313 checkpoint sections and assessments 
 Progress and adaptation handlers were exercised using Nura's actual stored Osmosis sitting and profile in rollback-only transactions. Both passed, including response-model validation. The adaptation replay temporarily reopened the ended sitting inside the rolled-back transaction so its in-lesson path could be exercised. An ended sitting correctly returns lesson_session_required when not reopened.
 
 Progress now validates assignment ownership and lesson membership before storing a supplied assignment ID, rather than relying on a foreign-key failure. A further rollback-only replay used Osmosis's real questions: three misses opened socratic_panel, all nine correct answers were marked correctly, and completion returned landed. These calls also exercised the local mastery/review write paths without retaining simulated answers. HTTP/SQL regression tests cover the player flow. However, the four original incidents have not been causally explained: no original payloads or private Render tracebacks were available. Do not mark those incidents definitively resolved solely because the current replay passes. A fresh production run remains required; this is not being described as a transient fault.
+
+Follow-up inspection found and fixed a concrete partial-success failure path: completion used to commit progress before queuing post-lesson processing in a second transaction. If that second write failed, the client received a 500 despite saved completion, and processing could be lost. Completion and its idempotent processing job now commit together, even if no worker is running in that API process. Queue failure rolls back completion; retry creates exactly one job. Response aggregation also happens before the commit. This is a verified reliability correction, not a claim that it explains the unavailable historical tracebacks.
 
 ## 3. Osmosis scientific corrections
 
@@ -107,4 +109,6 @@ The production aggregate audit found zero usable flanker contrasts, zero Word Co
 
 374 focused tests passed, covering question storage and marking, adaptation, scaffold behaviour, choice persistence and engine precedence, no-bank reopening, baseline reduction, consent and safeguarding. Production migration upgrade completed successfully at the existing 20261020_0111 head. The Git commit is reported alongside this handoff.
 
-Remaining: deploy the new main commit through the separate Render account and re-run the actual browser demo; two corrected expanded passages need renewed teacher approval; the four original 500 incidents remain causally unconfirmed despite successful rollback replays; the flanker/Word Conflict overlap question lacks paired data and the provisional thresholds need review. Frontend wiring and media quota recovery are not presented as completed backend work.
+The atomic completion follow-up passed 93 intelligence/consent regression tests, including injected queue failure, full rollback and idempotent retry. Both production-data handler replays passed again with every write rolled back. Test-worker queue isolation was updated because completion now reliably creates durable jobs even without an in-process worker.
+
+Remaining: deploy the atomic queue follow-up through the separate Render account and re-run the actual browser demo; two corrected expanded passages need renewed teacher approval; the four original 500 incidents remain causally unconfirmed despite successful rollback replays; the flanker/Word Conflict overlap question lacks paired data and the provisional thresholds need review. Frontend wiring and media quota recovery are not presented as completed backend work. Neither a teacher's approval nor an empirical result can be replaced by an automated backend sign-off.

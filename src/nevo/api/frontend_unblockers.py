@@ -85,6 +85,7 @@ from nevo.api.response_models import (
 from nevo.content_parsing.chunks import reading_chunks, reading_groups
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
+from nevo.content_parsing.upload_reuse import find_reusable_upload, record_reused_media
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import (
     AttentionFlag,
@@ -93,7 +94,7 @@ from nevo.db.models.attention_flag import (
     InterventionRecommendation,
 )
 from nevo.db.models.consent import ParentLink
-from nevo.db.models.content import Lesson, LessonKeyPoint, LessonSegment
+from nevo.db.models.content import ContentParseRun, Lesson, LessonKeyPoint, LessonSegment
 from nevo.db.models.frontend_support import (
     Concept,
     LessonAssignment,
@@ -1438,7 +1439,6 @@ async def upload_content(
     which is why it is not something to hold a request open for. Poll
     ``pollUrl`` until it reports finished.
     """
-    del session
     if service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     content = await file.read()
@@ -1453,6 +1453,30 @@ async def upload_content(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Nevo could not extract readable lesson text from this file.",
         )
+    actor = await require_school_actor(
+        session, principal, roles={"teacher", "senco_admin", "other_admin"}
+    )
+    reused = await find_reusable_upload(
+        session,
+        actor_id=actor.id,
+        school_id=actor.school_id,
+        scope="lesson",
+        content=content,
+        subject=subject,
+    )
+    if reused is not None:
+        reused_lesson = UUID(str(reused.structure["lessonId"]))
+        run = await session.scalar(
+            select(ContentParseRun)
+            .where(
+                ContentParseRun.lesson_id == reused_lesson,
+                ContentParseRun.status.in_(["completed", "completed_with_review"]),
+            )
+            .order_by(ContentParseRun.created_at.desc())
+        )
+        if run is not None:
+            await record_reused_media(session, reused)
+            return ParseAcceptedResponse.started(lesson_id=reused_lesson, parse_run_id=run.id)
     lesson_id, parse_run_id = await service.start(
         request=ContentParseRequest(
             title=_title_from_filename(file.filename),

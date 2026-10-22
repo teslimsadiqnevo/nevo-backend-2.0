@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, model_validator
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -88,6 +88,12 @@ from nevo.content_parsing.failures import (
 )
 from nevo.content_parsing.modules import delivery_modules
 from nevo.content_parsing.service import ContentParsingService
+from nevo.content_parsing.upload_reuse import (
+    find_reusable_upload,
+    record_reused_media,
+    reuse_response,
+    source_key,
+)
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag, InterventionRecommendation
 from nevo.db.models.content import Lesson, LessonSegment
@@ -2338,6 +2344,41 @@ async def staged_upload(
     actor = await require_school_actor(
         session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
     )
+    fingerprint = source_key(
+        text=payload.source_text,
+        title=payload.title,
+        subject=payload.subject,
+        source_type=payload.source_type.value,
+        scope=payload.scope,
+    )
+    lock = int.from_bytes(
+        hashlib.sha256(f"{actor.id}:{fingerprint}".encode()).digest()[:8], "big", signed=True
+    )
+    await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock})
+    reused = await find_reusable_upload(
+        session,
+        actor_id=actor.id,
+        school_id=actor.school_id,
+        scope=payload.scope,
+        key=fingerprint,
+        subject=payload.subject,
+    )
+    if reused is not None:
+        await record_reused_media(session, reused)
+        return reuse_response(reused)
+    pending = await session.scalar(
+        select(UploadJob)
+        .where(
+            UploadJob.requested_by_id == actor.id,
+            UploadJob.school_id == actor.school_id,
+            UploadJob.scope == payload.scope,
+            UploadJob.status == "processing",
+            UploadJob.structure["sourceCacheKey"].astext == fingerprint,
+        )
+        .order_by(UploadJob.created_at.desc())
+    )
+    if pending is not None:
+        return reuse_response(pending)
     job = UploadJob(
         school_id=actor.school_id,
         requested_by_id=actor.id,
@@ -2345,6 +2386,7 @@ async def staged_upload(
         filename=payload.filename,
         status="processing",
         stage=UploadStage.RECEIVING_FILE.value,
+        structure={"sourceCacheKey": fingerprint},
     )
     session.add(job)
     await session.commit()
@@ -2444,7 +2486,11 @@ def _parse_into_job(
                 return
             job.status = "ready"
             job.stage = UploadStage.READY_TO_ASSIGN.value
-            job.structure = _upload_structure(parsed)
+            fingerprint = job.structure.get("sourceCacheKey")
+            job.structure = {
+                **_upload_structure(parsed),
+                **({"sourceCacheKey": fingerprint} if fingerprint else {}),
+            }
             job.completed_at = datetime.now(UTC)
 
     spawn(work, name=f"upload-parse-{job_id}")
@@ -2477,6 +2523,20 @@ async def _ingest_one_file(
         raise HTTPException(status_code=400, detail="Could not read lesson file") from error
     if not source_text.strip():
         raise HTTPException(status_code=400, detail="No readable lesson text was found")
+    actor = await require_school_actor(
+        session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
+    )
+    reused = await find_reusable_upload(
+        session,
+        actor_id=actor.id,
+        school_id=actor.school_id,
+        scope=scope,
+        content=content,
+        subject=subject,
+    )
+    if reused is not None:
+        await record_reused_media(session, reused)
+        return reuse_response(reused)
     result = await staged_upload(
         UploadRequest(
             title=_title_from_filename(filename),
@@ -2491,6 +2551,8 @@ async def _ingest_one_file(
         parser,
         sessions,
     )
+    if result.get("reused"):
+        return result
     session.add(
         UploadSourceBlob(
             upload_id=UUID(str(result["uploadId"])),

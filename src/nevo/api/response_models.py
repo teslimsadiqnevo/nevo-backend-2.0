@@ -1132,6 +1132,7 @@ class UploadCreatedResponse(CamelResponse):
     upload_id: UUID
     status: UploadStatus
     stage: UploadStage
+    reused: bool = False
 
 
 class BatchUploadItemResponse(CamelResponse):

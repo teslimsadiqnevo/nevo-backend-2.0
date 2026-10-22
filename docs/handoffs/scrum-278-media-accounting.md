@@ -27,6 +27,13 @@ this report's costs when calculating a combined AI total.
 ## Reuse and cost interpretation
 
 Media is generated at lesson preparation or explicit repair, not per child/session/serve.
+Unchanged staged uploads now reuse the existing ready job and lesson for the same
+uploader, school, scope and subject, preserving edits and approvals. Existing file
+uploads are matched against retained bytes; new text imports carry a deterministic
+source/settings fingerprint. The response includes `reused: true`. Reused asset
+references are counted as cache hits with no generation calls or asset writes.
+This is idempotent retrieval, not a new independent lesson copy. Changing the
+source/settings or explicitly regenerating remains a separate operation.
 Audio is reused by normalized script plus configured voice. Images are reused by
 prompt, model and safety-policy version. Cached images can still incur safety-review costs.
 Audio cache lookup truncates the existing narration input to 2,000 characters; this ticket

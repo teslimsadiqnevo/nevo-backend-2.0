@@ -1,5 +1,42 @@
 # Controlled unchanged Osmosis re-upload
 
+## Follow-up fix and successful handler test
+
+The `selection` choice alias is now classified using its answer cardinality and
+validated against actual options. Unknown renderers and unmatched answers still
+fail preparation; no question is silently discarded.
+
+Staged uploads now reuse an existing ready upload for the same uploader, school,
+scope and subject when the retained file bytes match. New text imports also keep
+a deterministic source/settings fingerprint, and concurrent matching processing
+requests return the same job rather than starting another parse. Existing content,
+teacher edits and approval records are retained. `UploadCreatedResponse.reused`
+explicitly identifies reuse. This is idempotent reuse of the original lesson, not
+a new editable copy or permission to share a different school's lesson.
+
+The new handler was exercised over multipart HTTP using local ASGI execution,
+real test-school authentication, the original retained PDF and the production DB
+and media ledger. Latest window: 22 October 2026, 19:33:06 to 19:33:25 UTC.
+All ten referenced storage objects were verified to exist before this repeat.
+
+| Media | Provider calls | Cache hits | Asset writes |
+| --- | ---: | ---: | ---: |
+| Narration | 0 | 6 | 0 |
+| Images | 0 | 4 | 0 |
+
+The response returned original upload `f797428f-2674-4584-81f6-919b28110e5d`,
+status `ready`, `reused: true`, and original lesson `3367de9d-be40-4704-8a95-7a197b9824dc`.
+No parsing, safety-model, image-generation or narration-generation call was made
+by that reused request. Cache hits count reused stored references; as with the
+report inventory, they are not a periodic bucket-integrity audit.
+
+The updated handler still needs deploying on Render. This local HTTP test must
+not be represented as proof that Render is already running the new code.
+No migration is required beyond existing 0112. The earlier failed production test
+is retained below rather than rewritten as a success.
+
+## Earlier production failure (before this fix)
+
 Production test on 22 October 2026, 19:19:13 to 19:20:33 UTC.
 
 Original retained upload: `f797428f-2674-4584-81f6-919b28110e5d`.
@@ -26,7 +63,7 @@ upload from reaching media preparation. No conclusion about unchanged-upload
 reuse can be drawn from these zeros. Do not report this as a zero-cost upload:
 lesson parsing made AI calls outside the media ledger.
 
-## What the implementation currently guarantees
+## Earlier adapter-only behavior (before source reuse)
 
 Audio storage lookup is keyed by configured voice and normalized script (first
 2,000 characters). Image lookup is keyed by safety policy version, image model

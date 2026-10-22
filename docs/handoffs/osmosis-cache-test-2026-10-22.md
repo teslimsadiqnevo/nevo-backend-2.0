@@ -1,5 +1,22 @@
 # Controlled unchanged Osmosis re-upload
 
+## Production rerun passed
+
+After deployment of `9b76c50`, the exact retained PDF was posted to the public
+`https://api.nevolearning.com/api/v1/uploads` endpoint on 22 October 2026,
+19:38:07 to 19:38:25 UTC. The response returned the original upload and lesson,
+status `ready`, stage `ready_to_assign`, and `reused: true`.
+
+| Media | Provider calls | Cache hits | Asset writes | Retries | Failures |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Narration | 0 | 6 | 0 | 0 | 0 |
+| Images | 0 | 4 | 0 | 0 | 0 |
+
+This supersedes the deployment caveat on the earlier local test below. It proves
+the unchanged-source reuse path is operating on the public API. The report's
+whole-day totals also include earlier local-handler verification runs; the table
+above is only the public-API rerun's window.
+
 ## Follow-up fix and successful handler test
 
 The `selection` choice alias is now classified using its answer cardinality and

@@ -104,6 +104,20 @@ def test_browser_view_escapes_data_and_never_embeds_key(client):
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
+def test_view_accepts_legacy_timestamps_and_calendar_dates(client):
+    for start, end in (
+        ("2026-10-20T12:30:00+00:00", "2026-10-22T15:30:00+00:00"),
+        ("2026-10-20", "2026-10-22"),
+    ):
+        response = client.http.get(
+            "/api/ops/media-usage/view",
+            params={"from": start, "until": end},
+            auth=("ops", KEY),
+        )
+        assert response.status_code == 200, response.text
+        assert 'type="date"' in response.text
+
+
 def cycle():
     now = datetime.now(UTC) - timedelta(seconds=1)
     return {

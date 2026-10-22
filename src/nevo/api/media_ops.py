@@ -191,9 +191,13 @@ Currencies are kept separate. Calls before tracking began are not reconstructed.
 @router.get("/view", response_class=HTMLResponse, dependencies=[Depends(ops_access)])
 async def media_usage_view(
     session: DatabaseSession,
-    since: Annotated[date | None, Query(alias="from")] = None,
-    until: date | None = None,
+    since: Annotated[date | datetime | None, Query(alias="from")] = None,
+    until: date | datetime | None = None,
 ) -> HTMLResponse:
+    if isinstance(since, datetime):
+        since = since.astimezone(UTC).date() if since.tzinfo else since.date()
+    if isinstance(until, datetime):
+        until = until.astimezone(UTC).date() if until.tzinfo else until.date()
     end_date = until or datetime.now(UTC).date()
     start_date = since or (end_date - timedelta(days=29))
     if end_date == date.max:

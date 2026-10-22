@@ -1,7 +1,7 @@
 """Private platform-wide media accounting, never a school-admin permission."""
 
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from html import escape
 from typing import Annotated, Literal
@@ -170,10 +170,10 @@ th,td{{text-align:left;padding:10px;border-bottom:1px solid #9a9ccb;white-space:
 th{{background:#3b3f6e;color:#f7f1e6}}tbody tr:nth-child(even){{background:#ede8dc}}
 p{{max-width:1000px;line-height:1.5}}@media print{{form{{display:none}}body{{padding:0}}}}
 </style></head><body><h1>Nevo media usage</h1>
-<form method="get"><label>From (with timezone)<input name="from"
-value="{escape(data.since.isoformat(), quote=True)}" required></label>
-<label>Until (with timezone)<input name="until"
-value="{escape(data.until.isoformat(), quote=True)}" required></label>
+<form method="get"><label>From (UTC)<input type="date" name="from"
+value="{data.since.date().isoformat()}" required></label>
+<label>Through (UTC)<input type="date" name="until"
+value="{(data.until - timedelta(microseconds=1)).date().isoformat()}" required></label>
 <button type="submit">Refresh report</button></form>
 <p>Recorded since: {escape(str(data.trackingStartedAt or "No usage recorded yet"))}.
 Costs are estimates, not invoices. Unpriced calls are not treated as free.
@@ -191,10 +191,16 @@ Currencies are kept separate. Calls before tracking began are not reconstructed.
 @router.get("/view", response_class=HTMLResponse, dependencies=[Depends(ops_access)])
 async def media_usage_view(
     session: DatabaseSession,
-    since: Annotated[datetime | None, Query(alias="from")] = None,
-    until: datetime | None = None,
+    since: Annotated[date | None, Query(alias="from")] = None,
+    until: date | None = None,
 ) -> HTMLResponse:
-    data = await media_usage(session, since, until)
+    end_date = until or datetime.now(UTC).date()
+    start_date = since or (end_date - timedelta(days=29))
+    if end_date == date.max:
+        raise HTTPException(422, detail={"code": "invalid_reporting_range"})
+    start = datetime.combine(start_date, time.min, tzinfo=UTC)
+    end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=UTC)
+    data = await media_usage(session, start, end)
     return HTMLResponse(
         report_html(data),
         headers={

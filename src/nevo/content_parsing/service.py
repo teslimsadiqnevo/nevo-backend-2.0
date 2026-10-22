@@ -691,11 +691,14 @@ class ContentParsingService:
         try:
             kwargs = {}
             if isinstance(generator, EducationalImageService) and requested_by_user_id is not None:
-                kwargs["context"] = await self._ai_gateway.check_content(
-                    segment.body,
-                    requester_user_id=requested_by_user_id,
-                    phase="illustration_source",
-                )
+                async def source_check():
+                    return await self._ai_gateway.check_content(
+                        segment.body,
+                        requester_user_id=requested_by_user_id,
+                        phase="illustration_source",
+                    )
+
+                kwargs["source_check"] = source_check
             visual = await generator.generate(
                 title=segment.title,
                 lesson_text=segment.body,

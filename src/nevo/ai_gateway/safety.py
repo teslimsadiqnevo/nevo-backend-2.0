@@ -115,16 +115,32 @@ class ContentSafetyGuard:
             try:
                 async with self._semaphore:
                     if self._client:
-                        response = await self._client.post(
+                        from nevo.ops.media_usage import provider_request
+
+                        response = await provider_request(
+                            self._client,
+                            "POST",
                             f"{self._base}/messages",
+                            provider="anthropic",
+                            model=self._model,
+                            operation=f"safety_{phase}",
+                            retry_number=1,
                             headers=self._headers(),
                             json=self._payload(content),
                             timeout=30,
                         )
                     else:
                         async with httpx.AsyncClient(timeout=30) as client:
-                            response = await client.post(
+                            from nevo.ops.media_usage import provider_request
+
+                            response = await provider_request(
+                                client,
+                                "POST",
                                 f"{self._base}/messages",
+                                provider="anthropic",
+                                model=self._model,
+                                operation=f"safety_{phase}",
+                                retry_number=1,
                                 headers=self._headers(),
                                 json=self._payload(content),
                             )

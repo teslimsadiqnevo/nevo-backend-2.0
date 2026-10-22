@@ -15,6 +15,7 @@ from nevo.audio.service import AudioGenerationError, AudioGenerationService
 from nevo.core.config import get_settings
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.session import create_engine, create_session_factory
+from nevo.ops.media_usage import close_ledger
 
 LESSON = UUID("3367de9d-be40-4704-8a95-7a197b9824dc")
 GUIDANCE = {
@@ -127,6 +128,7 @@ async def main(apply_guidance=False, audio=False):
             report["audio"][row.sequence_order] = "generated_and_stored"
         print(json.dumps(report, sort_keys=True))
     finally:
+        await close_ledger()
         await engine.dispose()
 
 

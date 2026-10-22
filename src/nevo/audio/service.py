@@ -7,6 +7,7 @@ from weakref import WeakKeyDictionary
 import httpx
 
 from nevo.audio.config import AudioSettings
+from nevo.ops.media_usage import cache_hit, provider_request, tracked_generation
 from nevo.storage import StorageError, SupabaseStorage
 
 #: Two thousand characters of speech takes YarnGPT longer than a minute on a
@@ -55,6 +56,7 @@ class AudioGenerationService:
     def configured(self) -> bool:
         return bool(self._settings.yarngpt_api_key and self._storage.configured)
 
+    @tracked_generation("audio")
     async def generate(self, script: str) -> dict[str, object]:
         normalized = " ".join(script.split()).strip()[:2_000]
         if not normalized:
@@ -69,6 +71,8 @@ class AudioGenerationService:
             if not await self._storage.exists(object_path):
                 audio = await self._generate_audio(normalized)
                 await self._storage.upload(object_path, audio, content_type="audio/mpeg")
+            else:
+                cache_hit()
             audio_url = await self._storage.url_for(object_path)
         except StorageError as error:
             raise AudioGenerationError(str(error)) from error
@@ -216,7 +220,13 @@ class AudioGenerationService:
     ) -> httpx.Response:
         for attempt in range(YARNGPT_ATTEMPTS):
             try:
-                response = await client.request(method, url, **kwargs)
+                operation = "synthesis" if method == "POST" else (
+                    "voice_catalogue" if url.rstrip("/").endswith("voices") else "job_read"
+                )
+                response = await provider_request(
+                    client, method, url, provider="yarngpt", model="tts",
+                    operation=operation, retry_number=attempt + 1, **kwargs,
+                )
             except httpx.TransportError:
                 if attempt == YARNGPT_ATTEMPTS - 1:
                     raise

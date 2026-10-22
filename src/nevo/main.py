@@ -248,6 +248,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await app.state.heartbeat_loop.stop()
         await app.state.self_ping_loop.stop()
         await app.state.ai_gateway.close()
+        from nevo.ops.media_usage import close_ledger
+
+        await close_ledger()
         await engine.dispose()
 
 

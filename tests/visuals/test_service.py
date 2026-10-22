@@ -94,6 +94,31 @@ def _install(monkeypatch: pytest.MonkeyPatch, handler) -> None:
     monkeypatch.setattr(httpx, "AsyncClient", client)
 
 
+async def test_source_safety_and_rejected_candidates_are_metered(monkeypatch, media_ledger):
+    fake = _Fake([_review(False, "Correct the labels"), _review(True)])
+    _install(monkeypatch, fake)
+    service = EducationalImageService(_settings())
+
+    async def source_check():
+        await service._safety.check("One half equals two quarters.", phase="illustration_source")
+
+    await service.generate(
+        title="Fractions",
+        lesson_text="One half equals two quarters.",
+        requested_prompt=None,
+        source_check=source_check,
+    )
+    rows = list(media_ledger.rows.values())
+    calls = [row for row in rows if row["kind"] == "provider_call"]
+    generations = [row for row in calls if row["operation"] == "image_generation"]
+    assert [row["attempt"] for row in generations] == [1, 2]
+    assert sum(row["operation"] == "image_review" for row in calls) == 2
+    assert sum(row["operation"] == "safety_illustration_source" for row in calls) == 1
+    assert len({row["run_id"] for row in rows}) == 1
+    assert rows[0]["status"] == "succeeded"
+    assert "One half equals" not in str(rows)
+
+
 def test_service_is_unconfigured_without_keys() -> None:
     assert not EducationalImageService(VisualGenerationSettings()).configured
     assert not EducationalImageService(_settings(OPENAI_API_KEY=None)).configured
@@ -208,7 +233,7 @@ async def test_safety_blocks_images_before_delivery(monkeypatch, blocked_phase):
         return fake(request)
 
     _install(monkeypatch, handler)
-    with pytest.raises(VisualGenerationError, match="cannot help"):
+    with pytest.raises(VisualGenerationError, match="help with this one"):
         await EducationalImageService(_settings()).generate(
             title="Lesson", lesson_text="text", requested_prompt=None
         )

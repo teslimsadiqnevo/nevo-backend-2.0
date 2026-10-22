@@ -17,6 +17,7 @@ from nevo.ai_gateway.safety import (
     SafetyUnavailable,
     safety_from_settings,
 )
+from nevo.ops.media_usage import cache_hit, provider_request, tracked_generation
 from nevo.storage import StorageError, SupabaseStorage
 from nevo.visuals.config import VisualGenerationSettings
 
@@ -94,6 +95,7 @@ class EducationalImageService:
             and self._storage.configured
         )
 
+    @tracked_generation("image")
     async def generate(
         self,
         *,
@@ -101,12 +103,15 @@ class EducationalImageService:
         lesson_text: str,
         requested_prompt: str | None,
         context=None,
+        source_check=None,
     ) -> dict[str, object]:
         if not self.configured:
             raise VisualGenerationError("Image generation, review, or storage is not configured")
         safe_text = self._privacy.sanitize_text(lesson_text, pseudonym="the learner")[:4_000]
         prompt = self._prompt(title, safe_text, requested_prompt)
         try:
+            if source_check is not None:
+                context = await source_check()
             await self._safety.check(prompt, phase="image_prompt", context=context)
         except (SafetyBlocked, SafetyUnavailable) as error:
             raise VisualGenerationError(error.public_message) from error
@@ -128,6 +133,7 @@ class EducationalImageService:
                 await self._storage.upload(object_path, display, content_type="image/webp")
                 await self._storage.upload(preview_path, preview, content_type="image/webp")
             else:
+                cache_hit()
                 cached = await self._storage.download(object_path)
                 with Image.open(io.BytesIO(cached)) as picture:
                     buffer = io.BytesIO()
@@ -237,8 +243,11 @@ class EducationalImageService:
         response: httpx.Response | None = None
         async with self._image_client() as client:
             for attempt in range(RATE_LIMIT_RETRIES + 1):
-                response = await client.post(
+                response = await provider_request(
+                    client, "POST",
                     f"{str(self._settings.openai_base_url).rstrip('/')}/images/generations",
+                    provider="openai", model=self._settings.image_model,
+                    operation="image_generation",
                     headers={"Authorization": f"Bearer {self._openai_key()}"},
                     json=payload,
                 )
@@ -270,8 +279,11 @@ class EducationalImageService:
                 "Generated image is too large to review; lower IMAGE_GENERATION_SIZE"
             )
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
+            response = await provider_request(
+                client, "POST",
                 f"{str(self._settings.anthropic_base_url).rstrip('/')}/messages",
+                provider="anthropic", model=self._settings.validator_model,
+                operation="image_review",
                 headers={
                     "x-api-key": self._anthropic_key(),
                     "anthropic-version": self._settings.anthropic_version,

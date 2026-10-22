@@ -159,8 +159,7 @@ def test_completed_lesson_reopens_for_review_and_late_save_cannot_undo_it(runtim
     dashboard = runtime.client.get("/api/v1/students/me/dashboard")
     assert dashboard.status_code == 200, dashboard.text
     row = next(
-        r for r in dashboard.json()["recentProgress"]
-        if r["lessonId"] == str(runtime.ids["lesson"])
+        r for r in dashboard.json()["recentProgress"] if r["lessonId"] == str(runtime.ids["lesson"])
     )
     assert row["status"] == "completed" and row["completedAt"]
 
@@ -182,8 +181,28 @@ def test_handoff_uses_that_questions_own_guided_questions(runtime):
     for _ in range(3):
         result = answer(runtime, sitting, 0)
         assert result.status_code == 201, result.text
-    assert result.json()["handoffTo"] == "socratic_panel"
-    assert [row["prompt"] for row in result.json()["guidedPrompts"]] == expected
+    assert result.json()["handoffTo"] is None
+    assert result.json()["handoffAvailableAt"]
+
+    async def pass_grace():
+        from datetime import timedelta
+
+        from nevo.db.models.product import LessonQuestionAttempt
+
+        async with runtime.sessions.begin() as session:
+            rows = await session.scalars(
+                select(LessonQuestionAttempt).where(LessonQuestionAttempt.session_id == sitting)
+            )
+            for row in rows:
+                row.submitted_at -= timedelta(seconds=100)
+
+    run(pass_grace())
+    result = runtime.client.get(
+        f"/api/v1/lessons/{runtime.ids['lesson']}/attempts?sessionId={sitting}"
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()[-1]["handoffTo"] == "socratic_panel"
+    assert [row["prompt"] for row in result.json()[-1]["guidedPrompts"]] == expected
 
 
 def test_adaptation_runs_after_three_distinct_unaided_successes(runtime):

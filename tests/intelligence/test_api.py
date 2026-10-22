@@ -101,7 +101,10 @@ def client_for() -> tuple[TestClient, FakeAdaptationEngineService, AuthPrincipal
     )
     app.dependency_overrides[authenticated_principal] = lambda: principal
     app.dependency_overrides[database_session] = lambda: SimpleNamespace(
-        get=AsyncMock(return_value=None), scalar=AsyncMock(return_value=segment), commit=AsyncMock()
+        get=AsyncMock(return_value=None),
+        scalar=AsyncMock(return_value=segment),
+        scalars=AsyncMock(return_value=[segment]),
+        commit=AsyncMock(),
     )
     app.dependency_overrides[require_learning_consent_if_student] = lambda: None
     app.include_router(router)
@@ -141,6 +144,7 @@ def test_adapt_endpoint_returns_adaptation_plan() -> None:
         "segmentId": "intro",
         "modality": "visual",
         "density": "low",
+        "densityScope": "segment",
         "scaffolding": "strong",
         "priority": 80,
         "availableFormats": ["visual", "text"],

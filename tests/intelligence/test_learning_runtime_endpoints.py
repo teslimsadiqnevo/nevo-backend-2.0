@@ -185,6 +185,10 @@ def runtime(monkeypatch):
                             "answerType": "numeric",
                             "answerKey": 5,
                             "conceptId": str(ids["concept"]),
+                            "guidedQuestions": [
+                                "What does one fifth mean?",
+                                "How many equal fifths make a whole?",
+                            ],
                         }
                     ],
                 )
@@ -782,6 +786,18 @@ def test_quiet_work_has_no_adjustment_and_actual_help_is_served(runtime):
     assert helped.json()["proactiveAdjustment"]["action"] == "offer_hint"
     assert helped.json()["proactiveAdjustment"]["hint"] == "Count the equal parts."
     assert answer(runtime, sitting, 3).status_code == 201
+
+    async def grace_passed():
+        from nevo.db.models.product import LessonQuestionAttempt
+
+        async with runtime.sessions.begin() as session:
+            rows = await session.scalars(
+                select(LessonQuestionAttempt).where(LessonQuestionAttempt.session_id == sitting)
+            )
+            for row in rows:
+                row.submitted_at -= timedelta(seconds=100)
+
+    run(grace_passed())
     panel = adapt(
         runtime,
         sitting,

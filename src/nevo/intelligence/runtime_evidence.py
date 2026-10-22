@@ -28,11 +28,57 @@ def engagement(events):
             durations[key] += value
         elif key in {"task_switch", "navigation_fragmentation", "rapid_guessing"}:
             counts += value
+    # A pause alone can be thought. Count interrupted time only alongside navigation changes.
+    if counts:
+        durations["focus_drop"] += sum(
+            _number(row.event_data.get("value"))
+            for row in readings
+            if row.event_data.get("indicator") == "return_after_pause"
+        )
     total = sum(durations.values())
     if not total and not counts:
         return None
     focus_fraction = durations["focus_drop"] / total if total else 0
-    return max(0.0, 1 - focus_fraction - min(0.6, counts * 0.08))
+    span_minutes = max(
+        1.0,
+        (
+            max(row.timestamp for row in readings) - min(row.timestamp for row in readings)
+        ).total_seconds()
+        / 60,
+    )
+    return max(0.0, 1 - focus_fraction - min(0.6, counts * 0.08 / span_minutes))
+
+
+def engagement_decline_seconds(events, baseline, now):
+    if baseline is None:
+        return 0
+    readings = sorted(
+        (
+            row
+            for row in events
+            if row.event_type is Event.ENGAGEMENT_SIGNAL
+            and now - timedelta(minutes=6) <= row.timestamp <= now
+        ),
+        key=lambda row: row.timestamp,
+    )
+    since, previous = None, None
+    for index, row in enumerate(readings):
+        if previous and row.timestamp - previous > timedelta(seconds=30):
+            since = None
+        window = [
+            item
+            for item in readings[: index + 1]
+            if item.timestamp >= row.timestamp - timedelta(seconds=60)
+        ]
+        score = engagement(window)
+        if score is not None and score <= baseline - 0.15:
+            since = since or row.timestamp
+        else:
+            since = None
+        previous = row.timestamp
+    if since is None or previous is None or now - previous > timedelta(seconds=30):
+        return 0
+    return min(180, max(0, int((now - since).total_seconds())))
 
 
 def derive_runtime_evidence(
@@ -108,7 +154,10 @@ def derive_runtime_evidence(
         ),
         engagement_score=engagement_score,
         engagement_baseline=engagement_baseline,
-        engagement_below_baseline_seconds=min(180, int(focus_ms / 1000)) if below else 0,
+        engagement_below_baseline_seconds=max(
+            min(180, int(focus_ms / 1000)) if below else 0,
+            engagement_decline_seconds(events, engagement_baseline, now),
+        ),
         consecutive_errors=errors,
         replay_count_on_segment=replay_count,
         continuous_minutes=max(0, (now - continuous_start).total_seconds() / 60),

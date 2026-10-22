@@ -1328,6 +1328,8 @@ async def lesson_detail(
             .where(
                 LessonSession.student_id == actor.id,
                 LessonSession.lesson_id == lesson_id,
+                LessonSession.completion_status == "in_progress",
+                LessonSession.ended_at.is_(None),
             )
             .order_by(LessonSession.started_at.desc())
             .limit(1)

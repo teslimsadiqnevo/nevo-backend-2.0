@@ -65,6 +65,7 @@ async def prepare_adaptation(session, principal, payload, signals):
         LessonSession.student_id == actor.id,
         LessonSession.lesson_id == lesson.id,
         LessonSession.completion_status == LessonCompletionStatus.IN_PROGRESS,
+        LessonSession.ended_at.is_(None),
     )
     if payload.session_id:
         query = query.where(LessonSession.id == payload.session_id)
@@ -80,6 +81,17 @@ async def prepare_adaptation(session, principal, payload, signals):
                 "message": "Open the lesson before continuing.",
             },
         )
+    attempts = (
+        list(
+            await session.scalars(
+                select(LessonQuestionAttempt)
+                .where(LessonQuestionAttempt.session_id == sitting.id)
+                .order_by(LessonQuestionAttempt.submitted_at.desc())
+            )
+        )
+        if sitting
+        else []
+    )
     stored = list(
         await session.scalars(
             select(LessonSegment)
@@ -121,6 +133,11 @@ async def prepare_adaptation(session, principal, payload, signals):
                 for question in item.get("guidedQuestions", [])
                 if isinstance(question, str) and question.strip()
             )
+        missed = next((item for item in attempts if item.segment_id == row.id), None)
+        if missed is not None and missed.correct is False:
+            snapshot = missed.question_snapshot or {}
+            questions = tuple(snapshot.get("guidedQuestions") or ())
+            hints = (snapshot["hint"],) if snapshot.get("hint") else hints
         segments.append(
             ContentSegment(
                 id=declared.id,
@@ -216,15 +233,21 @@ async def prepare_adaptation(session, principal, payload, signals):
             elapsed = max(
                 0, int((now - datetime.fromisoformat(runtime["enteredAt"])).total_seconds())
             )
-        attempts = list(
-            await session.scalars(
-                select(LessonQuestionAttempt)
-                .where(
-                    LessonQuestionAttempt.session_id == sitting.id,
-                )
-                .order_by(LessonQuestionAttempt.submitted_at.desc())
-            )
-        )
+        from nevo.intelligence.question_support import guidance_deadline
+
+        current_attempts = [item for item in attempts if current and item.segment_id == current.id]
+        grace_until = guidance_deadline(current_attempts, actor)
+        declined_breaks = [
+            event.timestamp
+            for event in events
+            if event.event_type is SignalEventType.BREAK_DECLINED and event.timestamp <= now
+        ]
+        break_boundaries = [
+            event
+            for event in events
+            if event.event_type in {SignalEventType.BREAK_START, SignalEventType.BREAK_END}
+            and event.timestamp <= now
+        ]
         errors = 0
         for attempt in attempts:
             if attempt.correct is not False:
@@ -309,6 +332,14 @@ async def prepare_adaptation(session, principal, payload, signals):
             if current
             else (),
             misconception_confirmed=repeated_near_miss(attempts),
+            question_support_ready=grace_until is not None and now >= grace_until,
+            support_grace_until=grace_until,
+            break_declined_seconds_ago=(
+                int((now - max(declined_breaks)).total_seconds()) if declined_breaks else None
+            ),
+            break_in_progress=bool(
+                break_boundaries and break_boundaries[-1].event_type is SignalEventType.BREAK_START
+            ),
             session_modality_shift_count=len(shifts),
             session_adaptation_count=len(adaptations),
             seconds_since_last_adaptation=max(

@@ -82,6 +82,10 @@ class RuntimeSignals:
     session_modality_shift_count: int | None = None
     session_adaptation_count: int = 0
     misconception_confirmed: bool = False
+    question_support_ready: bool = True
+    support_grace_until: datetime | None = None
+    break_declined_seconds_ago: int | None = None
+    break_in_progress: bool = False
 
 
 @dataclass(frozen=True, slots=True)

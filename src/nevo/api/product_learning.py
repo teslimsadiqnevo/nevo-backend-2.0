@@ -532,10 +532,11 @@ async def _attempt_payload_with_outcome(
 ) -> dict[str, object]:
     payload = _attempt_payload(item)
     payload["resultState"] = await _derive_result_state(session, item.session_id)
-    prompts = await _socratic_handoff(session, item)
+    prompts, deadline = await _socratic_handoff(session, item)
     payload["handoffTo"] = "socratic_panel" if prompts else None
     payload["guidedPrompts"] = prompts
     payload["advanceAfterHandoff"] = bool(prompts)
+    payload["handoffAvailableAt"] = deadline
     return payload
 
 
@@ -571,7 +572,7 @@ async def _derive_result_state(
 
 async def _socratic_handoff(
     session: DatabaseSession, item: LessonQuestionAttempt
-) -> list[dict[str, str]]:
+) -> tuple[list[dict[str, str]], datetime | None]:
     """Return the server-owned SCRUM-241 hand-off after three misses."""
 
     recent = list(
@@ -582,17 +583,21 @@ async def _socratic_handoff(
                 LessonQuestionAttempt.question_id == item.question_id,
             )
             .order_by(LessonQuestionAttempt.attempt_number.desc())
-            .limit(3)
+            .limit(100)
         )
     )
-    if len(recent) < 3 or any(attempt.correct is not False for attempt in recent):
-        return []
+    from nevo.intelligence.question_support import guidance_deadline
+
+    student = await session.get(User, item.student_id)
+    deadline = guidance_deadline(recent, student) if student else None
+    if deadline is None or datetime.now(UTC) < deadline:
+        return [], deadline
     guided = item.question_snapshot.get("guidedQuestions") or []
     return [
         {"id": f"{item.question_id}-guided-{index}", "prompt": prompt.strip()}
         for index, prompt in enumerate(guided, start=1)
         if isinstance(prompt, str) and prompt.strip()
-    ]
+    ], deadline
 
 
 async def _question_for_attempt(
@@ -851,6 +856,8 @@ async def lesson_detail(
             .where(
                 LessonSession.student_id == actor.id,
                 LessonSession.lesson_id == lesson_id,
+                LessonSession.completion_status == LessonCompletionStatus.IN_PROGRESS,
+                LessonSession.ended_at.is_(None),
             )
             .order_by(LessonSession.started_at.desc())
             .limit(1)
@@ -1312,6 +1319,7 @@ async def start_lesson_session(
             LessonSession.student_id == actor.id,
             LessonSession.lesson_id == lesson_id,
             LessonSession.completion_status == LessonCompletionStatus.IN_PROGRESS,
+            LessonSession.ended_at.is_(None),
         )
         .order_by(LessonSession.started_at.desc())
     )
@@ -2889,6 +2897,8 @@ async def _offline_package_payload(
             .where(
                 LessonSession.student_id == actor.id,
                 LessonSession.lesson_id == lesson_id,
+                LessonSession.completion_status == LessonCompletionStatus.IN_PROGRESS,
+                LessonSession.ended_at.is_(None),
             )
             .order_by(LessonSession.started_at.desc())
             .limit(1)

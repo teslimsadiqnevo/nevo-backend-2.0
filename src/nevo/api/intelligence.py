@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
@@ -10,6 +11,7 @@ from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.db.models.content import LessonSegment
+from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.signal_event import AdaptationDecision, LessonSession
 from nevo.domain.intelligence.vocabulary import (
     AccommodationType,
@@ -219,6 +221,8 @@ class BreakSuggestionResponse(BaseModel):
     severity: BreakSeverity
     break_type: BreakType | None
     reason: str | None
+    suppressed_reason: Literal["break_declined", "break_in_progress"] | None = None
+    retry_at: datetime | None = None
 
     @classmethod
     def from_result(cls, result: BreakThresholdResult) -> "BreakSuggestionResponse":
@@ -242,6 +246,9 @@ class SegmentAdaptationResponse(BaseModel):
     recommended_format: ContentModality | None = None
     chosen_depth: Literal["original", "simplified", "expanded"] | None = None
     slower: bool | None = None
+    density_scope: Literal["segment"] = Field(
+        default="segment", description="Density applies only to this segment until replaced."
+    )
 
     @classmethod
     def from_segment(
@@ -427,6 +434,12 @@ class AdaptResponse(BaseModel):
     )
     suppressed_attempt: "SuppressedAdaptationResponse | None" = None
     decision_id: UUID | None = None
+    adjustment_disposition: Literal["apply", "retain", "clear"] = Field(
+        default="clear",
+        description="retain never dismisses active question help, including during cooldown.",
+    )
+    cooldown_until: datetime | None = None
+    support_grace_until: datetime | None = None
 
     @classmethod
     def from_plan(cls, plan: AdaptationPlan) -> "AdaptResponse":
@@ -736,19 +749,36 @@ async def adapt_lesson(
         requested_by_user_id=principal.user_id,
     )
     response = AdaptResponse.from_plan(plan)
-    sitting = await session.get(LessonSession, context.session_id) if context.session_id else None
+    sitting = (
+        await session.get(
+            LessonSession, context.session_id, populate_existing=True, with_for_update=True
+        )
+        if context.session_id
+        else None
+    )
+    if sitting is not None and sitting.ended_at is not None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "lesson_session_required",
+                "message": "Open the lesson before continuing.",
+            },
+        )
     delivery = dict(sitting.delivery_state or {}) if sitting else {}
     recommendations = dict(delivery.get("recommendations") or {})
-    for item in response.segments:
-        row = await session.scalar(
-            select(LessonSegment).where(
-                LessonSegment.lesson_id == payload.lesson_id,
-                (LessonSegment.id == _segment_uuid(item.segment_id))
-                | (LessonSegment.segment_key == item.segment_id),
-            )
+    current_row = None
+    rows = list(
+        await session.scalars(
+            select(LessonSegment).where(LessonSegment.lesson_id == payload.lesson_id)
         )
+    )
+    by_key = {key: row for row in rows for key in (str(row.id), row.segment_key)}
+    for item in response.segments:
+        row = by_key.get(item.segment_id)
         if row is None:
             raise HTTPException(409, detail={"code": "lesson_content_changed"})
+        if context.signals.current_segment_id in {str(row.id), row.segment_key}:
+            current_row = row
         from nevo.api.lesson_contracts import student_modalities
         from nevo.intelligence.delivery_preferences import segment_choice
 
@@ -776,8 +806,69 @@ async def adapt_lesson(
         item.recommended_format = (
             ContentModality(candidate) if candidate in item.available_formats else None
         )
-    if sitting:
-        sitting.delivery_state = {**delivery, "recommendations": recommendations}
+    response.support_grace_until = context.signals.support_grace_until
+    now = datetime.now(UTC)
+    declined = context.signals.break_declined_seconds_ago
+    if declined is not None and declined < 120:
+        response.break_suggestion.suppressed_reason = "break_declined"
+        response.break_suggestion.retry_at = now + timedelta(seconds=120 - declined)
+    if context.signals.break_in_progress:
+        response.break_suggestion.suppressed_reason = "break_in_progress"
+        response.break_suggestion.retry_at = None
+    if response.suppressed_attempt and response.suppressed_attempt.reason == "adaptation_cooldown":
+        response.adjustment_disposition = "retain"
+        elapsed = context.signals.seconds_since_last_adaptation
+        if elapsed is not None:
+            response.cooldown_until = now + timedelta(seconds=max(0, 120 - elapsed))
+    latest = (
+        await session.scalar(
+            select(LessonQuestionAttempt)
+            .where(
+                LessonQuestionAttempt.session_id == sitting.id,
+                LessonQuestionAttempt.segment_id == current_row.id,
+            )
+            .order_by(LessonQuestionAttempt.submitted_at.desc())
+            .limit(1)
+        )
+        if sitting and current_row
+        else None
+    )
+    active = delivery.get("activeSupport") or {}
+    if (
+        latest is not None
+        and latest.correct is not False
+        and response.proactive_adjustment is not None
+        and response.proactive_adjustment.action
+        in {ProactiveAction.OFFER_HINT, ProactiveAction.SHOW_SOCRATIC_PANEL}
+    ):
+        response.proactive_adjustment = None
+    unresolved = (
+        current_row is not None
+        and latest is not None
+        and latest.correct is False
+        and active.get("segmentId") == str(current_row.id)
+        and active.get("questionId") == latest.question_id
+    )
+    if response.proactive_adjustment is not None:
+        response.adjustment_disposition = "apply"
+    elif unresolved and active.get("adjustment"):
+        response.proactive_adjustment = ProactiveAdjustmentResponse.model_validate(
+            active["adjustment"]
+        )
+        response.decision_id = UUID(active["decisionId"]) if active.get("decisionId") else None
+        response.adjustment_disposition = "retain"
+    elif not unresolved:
+        delivery.pop("activeSupport", None)
+        if active or (latest is not None and latest.correct is not False):
+            response.adjustment_disposition = "clear"
+        elif (
+            latest is not None
+            and latest.correct is False
+            and response.support_grace_until is not None
+            and now >= response.support_grace_until
+        ):
+            # A direct attempt hand-off may be on screen without an engine-issued decision.
+            response.adjustment_disposition = "retain"
     # SCRUM-272 replaces the separate pill with the recommendation in the control.
     response.modality_suggestion = None
     action = plan.proactive_adjustment
@@ -800,16 +891,24 @@ async def adapt_lesson(
                 ],
             )
         )
-        await session.commit()
+    if sitting:
+        if (
+            response.adjustment_disposition == "apply"
+            and response.proactive_adjustment is not None
+            and response.proactive_adjustment.action
+            in {ProactiveAction.OFFER_HINT, ProactiveAction.SHOW_SOCRATIC_PANEL}
+            and latest is not None
+            and current_row is not None
+        ):
+            delivery["activeSupport"] = {
+                "segmentId": str(current_row.id),
+                "questionId": latest.question_id,
+                "decisionId": str(response.decision_id) if response.decision_id else None,
+                "adjustment": response.proactive_adjustment.model_dump(mode="json", by_alias=True),
+            }
+        sitting.delivery_state = {**delivery, "recommendations": recommendations}
     await session.commit()
     return response
-
-
-def _segment_uuid(value):
-    try:
-        return UUID(value)
-    except (ValueError, TypeError):
-        return UUID(int=0)
 
 
 @router.get(

@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool
 
 TRANSACTION_POOLER_PORT = 6543
 """Supabase serves transaction-mode pooling here and session mode on 5432."""
@@ -43,16 +42,12 @@ def create_engine(database_url: str) -> AsyncEngine:
     every request, so the defaults here trade a little safety margin for not
     paying that repeatedly.
     """
+    connect_args = {"statement_cache_size": statement_cache_size(database_url)}
     if _is_transaction_pooler(database_url):
-        # SQLAlchemy has a separate cache; disabling asyncpg's alone is insufficient.
-        return create_async_engine(
-            database_url,
-            poolclass=NullPool,
-            connect_args={
-                "statement_cache_size": 0,
-                "prepared_statement_cache_size": 0,
-                "prepared_statement_name_func": lambda: f"__nevo_{uuid4().hex}__",
-            },
+        # Reuse client connections without reusing another transaction's prepared statements.
+        connect_args.update(
+            prepared_statement_cache_size=0,
+            prepared_statement_name_func=lambda: f"__nevo_{uuid4().hex}__",
         )
     return create_async_engine(
         database_url,
@@ -67,9 +62,7 @@ def create_engine(database_url: str) -> AsyncEngine:
         pool_size=10,
         max_overflow=10,
         pool_timeout=10,
-        connect_args={
-            "statement_cache_size": statement_cache_size(database_url),
-        },
+        connect_args=connect_args,
     )
 
 

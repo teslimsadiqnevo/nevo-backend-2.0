@@ -518,6 +518,7 @@ async def session_state(
     query = select(LessonSession).where(
         LessonSession.student_id == student_id,
         LessonSession.completion_status == LessonCompletionStatus.IN_PROGRESS,
+        LessonSession.ended_at.is_(None),
     )
     if session_id is not None:
         query = query.where(LessonSession.id == session_id)

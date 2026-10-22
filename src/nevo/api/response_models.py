@@ -681,7 +681,8 @@ class LessonSessionResponse(CamelResponse):
     )
     completed_at: datetime | None = None
     review_of_session_id: UUID | None = Field(
-        default=None, description="Completed sitting whose saved attempts should be shown in review."
+        default=None,
+        description="Completed sitting whose saved attempts should be shown in review.",
     )
 
 
@@ -749,6 +750,12 @@ class LessonQuestionAttemptResponse(CamelResponse):
     submitted_at: datetime
     result_state: Literal["landed", "partly_landed", "nothing_landed", "not_attempted"]
     handoff_to: Literal["socratic_panel"] | None = None
+    handoff_available_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Guidance grace deadline; re-read attempts then if the question is still unresolved."
+        ),
+    )
     guided_prompts: list[SocraticHandoffPrompt] = Field(default_factory=list)
     advance_after_handoff: bool = Field(
         default=False,

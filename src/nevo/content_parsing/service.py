@@ -281,7 +281,8 @@ class ContentParsingService:
                                 "chunk_number": str(index),
                                 "chunk_count": str(len(chunks)),
                                 "source_text": (
-                                    "For each comprehension checkpoint, include a short hint that "
+                                    "For every checkpoint and after-lesson assessment question, "
+                                    "include a short hint that "
                                     "does not reveal its answer and guidedQuestions with two or "
                                     "three questions grounded in the supplied teaching material. "
                                     "Do not invent facts or add a new topic.\n\n"

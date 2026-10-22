@@ -11,6 +11,10 @@ def monitor_break_thresholds(
     signals: RuntimeSignals,
     profile: LearnerProfileSnapshot,
 ) -> BreakThresholdResult:
+    if signals.break_in_progress or (
+        signals.break_declined_seconds_ago is not None and signals.break_declined_seconds_ago < 120
+    ):
+        return BreakThresholdResult((), BreakSeverity.NONE, None, None)
     thresholds: list[BreakThreshold] = []
     if signals.session_adaptation_count >= 2 and signals.consecutive_errors >= 2:
         thresholds.append(BreakThreshold.PERSISTENT_STALL)

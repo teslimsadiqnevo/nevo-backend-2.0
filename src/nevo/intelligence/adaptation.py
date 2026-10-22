@@ -556,7 +556,7 @@ def _stuck_adjustment(
         or signals.replay_count_on_segment >= 1
         or signals.misconception_confirmed
     )
-    if stepping_through and segment.guided_questions:
+    if stepping_through and segment.guided_questions and signals.question_support_ready:
         return ProactiveAdjustment(
             action="show_socratic_panel",
             reason="Several wrong answers after going back over this part.",

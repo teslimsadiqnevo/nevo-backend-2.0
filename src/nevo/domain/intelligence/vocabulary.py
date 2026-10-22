@@ -250,6 +250,8 @@ class ProactiveAction(StrEnum):
     All five are produced today. The engine offers a hint after two aligned
     errors and opens the guided Socratic panel after three, or after the replay
     threshold where the segment carries guided questions.
+    Guided panels additionally respect the server's productive-work grace deadline;
+    the miss count alone is not permission to interrupt.
     """
 
     SIMPLIFY = "simplify"

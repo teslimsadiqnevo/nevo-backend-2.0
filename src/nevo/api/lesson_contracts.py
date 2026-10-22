@@ -7,6 +7,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    field_validator,
     model_serializer,
     model_validator,
 )
@@ -156,6 +157,14 @@ class DepthVariantBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     body: str = ""
+
+    @field_validator("body")
+    @classmethod
+    def keep_list_paragraphs(cls, value: str) -> str:
+        from nevo.content_parsing.chunks import numbered_paragraphs
+
+        return numbered_paragraphs(value)
+
     review_status: Literal["approved", "pending"] = Field(default="pending", alias="reviewStatus")
     source_claims: list[str] = Field(default_factory=list, alias="sourceClaims")
     reviewed_by: UUID | None = Field(default=None, alias="reviewedBy")
@@ -209,6 +218,7 @@ def depth_payloads(values, text_variant, *, for_student=False, reviewer_names=No
             continue
         result[key] = {
             **item,
+            "body": DepthVariantBody.model_validate({"body": item["body"]}).body,
             "reviewedByName": None
             if for_student
             else (reviewer_names or {}).get(str(item.get("reviewedBy"))),
@@ -402,6 +412,9 @@ class InteractiveActivityVariant(BaseModel):
     introduction: str | None = Field(
         default=None, description="Source context shown before the actionable steps, not a task."
     )
+    safety: str | None = Field(
+        default=None, description="Authored safety instructions; show before activity steps."
+    )
     materials: list[str] = Field(default_factory=list, max_length=12)
     steps: list[InteractiveActivityStep] = Field(default_factory=list, max_length=12)
     in_progress: str | None = Field(
@@ -417,7 +430,7 @@ class InteractiveActivityVariant(BaseModel):
     @model_serializer(mode="wrap")
     def omit_absent_observations(self, handler):
         data = handler(self)
-        for key in ("inProgress", "in_progress", "outcome"):
+        for key in ("inProgress", "in_progress", "outcome", "safety"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data

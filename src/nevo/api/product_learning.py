@@ -78,6 +78,7 @@ from nevo.api.response_models import (
     UploadStructureDocument,
     UploadStructureResponse,
 )
+from nevo.content_parsing.activity import activity_for_delivery
 from nevo.content_parsing.chunks import reading_chunks, reading_groups
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.failures import (
@@ -915,7 +916,7 @@ async def lesson_detail(
                 if for_teacher
                 else safety_reviewed_visual(item.visual_variant),
                 "audioVariant": item.audio_variant,
-                "interactiveVariant": item.interactive_variant,
+                "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body),
                 "calculationVariant": item.calculation_variant,
                 "depthVariants": depth_payloads(
                     item.depth_variants,
@@ -1264,8 +1265,8 @@ async def cancel_assignment(
         **CONSENT_WITHDRAWN_RESPONSE,
         409: {
             "description": (
-                "onboarding_incomplete, prerequisite_required, or completed_session_unavailable; "
-                "a missing review sitting never resets a completed lesson."
+                "onboarding_incomplete or prerequisite_required. "
+                "Completed lessons retain completion and recover their review sitting."
             )
         },
     },
@@ -1280,7 +1281,7 @@ async def start_lesson_session(
     actor, _ = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
-    await session.refresh(actor, with_for_update=True)
+    await session.refresh(actor, with_for_update={"key_share": True})
     progress = await session.scalar(
         select(LessonProgress).where(
             LessonProgress.student_id == actor.id,
@@ -1314,13 +1315,45 @@ async def start_lesson_session(
                 "deliveryState": delivery_for_read(finished),
                 "segmentPosition": 0,
             }
-        raise HTTPException(
-            409,
-            detail={
-                "code": "completed_session_unavailable",
-                "message": "This lesson is complete, but its review session could not be found.",
-            },
+        # Older signal snapshots could reopen the completed sitting. Recover
+        # from the durable completion record, never from invented answers.
+        finished = (
+            await session.get(LessonSession, progress.session_id) if progress.session_id else None
         )
+        if finished is not None and (
+            finished.student_id != actor.id or finished.lesson_id != lesson_id
+        ):
+            finished = None
+        completed_at = progress.completed_at or datetime.now(UTC)
+        if finished is None:
+            finished = LessonSession(
+                id=uuid4(),
+                student_id=actor.id,
+                lesson_id=lesson_id,
+                started_at=min(progress.started_at or completed_at, completed_at),
+                ended_at=completed_at,
+                completion_status=LessonCompletionStatus.COMPLETED,
+                delivery_state={"reviewRecoveredFrom": "lesson_progress"},
+            )
+            session.add(finished)
+        else:
+            finished.completion_status = LessonCompletionStatus.COMPLETED
+            finished.ended_at = max(completed_at, finished.started_at)
+        progress.session_id = finished.id
+        progress.status = "completed"
+        await delivery_snapshot(session, actor, finished)
+        await session.commit()
+        return {
+            "sessionId": str(finished.id),
+            "resumed": True,
+            "reviewMode": True,
+            "reviewOfSessionId": str(finished.id),
+            "completedAt": completed_at,
+            "depth": finished.delivery_depth,
+            "reroutedFromSessionId": finished.rerouted_from_session_id,
+            "deliveryState": delivery_for_read(finished),
+            "segmentPosition": 0,
+        }
     await ensure_prerequisites(session, actor.id, lesson_id)
     existing = await session.scalar(
         select(LessonSession)
@@ -1433,7 +1466,7 @@ async def save_lesson_question_attempt(
     actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role is not UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
-    await session.refresh(actor, with_for_update=True)
+    await session.refresh(actor, with_for_update={"key_share": True})
     lesson_session = await session.get(LessonSession, payload.session_id)
     if (
         lesson_session is None
@@ -1630,7 +1663,9 @@ async def save_lesson_progress(
     actor, _ = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role != UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
-    await session.refresh(actor, with_for_update=True)
+    # FOR NO KEY UPDATE serializes saves without blocking the foreign-key
+    # checks of concurrent adaptation decisions and signal writes.
+    await session.refresh(actor, with_for_update={"key_share": True})
     lesson_session = await session.get(LessonSession, payload.session_id)
     if (
         lesson_session is None
@@ -1676,12 +1711,20 @@ async def save_lesson_progress(
             "checkResumableUntil": progress.check_resumable_until,
         }
     if progress is None:
-        progress = LessonProgress(student_id=actor.id, lesson_id=lesson_id)
+        progress = LessonProgress(
+            student_id=actor.id,
+            lesson_id=lesson_id,
+            module_position=payload.module_position,
+            segment_position=payload.segment_position,
+        )
         session.add(progress)
     progress.session_id = payload.session_id
-    progress.assignment_id = payload.assignment_id
-    progress.module_position = payload.module_position
-    progress.segment_position = payload.segment_position
+    if "assignment_id" in payload.model_fields_set:
+        progress.assignment_id = payload.assignment_id
+    if "module_position" in payload.model_fields_set:
+        progress.module_position = payload.module_position
+    if "segment_position" in payload.model_fields_set:
+        progress.segment_position = payload.segment_position
     if "check_position" in payload.model_fields_set:
         progress.check_position = payload.check_position
         progress.check_resumable_until = (
@@ -1692,13 +1735,13 @@ async def save_lesson_progress(
         target = await session.scalar(
             select(LessonSegment).where(
                 LessonSegment.lesson_id == lesson_id,
-                LessonSegment.sequence_order == payload.segment_position + 1,
+                LessonSegment.sequence_order == progress.segment_position + 1,
             )
         )
         if target is not None and target.concept_id is not None:
             await ensure_prerequisites(session, actor.id, lesson_id, target.concept_id)
     progress.started_at = progress.started_at or lesson_session.started_at
-    lesson_session.exit_position = str(payload.segment_position)
+    lesson_session.exit_position = str(progress.segment_position)
     derived_result = await _derive_result_state(session, lesson_session.id)
     # A lesson that was never attempted is not the "nothing landed" result.
     # Keep its sitting open at the saved cursor so the next launch resumes it.
@@ -3042,7 +3085,7 @@ async def _offline_package_payload(
                     "text": item.text_variant,
                     "visual": safety_reviewed_visual(item.visual_variant),
                     "audio": item.audio_variant,
-                    "interactive": item.interactive_variant,
+                    "interactive": activity_for_delivery(item.interactive_variant, item.body),
                     "calculation": item.calculation_variant,
                 },
                 # Offline too: the point of the offline package is a lesson

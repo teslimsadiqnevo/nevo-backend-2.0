@@ -82,6 +82,7 @@ from nevo.api.response_models import (
 from nevo.api.response_models import (
     LessonModuleResponse as SharedLessonModuleResponse,
 )
+from nevo.content_parsing.activity import activity_for_delivery
 from nevo.content_parsing.chunks import reading_chunks, reading_groups
 from nevo.content_parsing.entities import ContentParseRequest, SourcePage
 from nevo.content_parsing.service import ContentParsingService
@@ -1384,7 +1385,7 @@ async def lesson_detail(
                     else item.visual_variant
                 ),
                 audioVariant=item.audio_variant,
-                interactiveVariant=item.interactive_variant,
+                interactiveVariant=activity_for_delivery(item.interactive_variant, item.body),
                 calculationVariant=item.calculation_variant,
                 depthVariants=depth_payloads(
                     item.depth_variants,

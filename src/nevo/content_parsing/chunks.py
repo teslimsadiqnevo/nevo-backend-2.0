@@ -3,6 +3,11 @@ import re
 from collections import defaultdict
 
 
+def numbered_paragraphs(text: str) -> str:
+    """Keep numbered source items as separate paragraphs without changing their words."""
+    return re.sub(r"(?<!\n)\n(?=[ \t]*\d+[.)]\s+)", "\n\n", text)
+
+
 def reading_groups(chunks, config):
     """Group immutable source anchors; never invalidate saved annotations."""
     reading, support = config.get("reading") or {}, config.get("support") or {}

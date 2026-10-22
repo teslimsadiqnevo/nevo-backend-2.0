@@ -1,6 +1,6 @@
 from nevo.api.lesson_contracts import InteractiveActivityVariant
 from nevo.api.response_models import OfflinePackageModalityVariants
-from nevo.content_parsing.activity import source_activity_observations
+from nevo.content_parsing.activity import activity_for_delivery, source_activity_observations
 from nevo.content_parsing.service import _interactive_variant
 
 
@@ -82,3 +82,45 @@ def test_source_steps_survive_without_an_authored_final_observation():
     activity = _interactive_variant(None, "Take a leaf. Draw the veins.")
     assert len(activity["steps"]) == 2
     assert "outcome" not in activity and "inProgress" not in activity
+
+
+def test_activity_card_carries_authored_safety_and_sentence_case_without_extra_steps():
+    source = "Safety: let an adult do the cutting. Do not taste the water.\n\n1. Add water."
+    original = {
+        "type": "activity",
+        "steps": [{"id": "one", "instruction": "Add water."}],
+        "outcome": "the strip stays firm.",
+    }
+    delivered = activity_for_delivery(original, source)
+    card = InteractiveActivityVariant.model_validate(delivered).model_dump(by_alias=True)
+    assert card["safety"] == "let an adult do the cutting. Do not taste the water."
+    assert card["outcome"] == "The strip stays firm."
+    assert card["steps"] == original["steps"]
+    assert "safety" not in original
+
+
+def test_activity_does_not_borrow_another_activitys_safety_line():
+    source = "Safety: adults cut the yam.\n\nDraw a plant."
+    drawing = {"type": "activity", "steps": [{"id": "one", "instruction": "Draw a plant."}]}
+    assert "safety" not in source_activity_observations(drawing, source)
+    fabricated = {**drawing, "safety": "Put your hand in boiling water."}
+    assert "safety" not in source_activity_observations(fabricated, source)
+
+
+def test_simplified_numbered_questions_keep_separate_paragraphs():
+    from nevo.api.lesson_contracts import DepthVariantBody
+
+    source = "1. First question?\n2. Second question?\n3. Third question?"
+    displayed = DepthVariantBody(body=source).body
+    assert displayed == "1. First question?\n\n2. Second question?\n\n3. Third question?"
+    assert " ".join(displayed.split()) == " ".join(source.split())
+
+
+def test_outcome_capitalization_does_not_drop_authored_copy_or_change_ph_notation():
+    source = "the strip stays firm."
+    activity = _interactive_variant({"steps": ["Observe the strip."], "outcome": source}, source)
+    assert source_activity_observations(activity, source)["outcome"] == "The strip stays firm."
+    assert (
+        activity_for_delivery({"steps": [], "outcome": "pH increases."}, "")["outcome"]
+        == "pH increases."
+    )

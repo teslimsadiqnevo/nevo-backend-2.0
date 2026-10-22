@@ -14,6 +14,7 @@ from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
 from nevo.api.lesson_contracts import UnclassifiableQuestionError, checkpoint_payloads
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
+from nevo.content_parsing.activity import activity_for_delivery
 from nevo.content_parsing.activity import activity_observations as _activity_observations
 from nevo.content_parsing.depth import (
     DEPTH_CONCURRENCY,
@@ -691,6 +692,7 @@ class ContentParsingService:
         try:
             kwargs = {}
             if isinstance(generator, EducationalImageService) and requested_by_user_id is not None:
+
                 async def source_check():
                     return await self._ai_gateway.check_content(
                         segment.body,
@@ -1794,16 +1796,19 @@ def _interactive_variant(
                 steps.append({"id": step_id[:120], "instruction": instruction[:500]})
     if not steps:
         return _source_activity(body, title=title)
-    return {
-        "type": "activity",
-        "title": str(value.get("title") or "Try this activity")[:160],
-        "introduction": _optional_string(value.get("introduction")),
-        "materials": [str(item)[:120] for item in value.get("materials", [])]
-        if isinstance(value.get("materials"), list)
-        else [],
-        "steps": steps[:12],
-        **_activity_observations(value),
-    }
+    return activity_for_delivery(
+        {
+            "type": "activity",
+            "title": str(value.get("title") or "Try this activity")[:160],
+            "introduction": _optional_string(value.get("introduction")),
+            "materials": [str(item)[:120] for item in value.get("materials", [])]
+            if isinstance(value.get("materials"), list)
+            else [],
+            "steps": steps[:12],
+            **_activity_observations(value),
+        },
+        body,
+    )
 
 
 def _source_activity(body: str, *, title: str | None = None) -> dict[str, object] | None:

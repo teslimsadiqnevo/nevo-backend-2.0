@@ -1,5 +1,6 @@
 """Exercise reported handlers against stored data with every write rolled back."""
 
+import argparse
 import asyncio
 import json
 import traceback
@@ -29,7 +30,7 @@ class RollbackSession(AsyncSession):
         await self.flush()
 
 
-async def main():
+async def main(student_name="nura"):
     engine = create_engine(get_settings().database_url)
     sessions = async_sessionmaker(engine, class_=RollbackSession, expire_on_commit=False)
     try:
@@ -39,7 +40,7 @@ async def main():
                 .join(User, User.id == LessonSession.student_id)
                 .where(
                     LessonSession.lesson_id == UUID("3367de9d-be40-4704-8a95-7a197b9824dc"),
-                    User.first_name.ilike("nura"),
+                    User.first_name.ilike(student_name),
                 )
                 .order_by(LessonSession.started_at.desc())
                 .limit(1)
@@ -119,4 +120,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--student-name", default="nura")
+    asyncio.run(main(parser.parse_args().student_name))

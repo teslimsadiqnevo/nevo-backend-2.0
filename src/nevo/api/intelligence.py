@@ -834,6 +834,62 @@ async def adapt_lesson(
         else None
     )
     active = delivery.get("activeSupport") or {}
+    from nevo.intelligence.question_support import two_miss_hint
+
+    question_attempts = (
+        list(
+            await session.scalars(
+                select(LessonQuestionAttempt)
+                .where(
+                    LessonQuestionAttempt.session_id == sitting.id,
+                    LessonQuestionAttempt.question_id == latest.question_id,
+                    LessonQuestionAttempt.correct.is_not(None),
+                )
+                .order_by(LessonQuestionAttempt.attempt_number.desc())
+                .limit(2)
+            )
+        )
+        if sitting and latest and latest.correct is False
+        else []
+    )
+    authored_hint = two_miss_hint(latest, question_attempts)
+    same_question = bool(
+        latest
+        and current_row
+        and active.get("segmentId") == str(current_row.id)
+        and active.get("questionId") == latest.question_id
+    )
+    active_action = (active.get("adjustment") or {}).get("action") if same_question else None
+    question_hint = False
+    if active_action == "show_socratic_panel":
+        response.proactive_adjustment = None
+    elif authored_hint:
+        if active_action == "offer_hint":
+            # Reuse the existing offer/decision instead of issuing another hint on every poll.
+            if not response.proactive_adjustment or (
+                response.proactive_adjustment.action != ProactiveAction.SHOW_SOCRATIC_PANEL
+            ):
+                response.proactive_adjustment = None
+        elif (
+            response.proactive_adjustment is None
+            or (response.proactive_adjustment.action != ProactiveAction.SHOW_SOCRATIC_PANEL)
+            or latest.question_id not in delivery.get("hintedQuestions", [])
+        ):
+            response.proactive_adjustment = ProactiveAdjustmentResponse(
+                action=ProactiveAction.OFFER_HINT,
+                reason="Two marked misses on this question.",
+                confidence=1.0,
+                trigger_signals=[
+                    TriggerSignalResponse(
+                        category="question_support",
+                        name="two_marked_misses",
+                        confidence=1.0,
+                    )
+                ],
+                hint=authored_hint,
+                segment_id=str(current_row.id),
+            )
+            question_hint = True
     if (
         latest is not None
         and latest.correct is not False
@@ -873,7 +929,27 @@ async def adapt_lesson(
     response.modality_suggestion = None
     action = plan.proactive_adjustment
     suggestion = plan.modality_suggestion
-    if context.session_id and (action is not None or suggestion is not None):
+    if question_hint and context.session_id:
+        response.decision_id = uuid4()
+        session.add(
+            AdaptationDecision(
+                id=response.decision_id,
+                student_id=context.student_id,
+                session_id=context.session_id,
+                lesson_id=context.lesson_id,
+                segment_id=str(current_row.id),
+                action="offer_hint",
+                confidence=1.0,
+                trigger_signals=[
+                    {"category": "question_support", "name": "two_marked_misses", "confidence": 1.0}
+                ],
+            )
+        )
+    elif (
+        context.session_id
+        and (action is not None or suggestion is not None)
+        and (response.adjustment_disposition != "retain")
+    ):
         response.decision_id = uuid4()
         evidence = action.trigger_signals if action else suggestion.trigger_signals
         session.add(
@@ -906,6 +982,15 @@ async def adapt_lesson(
                 "decisionId": str(response.decision_id) if response.decision_id else None,
                 "adjustment": response.proactive_adjustment.model_dump(mode="json", by_alias=True),
             }
+            if response.proactive_adjustment.action is ProactiveAction.OFFER_HINT:
+                delivery["hintedQuestions"] = list(
+                    dict.fromkeys(
+                        [
+                            *delivery.get("hintedQuestions", []),
+                            latest.question_id,
+                        ]
+                    )
+                )
         sitting.delivery_state = {**delivery, "recommendations": recommendations}
     await session.commit()
     return response

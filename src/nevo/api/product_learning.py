@@ -1484,7 +1484,13 @@ async def save_lesson_question_attempt(
         answer=payload.answer,
         correct=answer_matches(payload.answer, question),
         response_time_ms=payload.response_time_ms,
-        hint_count=payload.hint_count,
+        hint_count=max(
+            payload.hint_count,
+            int(
+                payload.question_id
+                in (lesson_session.delivery_state or {}).get("hintedQuestions", [])
+            ),
+        ),
     )
     session.add(record)
     await session.flush()

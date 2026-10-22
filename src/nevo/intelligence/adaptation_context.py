@@ -137,7 +137,8 @@ async def prepare_adaptation(session, principal, payload, signals):
         if missed is not None and missed.correct is False:
             snapshot = missed.question_snapshot or {}
             questions = tuple(snapshot.get("guidedQuestions") or ())
-            hints = (snapshot["hint"],) if snapshot.get("hint") else hints
+            hint = snapshot.get("hint")
+            hints = (hint,) if isinstance(hint, str) and hint.strip() else ()
         segments.append(
             ContentSegment(
                 id=declared.id,

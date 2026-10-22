@@ -182,6 +182,7 @@ def runtime(monkeypatch):
                         {
                             "id": "q1",
                             "prompt": "How many fifths make one whole?",
+                            "hint": "Count the equal parts.",
                             "answerType": "numeric",
                             "answerKey": 5,
                             "conceptId": str(ids["concept"]),
@@ -870,7 +871,7 @@ def test_cooldown_comes_from_server_even_with_default_mode(runtime):
         engagementBelowBaselineSeconds=190,
     )
     assert response.status_code == 200, response.text
-    assert response.json()["proactiveAdjustment"] is None
+    assert response.json()["proactiveAdjustment"]["action"] == "offer_hint"
     assert response.json()["suppressedAttempt"]["reason"] == "adaptation_cooldown"
 
 

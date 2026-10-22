@@ -33,7 +33,9 @@ async def delivery_snapshot(session, student, lesson_session=None):
     from nevo.api.response_models import EngineConfig
 
     if lesson_session is not None and lesson_session.delivery_state:
-        return dict(lesson_session.delivery_state)
+        from nevo.intelligence.delivery_preferences import delivery_for_read
+
+        return delivery_for_read(lesson_session)
     aggregate = await SqlAlchemyAccommodationPatternRepository(
         async_sessionmaker(session.bind, expire_on_commit=False)
     ).aggregate_for_student(student_id=student.id)

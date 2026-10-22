@@ -53,7 +53,7 @@ from nevo.domain.intelligence.vocabulary import (
     UploadStatus,
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
-from nevo.intelligence.delivery_preferences import SegmentChoice
+from nevo.intelligence.delivery_preferences import LessonChoice, SegmentChoice, SegmentFormatChoice
 
 
 def _camel(value: str) -> str:
@@ -1431,7 +1431,8 @@ class SessionDeliveryResponse(CamelResponse):
     engine_config: EngineConfig
     accommodations: list[AccommodationType]
     captured_at: datetime
-    segment_choices: dict[str, "SegmentChoice"] = Field(default_factory=dict)
+    segment_choices: dict[str, SegmentFormatChoice] = Field(default_factory=dict)
+    lesson_preferences: LessonChoice = Field(default_factory=LessonChoice)
     recommendations: dict[str, str] = Field(default_factory=dict)
 
 

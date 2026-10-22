@@ -93,7 +93,9 @@ def test_choice_is_per_segment_and_partial_updates_preserve_other_choices():
     save_choice(sitting, first, SegmentChoice(depth="simplified"))
     assert segment_choice(sitting, first)["modality"] == "audio"
     assert segment_choice(sitting, first)["slower"] is True
-    assert segment_choice(sitting, second) == {}
+    assert segment_choice(sitting, second)["depth"] == "simplified"
+    assert segment_choice(sitting, second)["slower"] is True
+    assert "modality" not in segment_choice(sitting, second)
 
 
 def test_option_order_is_stable_and_not_always_first():

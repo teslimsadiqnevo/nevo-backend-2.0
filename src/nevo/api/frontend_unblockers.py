@@ -1273,6 +1273,8 @@ async def lesson_detail(
     session: DatabaseSession,
     consent: StudentLearningConsent = None,
 ) -> LessonDetailResponse:
+    from nevo.intelligence.delivery_preferences import segment_choice
+
     actor = await require_school_actor(session, principal)
     lesson = await session.get(Lesson, lesson_id)
     if lesson is None or (lesson.school_id is not None and lesson.school_id != actor.school_id):
@@ -1366,19 +1368,8 @@ async def lesson_detail(
                     else list(item.available_modalities)
                 ),
                 availableFormats=student_modalities(item),
-                primaryModality=(
-                    (sitting.delivery_state or {})
-                    .get("segmentChoices", {})
-                    .get(str(item.id), {})
-                    .get("modality")
-                    if sitting
-                    else None
-                ),
-                deliveryPreference=(
-                    (sitting.delivery_state or {}).get("segmentChoices", {}).get(str(item.id))
-                    if sitting
-                    else None
-                ),
+                primaryModality=segment_choice(sitting, item).get("modality"),
+                deliveryPreference=segment_choice(sitting, item) or None,
                 recommendedFormat=recommendations.get(str(item.id))
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,

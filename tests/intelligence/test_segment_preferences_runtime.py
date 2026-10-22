@@ -80,6 +80,45 @@ def test_queue_failure_rolls_back_completion_and_retry_succeeds(runtime, monkeyp
     assert response.json()["intelligence"]["status"] == "pending"
 
 
+def test_depth_choice_is_exposed_at_sitting_scope_and_resets_for_review(runtime):
+    from datetime import UTC, datetime
+
+    from nevo.ai_gateway.safety import POLICY_VERSION
+    from nevo.db.models.content import LessonSegment
+
+    async def approve():
+        async with runtime.sessions() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.depth_variants = {
+                "simplified": {
+                    "body": "Count the equal groups.",
+                    "reviewStatus": "approved",
+                    "reviewedBy": str(runtime.ids["teacher"]),
+                    "reviewedAt": datetime.now(UTC).isoformat(),
+                    "safetyPolicyVersion": POLICY_VERSION,
+                }
+            }
+            await session.commit()
+
+    run(approve())
+    sitting = start(runtime)
+    lesson, segment = runtime.ids["lesson"], runtime.ids["segment"]
+    url = f"/api/v1/lessons/{lesson}/sessions/{sitting}/segments/{segment}/preferences"
+    saved = runtime.client.put(url, json={"depth": "simplified", "slower": True})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["lessonPreferences"]["depth"] == "simplified"
+    resumed = runtime.client.post(f"/api/v1/lessons/{lesson}/session")
+    assert resumed.json()["deliveryState"]["lessonPreferences"]["depth"] == "simplified"
+    assert answer(runtime, sitting, 5).status_code == 201
+    finished = runtime.client.put(
+        f"/api/v1/lessons/{lesson}/progress", json={"sessionId": sitting, "status": "completed"}
+    )
+    assert finished.status_code == 200, finished.text
+    review = runtime.client.post(f"/api/v1/lessons/{lesson}/session")
+    assert review.json()["reviewMode"] is True
+    assert review.json()["deliveryState"]["lessonPreferences"]["depth"] is None
+
+
 def test_choices_survive_reload_and_override_engine_without_inventing_media(runtime):
     sitting = start(runtime)
     lesson, segment = runtime.ids["lesson"], runtime.ids["segment"]
@@ -94,7 +133,8 @@ def test_choices_survive_reload_and_override_engine_without_inventing_media(runt
     assert resumed.status_code == 201, resumed.text
     assert resumed.json()["sessionId"] == sitting
     choice = resumed.json()["deliveryState"]["segmentChoices"][str(segment)]
-    assert choice["modality"] == "interactive" and choice["slower"] is True
+    assert choice["modality"] == "interactive"
+    assert resumed.json()["deliveryState"]["lessonPreferences"]["slower"] is True
     result = runtime.client.post(
         "/api/intelligence/adapt",
         json={

@@ -117,8 +117,11 @@ from nevo.domain.intelligence.vocabulary import (
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
 from nevo.intelligence.delivery_preferences import (
+    LessonChoice,
     SegmentChoice,
     SegmentChoiceWrite,
+    delivery_for_read,
+    lesson_choices,
     save_choice,
     segment_choice,
 )
@@ -1302,7 +1305,7 @@ async def start_lesson_session(
                 "completedAt": progress.completed_at or finished.ended_at,
                 "depth": finished.delivery_depth,
                 "reroutedFromSessionId": finished.rerouted_from_session_id,
-                "deliveryState": finished.delivery_state,
+                "deliveryState": delivery_for_read(finished),
                 "segmentPosition": 0,
             }
         raise HTTPException(
@@ -1340,7 +1343,7 @@ async def start_lesson_session(
             "reroutedFromSessionId": existing.rerouted_from_session_id,
             "checkPosition": progress.check_position if progress else None,
             "checkResumableUntil": progress.check_resumable_until if progress else None,
-            "deliveryState": existing.delivery_state,
+            "deliveryState": delivery_for_read(existing),
             "segmentPosition": progress.segment_position if progress else 0,
         }
     if (
@@ -1361,7 +1364,7 @@ async def start_lesson_session(
                 "reroutedFromSessionId": check_session.rerouted_from_session_id,
                 "checkPosition": progress.check_position,
                 "checkResumableUntil": progress.check_resumable_until,
-                "deliveryState": check_session.delivery_state,
+                "deliveryState": delivery_for_read(check_session),
                 "segmentPosition": progress.segment_position,
             }
     record = LessonSession(
@@ -1396,7 +1399,7 @@ async def start_lesson_session(
         "resumed": False,
         "depth": record.delivery_depth,
         "reroutedFromSessionId": record.rerouted_from_session_id,
-        "deliveryState": record.delivery_state,
+        "deliveryState": delivery_for_read(record),
         "segmentPosition": progress.segment_position,
     }
 
@@ -1522,6 +1525,9 @@ async def lesson_question_attempts(
 
 
 class SegmentChoiceResponse(SegmentChoice):
+    lesson_preferences: LessonChoice = Field(
+        default_factory=LessonChoice, alias="lessonPreferences"
+    )
     available_formats: list[str] = Field(alias="availableFormats")
     recommended_format: str | None = Field(default=None, alias="recommendedFormat")
 
@@ -1555,13 +1561,13 @@ async def set_segment_preferences(
         or segment.lesson_id != lesson_id
     ):
         raise HTTPException(404, detail={"code": "lesson_session_not_found"})
-    if sitting.ended_at:
+    if sitting.ended_at or sitting.completion_status != LessonCompletionStatus.IN_PROGRESS:
         raise HTTPException(409, detail={"code": "lesson_session_ended"})
     available = student_modalities(segment)
     if payload.modality is not None and payload.modality not in available:
         raise HTTPException(409, detail={"code": "format_unavailable"})
     if payload.depth in {"simplified", "expanded"}:
-        from nevo.content_parsing.depth import depth_approved
+        from nevo.api.lesson_contracts import depth_approved
 
         variant = (segment.depth_variants or {}).get(payload.depth)
         if not variant or not depth_approved(variant):
@@ -1589,6 +1595,7 @@ async def set_segment_preferences(
     await session.commit()
     return {
         **current,
+        "lessonPreferences": lesson_choices(sitting),
         "availableFormats": available,
         "recommendedFormat": recommendation if recommendation in available else None,
     }
@@ -1741,7 +1748,7 @@ async def save_lesson_progress(
             "depth": "lower",
             "segmentPosition": 0,
             "reason": "nothing_landed",
-            "deliveryState": lower_session.delivery_state,
+            "deliveryState": delivery_for_read(lower_session),
         }
     elif not_attempted:
         reroute = {

@@ -38,6 +38,7 @@ from nevo.api.learning_support import router as learning_support_router
 from nevo.api.learning_support_records import router as learning_support_records_router
 from nevo.api.lesson_review import router as lesson_review_router
 from nevo.api.mastery import router as mastery_router
+from nevo.api.media_ops import router as media_ops_router
 from nevo.api.onboarding import router as onboarding_router
 from nevo.api.parent_rights import router as parent_rights_router
 from nevo.api.parents import router as parent_router
@@ -399,6 +400,7 @@ app.include_router(subjects_router)
 app.include_router(support_router)
 app.include_router(sso_router)
 app.include_router(teacher_assignment_router)
+app.include_router(media_ops_router)
 
 
 @app.get("/health", tags=["system"])

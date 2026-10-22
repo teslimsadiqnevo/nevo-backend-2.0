@@ -48,7 +48,8 @@ historical assets while call counts apply only to the requested reporting interv
 
 Run `alembic upgrade head` before using the new media generation adapters.
 The normal Render start command already runs migrations before starting the API.
-No frontend changes, new public routes, or changes to the lesson payload are required.
+No frontend changes or changes to the lesson payload are required.
+The private reporting routes described below require an additional secret, not a school role.
 
 Standard direct-API token prices for the current GPT Image 2, Claude Opus 4.8 and
 Claude Haiku 4.5 models are included, checked on 22 October 2026 against the
@@ -79,6 +80,28 @@ these are estimates, not
 a claim that the provider has billed exactly that amount.
 
 ## Operator report
+
+Set `OPS_REPORT_KEY` in Render to a random secret of at least 32 characters.
+A generated value is available in this checkout's ignored `.env`; never put it in frontend envs.
+Open `/api/ops/media-usage/view` for the readable report and sign in with username
+`ops` and that secret as password. `/api/ops/media-usage` returns typed JSON;
+API clients can instead send `X-Nevo-Ops-Key`. Both support `from` and `until` dates.
+School tokens alone cannot read platform spending. Responses are not cacheable.
+These routes use the existing 0112 ledger and need no additional migration.
+
+`POST /api/ops/media-usage/effective-rate` calculates a measured YarnGPT effective
+rate from a closed top-up cycle. Supply `from`, `until`, `paidAmount`, `refunds`,
+`currency`, and true attestations `fullyConsumed`, `zeroOpeningBalance`,
+`exclusiveNarrationUse`, `trackingCoveredWholeCycle`. Uncertain dispatched calls
+require reconciliation first. The denominator is deduplicated accepted synthesis
+characters, not polling or retry counts. This is an effective observed rate, not
+an official tariff; it neither persists nor applies a price automatically.
+
+Verified Osmosis inventory on 22 October: six base narration assets and four base
+images, not eighteen narrations. Eligible base media is generated during upload
+preparation or explicit repair, not first playback. Simplify/Expand are text rewrites;
+Slower does not generate a separate narration. Calculation-step narration, where
+authored, is an additional asset tracked separately.
 
 ```bash
 python scripts/report_media_usage.py \

@@ -100,6 +100,12 @@ class ComprehensionCheckpoint(BaseModel):
         if not isinstance(value, dict):
             return value
         value = dict(value)
+        for field in ("answer_type", "answer_key"):
+            canonical = {"answer_type": "answerType", "answer_key": "answerKey"}[field]
+            if canonical not in value and field in value:
+                value[canonical] = value[field]
+        if "options" not in value and isinstance(value.get("choices"), list):
+            value["options"] = value["choices"]
         key = value.get("answerKey", value.get("answer_key"))
         kind = value.get("answerType", value.get("answer_type"))
         if kind in {"selection", "choice", "select", "single_select", "multi_select"}:

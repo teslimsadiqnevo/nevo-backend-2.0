@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -33,7 +33,7 @@ async def find_reusable_upload(
         UploadJob.requested_by_id == actor_id,
         UploadJob.school_id == school_id,
         UploadJob.scope == scope,
-        UploadJob.status == "ready",
+        UploadJob.status.in_(["ready", "processing"]),
     )
     if content is not None:
         query = query.join(UploadSourceBlob).where(UploadSourceBlob.content == content)
@@ -41,6 +41,14 @@ async def find_reusable_upload(
         query = query.where(UploadJob.structure["sourceCacheKey"].astext == key)
     jobs = await session.scalars(query.order_by(UploadJob.created_at.desc()))
     for job in jobs:
+        if job.status == "processing":
+            if (
+                key is not None
+                and job.structure.get("sourceCacheKey") == key
+                and job.created_at > datetime.now(UTC) - timedelta(minutes=20)
+            ):
+                return job
+            continue
         try:
             lesson_id = UUID(str(job.structure.get("lessonId")))
         except ValueError:
@@ -62,6 +70,8 @@ async def find_reusable_upload(
 
 async def record_reused_media(session: AsyncSession, job: UploadJob) -> None:
     """Record reused asset references; no provider call, draw, synthesis or asset write."""
+    if job.status != "ready":
+        return
     rows = await session.scalars(
         select(LessonSegment).where(LessonSegment.lesson_id == UUID(str(job.structure["lessonId"])))
     )

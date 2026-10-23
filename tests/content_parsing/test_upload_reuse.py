@@ -168,3 +168,51 @@ def test_unchanged_upload_reuses_prepared_lesson_and_counts_media(monkeypatch):
             await engine.dispose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.skipif(not URL, reason="Disposable database required")
+def test_repeat_upload_reuses_an_in_flight_job_without_new_generation(monkeypatch):
+    async def scenario():
+        engine, sessions, teacher, school = await setup()
+        try:
+            payload = UploadRequest(
+                title="Respiration",
+                filename="respiration.txt",
+                sourceType="text",
+                sourceText="Cells release usable energy.",
+            )
+            key = source_key(
+                text=payload.source_text,
+                title=payload.title,
+                subject=None,
+                source_type="text",
+                scope="lesson",
+            )
+            async with sessions.begin() as session:
+                job = UploadJob(
+                    school_id=school,
+                    requested_by_id=teacher,
+                    scope="lesson",
+                    filename="respiration.txt",
+                    status="processing",
+                    stage="preparing_adaptations",
+                    structure={"sourceCacheKey": key},
+                )
+                session.add(job)
+                await session.flush()
+                job_id = job.id
+            monkeypatch.setattr(
+                "nevo.api.product_learning._parse_into_job",
+                AsyncMock(side_effect=AssertionError("Duplicate generation")),
+            )
+            async with sessions() as session:
+                response = await staged_upload(
+                    payload, AuthPrincipal(teacher, "teacher", uuid4()), session, None, sessions
+                )
+                assert response["uploadId"] == str(job_id)
+                assert response["status"] == "processing"
+                assert response["reused"] is True
+        finally:
+            await engine.dispose()
+
+    asyncio.run(scenario())

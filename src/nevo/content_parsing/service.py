@@ -4,6 +4,7 @@ import logging
 import math
 import re
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 from datetime import timedelta
@@ -268,39 +269,98 @@ class ContentParsingService:
 
         pass_limit = asyncio.Semaphore(2)
 
+        def question_items(payload):
+            return [
+                question
+                for section in _dict_list(payload.get("segments"))
+                for question in _question_list(
+                    section.get("comprehension_checkpoints")
+                    or section.get("comprehensionCheckpoints")
+                )
+            ] + _question_list(payload.get("assessment"))
+
         async def read_pass(index: int, chunk: str):
             async with pass_limit:
-                try:
-                    return await self._ai_gateway.generate(
-                        AiGenerationRequest(
-                            requester_user_id=requested_by_user_id,
-                            service=AiService.LESSON_GENERATION,
-                            prompt_name=PROMPT_NAME,
-                            variables={
-                                "lesson_title": request.title,
-                                "source_type": request.source_type.value,
-                                "chunk_number": str(index),
-                                "chunk_count": str(len(chunks)),
-                                "source_text": (
-                                    "For every checkpoint and after-lesson assessment question, "
-                                    "include a short hint that "
-                                    "does not reveal its answer and guidedQuestions with two or "
-                                    "three questions grounded in the supplied teaching material. "
-                                    "Do not invent facts or add a new topic.\n\n"
-                                    "For activities, inProgress and outcome are optional "
-                                    "source-authored lines. Copy them verbatim from the "
-                                    "upload only when explicitly present. Do not compose, infer, "
-                                    "or default either line; omit absent fields.\n\n"
-                                    + _pass_source(chunks, index)
-                                ),
-                            },
-                            max_output_tokens=PARSE_OUTPUT_TOKENS,
-                            timeout_seconds=PARSE_TIMEOUT_SECONDS,
-                            json_output=True,
+                correction = ""
+                required_questions = None
+                for attempt in range(2):
+                    try:
+                        generated = await generate_pass(index, correction)
+                        candidate = _json_payload(generated.text)
+                        if (
+                            required_questions is not None
+                            and Counter(
+                                str(q.get("prompt", "")).strip() for q in question_items(candidate)
+                            )
+                            != required_questions
+                        ):
+                            raise UnclassifiableQuestionError(
+                                "Question correction changed or dropped an original question"
+                            )
+                        _segments_from_payload_list(candidate, sequence_offset=0)
+                        if index == len(chunks):
+                            _assessment_questions(candidate)
+                        return generated, attempt + 1
+                    except UnclassifiableQuestionError as error:
+                        if attempt == 1:
+                            return error, attempt + 1
+                        original_questions = question_items(candidate)
+                        required_questions = Counter(
+                            str(q.get("prompt", "")).strip() for q in original_questions
                         )
+                        correction = (
+                            "The previous output failed question validation: "
+                            + str(error)
+                            + ". Correct the question schema using the supplied source. "
+                            "Do not drop questions or invent answer keys. "
+                            "Preserve every question prompt and its occurrence count exactly. "
+                            "Original questions: "
+                            + json.dumps(original_questions)
+                            + ". Return the full lesson JSON.\n\n"
+                        )
+                    except json.JSONDecodeError:
+                        # Keep provider stop/token metadata on the fallback diagnostic.
+                        return generated, attempt + 1
+                    except (AiGatewayError, ValueError) as error:
+                        return error, attempt + 1
+
+        async def generate_pass(index: int, correction: str):
+            try:
+                return await self._ai_gateway.generate(
+                    AiGenerationRequest(
+                        requester_user_id=requested_by_user_id,
+                        service=AiService.LESSON_GENERATION,
+                        prompt_name=PROMPT_NAME,
+                        variables={
+                            "lesson_title": request.title,
+                            "source_type": request.source_type.value,
+                            "chunk_number": str(index),
+                            "chunk_count": str(len(chunks)),
+                            "source_text": (
+                                correction
+                                + "Question answerType must be single_choice, multiple_choice, "
+                                "text, numeric or boolean, never selection. Choice questions "
+                                "require two or more value-label options and matching answerKey "
+                                "values. Use camelCase answerType and answerKey.\n\n"
+                                + "For every checkpoint and after-lesson assessment question, "
+                                "include a short hint that "
+                                "does not reveal its answer and guidedQuestions with two or "
+                                "three questions grounded in the supplied teaching material. "
+                                "Do not invent facts or add a new topic.\n\n"
+                                "For activities, inProgress and outcome are optional "
+                                "source-authored lines. Copy them verbatim from the "
+                                "upload only when explicitly present. Do not compose, infer, "
+                                "or default either line; omit absent fields.\n\n"
+                                + _pass_source(chunks, index)
+                            ),
+                        },
+                        max_output_tokens=PARSE_OUTPUT_TOKENS,
+                        timeout_seconds=PARSE_TIMEOUT_SECONDS,
+                        json_output=True,
                     )
-                except (AiGatewayError, ValueError) as error:
-                    return error
+                )
+            except (AiGatewayError, ValueError):
+                raise
 
         results = await asyncio.gather(
             *(read_pass(index, chunk) for index, chunk in enumerate(chunks, start=1))
@@ -309,11 +369,11 @@ class ContentParsingService:
         seen_bodies: set[str] = set()
 
         for index, chunk in enumerate(chunks, start=1):
-            result = results[index - 1]
+            result, attempts = results[index - 1]
+            ai_call_count += attempts
             try:
                 if isinstance(result, Exception):
                     raise result
-                ai_call_count += 1
                 payload = _json_payload(result.text)
                 chunk_segments = _segments_from_payload_list(payload, sequence_offset=len(segments))
                 from nevo.content_parsing.activity import source_activity_observations

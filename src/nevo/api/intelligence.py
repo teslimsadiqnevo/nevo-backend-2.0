@@ -1017,11 +1017,21 @@ async def adapt_lesson(
         # Keep an offer reachable after its first appearance. Declining can
         # suppress a repeated interruption but never removes the break control.
         previous_offer = delivery.get("breakOffer")
+        declined_seconds = context.signals.break_declined_seconds_ago
+        offered_at = delivery.get("breakOfferAt")
+        if previous_offer and declined_seconds is not None and (
+            not offered_at
+            or now - timedelta(seconds=declined_seconds) >= datetime.fromisoformat(offered_at)
+        ):
+            previous_offer = None
+            delivery.pop("breakOffer", None)
+            delivery.pop("breakOfferAt", None)
         if context.signals.break_in_progress or (
             context.signals.break_declined_seconds_ago is not None
             and context.signals.break_declined_seconds_ago < 120
         ):
             delivery.pop("breakOffer", None)
+            delivery.pop("breakOfferAt", None)
         elif response.break_suggestion.break_type is not None:
             response.break_suggestion.offer_persistent = True
             delivery["breakOffer"] = response.break_suggestion.model_dump(
@@ -1029,6 +1039,7 @@ async def adapt_lesson(
             )
             # Persist the offered action, not an affective-state label/cue.
             delivery["breakOffer"]["triggeredThresholds"] = []
+            delivery["breakOfferAt"] = now.isoformat()
         elif previous_offer:
             response.break_suggestion = BreakSuggestionResponse.model_validate(previous_offer)
             response.break_suggestion.offer_persistent = True

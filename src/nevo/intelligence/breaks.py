@@ -16,6 +16,17 @@ def monitor_break_thresholds(
     ):
         return BreakThresholdResult((), BreakSeverity.NONE, None, None)
     thresholds: list[BreakThreshold] = []
+    # A marked miss plus a separate struggle signal can offer relief immediately;
+    # elapsed work time remains an independent, secondary reason to pause.
+    if signals.frustration_detected or (
+        signals.consecutive_errors >= 1
+        and (
+            signals.replay_count_on_segment >= 1
+            or _comprehension_drop(signals)
+            or signals.engagement_below_baseline_seconds >= 60
+        )
+    ):
+        thresholds.append(BreakThreshold.FRUSTRATION_HIGH)
     if signals.session_adaptation_count >= 2 and signals.consecutive_errors >= 2:
         thresholds.append(BreakThreshold.PERSISTENT_STALL)
     attention_window = min(20, max(5, profile.attention_span or 20))
@@ -58,6 +69,14 @@ def select_break_type(
     signals: RuntimeSignals,
     profile: LearnerProfileSnapshot,
 ) -> BreakType:
+    if {BreakThreshold.FRUSTRATION_HIGH, BreakThreshold.PERSISTENT_STALL}.intersection(
+        triggered_thresholds
+    ):
+        if signals.session_break_count >= 2 or signals.reteaching_exhausted:
+            return BreakType.STOP_FOR_DAY
+        if signals.session_break_count >= 1 or signals.consecutive_errors >= 3:
+            return BreakType.FULL
+        return BreakType.MICRO
     high_severity = {
         "engagement_decline",
         "comprehension_drop",

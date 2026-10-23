@@ -22,6 +22,10 @@ ScalarAnswer = str | int | float | bool
 class UnclassifiableQuestionError(ValueError):
     """A question cannot be published without a usable renderer and answer."""
 
+    def __init__(self, message, *, question_label=None):
+        self.question_label = question_label
+        super().__init__(message + (f' Question: "{question_label}".' if question_label else ""))
+
 
 def safety_reviewed_visual(value):
     return (
@@ -91,6 +95,61 @@ class CheckpointOption(BaseModel):
     authored_by: Literal["person", "nevo"] = Field(default="nevo", alias="authoredBy")
 
 
+class GuidedStepPrompt(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    id: str
+    prompt: str
+    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean"] = Field(
+        alias="answerType"
+    )
+    options: list[CheckpointOption] = Field(default_factory=list)
+
+
+class GuidedCheckStep(BaseModel):
+    """A source-backed panel step; correctness is a comparison, never text inference."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    id: str = Field(min_length=1, max_length=160)
+    prompt: str = Field(min_length=1)
+    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean"] = Field(
+        alias="answerType"
+    )
+    options: list[CheckpointOption] = Field(default_factory=list)
+    answer_key: ScalarAnswer | list[ScalarAnswer] = Field(alias="answerKey")
+    explanation: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonical_choice(cls, value):
+        return ComprehensionCheckpoint.canonical_choice_type(value)
+
+    @model_validator(mode="after")
+    def markable(self):
+        keys = self.answer_key if isinstance(self.answer_key, list) else [self.answer_key]
+        if not keys or any(key is None or key == "" for key in keys):
+            raise ValueError("Guided steps need a held answer")
+        if self.answer_type in {"single_choice", "multiple_choice"}:
+            values = [option.value for option in self.options]
+            if (
+                len(values) < 2
+                or len(set(map(str, values))) != len(values)
+                or any(key not in values for key in keys)
+            ):
+                raise ValueError("Guided choice keys must match distinct options")
+            if self.answer_type == "single_choice" and isinstance(self.answer_key, list):
+                raise ValueError("Single choice needs one scalar answer")
+            if self.answer_type == "multiple_choice" and not isinstance(self.answer_key, list):
+                raise ValueError("Multiple choice needs an answer list")
+        elif self.answer_type == "numeric":
+            from nevo.content_parsing.answers import _number
+
+            if _number(self.answer_key) is None:
+                raise ValueError("Guided numeric step needs a numeric answer")
+        elif not isinstance(self.answer_key, bool):
+            raise ValueError("Guided boolean step needs true or false")
+        return self
+
+
 class ComprehensionCheckpoint(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -138,6 +197,17 @@ class ComprehensionCheckpoint(BaseModel):
     explanation: str | None = None
     hint: str | None = None
     guided_questions: list[str] = Field(default_factory=list, alias="guidedQuestions", max_length=5)
+    guided_steps: list[GuidedCheckStep] = Field(
+        default_factory=list, alias="guidedSteps", max_length=8
+    )
+
+    @model_validator(mode="after")
+    def unique_guided_steps(self):
+        ids = [step.id for step in self.guided_steps]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Guided step IDs must be unique within a question")
+        return self
+
     text_density: float | None = Field(default=None, alias="textDensity", ge=0, le=1)
     position: str = "after_segment"
     #: How the check is put to the child. Decided here and not on the device:
@@ -588,6 +658,10 @@ class CalculationStep(BaseModel):
             ),
         )
         options = item.get("options")
+        # Legacy expression/hex steps were mislabelled as choices despite
+        # carrying no options. They use the typed pad with explicit characters.
+        if expected == "text" and not options and item.get("input") == "choice":
+            item["input"] = "number"
         item.setdefault(
             "targets",
             [option.get("value") for option in options if isinstance(option, dict)]
@@ -609,7 +683,21 @@ class CalculationStep(BaseModel):
                 dict.fromkeys(
                     character
                     for character in typed
-                    if not character.isalnum() and not character.isspace()
+                    if not character.isdigit() and not character.isspace()
+                )
+            )
+        if item.get("input") == "number":
+            required = item.get("requiredCharacters") or item.get("required_characters") or []
+            item["requiredCharacters"] = list(
+                dict.fromkeys(
+                    [
+                        *required,
+                        *(
+                            char
+                            for char in str(answer or "")
+                            if not char.isdigit() and not char.isspace()
+                        ),
+                    ]
                 )
             )
         result_target_id = str(
@@ -804,6 +892,24 @@ class CalculationVariant(BaseModel):
     manipulative: Manipulative | None = None
     completion_statement: str = Field(alias="completionStatement")
 
+    @model_validator(mode="after")
+    def markable_steps(self):
+        if not self.steps:
+            raise ValueError("A calculation needs markable steps")
+        for step in self.steps:
+            if step.answer is None or step.answer == "":
+                raise UnclassifiableQuestionError(
+                    "Unmarkable calculation step", question_label=step.prompt[:160]
+                )
+            if step.input == "choice" and (
+                len(step.options) < 2
+                or step.answer not in [option.value for option in step.options]
+            ):
+                raise UnclassifiableQuestionError(
+                    "Unmarkable calculation choice", question_label=step.prompt[:160]
+                )
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def fill_renderer_contract(cls, value: object) -> object:
@@ -864,7 +970,10 @@ def checkpoint_payloads(
         if strict:
             if not str(item.get("prompt") or "").strip() or item.get("answerKey") is None:
                 raise UnclassifiableQuestionError(
-                    f"Unclassifiable question in {segment_key}: prompt and answer required"
+                    f"Unclassifiable question in {segment_key}: prompt and answer required",
+                    question_label=str(item.get("prompt") or item.get("id") or f"Question {index}")[
+                        :160
+                    ],
                 )
             kind = item.get("answerType")
             if kind is not None and kind not in {
@@ -875,7 +984,10 @@ def checkpoint_payloads(
                 "boolean",
             }:
                 raise UnclassifiableQuestionError(
-                    f"Unsupported question type in {segment_key}: {kind}"
+                    f"Unsupported question type in {segment_key}: {kind}",
+                    question_label=str(item.get("prompt") or item.get("id") or f"Question {index}")[
+                        :160
+                    ],
                 )
         item.setdefault("id", f"{segment_key}-check-{index}")
         item.setdefault("prompt", "Check your understanding of this part.")
@@ -911,7 +1023,10 @@ def checkpoint_payloads(
         except ValueError as error:
             if strict:
                 raise UnclassifiableQuestionError(
-                    f"Unclassifiable question in {segment_key}: no supported renderer"
+                    f"Unclassifiable question in {segment_key}: no supported renderer",
+                    question_label=str(item.get("prompt") or item.get("id") or f"Question {index}")[
+                        :160
+                    ],
                 ) from error
             raise
         if strict and question.answer_type in {"single_choice", "multiple_choice"}:
@@ -921,8 +1036,31 @@ def checkpoint_payloads(
                 else [question.answer_key]
             )
             options = [option.value for option in question.options]
-            if len(options) < 2 or not keys or any(key not in options for key in keys):
-                raise UnclassifiableQuestionError(f"Unmarkable choice question in {segment_key}")
+            if (
+                len(options) < 2
+                or len(set(map(str, options))) != len(options)
+                or not keys
+                or any(key not in options for key in keys)
+            ):
+                raise UnclassifiableQuestionError(
+                    f"Unmarkable choice question in {segment_key}",
+                    question_label=question.prompt[:160],
+                )
+        if strict and question.answer_type == "numeric":
+            from nevo.content_parsing.answers import _number
+
+            if _number(question.answer_key) is None:
+                raise UnclassifiableQuestionError(
+                    "Unmarkable numeric question", question_label=question.prompt[:160]
+                )
+        if (
+            strict
+            and question.answer_type == "boolean"
+            and not isinstance(question.answer_key, bool)
+        ):
+            raise UnclassifiableQuestionError(
+                "Unmarkable boolean question", question_label=question.prompt[:160]
+            )
         from nevo.probe.presentation import ordered_options
 
         rendered = question.model_dump(by_alias=True, mode="json")
@@ -930,6 +1068,11 @@ def checkpoint_payloads(
             rendered["options"],
             seed=f"{presentation_seed}:{segment_key}:{question.id}:{question.prompt}",
         )
+        for step in rendered.get("guidedSteps", []):
+            step["options"] = ordered_options(
+                step.get("options", []),
+                seed=f"{presentation_seed}:{segment_key}:{question.id}:{step['id']}",
+            )
         result.append(rendered)
     return result
 

@@ -49,7 +49,7 @@ FORBIDDEN_ASK_NEVO_TEXT_KEYS = {
     "message",
     "text",
 }
-BREAK_TYPES = {"micro", "movement", "consolidation", "full"}
+BREAK_TYPES = {"micro", "movement", "consolidation", "full", "stop_for_day"}
 ENGAGEMENT_INDICATORS = {
     "focus_drop",
     "task_switch",
@@ -163,7 +163,9 @@ class SignalEventRequest(BaseModel):
         if self.event_type in break_events:
             break_type = self.event_data.get("breakType")
             if break_type is not None and break_type not in BREAK_TYPES:
-                raise ValueError("breakType must be micro, movement, consolidation, or full.")
+                raise ValueError(
+                    "breakType must be micro, movement, consolidation, full, or stop_for_day."
+                )
         if (
             self.event_type
             in {
@@ -323,6 +325,7 @@ BREAK_TRIGGERS: frozenset[str] = frozenset(
         "engine_offer",
         #: The child chose "Take a break first" at a module boundary.
         "module_boundary",
+        "student_request",
     }
 )
 
@@ -464,7 +467,9 @@ async def _require_confirmed_consent(request: Request, principal: AuthPrincipal)
     status_code=status.HTTP_202_ACCEPTED,
     responses={
         403: {
-            "description": "consent_pending, consent_required, consent_withdrawn or student_required"
+            "description": (
+                "consent_pending, consent_required, consent_withdrawn or student_required"
+            )
         },
         503: {"description": "consent_service_unavailable; no events are accepted"},
     },

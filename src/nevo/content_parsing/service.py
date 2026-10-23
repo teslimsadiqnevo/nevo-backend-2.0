@@ -322,6 +322,12 @@ class ContentParsingService:
                                 "include a short hint that "
                                 "does not reveal its answer and guidedQuestions with two or "
                                 "three questions grounded in the supplied teaching material. "
+                                "For each in-lesson checkpoint also include guidedSteps: two or "
+                                "three question-specific markable steps, each with unique id, "
+                                "prompt, answerType (single_choice, multiple_choice, numeric or "
+                                "boolean), options as value-label objects and a source-supported "
+                                "answerKey. These lead toward the checkpoint, not a new topic. "
+                                "No free-text judgement or generic concept-key prompts. "
                                 "Do not invent facts or add a new topic.\n\n"
                                 "For activities, inProgress and outcome are optional "
                                 "source-authored lines. Copy them verbatim from the "
@@ -1541,6 +1547,8 @@ def _validated_calculation_variant(
             # with no way to answer it.
             return None, "calculation_step_missing_options"
         input_kind = str(step.get("input") or "").strip()
+        if expected_input == "text" and not options:
+            input_kind = "number"
         if input_kind not in {"tap", "choice", "number"}:
             input_kind = {
                 "selection": "choice",

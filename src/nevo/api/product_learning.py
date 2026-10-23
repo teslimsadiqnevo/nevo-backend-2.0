@@ -123,6 +123,11 @@ from nevo.domain.intelligence.vocabulary import (
     UploadStage,
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
+from nevo.intelligence.comprehension import (
+    BreakControlRequest,
+    BreakControlResponse,
+    ComprehensionGate,
+)
 from nevo.intelligence.delivery_preferences import (
     LessonChoice,
     SegmentChoice,
@@ -545,8 +550,24 @@ async def _attempt_payload_with_outcome(
     prompts, deadline = await _socratic_handoff(session, item)
     payload["handoffTo"] = "socratic_panel" if prompts else None
     payload["guidedPrompts"] = prompts
-    payload["advanceAfterHandoff"] = bool(prompts)
+    payload["advanceAfterHandoff"] = False
     payload["handoffAvailableAt"] = deadline
+    from nevo.intelligence.comprehension import gate_for_position
+
+    sitting = await session.get(LessonSession, item.session_id)
+    if sitting:
+        segment = await session.get(LessonSegment, item.segment_id) if item.segment_id else None
+        gate = await gate_for_position(
+            session,
+            sitting,
+            segment.sequence_order if segment else None,
+            complete=segment is None,
+        )
+        payload["comprehensionGate"] = gate.model_dump(mode="json", by_alias=True)
+    payload["supportStatus"] = item.question_snapshot.get(
+        "supportStatus",
+        "supported" if item.hint_count or item.attempt_number > 1 else "independent",
+    )
     return payload
 
 
@@ -602,11 +623,15 @@ async def _socratic_handoff(
     deadline = guidance_deadline(recent, student) if student else None
     if deadline is None or datetime.now(UTC) < deadline:
         return [], deadline
-    guided = item.question_snapshot.get("guidedQuestions") or []
+    guided = item.question_snapshot.get("guidedSteps") or []
     return [
-        {"id": f"{item.question_id}-guided-{index}", "prompt": prompt.strip()}
-        for index, prompt in enumerate(guided, start=1)
-        if isinstance(prompt, str) and prompt.strip()
+        {
+            "id": step["id"],
+            "prompt": step["prompt"],
+            "answerType": step["answerType"],
+            "options": step.get("options") or [],
+        }
+        for step in guided
     ], deadline
 
 
@@ -1435,6 +1460,17 @@ async def start_lesson_session(
     )
     session.add(record)
     await delivery_snapshot(session, actor, record)
+    if progress and progress.session_id:
+        prior = await session.get(LessonSession, progress.session_id)
+        if prior and prior.student_id == actor.id and prior.lesson_id == lesson_id:
+            record.delivery_state = {
+                **record.delivery_state,
+                **{
+                    key: value
+                    for key, value in (prior.delivery_state or {}).items()
+                    if key in {"reteaching", "guidedProgress", "hintedQuestions"}
+                },
+            }
     if progress is None:
         from nevo.intelligence.progression import next_work
 
@@ -1487,7 +1523,7 @@ async def save_lesson_question_attempt(
     if actor.role is not UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
     await session.refresh(actor, with_for_update={"key_share": True})
-    lesson_session = await session.get(LessonSession, payload.session_id)
+    lesson_session = await session.get(LessonSession, payload.session_id, with_for_update=True)
     if (
         lesson_session is None
         or lesson_session.student_id != actor.id
@@ -1519,6 +1555,21 @@ async def save_lesson_question_attempt(
     question, segment_id = await _question_for_attempt(
         session, lesson, payload, presentation_seed=str(actor.id)
     )
+    from nevo.intelligence.comprehension import note_attempt, require_gate
+
+    segment = await session.get(LessonSegment, segment_id) if segment_id else None
+    if segment:
+        await require_gate(session, lesson_session, segment.sequence_order - 1)
+    else:
+        await require_gate(session, lesson_session, complete=True)
+    if question.get("answerKey") is None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "lesson_content_requires_review",
+                "message": "This question needs its teacher's review.",
+            },
+        )
     if question.get("conceptId"):
         await ensure_prerequisites(session, actor.id, lesson.id, UUID(str(question["conceptId"])))
     attempt_number = int(
@@ -1555,10 +1606,112 @@ async def save_lesson_question_attempt(
     )
     session.add(record)
     await session.flush()
+    if segment:
+        await note_attempt(session, lesson_session, segment, record)
     await apply_marked_attempt(session, actor, record)
     await session.commit()
     await session.refresh(record)
     return await _attempt_payload_with_outcome(session, record)
+
+
+@router.get(
+    "/lessons/{lesson_id}/sessions/{session_id}/comprehension", response_model=ComprehensionGate
+)
+async def lesson_comprehension_state(
+    lesson_id: UUID,
+    session_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
+):
+    from nevo.intelligence.comprehension import gate_for_position
+
+    actor, _ = await _lesson_for_actor(lesson_id, principal, session)
+    sitting = await session.get(LessonSession, session_id)
+    if (
+        actor.role != UserRole.STUDENT
+        or not sitting
+        or (sitting.student_id != actor.id or sitting.lesson_id != lesson_id)
+    ):
+        raise HTTPException(404, detail="Lesson session not found")
+    return await gate_for_position(session, sitting, complete=True)
+
+
+@router.post(
+    "/lessons/{lesson_id}/sessions/{session_id}/break", response_model=BreakControlResponse
+)
+async def control_lesson_break(
+    lesson_id: UUID,
+    session_id: UUID,
+    payload: BreakControlRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
+):
+    from nevo.db.models.signal_event import SignalEvent
+    from nevo.intelligence.comprehension import gate_for_position
+
+    actor, _ = await _lesson_for_actor(lesson_id, principal, session)
+    if actor.role != UserRole.STUDENT:
+        raise HTTPException(403, detail={"code": "student_account_required"})
+    await session.refresh(actor, with_for_update={"key_share": True})
+    sitting = await session.get(LessonSession, session_id, with_for_update=True)
+    if not sitting or sitting.student_id != actor.id or sitting.lesson_id != lesson_id:
+        raise HTTPException(404, detail="Lesson session not found")
+    delivery = dict(sitting.delivery_state or {})
+    current = delivery.get("breakControl") or {}
+    if sitting.ended_at and not (
+        payload.action == "stop_for_day" and current.get("status") == "stopped"
+    ):
+        raise HTTPException(409, detail={"code": "lesson_session_ended"})
+    next_status = {"start": "paused", "return": "learning", "stop_for_day": "stopped"}[
+        payload.action
+    ]
+    gate = await gate_for_position(session, sitting, complete=True)
+    if current.get("status") != next_status:
+        now = datetime.now(UTC)
+        if payload.action == "return" and current.get("status") == "paused":
+            event = SignalEventType.BREAK_END
+        elif payload.action in {"start", "stop_for_day"}:
+            event = SignalEventType.BREAK_START
+            sitting.break_count = (sitting.break_count or 0) + 1
+        else:
+            event = None
+        if event:
+            session.add(
+                SignalEvent(
+                    student_id=actor.id,
+                    session_id=sitting.id,
+                    event_type=event,
+                    timestamp=now,
+                    event_data={
+                        "breakType": "stop_for_day"
+                        if payload.action == "stop_for_day"
+                        else payload.break_type,
+                        "trigger": "student_request",
+                    },
+                )
+            )
+        if payload.action == "stop_for_day":
+            sitting.ended_at = now
+            sitting.completion_status = LessonCompletionStatus.EXITED
+            progress = await session.scalar(
+                select(LessonProgress).where(
+                    LessonProgress.student_id == actor.id, LessonProgress.lesson_id == lesson_id
+                )
+            )
+            if progress and progress.status != "completed":
+                progress.status = "exited"
+        delivery.pop("breakOffer", None)
+        delivery["breakControl"] = {"status": next_status, "at": now.isoformat()}
+        sitting.delivery_state = delivery
+        await session.commit()
+    return BreakControlResponse(
+        session_id=str(sitting.id),
+        status=next_status,
+        resume_segment_id=gate.segment_id,
+        can_advance=gate.can_advance,
+    )
 
 
 @router.get(
@@ -1732,6 +1885,36 @@ async def save_lesson_progress(
             "checkPosition": progress.check_position,
             "checkResumableUntil": progress.check_resumable_until,
         }
+    from nevo.intelligence.comprehension import cursor_index, require_gate
+
+    # Leaving and saving the current location always remain possible. Only
+    # forward navigation and completion require the earlier in-lesson checks.
+    if payload.status == "completed":
+        await require_gate(session, lesson_session, complete=True)
+    elif payload.check_position is not None:
+        await require_gate(session, lesson_session, complete=True)
+    elif payload.status == "in_progress" and (
+        {"segment_position", "module_position"} & payload.model_fields_set
+    ):
+        index = await cursor_index(
+            session,
+            lesson_id,
+            payload.module_position
+            if "module_position" in payload.model_fields_set
+            else progress.module_position
+            if progress
+            else 0,
+            payload.segment_position
+            if "segment_position" in payload.model_fields_set
+            else progress.segment_position
+            if progress
+            else 0,
+        )
+        await require_gate(session, lesson_session, index)
+    elif payload.status == "exited" and progress:
+        # Leaving cannot become an alternate forward-navigation write.
+        payload.module_position = progress.module_position
+        payload.segment_position = progress.segment_position
     if progress is None:
         progress = LessonProgress(
             student_id=actor.id,
@@ -1767,19 +1950,11 @@ async def save_lesson_progress(
     derived_result = await _derive_result_state(session, lesson_session.id)
     # A lesson that was never attempted is not the "nothing landed" result.
     # Keep its sitting open at the saved cursor so the next launch resumes it.
-    not_attempted = (
-        payload.status is LessonCompletionStatus.COMPLETED and derived_result == "not_attempted"
-    )
-    if not_attempted:
-        progress.status = LessonCompletionStatus.IN_PROGRESS
-    elif payload.status in {"completed", "exited"}:
+    if payload.status in {"completed", "exited"}:
         lesson_session.ended_at = lesson_session.ended_at or datetime.now(UTC)
         lesson_session.completion_status = LessonCompletionStatus(payload.status)
     reroute: dict[str, object] | None = None
-    nothing_landed = (
-        payload.status is LessonCompletionStatus.COMPLETED and derived_result == "nothing_landed"
-    )
-    if payload.status == "completed" and not not_attempted:
+    if payload.status == "completed":
         from nevo.intelligence.learning_runtime import seed_completed_lesson_reviews
 
         await seed_completed_lesson_reviews(session, actor.id, lesson_session.id)
@@ -1789,54 +1964,13 @@ async def save_lesson_progress(
             if payload.assignment_id
             else None
         )
-        if assignment and assignment.student_id == actor.id and not nothing_landed:
+        if assignment and assignment.student_id == actor.id:
             assignment.status = "completed"
             assignment.completed_at = datetime.now(UTC)
-    if nothing_landed:
-        lower_session = await session.scalar(
-            select(LessonSession)
-            .where(
-                LessonSession.rerouted_from_session_id == lesson_session.id,
-                LessonSession.student_id == actor.id,
-            )
-            .order_by(LessonSession.started_at.desc())
-            .limit(1)
-        )
-        if lower_session is None:
-            lower_session = LessonSession(
-                id=uuid4(),
-                student_id=actor.id,
-                lesson_id=lesson_id,
-                started_at=datetime.now(UTC),
-                completion_status=LessonCompletionStatus.IN_PROGRESS,
-                delivery_depth="lower",
-                rerouted_from_session_id=lesson_session.id,
-            )
-            session.add(lower_session)
-        await delivery_snapshot(session, actor, lower_session)
-        progress.session_id = lower_session.id
-        progress.status = LessonCompletionStatus.IN_PROGRESS
-        progress.module_position = 0
-        progress.segment_position = 0
-        progress.completed_at = None
-        reroute = {
-            "sessionId": str(lower_session.id),
-            "lessonId": str(lesson_id),
-            "depth": "lower",
-            "segmentPosition": 0,
-            "reason": "nothing_landed",
-            "deliveryState": delivery_for_read(lower_session),
-        }
-    elif not_attempted:
-        reroute = {
-            "sessionId": str(lesson_session.id),
-            "lessonId": str(lesson_id),
-            "depth": lesson_session.delivery_depth,
-            "segmentPosition": progress.segment_position,
-            "reason": "not_attempted",
-        }
+    # Final assessment measures outcomes; it cannot undo the in-lesson passes
+    # or make completion conditional on the after-lesson score.
     intelligence: dict[str, object] = {"status": "not_run"}
-    if payload.status == "completed" and not not_attempted:
+    if payload.status == "completed":
         intelligence["status"] = await enqueue_post_lesson(
             session,
             session_id=lesson_session.id,

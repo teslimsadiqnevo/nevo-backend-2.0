@@ -16,6 +16,7 @@ from nevo.api.auth import SessionResponse
 from nevo.api.lesson_contracts import (
     AudioVariant,
     CalculationVariant,
+    CheckpointOption,
     ComprehensionCheckpoint,
     DepthVariants,
     InteractiveVariant,
@@ -54,6 +55,7 @@ from nevo.domain.intelligence.vocabulary import (
     UploadStatus,
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
+from nevo.intelligence.comprehension import ComprehensionGate, ComprehensionPolicy
 from nevo.intelligence.delivery_preferences import LessonChoice, SegmentChoice, SegmentFormatChoice
 
 
@@ -735,6 +737,8 @@ class LessonProgressResponse(CamelResponse):
 class SocraticHandoffPrompt(CamelResponse):
     id: str
     prompt: str
+    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean"] = "single_choice"
+    options: list[CheckpointOption] = Field(default_factory=list)
 
 
 class LessonQuestionAttemptResponse(CamelResponse):
@@ -748,6 +752,8 @@ class LessonQuestionAttemptResponse(CamelResponse):
     question: ComprehensionCheckpoint
     answer: JsonValue
     correct: bool | None
+    support_status: Literal["supported", "independent"] = "independent"
+    comprehension_gate: ComprehensionGate | None = None
     submitted_at: datetime
     result_state: Literal["landed", "partly_landed", "nothing_landed", "not_attempted"]
     handoff_to: Literal["socratic_panel"] | None = None
@@ -761,9 +767,7 @@ class LessonQuestionAttemptResponse(CamelResponse):
     advance_after_handoff: bool = Field(
         default=False,
         description=(
-            "True whenever handoffTo is socratic_panel, so the player moves forward "
-            "into the panel and never returns the child to the failed question. False "
-            "only when there is no handoff."
+            "Always false. Panel completion never unlocks the section; retry the original check."
         ),
     )
 
@@ -1088,6 +1092,7 @@ class OfflinePackage(CamelResponse):
     """
 
     id: UUID
+    comprehension_policy: ComprehensionPolicy = Field(default_factory=ComprehensionPolicy)
     title: str
     #: The parser version the lesson was built by, so a client can tell a
     #: cached package from a newer parse of the same lesson.

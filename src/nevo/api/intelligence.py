@@ -3,13 +3,15 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
+from nevo.api.lesson_contracts import GuidedStepPrompt
+from nevo.db.models.account import User
 from nevo.db.models.content import LessonSegment
 from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.signal_event import AdaptationDecision, LessonSession
@@ -30,6 +32,7 @@ from nevo.domain.intelligence.vocabulary import (
 from nevo.domain.learner_profiles.vocabulary import ConfidenceLevel
 from nevo.intelligence.accommodation_service import AccommodationInferenceService
 from nevo.intelligence.adaptation import AdaptationEngineService
+from nevo.intelligence.comprehension import ComprehensionGate, gate_for_position
 from nevo.intelligence.entities import (
     AccommodationAnalysis,
     AccommodationSignal,
@@ -79,6 +82,13 @@ class ContentSegmentRequest(BaseModel):
 
 
 class RuntimeSignalsRequest(BaseModel):
+    frustration_detected: bool = Field(
+        default=False,
+        alias="frustrationDetected",
+        description=(
+            "Optional device-derived transient cue for a break; never send raw touch data."
+        ),
+    )
     model_config = ConfigDict(populate_by_name=True)
 
     current_segment_id: str | None = Field(default=None, alias="currentSegmentId")
@@ -223,6 +233,8 @@ class BreakSuggestionResponse(BaseModel):
     reason: str | None
     suppressed_reason: Literal["break_declined", "break_in_progress"] | None = None
     retry_at: datetime | None = None
+    always_available: Literal[True] = True
+    offer_persistent: bool = False
 
     @classmethod
     def from_result(cls, result: BreakThresholdResult) -> "BreakSuggestionResponse":
@@ -230,7 +242,13 @@ class BreakSuggestionResponse(BaseModel):
             triggered_thresholds=list(result.triggered_thresholds),
             severity=result.severity,
             break_type=result.break_type,
-            reason="You can pause here, or keep going." if result.break_type is not None else None,
+            reason=(
+                "You can stop for today and come back to this part."
+                if result.break_type == BreakType.STOP_FOR_DAY
+                else "You can pause here and return to this part."
+                if result.break_type is not None
+                else None
+            ),
         )
 
 
@@ -278,20 +296,18 @@ class GuidedPrompt(BaseModel):
 
 
 class GuidedAnswerRequest(BaseModel):
-    """What the child said back to a guided question.
+    """A structured choice/construction, marked against a stored guided-step key.
 
-    Their own words are deliberately not accepted. A guided question is a
-    teaching device, not an assessment, and the one thing worth recording is
-    whether the dialogue moved them on - so the panel sends the option they
-    picked, or how much they wrote, and the words stay where they were typed.
-    Ask B19.
+    outcome and responseLength are legacy metadata, never correctness evidence.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
     student_id: UUID = Field(alias="studentId")
     session_id: UUID | None = Field(default=None, alias="sessionId")
-    prompt_id: str = Field(alias="promptId", max_length=80)
+    prompt_id: str = Field(alias="promptId", max_length=160)
+    question_id: str | None = Field(default=None, alias="questionId", max_length=160)
+    answer: JsonValue = None
     concept_id: UUID | None = Field(default=None, alias="conceptId")
     option: str | None = Field(default=None, max_length=200)
     response_length: int | None = Field(default=None, alias="responseLength", ge=0, le=10_000)
@@ -305,6 +321,13 @@ class GuidedAnswerResponse(BaseModel):
 
     recorded: bool = True
     prompt_id: str = Field(alias="promptId")
+    correct: bool | None = None
+    panel_complete: bool = Field(default=False, alias="panelComplete")
+    can_advance: Literal[False] = Field(default=False, alias="canAdvance")
+    retry_check: bool = Field(default=False, alias="retryCheck")
+    question_id: str | None = Field(default=None, alias="questionId")
+    prompt: GuidedStepPrompt | None = None
+    feedback: str | None = None
 
 
 class ProactiveAdjustmentResponse(BaseModel):
@@ -334,6 +357,9 @@ class ProactiveAdjustmentResponse(BaseModel):
     #: client can stop inferring it - and if the engine ever means a
     #: different one, it will say so here rather than silently. Ask B46.
     segment_id: str | None = Field(default=None, alias="segmentId")
+    suggested_modality: ContentModality | None = Field(default=None, alias="suggestedModality")
+    guided_steps: list[GuidedStepPrompt] = Field(default_factory=list, alias="guidedSteps")
+    requires_choice: bool = Field(default=False, alias="requiresChoice")
 
     @model_validator(mode="after")
     def _carry_what_the_action_needs(self) -> "ProactiveAdjustmentResponse":
@@ -345,7 +371,9 @@ class ProactiveAdjustmentResponse(BaseModel):
 
         if self.action is ProactiveAction.OFFER_HINT and not (self.hint or "").strip():
             raise ValueError("offer_hint carries no hint text")
-        if self.action is ProactiveAction.SHOW_SOCRATIC_PANEL and not self.guided_questions:
+        if self.action is ProactiveAction.SHOW_SOCRATIC_PANEL and not (
+            self.guided_questions or self.guided_steps
+        ):
             raise ValueError("show_socratic_panel carries no questions")
         return self
 
@@ -440,6 +468,7 @@ class AdaptResponse(BaseModel):
     )
     cooldown_until: datetime | None = None
     support_grace_until: datetime | None = None
+    comprehension_gate: ComprehensionGate | None = None
 
     @classmethod
     def from_plan(cls, plan: AdaptationPlan) -> "AdaptResponse":
@@ -833,6 +862,13 @@ async def adapt_lesson(
         if sitting and current_row
         else None
     )
+    if latest and latest.correct is False and current_row and sitting:
+        previous = (delivery.get("reteaching") or {}).get(str(current_row.id)) or {}
+        if previous.get("questionId") != latest.question_id:
+            from nevo.intelligence.comprehension import note_attempt
+
+            await note_attempt(session, sitting, current_row, latest)
+            delivery = dict(sitting.delivery_state or {})
     active = delivery.get("activeSupport") or {}
     from nevo.intelligence.question_support import two_miss_hint
 
@@ -926,8 +962,75 @@ async def adapt_lesson(
             # A direct attempt hand-off may be on screen without an engine-issued decision.
             response.adjustment_disposition = "retain"
     # SCRUM-272 replaces the separate pill with the recommendation in the control.
+    if sitting and current_row:
+        response.comprehension_gate = await gate_for_position(
+            session, sitting, current_row.sequence_order
+        )
+        teaching = response.comprehension_gate.reteaching
+        if latest and latest.correct is False and teaching:
+            route = teaching.recommended_route
+            actions = {
+                "format": "offer_modality_shift",
+                "simplify": "simplify",
+                "simpler_presentation": "rechunk",
+                "slower": "slower",
+                "rechunk": "rechunk",
+                "panel": "show_socratic_panel",
+            }
+            from nevo.intelligence.guided_panel import public_prompt
+
+            steps = [
+                public_prompt(step) for step in latest.question_snapshot.get("guidedSteps", [])
+            ]
+            response.proactive_adjustment = ProactiveAdjustmentResponse(
+                action=actions[route.action],
+                reason=route.label,
+                confidence=1.0,
+                trigger_signals=[
+                    TriggerSignalResponse(
+                        category="question_support", name="server_marked_miss", confidence=1.0
+                    )
+                ],
+                segment_id=str(current_row.id),
+                suggested_modality=route.format,
+                requires_choice=route.action in {"format", "simplify"},
+                guided_steps=steps if route.action == "panel" else [],
+                hint=teaching.hint,
+            )
+            # A response to a known wrong answer is not a profile inference and
+            # must not wait behind adaptation confidence/dwell/cooldown limits.
+            response.suppressed_attempt = None
+            response.cooldown_until = None
+            response.support_grace_until = None
+            response.adjustment_disposition = "apply"
+            question_hint = False
+            if same_question and active.get("attemptId") == str(latest.id):
+                response.adjustment_disposition = "retain"
+                response.decision_id = (
+                    UUID(active["decisionId"]) if active.get("decisionId") else None
+                )
+            if route.format:
+                recommendations[str(current_row.id)] = route.format
+                for item in response.segments:
+                    if item.segment_id in {str(current_row.id), current_row.segment_key}:
+                        item.recommended_format = ContentModality(route.format)
+        # Keep an offer reachable after its first appearance. Declining can
+        # suppress a repeated interruption but never removes the break control.
+        previous_offer = delivery.get("breakOffer")
+        if context.signals.break_in_progress:
+            delivery.pop("breakOffer", None)
+        elif response.break_suggestion.break_type is not None:
+            response.break_suggestion.offer_persistent = True
+            delivery["breakOffer"] = response.break_suggestion.model_dump(
+                mode="json", by_alias=True
+            )
+            # Persist the offered action, not an affective-state label/cue.
+            delivery["breakOffer"]["triggeredThresholds"] = []
+        elif previous_offer:
+            response.break_suggestion = BreakSuggestionResponse.model_validate(previous_offer)
+            response.break_suggestion.offer_persistent = True
     response.modality_suggestion = None
-    action = plan.proactive_adjustment
+    action = response.proactive_adjustment
     suggestion = plan.modality_suggestion
     if question_hint and context.session_id:
         response.decision_id = uuid4()
@@ -972,13 +1075,21 @@ async def adapt_lesson(
             response.adjustment_disposition == "apply"
             and response.proactive_adjustment is not None
             and response.proactive_adjustment.action
-            in {ProactiveAction.OFFER_HINT, ProactiveAction.SHOW_SOCRATIC_PANEL}
+            in {
+                ProactiveAction.OFFER_HINT,
+                ProactiveAction.SHOW_SOCRATIC_PANEL,
+                ProactiveAction.OFFER_MODALITY_SHIFT,
+                ProactiveAction.RECHUNK,
+                ProactiveAction.SIMPLIFY,
+                ProactiveAction.SLOWER,
+            }
             and latest is not None
             and current_row is not None
         ):
             delivery["activeSupport"] = {
                 "segmentId": str(current_row.id),
                 "questionId": latest.question_id,
+                "attemptId": str(latest.id),
                 "decisionId": str(response.decision_id) if response.decision_id else None,
                 "adjustment": response.proactive_adjustment.model_dump(mode="json", by_alias=True),
             }
@@ -1225,6 +1336,7 @@ def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:
     # streaks and guardrail counters are reconstructed from persisted evidence.
     return RuntimeSignals(
         current_segment_id=signals.current_segment_id,
+        frustration_detected=signals.frustration_detected,
     )
 
 
@@ -1239,6 +1351,7 @@ def _signals_from_request(signals: RuntimeSignalsRequest) -> RuntimeSignals:
 async def answer_guided_question(
     payload: GuidedAnswerRequest,
     principal: PrincipalDependency,
+    session: DatabaseSession,
     consent: StudentLearningConsent = None,
 ) -> GuidedAnswerResponse:
     """Record what a child said back to a guided question.
@@ -1259,4 +1372,19 @@ async def answer_guided_question(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Students can answer only their own guided questions",
         )
-    return GuidedAnswerResponse(recorded=True, promptId=payload.prompt_id)
+    from nevo.api.product_common import require_student_access
+    from nevo.intelligence.guided_panel import answer_step
+
+    await require_student_access(session, principal, payload.student_id)
+    if principal.role != "student":
+        raise HTTPException(403, detail={"code": "student_account_required"})
+    if payload.session_id is None:
+        raise HTTPException(422, detail={"code": "lesson_session_required"})
+    student = await session.get(User, payload.student_id)
+    await session.refresh(student, with_for_update={"key_share": True})
+    sitting = await session.get(LessonSession, payload.session_id, with_for_update=True)
+    if not sitting or sitting.student_id != payload.student_id or sitting.ended_at is not None:
+        raise HTTPException(404, detail={"code": "lesson_session_not_found"})
+    result = await answer_step(session, sitting, payload)
+    await session.commit()
+    return GuidedAnswerResponse.model_validate(result)

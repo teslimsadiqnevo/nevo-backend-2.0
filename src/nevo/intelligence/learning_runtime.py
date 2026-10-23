@@ -226,7 +226,7 @@ async def apply_marked_attempt(
         .with_for_update()
     )
     engine = HybridAktMasteryEngine()
-    effective_hints = attempt.hint_count
+    effective_hints = max(attempt.hint_count, int(question.get("supportStatus") == "supported"))
     if question.get("calculationComplete") is True:
         parts = list(
             await session.scalars(
@@ -240,7 +240,17 @@ async def apply_marked_attempt(
         hints = {}
         for part in parts:
             hints[part.question_id] = max(hints.get(part.question_id, 0), part.hint_count)
-        effective_hints = sum(hints.values())
+        effective_hints = max(
+            effective_hints,
+            sum(hints.values()),
+            int(
+                any(
+                    part.correct is False
+                    or part.question_snapshot.get("supportStatus") == "supported"
+                    for part in parts
+                )
+            ),
+        )
     related_ids = tuple(UUID(value) for value in (concept.prerequisite_ids or []))
     related_mastery = {
         item.concept_id: item.mastery_probability_concept
@@ -362,6 +372,12 @@ async def _scaffold_attempt(session, user, concept_id, attempt):
         )
     )
     if recorded is not None:
+        # Each distinct question contributes at most one independent success.
+        # A later supported pass is still recorded, without awarding a new streak.
+        previous = await session.get(ScaffoldProblemLog, recorded)
+        if attempt.correct and previous and previous.outcome == "struggled":
+            previous.outcome = "correct"
+            previous.change_reason = "supported_pass"
         return
     row = await session.scalar(
         select(StudentConceptScaffoldState)
@@ -408,7 +424,9 @@ async def _scaffold_attempt(session, user, concept_id, attempt):
             student_id=student_id,
             concept_id=concept_id,
             problem_id=f"{attempt.session_id}:{attempt.question_id}",
-            response_correct=independent,
+            response_correct=bool(attempt.correct),
+            counts_as_independent=independent
+            and attempt.question_snapshot.get("supportStatus") != "supported",
             response_time_ms=attempt.response_time_ms,
             hint_count=hint_count,
         ),

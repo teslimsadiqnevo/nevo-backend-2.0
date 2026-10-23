@@ -48,13 +48,19 @@ class ProgressiveScaffoldFadingEngine:
         attempt: ScaffoldProblemAttempt,
     ) -> ScaffoldDecision:
         intensity_used = attempt.scaffold_intensity or state.current_intensity
+        supported_pass = attempt.response_correct and (
+            not attempt.counts_as_independent or attempt.hint_count > 0
+        )
         outcome = (
             ScaffoldOutcome.CORRECT
-            if _mastery_signal_met(state=state, attempt=attempt)
+            if supported_pass or _mastery_signal_met(state=state, attempt=attempt)
             else ScaffoldOutcome.STRUGGLED
         )
 
-        if outcome is ScaffoldOutcome.CORRECT:
+        if supported_pass:
+            consecutive_correct = response_time_streak = hint_streak = 0
+            next_intensity, reason = intensity_used, "supported_pass"
+        elif outcome is ScaffoldOutcome.CORRECT:
             consecutive_correct = state.consecutive_correct + 1
             response_time_streak = _response_time_streak(state, attempt)
             hint_streak = _hint_streak(state, attempt)
@@ -97,6 +103,8 @@ def _mastery_signal_met(
     if not attempt.response_correct or attempt.hint_count > 0:
         return False
     if state.last_hint_count is not None and attempt.hint_count > state.last_hint_count:
+        return False
+    if not attempt.counts_as_independent:
         return False
     return True
 

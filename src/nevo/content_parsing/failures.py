@@ -124,6 +124,15 @@ FAILURE_REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
 def failure_reason(error: BaseException | str) -> str:
     """A sentence a teacher can act on, or an honest generic one."""
 
+    label = getattr(error, "question_label", None)
+    if not label:
+        match = re.search(r'Question: "([^"\n]{1,160})"', str(error))
+        label = match.group(1) if match else None
+    if label:
+        return (
+            f'The question "{label}" has no usable marking rule. '
+            "The lesson has not been published. Please correct this question and upload again."
+        )
     text = (
         f"{error.__class__.__name__} {error}" if isinstance(error, BaseException) else str(error)
     ).casefold()

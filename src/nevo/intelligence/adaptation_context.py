@@ -345,6 +345,17 @@ async def prepare_adaptation(session, principal, payload, signals):
             ),
             session_modality_shift_count=len(shifts),
             session_adaptation_count=len(adaptations),
+            session_break_count=sum(
+                event.event_type is SignalEventType.BREAK_START for event in events
+            ),
+            reteaching_exhausted=bool(
+                current
+                and (
+                    ((sitting.delivery_state or {}).get("reteaching") or {}).get(
+                        str(current.id), {}
+                    )
+                ).get("teacherNotified")
+            ),
             seconds_since_last_adaptation=max(
                 0, int((now - adaptations[-1].timestamp).total_seconds())
             )

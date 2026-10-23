@@ -75,6 +75,7 @@ class BreakType(StrEnum):
     MOVEMENT = "movement"
     CONSOLIDATION = "consolidation"
     FULL = "full"
+    STOP_FOR_DAY = "stop_for_day"
 
 
 class AccommodationType(StrEnum):
@@ -211,9 +212,15 @@ class BreakThreshold(StrEnum):
     existed only in our code and a client had no way to see them. Somebody
     reading the contract could not tell this list from any other list of
     strings, which cost three rounds of asking each other what the five were.
+
+    Frustration-based triggers (primary):
+    - frustration_high: Multiple signals of struggle (errors, replays, comprehension drop)
+
+    Clock-based triggers remain available alongside immediate relief:
+    - time_threshold: Extended continuous work
     """
 
-    #: Twenty unbroken minutes.
+    #: Twenty unbroken minutes (secondary, clock-based).
     TIME_THRESHOLD = "time_threshold"
     PERSISTENT_STALL = "persistent_stall"
     #: Three minutes below this session's own engagement baseline.
@@ -224,6 +231,8 @@ class BreakThreshold(StrEnum):
     REPEATED_ERRORS = "repeated_errors"
     #: The same segment replayed three times.
     REPLAY_ACCUMULATION = "replay_accumulation"
+    #: High frustration: multiple struggle signals at once
+    FRUSTRATION_HIGH = "frustration_high"
 
 
 class BreakSeverity(StrEnum):
@@ -249,11 +258,10 @@ class ProactiveAction(StrEnum):
     Typed because a bare string put the vocabulary in a document instead of
     the contract, and a client had no way to know which values it must handle.
 
-    All five are produced today. The engine offers a hint after two aligned
-    errors and opens the guided Socratic panel after three, or after the replay
-    threshold where the segment carries guided questions.
-    Guided panels additionally respect the server's productive-work grace deadline;
-    the miss count alone is not permission to interrupt.
+    Question-specific re-teaching offers available formats, simpler display,
+    pacing, chunking and structured guidance without changing inference limits.
+    A pass after re-teaching is recorded as supported rather than independent
+    and does not count toward the three unaided successes that fade scaffolding.
     """
 
     SIMPLIFY = "simplify"
@@ -263,6 +271,10 @@ class ProactiveAction(StrEnum):
     OFFER_HINT = "offer_hint"
     #: Carries the questions the panel walks through.
     SHOW_SOCRATIC_PANEL = "show_socratic_panel"
+    #: Offer a different modality (visual, audio, interactive)
+    OFFER_MODALITY_SHIFT = "offer_modality_shift"
+    #: Re-chunk the section into smaller screens
+    RECHUNK = "rechunk"
 
 
 class ManipulativeKind(StrEnum):

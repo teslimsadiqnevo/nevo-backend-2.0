@@ -81,11 +81,15 @@ class RuntimeSignals:
     seconds_since_last_adaptation: int | None = None
     session_modality_shift_count: int | None = None
     session_adaptation_count: int = 0
+    session_break_count: int = 0
     misconception_confirmed: bool = False
     question_support_ready: bool = True
     support_grace_until: datetime | None = None
     break_declined_seconds_ago: int | None = None
     break_in_progress: bool = False
+    #: Device-derived transient cue; never stored on the learner or in signal events.
+    frustration_detected: bool = False
+    reteaching_exhausted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +131,8 @@ class ProactiveAdjustment:
     #: named. Carried so a client stops inferring it from the request it
     #: happened to send. Ask B46.
     segment_id: str | None = None
+    #: The suggested modality when action is offer_modality_shift
+    suggested_modality: ContentModality | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +231,11 @@ class ScaffoldProblemAttempt:
     response_time_ms: int | None = None
     expected_response_time_ms: int | None = None
     hint_count: int = 0
+    #: True if this attempt was unaided (no hint, no re-teaching).
+    #: False if the child was helped (panel, hint, modality shift, simplify, etc.).
+    #: Supported successes do NOT count toward the 3 consecutive unaided successes
+    #: needed to fade scaffolding.
+    counts_as_independent: bool = True
 
 
 @dataclass(frozen=True, slots=True)

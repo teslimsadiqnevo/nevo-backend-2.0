@@ -245,7 +245,10 @@ async def ask_nevo(
             },
         ) from limit
     except AiGatewayError as error:
-        raise public_ai_error(error) from error
+        raise public_ai_error(
+            error,
+            audience="teacher" if payload.role is AskNevoRole.TEACHER else "learner",
+        ) from error
     return AskResponse.from_result(result)
 
 

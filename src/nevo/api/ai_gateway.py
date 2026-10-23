@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -114,11 +114,13 @@ async def generate(
             )
         )
     except AiGatewayError as error:
-        raise public_ai_error(error) from error
+        raise public_ai_error(error, audience="teacher") from error
     return GenerateResponse.from_result(result)
 
 
-def public_ai_error(error: AiGatewayError, *, audience: str = "learner") -> HTTPException:
+def public_ai_error(
+    error: AiGatewayError, *, audience: Literal["learner", "teacher"]
+) -> HTTPException:
     from nevo.ai_gateway.safety import SafetyBlocked, SafetyUnavailable
 
     status_code = status.HTTP_400_BAD_REQUEST

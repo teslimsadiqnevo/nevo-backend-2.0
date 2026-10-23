@@ -254,6 +254,39 @@ class ComprehensionCheckpoint(BaseModel):
     authored_by: Literal["person", "nevo"] = Field(default="nevo", alias="authoredBy")
 
 
+def _require_markable_checkpoint(question: ComprehensionCheckpoint, segment_key: str) -> None:
+    """Renderer inference never makes a checkpoint eligible to gate by itself."""
+    key = question.answer_key
+    label = question.prompt[:160]
+    if key is None or (isinstance(key, str) and not key.strip()):
+        raise UnclassifiableQuestionError(
+            f"Unmarkable question in {segment_key}: missing expected answer",
+            question_label=label,
+        )
+    if question.answer_type in {"single_choice", "multiple_choice"}:
+        keys = key if isinstance(key, list) else [key]
+        options = [option.value for option in question.options]
+        if (
+            len(options) < 2
+            or len(set(map(str, options))) != len(options)
+            or not keys
+            or (question.answer_type == "single_choice" and len(keys) != 1)
+            or any(answer not in options for answer in keys)
+        ):
+            raise UnclassifiableQuestionError(
+                f"Unmarkable choice question in {segment_key}", question_label=label
+            )
+    elif question.answer_type == "numeric":
+        from nevo.content_parsing.answers import _number
+
+        if _number(key) is None:
+            raise UnclassifiableQuestionError("Unmarkable numeric question", question_label=label)
+    elif question.answer_type == "boolean" and not isinstance(key, bool):
+        raise UnclassifiableQuestionError("Unmarkable boolean question", question_label=label)
+    elif question.answer_type == "text" and not isinstance(key, (str, int, float, bool)):
+        raise UnclassifiableQuestionError("Unmarkable text question", question_label=label)
+
+
 class DepthVariantBody(BaseModel):
     """One rewrite of a segment's text."""
 
@@ -1063,38 +1096,8 @@ def checkpoint_payloads(
                     ],
                 ) from error
             raise
-        if strict and question.answer_type in {"single_choice", "multiple_choice"}:
-            keys = (
-                question.answer_key
-                if isinstance(question.answer_key, list)
-                else [question.answer_key]
-            )
-            options = [option.value for option in question.options]
-            if (
-                len(options) < 2
-                or len(set(map(str, options))) != len(options)
-                or not keys
-                or any(key not in options for key in keys)
-            ):
-                raise UnclassifiableQuestionError(
-                    f"Unmarkable choice question in {segment_key}",
-                    question_label=question.prompt[:160],
-                )
-        if strict and question.answer_type == "numeric":
-            from nevo.content_parsing.answers import _number
-
-            if _number(question.answer_key) is None:
-                raise UnclassifiableQuestionError(
-                    "Unmarkable numeric question", question_label=question.prompt[:160]
-                )
-        if (
-            strict
-            and question.answer_type == "boolean"
-            and not isinstance(question.answer_key, bool)
-        ):
-            raise UnclassifiableQuestionError(
-                "Unmarkable boolean question", question_label=question.prompt[:160]
-            )
+        if strict:
+            _require_markable_checkpoint(question, segment_key)
         from nevo.probe.presentation import ordered_options
 
         rendered = question.model_dump(by_alias=True, mode="json")

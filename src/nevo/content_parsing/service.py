@@ -759,6 +759,10 @@ class ContentParsingService:
             )
             PROVIDERS.record(LESSON_IMAGES, ok=True)
         except VisualGenerationError as error:
+            from nevo.ai_gateway.safety import SafetyBlocked
+
+            if isinstance(error.__cause__, SafetyBlocked):
+                raise error.__cause__ from None
             PROVIDERS.record(LESSON_IMAGES, ok=False, detail=str(error))
             # Into the run's notes, not only the log. "visual_generation_failed"
             # on its own told nobody why, which is how every image in a lesson

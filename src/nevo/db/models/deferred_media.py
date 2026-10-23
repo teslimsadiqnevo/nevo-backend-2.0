@@ -27,7 +27,8 @@ class DeferredLessonMedia(Base):
         UniqueConstraint("segment_id", "kind", name="uq_deferred_media_segment_kind"),
         CheckConstraint("kind IN ('image', 'audio')", name="ck_deferred_media_kind"),
         CheckConstraint(
-            "status IN ('queued','processing','awaiting_review','approved','failed','stale')",
+            "status IN ('queued','processing','awaiting_review','approved',"
+            "'failed','stale','withdrawn')",
             name="ck_deferred_media_status",
         ),
     )
@@ -54,3 +55,8 @@ class DeferredLessonMedia(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     approved_by_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    withdrawn_by_name: Mapped[str | None] = mapped_column(String(300), nullable=True)

@@ -45,6 +45,7 @@ from nevo.api.lesson_contracts import (
     checkpoint_payloads,
     depth_payloads,
     safety_reviewed_visual,
+    student_activity,
     student_modalities,
 )
 from nevo.api.pagination import (
@@ -1392,7 +1393,9 @@ async def lesson_detail(
                     else item.visual_variant
                 ),
                 audioVariant=item.audio_variant,
-                interactiveVariant=activity_for_delivery(item.interactive_variant, item.body),
+                interactiveVariant=student_activity(item)
+                if actor.role == UserRole.STUDENT
+                else activity_for_delivery(item.interactive_variant, item.body),
                 calculationVariant=item.calculation_variant,
                 depthVariants=depth_payloads(
                     item.depth_variants,

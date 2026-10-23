@@ -17,6 +17,7 @@ class MediaCounts(BaseModel):
     approved: int = 0
     failed: int = 0
     stale: int = 0
+    withdrawn: int = 0
 
 
 class MediaPreparation(BaseModel):
@@ -47,7 +48,9 @@ class LessonMediaItem(BaseModel):
     id: UUID
     segment_id: UUID
     kind: Literal["image", "audio"]
-    status: Literal["queued", "processing", "awaiting_review", "approved", "failed", "stale"]
+    status: Literal[
+        "queued", "processing", "awaiting_review", "approved", "failed", "stale", "withdrawn"
+    ]
     asset: PreparedMedia | None
     source_changed: bool
     failure_code: str | None
@@ -56,6 +59,9 @@ class LessonMediaItem(BaseModel):
     approved_at: datetime | None
     approved_by: UUID | None
     approved_by_name: str | None
+    withdrawn_at: datetime | None = None
+    withdrawn_by: UUID | None = None
+    withdrawn_by_name: str | None = None
 
 
 class LessonMediaResponse(BaseModel):

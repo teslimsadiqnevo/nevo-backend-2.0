@@ -1,10 +1,11 @@
 from copy import deepcopy
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.api.auth import PrincipalDependency
@@ -24,6 +25,13 @@ from nevo.db.models.deferred_media import DeferredLessonMedia
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 
 
+def reviewable_media():
+    return or_(
+        DeferredLessonMedia.failure_code.is_(None),
+        DeferredLessonMedia.failure_code != "content_safety_blocked",
+    )
+
+
 async def media_summary(session, lesson_id):
     counts = {"image": MediaCounts(), "audio": MediaCounts()}
     rows = await session.execute(
@@ -32,7 +40,7 @@ async def media_summary(session, lesson_id):
             DeferredLessonMedia.status,
             func.count(),
         )
-        .where(DeferredLessonMedia.lesson_id == lesson_id)
+        .where(DeferredLessonMedia.lesson_id == lesson_id, reviewable_media())
         .group_by(
             DeferredLessonMedia.kind,
             DeferredLessonMedia.status,
@@ -65,7 +73,7 @@ async def _lesson(session, principal, lesson_id):
     actor = await require_school_actor(
         session, principal, roles={"teacher", "senco_admin", "other_admin"}
     )
-    lesson = await session.get(Lesson, lesson_id)
+    lesson = await session.get(Lesson, lesson_id, with_for_update=True)
     if lesson is None or lesson.school_id != actor.school_id:
         raise HTTPException(404, detail="Lesson not found")
     return actor
@@ -85,6 +93,9 @@ def _view(job, segment):
         approved_at=job.approved_at,
         approved_by=job.approved_by,
         approved_by_name=job.approved_by_name,
+        withdrawn_at=job.withdrawn_at,
+        withdrawn_by=job.withdrawn_by,
+        withdrawn_by_name=job.withdrawn_by_name,
     )
 
 
@@ -97,7 +108,7 @@ async def lesson_media(lesson_id: UUID, principal: PrincipalDependency, session:
             LessonSegment,
             LessonSegment.id == DeferredLessonMedia.segment_id,
         )
-        .where(DeferredLessonMedia.lesson_id == lesson_id)
+        .where(DeferredLessonMedia.lesson_id == lesson_id, reviewable_media())
         .order_by(
             LessonSegment.sequence_order,
             DeferredLessonMedia.kind,
@@ -112,7 +123,7 @@ async def lesson_media(lesson_id: UUID, principal: PrincipalDependency, session:
 
 async def _job(session, lesson_id, media_id, *, require_current=True):
     job = await session.get(DeferredLessonMedia, media_id, with_for_update=True)
-    if job is None or job.lesson_id != lesson_id:
+    if job is None or job.lesson_id != lesson_id or job.failure_code == "content_safety_blocked":
         raise HTTPException(404, detail="Media preparation not found")
     segment = await session.get(LessonSegment, job.segment_id, with_for_update=True)
     if segment is None or (require_current and source_hash(segment) != job.source_hash):
@@ -147,6 +158,8 @@ async def _approve(session, actor, lesson_id, media_id):
             raise HTTPException(409, detail={"code": "media_safety_review_required"})
         segment.visual_variant = image
     else:
+        if not (result.get("audio") or {}).get("audioUrl") and not result.get("stepNarrations"):
+            raise HTTPException(409, detail={"code": "media_not_ready"})
         if result.get("audio"):
             segment.audio_variant = result["audio"]
         if result.get("stepNarrations"):
@@ -163,7 +176,98 @@ async def _approve(session, actor, lesson_id, media_id):
     job.status, job.approved_at = "approved", datetime.now(UTC)
     job.approved_by = actor.id
     job.approved_by_name = " ".join(filter(None, [actor.first_name, actor.last_name]))
+    # The next asset can lock/reload this same section; preserve both writes
+    # inside the transaction even though request sessions disable autoflush.
+    await session.flush()
     return _view(job, segment)
+
+
+async def _withdraw(job, segment, actor):
+    if job.status == "withdrawn":
+        return _view(job, segment)
+    if job.status != "approved":
+        raise HTTPException(409, detail={"code": "media_not_live"})
+    if job.kind == "image":
+        segment.visual_variant = None
+    else:
+        segment.audio_variant = None
+        calculation = deepcopy(segment.calculation_variant or {})
+        for step in calculation.get("steps", []):
+            step.pop("narrationAudio", None)
+        if calculation:
+            segment.calculation_variant = calculation
+    modality = "visual" if job.kind == "image" else "audio"
+    segment.available_modalities = [
+        item for item in (segment.available_modalities or []) if item != modality
+    ]
+    job.status = "withdrawn"
+    job.withdrawn_at = datetime.now(UTC)
+    job.withdrawn_by = actor.id
+    job.withdrawn_by_name = " ".join(filter(None, [actor.first_name, actor.last_name]))
+    return _view(job, segment)
+
+
+@router.post("/lessons/{lesson_id}/media/{media_id}/withdraw", response_model=LessonMediaItem)
+async def withdraw_media(
+    lesson_id: UUID, media_id: UUID, principal: PrincipalDependency, session: DatabaseSession
+):
+    """Withdraw one live asset, without changing a child's sitting or generating media."""
+    actor = await _lesson(session, principal, lesson_id)
+    job, segment = await _job(session, lesson_id, media_id, require_current=False)
+    result = await _withdraw(job, segment, actor)
+    await session.commit()
+    return result
+
+
+@router.post(
+    "/lessons/{lesson_id}/segments/{segment_id}/media/{kind}/withdraw",
+    response_model=LessonMediaItem,
+)
+async def withdraw_segment_media(
+    lesson_id: UUID,
+    segment_id: UUID,
+    kind: Literal["image", "audio"],
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    """Also covers live media created before deferred preparation was introduced."""
+    actor = await _lesson(session, principal, lesson_id)
+    segment = await session.get(LessonSegment, segment_id, with_for_update=True)
+    if not segment or segment.lesson_id != lesson_id:
+        raise HTTPException(404, detail="Section not found")
+    job = await session.scalar(
+        select(DeferredLessonMedia)
+        .where(DeferredLessonMedia.segment_id == segment_id, DeferredLessonMedia.kind == kind)
+        .with_for_update()
+    )
+    if job is None:
+        asset = segment.visual_variant if kind == "image" else segment.audio_variant
+        steps = (
+            [
+                {"stepId": step["stepId"], "audio": step["narrationAudio"]}
+                for step in (segment.calculation_variant or {}).get("steps", [])
+                if step.get("narrationAudio")
+            ]
+            if kind == "audio"
+            else []
+        )
+        if not asset and not steps:
+            raise HTTPException(404, detail="Live media not found")
+        job = DeferredLessonMedia(
+            lesson_id=lesson_id,
+            segment_id=segment_id,
+            requested_by=actor.id,
+            kind=kind,
+            status="approved",
+            source_hash=source_hash(segment),
+            payload={},
+            result={"image" if kind == "image" else "audio": asset, "stepNarrations": steps},
+        )
+        session.add(job)
+        await session.flush()
+    result = await _withdraw(job, segment, actor)
+    await session.commit()
+    return result
 
 
 @router.post("/lessons/{lesson_id}/media/{media_id}/approve", response_model=LessonMediaItem)

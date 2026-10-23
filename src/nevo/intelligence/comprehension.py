@@ -143,7 +143,9 @@ async def gate_for_position(session, sitting, position=None, *, complete=False):
                 segment_id=str(row.id),
                 question_ids=[str(q["id"]) for q in questions],
                 unresolved_question_ids=unresolved,
-                reteaching=state.get("response") if state.get("questionId") in unresolved else None,
+                reteaching=current_teaching(row, state.get("response"))
+                if state.get("questionId") in unresolved
+                else None,
             )
     return ComprehensionGate(can_advance=True)
 
@@ -225,6 +227,21 @@ def teaching_routes(segment, current_format="text"):
     if any(q.get("guidedSteps") for q in segment.comprehension_checkpoints or []):
         routes.append(TeachingRoute(action="panel", label="Work through it together"))
     return routes
+
+
+def current_teaching(segment, response):
+    if not response:
+        return None
+    result = ReteachingResponse.model_validate(response)
+    available = student_modalities(segment)
+    result.available_routes = [
+        route
+        for route in result.available_routes
+        if route.action != "format" or route.format in available
+    ]
+    if result.recommended_route not in result.available_routes:
+        result.recommended_route = result.available_routes[0]
+    return result
 
 
 async def note_attempt(session, sitting, segment, attempt):

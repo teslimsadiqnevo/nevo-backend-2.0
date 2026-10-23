@@ -43,11 +43,20 @@ def student_modalities(segment):
         available.append("audio")
     if safety_reviewed_visual(segment.visual_variant) and segment.visual_variant.get("imageUrl"):
         available.append("visual")
-    if segment.calculation_variant or (segment.interactive_variant or {}).get("steps"):
+    activity = student_activity(segment)
+    if segment.calculation_variant or (activity or {}).get("steps"):
         available.append("interactive")
     declared = [value for value in (segment.available_modalities or []) if value in available]
     ordered = list(dict.fromkeys([*declared, *available]))
     return segment_modalities(segment.content_type, ordered, segment.calculation_variant)
+
+
+def student_activity(segment):
+    # Temporary SCRUM-280 guard until the player renders mandatory safety instructions.
+    from nevo.content_parsing.activity import activity_for_delivery
+
+    activity = activity_for_delivery(segment.interactive_variant, segment.body)
+    return None if (activity or {}).get("safety") else activity
 
 
 def segment_modalities(content_type, available, calculation):

@@ -1017,7 +1017,10 @@ async def adapt_lesson(
         # Keep an offer reachable after its first appearance. Declining can
         # suppress a repeated interruption but never removes the break control.
         previous_offer = delivery.get("breakOffer")
-        if context.signals.break_in_progress:
+        if context.signals.break_in_progress or (
+            context.signals.break_declined_seconds_ago is not None
+            and context.signals.break_declined_seconds_ago < 120
+        ):
             delivery.pop("breakOffer", None)
         elif response.break_suggestion.break_type is not None:
             response.break_suggestion.offer_persistent = True

@@ -87,6 +87,11 @@ def segment_choice(sitting, segment):
     stored = ((sitting.delivery_state or {}).get("segmentChoices") or {}).get(str(segment.id), {})
     local = {key: value for key, value in stored.items() if key in {"modality", "updatedAt"}}
     choice = {**local, **lesson_choices(sitting)}
+    if "modality" in choice:
+        from nevo.api.lesson_contracts import student_modalities
+
+        if choice["modality"] not in student_modalities(segment):
+            choice.pop("modality")
     if choice.get("depth") in {"simplified", "expanded"} and hasattr(segment, "depth_variants"):
         from nevo.api.lesson_contracts import depth_approved
 

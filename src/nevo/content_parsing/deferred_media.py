@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from sqlalchemy import or_, select, update
 
-from nevo.ai_gateway.safety import POLICY_VERSION
+from nevo.ai_gateway.safety import POLICY_VERSION, SafetyBlocked
 from nevo.api.lesson_contracts import AudioVariant, VisualVariant
 from nevo.content_parsing.entities import ParsedLessonSegment
 from nevo.db.models.content import LessonSegment
@@ -217,6 +217,8 @@ class DeferredMediaWorker:
                     .values(status="queued", lease_token=None, lease_until=None)
                 )
             raise
+        except SafetyBlocked:
+            await self._finish(identity, token, failure="content_safety_blocked")
         except MediaPreparationFailure as error:
             await self._finish(identity, token, failure=str(error))
         except Exception:

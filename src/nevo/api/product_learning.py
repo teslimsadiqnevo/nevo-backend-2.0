@@ -44,6 +44,7 @@ from nevo.api.lesson_contracts import (
     depth_payloads,
     depth_reviewer_names,
     safety_reviewed_visual,
+    student_activity,
     student_modalities,
 )
 from nevo.api.product_common import (
@@ -961,7 +962,9 @@ async def lesson_detail(
                 if for_teacher
                 else safety_reviewed_visual(item.visual_variant),
                 "audioVariant": item.audio_variant,
-                "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body),
+                "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body)
+                if for_teacher
+                else student_activity(item),
                 "calculationVariant": item.calculation_variant,
                 "depthVariants": depth_payloads(
                     item.depth_variants,
@@ -3250,7 +3253,7 @@ async def _offline_package_payload(
                     "text": item.text_variant,
                     "visual": safety_reviewed_visual(item.visual_variant),
                     "audio": item.audio_variant,
-                    "interactive": activity_for_delivery(item.interactive_variant, item.body),
+                    "interactive": student_activity(item),
                     "calculation": item.calculation_variant,
                 },
                 # Offline too: the point of the offline package is a lesson

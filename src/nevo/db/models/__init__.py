@@ -56,6 +56,7 @@ from nevo.db.models.learner_profile import (
     LearnerProfileAttentionFlag,
     LearnerProfileHistory,
 )
+from nevo.db.models.lesson_signoff import LessonReviewSignoff
 from nevo.db.models.mastery import (
     ScaffoldProblemLog,
     StudentConceptMastery,
@@ -152,6 +153,7 @@ __all__ = [
     "LessonModule",
     "LessonProgress",
     "LessonQuestionAttempt",
+    "LessonReviewSignoff",
     "LessonSegment",
     "LessonSession",
     "Message",

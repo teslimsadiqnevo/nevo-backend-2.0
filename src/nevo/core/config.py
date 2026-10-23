@@ -1,4 +1,5 @@
 from functools import lru_cache
+import os
 from urllib.parse import unquote, urlsplit
 
 from pydantic import Field, field_validator
@@ -48,7 +49,10 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
     def assert_database_target_allowed(self) -> None:
-        if self.app_environment.strip().casefold() == "production":
+        if (
+            self.app_environment.strip().casefold() == "production"
+            or os.environ.get("RENDER", "").strip().casefold() == "true"
+        ):
             return
         parsed = urlsplit(self.database_url)
         username = unquote(parsed.username or "")

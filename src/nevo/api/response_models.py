@@ -9,6 +9,7 @@ from pydantic import (
     JsonValue,
     ValidationError,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -510,6 +511,13 @@ class LessonSummaryResponse(CamelResponse):
     _content_description = field_validator("description", mode="before")(clean_lesson_description)
 
 
+class ActivityAvailability(CamelResponse):
+    """Teacher-only reason an authored activity is currently withheld."""
+
+    reachable_by_students: Literal[False]
+    reason: Literal["safety_instruction_not_rendered"]
+
+
 class LessonSegmentResponse(CamelResponse):
     id: UUID
     segment_key: str
@@ -551,6 +559,7 @@ class LessonSegmentResponse(CamelResponse):
     visual_variant: VisualVariant | None = None
     audio_variant: AudioVariant | None = None
     interactive_variant: InteractiveVariant | None = None
+    activity_availability: "ActivityAvailability | None" = None
     calculation_variant: CalculationVariant | None = None
     #: The simpler and the longer version of ``body``. The adaptation plan's
     #: ``simplify`` and ``expand`` actions read from here; null means fall
@@ -565,6 +574,15 @@ class LessonSegmentResponse(CamelResponse):
     #: Estimated time to work through this segment, for the review screen's
     #: per-segment and total minute figures.
     estimated_minutes: int = 0
+
+    @model_serializer(mode="wrap")
+    def omit_clear_activity_status(self, handler):
+        result = handler(self)
+        if self.activity_availability is None and isinstance(result, dict):
+            result.pop("activityAvailability", None)
+            result.pop("activity_availability", None)
+        return result
+
 
     _keep_renderable = field_validator("review_reasons", mode="before")(renderable_review_reasons)
 

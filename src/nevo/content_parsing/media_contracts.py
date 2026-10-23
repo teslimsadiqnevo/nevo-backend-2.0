@@ -62,6 +62,14 @@ class LessonMediaItem(BaseModel):
     withdrawn_at: datetime | None = None
     withdrawn_by: UUID | None = None
     withdrawn_by_name: str | None = None
+    withdrawal_reason: str | None = None
+    withdrawal_reason_by: UUID | None = None
+    withdrawal_reason_at: datetime | None = None
+    can_undo: bool = False
+    undo_available_until: datetime | None = None
+    restored_at: datetime | None = None
+    restored_by: UUID | None = None
+    restored_by_name: str | None = None
 
 
 class LessonMediaResponse(BaseModel):

@@ -1,10 +1,10 @@
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 
 from nevo.ai_gateway.safety import POLICY_VERSION
@@ -23,6 +23,7 @@ from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
+WITHDRAWAL_UNDO_WINDOW = timedelta(minutes=5)
 
 
 def reviewable_media():
@@ -80,6 +81,12 @@ async def _lesson(session, principal, lesson_id):
 
 
 def _view(job, segment):
+    undo_until = (
+        job.withdrawn_at + WITHDRAWAL_UNDO_WINDOW
+        if job.status == "withdrawn" and job.withdrawn_at and job.restored_at is None
+        else None
+    )
+    can_undo = bool(undo_until and datetime.now(UTC) < undo_until)
     return LessonMediaItem(
         id=job.id,
         segment_id=job.segment_id,
@@ -96,6 +103,14 @@ def _view(job, segment):
         withdrawn_at=job.withdrawn_at,
         withdrawn_by=job.withdrawn_by,
         withdrawn_by_name=job.withdrawn_by_name,
+        withdrawal_reason=job.withdrawal_reason,
+        withdrawal_reason_by=job.withdrawal_reason_by,
+        withdrawal_reason_at=job.withdrawal_reason_at,
+        can_undo=can_undo,
+        undo_available_until=undo_until,
+        restored_at=job.restored_at,
+        restored_by=job.restored_by,
+        restored_by_name=job.restored_by_name,
     )
 
 
@@ -204,6 +219,12 @@ async def _withdraw(job, segment, actor):
     job.withdrawn_at = datetime.now(UTC)
     job.withdrawn_by = actor.id
     job.withdrawn_by_name = " ".join(filter(None, [actor.first_name, actor.last_name]))
+    job.withdrawal_reason = None
+    job.withdrawal_reason_by = None
+    job.withdrawal_reason_at = None
+    job.restored_at = None
+    job.restored_by = None
+    job.restored_by_name = None
     return _view(job, segment)
 
 
@@ -217,6 +238,94 @@ async def withdraw_media(
     result = await _withdraw(job, segment, actor)
     await session.commit()
     return result
+
+
+@router.post("/lessons/{lesson_id}/media/{media_id}/restore", response_model=LessonMediaItem)
+async def restore_media(
+    lesson_id: UUID, media_id: UUID, principal: PrincipalDependency, session: DatabaseSession
+):
+    """Undo a withdrawal during the short recovery window, using the stored asset."""
+    actor = await _lesson(session, principal, lesson_id)
+    job, segment = await _job(session, lesson_id, media_id, require_current=False)
+    now = datetime.now(UTC)
+    undo_until = job.withdrawn_at + WITHDRAWAL_UNDO_WINDOW if job.withdrawn_at else None
+    if (
+        job.status != "withdrawn"
+        or job.restored_at is not None
+        or undo_until is None
+        or now >= undo_until
+    ):
+        raise HTTPException(409, detail={"code": "media_withdrawal_undo_expired"})
+    if source_hash(segment) != job.source_hash:
+        raise HTTPException(409, detail={"code": "media_restore_source_changed"})
+    result = job.result or {}
+    if job.kind == "image":
+        image = result.get("image") or {}
+        if not image.get("imageUrl"):
+            raise HTTPException(409, detail={"code": "media_restore_review_required"})
+        segment.visual_variant = image
+    else:
+        audio = result.get("audio") or {}
+        narrations = result.get("stepNarrations") or []
+        if not audio.get("audioUrl") and not narrations:
+            raise HTTPException(409, detail={"code": "media_restore_review_required"})
+        if audio.get("audioUrl"):
+            segment.audio_variant = audio
+        if narrations:
+            calculation = deepcopy(segment.calculation_variant or {})
+            by_step = {item["stepId"]: item["audio"] for item in narrations}
+            for step in calculation.get("steps", []):
+                if step.get("stepId") in by_step:
+                    step["narrationAudio"] = by_step[step["stepId"]]
+            segment.calculation_variant = calculation
+    modality = "visual" if job.kind == "image" else "audio"
+    segment.available_modalities = list(
+        dict.fromkeys([*(segment.available_modalities or []), modality])
+    )
+    job.status = "approved"
+    job.restored_at = now
+    job.restored_by = actor.id
+    job.restored_by_name = " ".join(filter(None, [actor.first_name, actor.last_name]))
+    await session.commit()
+    return _view(job, segment)
+
+
+class WithdrawalReasonRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Reason cannot be blank")
+        return value
+
+
+@router.patch(
+    "/lessons/{lesson_id}/media/{media_id}/withdrawal-reason",
+    response_model=LessonMediaItem,
+)
+async def add_withdrawal_reason(
+    lesson_id: UUID,
+    media_id: UUID,
+    payload: WithdrawalReasonRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    """Attach an optional explanation after the time-sensitive withdrawal."""
+    actor = await _lesson(session, principal, lesson_id)
+    job, segment = await _job(session, lesson_id, media_id, require_current=False)
+    if job.withdrawn_at is None:
+        raise HTTPException(409, detail={"code": "media_not_withdrawn"})
+    if job.withdrawal_reason is not None:
+        raise HTTPException(409, detail={"code": "media_withdrawal_reason_already_recorded"})
+    job.withdrawal_reason = payload.reason
+    job.withdrawal_reason_by = actor.id
+    job.withdrawal_reason_at = datetime.now(UTC)
+    await session.commit()
+    return _view(job, segment)
 
 
 @router.post(
@@ -262,6 +371,9 @@ async def withdraw_segment_media(
             source_hash=source_hash(segment),
             payload={},
             result={"image" if kind == "image" else "audio": asset, "stepNarrations": steps},
+            approved_at=datetime.now(UTC),
+            approved_by=actor.id,
+            approved_by_name=" ".join(filter(None, [actor.first_name, actor.last_name])),
         )
         session.add(job)
         await session.flush()

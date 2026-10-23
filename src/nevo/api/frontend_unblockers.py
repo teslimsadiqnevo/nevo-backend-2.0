@@ -68,6 +68,7 @@ from nevo.api.product_common import (
     require_student_access,
 )
 from nevo.api.response_models import (
+    ActivityAvailability,
     AttentionFlagResponse,
     InterventionResponse,
     LessonDetailResponse,
@@ -80,6 +81,7 @@ from nevo.api.response_models import (
     SegmentApprovalResponse,
     StudentConsentSummaryResponse,
 )
+from nevo.content_parsing.activity import activity_for_delivery
 from nevo.api.response_models import (
     LessonModuleResponse as SharedLessonModuleResponse,
 )
@@ -1396,6 +1398,18 @@ async def lesson_detail(
                 interactiveVariant=student_activity(item)
                 if actor.role == UserRole.STUDENT
                 else activity_for_delivery(item.interactive_variant, item.body),
+                activityAvailability=(
+                    ActivityAvailability(
+                        reachableByStudents=False,
+                        reason="safety_instruction_not_rendered",
+                    )
+                    if actor.role != UserRole.STUDENT
+                    and isinstance(item.interactive_variant, dict)
+                    and item.interactive_variant.get("steps")
+                    and activity_for_delivery(item.interactive_variant, item.body).get("safety")
+                    and student_activity(item) is None
+                    else None
+                ),
                 calculationVariant=item.calculation_variant,
                 depthVariants=depth_payloads(
                     item.depth_variants,

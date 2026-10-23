@@ -60,3 +60,13 @@ class DeferredLessonMedia(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     withdrawn_by_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    withdrawal_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    withdrawal_reason_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    withdrawal_reason_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    restored_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    restored_by_name: Mapped[str | None] = mapped_column(String(300), nullable=True)

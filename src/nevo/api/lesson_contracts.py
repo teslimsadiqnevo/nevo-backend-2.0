@@ -1028,6 +1028,7 @@ def checkpoint_payloads(
     concept_id: UUID | None = None,
     strict: bool = False,
     presentation_seed: str = "lesson",
+    question_offset: int = 0,
 ) -> list[dict[str, object]]:
     """Normalize older parser output into the documented checkpoint contract."""
     result: list[dict[str, object]] = []
@@ -1103,7 +1104,10 @@ def checkpoint_payloads(
         rendered = question.model_dump(by_alias=True, mode="json")
         rendered["options"] = ordered_options(
             rendered["options"],
-            seed=f"{presentation_seed}:{segment_key}:{question.id}:{question.prompt}",
+            seed=f"{presentation_seed}:{segment_key}",
+            answer_key=rendered.get("answerKey"),
+            question_index=question_offset + index - 1,
+            position_seed=presentation_seed,
         )
         for step in rendered.get("guidedSteps", []):
             step["options"] = ordered_options(

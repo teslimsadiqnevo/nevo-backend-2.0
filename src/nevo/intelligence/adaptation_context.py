@@ -309,6 +309,11 @@ async def prepare_adaptation(session, principal, payload, signals):
         signals = replace(
             signals,
             **derived,
+            current_depth=(
+                (segment_choice(sitting, current).get("depth") or "original")
+                if current and sitting
+                else None
+            ),
             current_modality=ContentModality(
                 next(
                     (

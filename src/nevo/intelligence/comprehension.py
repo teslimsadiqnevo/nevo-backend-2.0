@@ -131,6 +131,10 @@ async def gate_for_position(session, sitting, position=None, *, complete=False):
         )
     )
     passed = {(row.segment_id, row.question_id) for row in attempts}
+    from nevo.intelligence.delivery_preferences import lesson_choices, segment_choice
+
+    preferences = lesson_choices(sitting)
+    current_depth = preferences.get("depth", "original")
     for index, row in enumerate(rows):
         if not complete and position is not None and index >= position:
             break
@@ -143,7 +147,12 @@ async def gate_for_position(session, sitting, position=None, *, complete=False):
                 segment_id=str(row.id),
                 question_ids=[str(q["id"]) for q in questions],
                 unresolved_question_ids=unresolved,
-                reteaching=current_teaching(row, state.get("response"))
+                reteaching=current_teaching(
+                    row,
+                    state.get("response"),
+                    current_depth,
+                    segment_choice(sitting, row).get("modality"),
+                )
                 if state.get("questionId") in unresolved
                 else None,
             )
@@ -201,7 +210,7 @@ async def cursor_index(session, lesson_id, module_position, segment_position):
     return positions[str(keys[segment_position])]
 
 
-def teaching_routes(segment, current_format="text"):
+def teaching_routes(segment, current_format="text", current_depth="original"):
     formats = student_modalities(segment)
     labels = {
         "visual": "Try it as a picture",
@@ -215,7 +224,7 @@ def teaching_routes(segment, current_format="text"):
         if value != current_format
     ]
     simplified = (segment.depth_variants or {}).get("simplified")
-    if depth_approved(simplified):
+    if current_depth != "simplified" and depth_approved(simplified):
         routes.append(TeachingRoute(action="simplify", label="Try it simpler"))
     routes.extend(
         [
@@ -224,21 +233,30 @@ def teaching_routes(segment, current_format="text"):
             TeachingRoute(action="rechunk", label="Try smaller parts"),
         ]
     )
-    if any(q.get("guidedSteps") for q in segment.comprehension_checkpoints or []):
+    if any(
+        q.get("guidedSteps") or q.get("guidedQuestions")
+        for q in segment.comprehension_checkpoints or []
+    ):
         routes.append(TeachingRoute(action="panel", label="Work through it together"))
     return routes
 
 
-def current_teaching(segment, response):
+def current_teaching(segment, response, current_depth="original", current_format=None):
     if not response:
         return None
     result = ReteachingResponse.model_validate(response)
     available = student_modalities(segment)
+    current_format = current_format or (available[0] if available else "text")
     result.available_routes = [
         route
         for route in result.available_routes
-        if route.action != "format" or route.format in available
+        if route.action != "format"
+        or (route.format in available and route.format != current_format)
     ]
+    if current_depth == "simplified":
+        result.available_routes = [
+            route for route in result.available_routes if route.action != "simplify"
+        ]
     if result.recommended_route not in result.available_routes:
         result.recommended_route = result.available_routes[0]
     return result
@@ -288,8 +306,12 @@ async def note_attempt(session, sitting, segment, attempt):
         misses = int(state.get("misses", 0)) + 1
         from nevo.intelligence.delivery_preferences import segment_choice
 
-        current_format = segment_choice(sitting, segment).get("modality", "text")
-        routes = teaching_routes(segment, current_format)
+        available_formats = student_modalities(segment)
+        choice = segment_choice(sitting, segment)
+        current_format = choice.get(
+            "modality", available_formats[0] if available_formats else "text"
+        )
+        routes = teaching_routes(segment, current_format, choice.get("depth", "original"))
         recommended = routes[(misses - 1) % len(routes)]
         screens = [
             str(chunk["text"]) for chunk in reading_chunks(segment.segment_key, segment.body)

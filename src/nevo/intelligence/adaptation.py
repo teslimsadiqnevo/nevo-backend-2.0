@@ -115,7 +115,7 @@ class AdaptationEngineService:
                 attempt = _suppression_attempt(
                     request=request,
                     plan=replace(fallback_plan, proactive_adjustment=candidate),
-                    reason="depth_variant_unavailable",
+                    reason=_depth_suppression_reason(candidate.action, request),
                 )
                 if self._rate_limits is not None and request.session_id:
                     await self._rate_limits.log_suppressed(
@@ -505,10 +505,20 @@ def _servable_adjustment(
     depth = DEPTH_BY_ACTION.get(adjustment.action)
     if depth is None:
         return adjustment
+    current_depth = request.signals.current_depth
+    if current_depth is not None and current_depth == depth:
+        return None
     current = _current_segment(request)
     if current is None or current.available_depths is None:
         return adjustment
     return adjustment if depth in current.available_depths else None
+
+
+def _depth_suppression_reason(action: str, request: AdaptationRequest) -> str:
+    desired = DEPTH_BY_ACTION.get(action)
+    if desired is not None and request.signals.current_depth == desired:
+        return "depth_already_applied"
+    return "depth_variant_unavailable"
 
 
 def _current_segment(request: AdaptationRequest) -> ContentSegment | None:

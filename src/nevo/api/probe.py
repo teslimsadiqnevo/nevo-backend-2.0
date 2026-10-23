@@ -278,7 +278,13 @@ async def next_question(
         question=item.question,
         options=[
             ProbeOption(value=str(option.get("value")), label=str(option.get("label")))
-            for option in ordered_options(item.options, seed=f"{student.id}:{item.id}")
+            for option in ordered_options(
+                item.options,
+                seed=f"{student.id}:{subject_id}",
+                answer_key=item.correct_option,
+                question_index=len(asked),
+                position_seed=f"{student.id}:{subject_id}",
+            )
         ],
         asked=len(asked) + 1,
     )

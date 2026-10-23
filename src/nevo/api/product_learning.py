@@ -956,6 +956,7 @@ async def lesson_detail(
                     item.comprehension_checkpoints,
                     segment_key=item.segment_key,
                     presentation_seed=str(actor.id),
+                    question_offset=item.sequence_order - 1,
                 ),
                 "textVariant": item.text_variant,
                 "visualVariant": item.visual_variant
@@ -3266,6 +3267,7 @@ async def _offline_package_payload(
                     item.comprehension_checkpoints,
                     segment_key=item.segment_key,
                     presentation_seed=str(actor.id),
+                    question_offset=item.sequence_order - 1,
                 ),
             }
             for item in segments

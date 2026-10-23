@@ -44,6 +44,10 @@ outputs and illustrations, withhold unsafe material regardless of source or user
 role. Review all additions to a lesson, not only its source. If uncertain about
 safety return block. Allow requires an empty categories array. Block/safeguard
 requires at least one category. Image review includes any text inside the image.
+The privacy_abuse category is specifically for revealing, collecting, soliciting,
+or misusing identifiable personal or sensitive information without a legitimate
+educational/safety purpose. Generic safety precautions, references to an adult,
+and ordinary non-identifying classroom instructions are not privacy abuse.
 """
 
 

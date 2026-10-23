@@ -81,7 +81,6 @@ from nevo.api.response_models import (
     SegmentApprovalResponse,
     StudentConsentSummaryResponse,
 )
-from nevo.content_parsing.activity import activity_for_delivery
 from nevo.api.response_models import (
     LessonModuleResponse as SharedLessonModuleResponse,
 )
@@ -1387,6 +1386,7 @@ async def lesson_detail(
                     item.comprehension_checkpoints,
                     segment_key=item.segment_key,
                     presentation_seed=str(actor.id),
+                    question_offset=item.sequence_order - 1,
                 ),
                 textVariant=item.text_variant,
                 visualVariant=(
@@ -2598,7 +2598,13 @@ async def _todays_prompt(
     probe = probes[(day_number + student_seed) % len(probes)]
     options = [
         (str(option.get("value", "")), str(option.get("label", "")))
-        for option in ordered_options(probe.options, seed=f"{student_id}:{probe.id}:{day_number}")
+        for option in ordered_options(
+            probe.options,
+            seed=f"{student_id}:{probe.school_subject_id}",
+            answer_key=probe.correct_option,
+            question_index=day_number,
+            position_seed=f"{student_id}:{probe.school_subject_id}",
+        )
     ]
     return (
         dimension,

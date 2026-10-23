@@ -211,11 +211,15 @@ class SignalEventRequest(BaseModel):
             return
         _require_keys(self.event_data, {"segmentId"})
         outcome = self.event_data.get("outcome")
-        if outcome is None:
+        if outcome is None and not {"from", "to", "timeOnSegment"}.issubset(self.event_data):
             _require_keys(
                 self.event_data,
                 {"modality", "comprehensionScore", "engagementScore", "timeOnSegment"},
             )
+        for key in ("from", "to", "modality"):
+            value = self.event_data.get(key)
+            if value is not None and value not in {"text", "audio", "visual", "interactive"}:
+                raise ValueError(f"{key} must be text, audio, visual, or interactive.")
         for key in ("comprehensionScore", "engagementScore"):
             score = self.event_data.get(key)
             if score is not None and (

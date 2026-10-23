@@ -130,9 +130,10 @@ SIGNAL_CONTRACTS: dict[SignalEventType, SignalContract] = {
         "Sent once when the next segment entered in the new modality is left "
         "or completed. That entry-to-exit interval is a full segment; it has "
         "no minimum number of seconds. timeOnSegment is milliseconds. The "
-        "comprehension and engagement scores are supplied aggregates: either "
-        "0-1 ratios or 0-100 scores, normalised on the server; raw interaction "
-        "data is never sent. One per switch. Ask B38.",
+        "from, to and timeOnSegment may be sent as observations without client "
+        "judgements. If outcome or aggregate scores are omitted, the event is "
+        "stored as an unscored switch; raw interaction data is never sent. "
+        "One per switch. Ask B38.",
         (
             "segmentId",
             "[from]",

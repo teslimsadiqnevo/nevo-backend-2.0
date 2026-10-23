@@ -14,9 +14,11 @@ def standalone_question(question: str) -> bool:
     )
 
 
-def ordered_options(options, *, seed):
-    """Stable within a pupil/item, independent of the correct answer's value."""
-    return sorted(
+def ordered_options(
+    options, *, seed, answer_key=None, question_index=None, position_seed=None
+):
+    """Stable item shuffle with balanced correct-answer positions across a set."""
+    ordered = sorted(
         options,
         key=lambda option: hashlib.sha256(
             json.dumps(
@@ -26,3 +28,30 @@ def ordered_options(options, *, seed):
             ).encode()
         ).digest(),
     )
+    if (
+        question_index is None
+        or isinstance(answer_key, list)
+        or answer_key is None
+        or len(ordered) < 2
+    ):
+        return ordered
+    correct_index = next(
+        (
+            index
+            for index, option in enumerate(ordered)
+            if option.get("value") == answer_key
+            and type(option.get("value")) is type(answer_key)
+        ),
+        None,
+    )
+    if correct_index is None:
+        return ordered
+    position_key = position_seed if position_seed is not None else seed
+    offset = int.from_bytes(
+        hashlib.sha256(str(position_key).encode()).digest()[:4],
+        "big",
+    )
+    target_index = (offset + question_index) % len(ordered)
+    correct = ordered.pop(correct_index)
+    ordered.insert(target_index, correct)
+    return ordered

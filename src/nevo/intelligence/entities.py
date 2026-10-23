@@ -61,6 +61,7 @@ class ContentSegment:
 class RuntimeSignals:
     current_segment_id: str | None = None
     current_modality: ContentModality | None = None
+    current_depth: str | None = None
     available_modalities: tuple[ContentModality, ...] = ()
     continuous_minutes: float = 0
     engagement_score: float | None = None

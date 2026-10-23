@@ -15,6 +15,7 @@ from nevo.db.models.content import LessonSegment
 from nevo.db.models.frontend_support import Notification
 from nevo.db.models.product import LessonModule, LessonQuestionAttempt
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
+from nevo.domain.accounts.vocabulary import NotificationCategory, NotificationType
 from nevo.domain.intelligence.vocabulary import LessonContentType, ScaffoldingLevel
 
 
@@ -465,7 +466,7 @@ async def notify_teacher(session, sitting):
             select(Notification.id)
             .where(
                 Notification.recipient_id == recipient,
-                Notification.type == "concept_support_needed",
+                Notification.type == NotificationType.CONCEPT_SUPPORT_NEEDED.value,
                 Notification.navigates_to == target,
                 Notification.read.is_(False),
                 Notification.archived_at.is_(None),
@@ -477,7 +478,8 @@ async def notify_teacher(session, sitting):
                 Notification(
                     recipient_id=recipient,
                     recipient_role=str(recipient_user.role),
-                    type="concept_support_needed",
+                    type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
+                    category=NotificationCategory.ATTENTION.value,
                     title="A learner needs another way into this idea",
                     description=(
                         f"{student.first_name or 'A learner'} has not yet passed a check "

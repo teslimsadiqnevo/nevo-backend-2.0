@@ -176,8 +176,18 @@ class ComprehensionCheckpoint(BaseModel):
             canonical = {"answer_type": "answerType", "answer_key": "answerKey"}[field]
             if canonical not in value and field in value:
                 value[canonical] = value[field]
+        for field, canonical in (
+            ("accepted_answers", "acceptedAnswers"),
+            ("guided_questions", "guidedQuestions"),
+            ("guided_steps", "guidedSteps"),
+        ):
+            if canonical not in value and field in value:
+                value[canonical] = value[field]
         if "options" not in value and isinstance(value.get("choices"), list):
             value["options"] = value["choices"]
+        for field in ("acceptedAnswers", "guidedQuestions", "guidedSteps", "options"):
+            if value.get(field) is None:
+                value[field] = []
         key = value.get("answerKey", value.get("answer_key"))
         kind = value.get("answerType", value.get("answer_type"))
         if kind in {

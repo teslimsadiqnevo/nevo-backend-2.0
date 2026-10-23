@@ -175,6 +175,7 @@ class NotificationType(StrEnum):
 
     ATTENTION_SUMMARY = "attention_summary"
     MODALITY_SHIFT = "modality_shift"
+    CONCEPT_SUPPORT_NEEDED = "concept_support_needed"
     PIN_RESET_REQUESTED = "pin_reset_requested"
     DEACTIVATED_STUDENT_SUPPORT_REQUESTED = "deactivated_student_support_requested"
     ADMIN_WELCOME = "admin_welcome"
@@ -213,6 +214,7 @@ class NotificationType(StrEnum):
 NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {
     NotificationType.ATTENTION_SUMMARY: NotificationCategory.ATTENTION,
     NotificationType.MODALITY_SHIFT: NotificationCategory.ATTENTION,
+    NotificationType.CONCEPT_SUPPORT_NEEDED: NotificationCategory.ATTENTION,
     NotificationType.PIN_RESET_REQUESTED: NotificationCategory.ACCOUNT,
     NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: NotificationCategory.ACCOUNT,
     NotificationType.ADMIN_WELCOME: NotificationCategory.ACCOUNT,
@@ -321,6 +323,7 @@ NOTIFICATION_CATEGORY_BY_TYPE.update(
     {
         NotificationType.ATTENTION_SUMMARY: NotificationCategory.ATTENTION,
         NotificationType.MODALITY_SHIFT: NotificationCategory.ATTENTION,
+        NotificationType.CONCEPT_SUPPORT_NEEDED: NotificationCategory.ATTENTION,
         NotificationType.PIN_RESET_REQUESTED: NotificationCategory.ACCOUNT,
         NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: NotificationCategory.ACCOUNT,
         NotificationType.ADMIN_WELCOME: NotificationCategory.ACCOUNT,

@@ -460,9 +460,12 @@ class SqlAlchemyContentParsingRepository:
                         answer = probe.get("answerKey")
                         options = probe.get("options")
                         if (
-                            answer is not None
+                            probe.get("answerType") == "single_choice"
+                            and answer is not None
                             and not isinstance(answer, list)
                             and isinstance(options, list)
+                            and len(options) >= 2
+                            and any(option.get("value") == answer for option in options)
                         ):
                             from nevo.probe.presentation import standalone_question
 
@@ -473,8 +476,15 @@ class SqlAlchemyContentParsingRepository:
                                     school_id=school_id,
                                     school_subject_id=school_subject.id,
                                     question=str(probe.get("prompt") or "").strip(),
-                                    options=options,
-                                    correct_option=str(answer),
+                                    options=[
+                                        {**option, "value": f"option-{position}"}
+                                        for position, option in enumerate(options, start=1)
+                                    ],
+                                    correct_option=next(
+                                        f"option-{position}"
+                                        for position, option in enumerate(options, start=1)
+                                        if option.get("value") == answer
+                                    ),
                                     concept_id=concept.id,
                                     lesson_id=lesson_id,
                                     difficulty=0.5,

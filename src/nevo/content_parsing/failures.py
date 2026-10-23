@@ -15,6 +15,7 @@ different things.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from uuid import uuid4
 
@@ -31,6 +32,12 @@ class UploadReasonCode(StrEnum):
     PARTIAL_READING = "partial_reading"
     UNCLASSIFIABLE_QUESTION = "unclassifiable_question"
     UNKNOWN = "unknown"
+
+
+def _matches(text: str, marker: str) -> bool:
+    if marker.isdecimal():
+        return re.search(r"\b" + re.escape(marker) + r"\b", text) is not None
+    return marker in text
 
 
 def failure_code(error: BaseException | str) -> UploadReasonCode:
@@ -58,12 +65,12 @@ def failure_code(error: BaseException | str) -> UploadReasonCode:
         (UploadReasonCode.SERVICE_BUSY, ("rate limit", "429", "too many requests")),
         (
             UploadReasonCode.SAVE_FAILED,
-            ("does not exist", "undefinedcolumn", "undefinedtable", "relation"),
+            ("does not exist", "undefinedcolumn", "undefinedtable", "relation", "value too long"),
         ),
         (UploadReasonCode.OUTPUT_LIMIT, ("max_tokens", "token limit", "truncated")),
     )
     for code, markers in rules:
-        if any(marker in text for marker in markers):
+        if any(_matches(text, marker) for marker in markers):
             return code
     return UploadReasonCode.UNKNOWN
 
@@ -104,7 +111,7 @@ FAILURE_REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
         "Nevo is busy preparing other lessons right now. Try this one again in a few minutes.",
     ),
     (
-        ("does not exist", "undefinedcolumn", "undefinedtable", "relation"),
+        ("does not exist", "undefinedcolumn", "undefinedtable", "relation", "value too long"),
         "Nevo could not save this lesson. This is a fault at our end and not "
         "anything about your file - we have been told, and the reference below "
         "finds it.",
@@ -119,7 +126,7 @@ def failure_reason(error: BaseException | str) -> str:
         f"{error.__class__.__name__} {error}" if isinstance(error, BaseException) else str(error)
     ).casefold()
     for markers, sentence in FAILURE_REASONS:
-        if any(marker in text for marker in markers):
+        if any(_matches(text, marker) for marker in markers):
             return sentence
     return GENERIC_FAILURE
 

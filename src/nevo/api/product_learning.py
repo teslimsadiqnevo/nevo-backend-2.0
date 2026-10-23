@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 import logging
@@ -11,7 +10,6 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import (
     APIRouter,
-    Depends,
     File,
     Form,
     HTTPException,
@@ -24,14 +22,13 @@ from fastapi import (
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, model_validator
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.access import accessible_lessons
 from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
-from nevo.api.content import get_content_parsing_service
-from nevo.api.dependencies import DatabaseSession, SessionFactory
+from nevo.api.dependencies import DatabaseSession
 from nevo.api.frontend_unblockers import (
     MAX_LESSON_UPLOAD_BYTES,
     _extract_text,
@@ -81,15 +78,12 @@ from nevo.api.response_models import (
 )
 from nevo.content_parsing.activity import activity_for_delivery
 from nevo.content_parsing.chunks import reading_chunks, reading_groups
-from nevo.content_parsing.entities import ContentParseRequest, SourcePage
+from nevo.content_parsing.entities import SourcePage
 from nevo.content_parsing.failures import (
     UploadReasonCode,
     failure_code,
-    failure_reason,
-    new_incident,
 )
 from nevo.content_parsing.modules import delivery_modules
-from nevo.content_parsing.service import ContentParsingService
 from nevo.content_parsing.upload_reuse import (
     find_reusable_upload,
     record_reused_media,
@@ -145,7 +139,6 @@ from nevo.intelligence.learning_runtime import (
 )
 from nevo.intelligence.session_delivery import delivery_snapshot
 from nevo.learner_profiles.post_lesson_worker import enqueue_post_lesson
-from nevo.ops.background import spawn
 from nevo.sso.service import SsoService
 
 logger = logging.getLogger(__name__)
@@ -159,7 +152,6 @@ CONSENT_WITHDRAWN_RESPONSE = {
     },
     503: {"description": "consent_service_unavailable: processing fails closed"},
 }
-ParsingService = Annotated[ContentParsingService, Depends(get_content_parsing_service)]
 LessonUpload = Annotated[UploadFile, File()]
 BatchLessonUpload = Annotated[list[UploadFile], File()]
 UploadScope = Annotated[str, Form(pattern="^(lesson|unit|term)$")]
@@ -2570,12 +2562,29 @@ async def staged_upload(
     payload: UploadRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
-    parser: ParsingService,
-    sessions: SessionFactory,
 ) -> dict[str, object]:
     actor = await require_school_actor(
         session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
     )
+    return await _queue_upload(
+        payload,
+        actor=actor,
+        session=session,
+        source_content=payload.source_text.encode("utf-8"),
+        content_type="text/plain; charset=utf-8",
+        source_is_extracted_text=True,
+    )
+
+
+async def _queue_upload(
+    payload: UploadRequest,
+    *,
+    actor: User,
+    session: AsyncSession,
+    source_content: bytes,
+    content_type: str,
+    source_is_extracted_text: bool,
+) -> dict[str, object]:
     fingerprint = source_key(
         text=payload.source_text,
         title=payload.title,
@@ -2621,21 +2630,27 @@ async def staged_upload(
         structure={"sourceCacheKey": fingerprint},
     )
     session.add(job)
+    await session.flush()
+    session.add(
+        UploadSourceBlob(
+            upload_id=job.id,
+            filename=payload.filename,
+            content_type=content_type,
+            content=source_content,
+            parse_metadata={
+                "title": payload.title,
+                "sourceType": payload.source_type.value,
+                "subject": payload.subject,
+                "contentIsExtractedText": source_is_extracted_text,
+            },
+        )
+    )
     await session.commit()
-    # The job row and GET /uploads/{id} already existed to report progress,
-    # but the parse ran inside this request anyway, so the caller waited for
-    # minutes of model calls and media generation before being told to poll.
-    _parse_into_job(
-        job_id=job.id,
-        request=ContentParseRequest(
-            title=payload.title,
-            source_type=payload.source_type,
-            source_text=payload.source_text,
-            source_metadata={"subject": payload.subject} if payload.subject else {},
-        ),
-        actor_id=actor.id,
-        parser=parser,
-        sessions=sessions,
+    logger.info(
+        "Upload queued upload=%s bytes=%s source_type=%s",
+        job.id,
+        len(source_content),
+        payload.source_type.value,
     )
     return {"uploadId": str(job.id), "status": job.status, "stage": job.stage}
 
@@ -2644,12 +2659,6 @@ async def staged_upload(
 async def staged_file_upload(
     principal: PrincipalDependency,
     session: DatabaseSession,
-    parser: ParsingService,
-    # The parse outlives the request, so it needs a factory to open its own
-    # session from. Declared here because FastAPI only resolves dependencies
-    # on a route handler; _ingest_one_file is a plain function and cannot ask
-    # for one itself.
-    sessions: SessionFactory,
     file: LessonUpload,
     scope: UploadScope = "lesson",
     subject: UploadSubject = None,
@@ -2661,71 +2670,7 @@ async def staged_file_upload(
         subject=subject,
         principal=principal,
         session=session,
-        parser=parser,
-        sessions=sessions,
     )
-
-
-def _parse_into_job(
-    *,
-    job_id: UUID,
-    request: ContentParseRequest,
-    actor_id: UUID,
-    parser: ContentParsingService,
-    sessions: async_sessionmaker[AsyncSession],
-) -> None:
-    """Parse behind the response, then write the outcome onto the job."""
-
-    async def note_stage(stage: UploadStage) -> None:
-        """Move the job on so the processing screen can say where it is."""
-
-        async with sessions.begin() as session:
-            job = await session.get(UploadJob, job_id)
-            if job is not None:
-                job.stage = stage.value
-
-    async def work() -> None:
-        try:
-            async with asyncio.timeout(20 * 60):
-                parsed = await parser.parse(
-                    request=request,
-                    requested_by_user_id=actor_id,
-                    on_stage=note_stage,
-                )
-        except Exception as error:
-            if isinstance(error, TimeoutError):
-                error = TimeoutError("Upload preparation timed out after 20 minutes")
-            # The same 12 hex characters an unhandled 500 carries, so a teacher
-            # looking at a failed parse has something to quote and we can find
-            # it in the log. A parse fails behind the response, so there is no
-            # 500 for it to ride on and it has to be written onto the job.
-            incident = new_incident()
-            logger.exception("Upload parse %s failed, incident %s", job_id, incident)
-            async with sessions.begin() as session:
-                job = await session.get(UploadJob, job_id)
-                if job is not None:
-                    job.status = "failed"
-                    # Raw, and staying raw: this is for us. It is whatever the
-                    # driver or the provider said, and it was never prose.
-                    job.error_message = str(error)[:1000]
-                    job.incident_id = incident
-                    job.failure_reason = failure_reason(error)
-                    job.completed_at = datetime.now(UTC)
-            raise
-        async with sessions.begin() as session:
-            job = await session.get(UploadJob, job_id)
-            if job is None:
-                return
-            job.status = "ready"
-            job.stage = UploadStage.READY_TO_ASSIGN.value
-            fingerprint = job.structure.get("sourceCacheKey")
-            job.structure = {
-                **_upload_structure(parsed),
-                **({"sourceCacheKey": fingerprint} if fingerprint else {}),
-            }
-            job.completed_at = datetime.now(UTC)
-
-    spawn(work, name=f"upload-parse-{job_id}")
 
 
 async def _ingest_one_file(
@@ -2736,8 +2681,6 @@ async def _ingest_one_file(
     subject: str | None,
     principal: PrincipalDependency,
     session: DatabaseSession,
-    parser: ParsingService,
-    sessions: SessionFactory,
 ) -> dict[str, object]:
     """Parse one uploaded file into a staged upload job.
 
@@ -2769,7 +2712,7 @@ async def _ingest_one_file(
     if reused is not None:
         await record_reused_media(session, reused)
         return reuse_response(reused)
-    result = await staged_upload(
+    result = await _queue_upload(
         UploadRequest(
             title=_title_from_filename(filename),
             filename=filename,
@@ -2778,22 +2721,12 @@ async def _ingest_one_file(
             sourceText=source_text,
             subject=subject,
         ),
-        principal,
-        session,
-        parser,
-        sessions,
+        actor=actor,
+        session=session,
+        source_content=content,
+        content_type=file.content_type or "application/octet-stream",
+        source_is_extracted_text=False,
     )
-    if result.get("reused"):
-        return result
-    session.add(
-        UploadSourceBlob(
-            upload_id=UUID(str(result["uploadId"])),
-            filename=filename,
-            content_type=file.content_type or "application/octet-stream",
-            content=content,
-        )
-    )
-    await session.commit()
     return result
 
 
@@ -2805,8 +2738,6 @@ async def _ingest_one_file(
 async def staged_batch_upload(
     principal: PrincipalDependency,
     session: DatabaseSession,
-    parser: ParsingService,
-    sessions: SessionFactory,
     files: BatchLessonUpload,
     scope: UploadScope = "lesson",
     subject: UploadSubject = None,
@@ -2836,8 +2767,6 @@ async def staged_batch_upload(
                 subject=subject,
                 principal=principal,
                 session=session,
-                parser=parser,
-                sessions=sessions,
             )
         except HTTPException as error:
             results.append(
@@ -2867,8 +2796,6 @@ async def import_cloud_file(
     payload: CloudImportRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
-    parser: ParsingService,
-    sessions: SessionFactory,
     request: Request,
 ) -> dict[str, object]:
     actor = await require_school_actor(
@@ -2896,7 +2823,7 @@ async def import_cloud_file(
     source_text = _extract_text(cloud_file.filename, cloud_file.content)
     if not source_text.strip():
         raise HTTPException(status_code=400, detail="No readable lesson text was found")
-    result = await staged_upload(
+    result = await _queue_upload(
         UploadRequest(
             title=payload.title or _title_from_filename(cloud_file.filename),
             filename=cloud_file.filename,
@@ -2905,20 +2832,14 @@ async def import_cloud_file(
             sourceText=source_text,
             subject=payload.subject,
         ),
-        principal,
-        session,
-        parser,
-        sessions,
+        actor=actor,
+        session=session,
+        source_content=cloud_file.content,
+        content_type=cloud_file.content_type,
+        source_is_extracted_text=False,
     )
-    session.add(
-        UploadSourceBlob(
-            upload_id=UUID(str(result["uploadId"])),
-            filename=cloud_file.filename,
-            content_type=cloud_file.content_type,
-            content=cloud_file.content,
-        )
-    )
-    await session.commit()
+    if result.get("reused"):
+        return result
     return result
 
 
@@ -2935,8 +2856,6 @@ async def retry_upload_pages(
     payload: RetryPagesRequest,
     principal: PrincipalDependency,
     session: DatabaseSession,
-    parser: ParsingService,
-    sessions: SessionFactory,
 ) -> dict[str, object]:
     actor = await require_school_actor(
         session,
@@ -2960,7 +2879,6 @@ async def retry_upload_pages(
     pages = _extract_pdf_pages(blob.content, payload.page_numbers)
     if not pages:
         raise HTTPException(status_code=422, detail="None of those pages exist in the PDF")
-    source_text = _extract_text(blob.filename, blob.content)
     # Same reason as the first parse: re-reading pages is minutes of model
     # work, so the job records that it is running and the client polls.
     job.undo_stack = [*job.undo_stack, job.structure][-20:]
@@ -2970,24 +2888,18 @@ async def retry_upload_pages(
     job.failure_reason = None
     job.incident_id = None
     job.completed_at = None
+    job.parse_lease_token = None
+    job.parse_lease_until = None
+    blob.parse_metadata = {
+        "title": _title_from_filename(blob.filename),
+        "sourceType": LessonSourceType.PDF.value,
+        "contentIsExtractedText": False,
+        "sourceMetadata": {
+            "retryOfUploadId": str(upload_id),
+            "retryPageNumbers": sorted(set(payload.page_numbers)),
+        },
+    }
     await session.commit()
-    _parse_into_job(
-        job_id=upload_id,
-        request=ContentParseRequest(
-            title=_title_from_filename(blob.filename),
-            source_type=LessonSourceType.PDF,
-            # Rebuild from the retained full source, not just the selected
-            # pages: replacing the structure with a subset loses other pages.
-            source_text=source_text,
-            source_metadata={
-                "retryOfUploadId": str(upload_id),
-                "retryPageNumbers": sorted(set(payload.page_numbers)),
-            },
-        ),
-        actor_id=actor.id,
-        parser=parser,
-        sessions=sessions,
-    )
     return {
         "uploadId": str(upload_id),
         "status": job.status,

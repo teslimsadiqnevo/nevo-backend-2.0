@@ -3,7 +3,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.api.lesson_contracts import checkpoint_payloads
@@ -28,7 +28,7 @@ from nevo.db.models.content import (
 )
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.probe import ProbeItem
-from nevo.db.models.product import LessonModule, UploadJob
+from nevo.db.models.product import LessonModule, UploadJob, UploadSourceBlob
 from nevo.db.models.subject import SchoolSubject
 from nevo.domain.accounts.vocabulary import UserStatus
 from nevo.domain.intelligence.vocabulary import (
@@ -220,6 +220,11 @@ class SqlAlchemyContentParsingRepository:
                     .where(
                         UploadJob.status.in_(("processing", "pending")),
                         UploadJob.created_at < cutoff,
+                        ~exists(
+                            select(UploadSourceBlob.upload_id).where(
+                                UploadSourceBlob.upload_id == UploadJob.id
+                            )
+                        ),
                     )
                     .with_for_update(skip_locked=True)
                 )
@@ -302,8 +307,17 @@ class SqlAlchemyContentParsingRepository:
                 )
             ),
         )
-        lesson_id = existing_lesson_id or uuid4()
         parse_run_id = parse_run_id or uuid4()
+        if existing_lesson_id is None:
+            async with self._sessions() as session:
+                previous_run = await session.get(ContentParseRun, parse_run_id)
+                if (
+                    previous_run is not None
+                    and previous_run.requested_by_user_id == requested_by_user_id
+                    and previous_run.source_type == request.source_type
+                ):
+                    existing_lesson_id = previous_run.lesson_id
+        lesson_id = existing_lesson_id or uuid4()
         school_id = await self.requester_school_id(requested_by_user_id)
         review_segment_count = sum(1 for segment in parsed.segments if segment.needs_review)
         status = (

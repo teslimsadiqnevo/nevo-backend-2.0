@@ -189,7 +189,10 @@ class LessonModule(Base):
 
 class UploadJob(Base):
     __tablename__ = "upload_jobs"
-    __table_args__ = (Index("ix_upload_jobs_requester_status", "requested_by_id", "status"),)
+    __table_args__ = (
+        Index("ix_upload_jobs_requester_status", "requested_by_id", "status"),
+        Index("ix_upload_jobs_parse_claim", "status", "parse_lease_until", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, server_default=text("gen_random_uuid()")
@@ -230,6 +233,11 @@ class UploadJob(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    parse_lease_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    parse_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    parse_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
 
 class UploadSourceBlob(Base):
@@ -243,6 +251,9 @@ class UploadSourceBlob(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    parse_metadata: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -42,12 +42,25 @@ an actual hazardous procedure merely because it includes a warning. Distinguish
 prevention/help-seeking from instructions facilitating harm. For model
 outputs and illustrations, withhold unsafe material regardless of source or user
 role. Review all additions to a lesson, not only its source. If uncertain about
-safety return block. Allow requires an empty categories array. Block/safeguard
+safety, block only when the supplied material contains clear evidence of a listed
+risk; do not infer a risk from an isolated word, an ordinary name, a number, or a
+generic classroom scenario. Allow requires an empty categories array. Block/safeguard
 requires at least one category. Image review includes any text inside the image.
 The privacy_abuse category is specifically for revealing, collecting, soliciting,
-or misusing identifiable personal or sensitive information without a legitimate
-educational/safety purpose. Generic safety precautions, references to an adult,
-and ordinary non-identifying classroom instructions are not privacy abuse.
+or misusing real, identifiable personal or sensitive information without a
+legitimate educational/safety purpose. A first name alone, a fictional/example
+name (including a name used in a maths or science problem), a school subject,
+ordinary ages, dates, places, quantities, or currency amounts are not personal
+data abuse by themselves. Do not rewrite, pseudonymise, or block lesson characters
+or ordinary worked examples. Block when context clearly links identifying details
+to a real child or adult, exposes contact/account/credential data, discloses
+private sensitive records, or solicits such information. A lesson-source review
+must preserve ordinary teaching examples while still blocking exposed credentials,
+private student records, and instructions to collect or publish a child's personal
+data. Safety precautions such as "let an adult pour warm water" and "do not drink
+the test liquids" are allowed; instructions to taste, ingest, mix, heat, or handle
+hazardous substances unsafely remain dangerous_instructions even if a warning is
+also present.
 """
 
 
@@ -182,6 +195,17 @@ class ContentSafetyGuard:
 
     def _payload(self, content, phase):
         phase_policy = ""
+        if phase == "lesson_source":
+            phase_policy = (
+                " Review this as educational lesson material. Ordinary fictional or "
+                "illustrative names, textbook examples, numbers, dates, currency, and "
+                "school subjects are not privacy abuse. A name in a question such as "
+                "'Ada saves 20,000 naira' is an ordinary teaching character unless the "
+                "text clearly identifies a real person and exposes private information. "
+                "Do not replace names or alter lesson wording. Allow explicit safety "
+                "precautions and adult-supervision instructions. Block an actually "
+                "hazardous procedure or clearly exposed private data."
+            )
         if phase in {"lesson_rewrite", "rewrite_approval"}:
             phase_policy = (
                 " This material is a proposed teacher-authored or AI-assisted educational rewrite. "

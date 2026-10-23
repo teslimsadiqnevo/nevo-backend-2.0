@@ -73,6 +73,7 @@ from nevo.consent.config import ConsentSettings
 from nevo.consent.wiring import build_consent_service
 from nevo.consent.worker import ConsentDeliveryWorker
 from nevo.content_parsing.deferred_media import DeferredMediaWorker
+from nevo.content_parsing.upload_worker import UploadParsingWorker
 from nevo.content_parsing.wiring import build_content_parsing_service
 from nevo.core.config import get_settings
 from nevo.db.session import create_engine, create_session_factory
@@ -186,6 +187,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.ai_gateway,
     )
+    app.state.upload_parsing_worker = UploadParsingWorker(
+        sessions,
+        app.state.content_parsing_service,
+    )
+    app.state.upload_parsing_worker.start()
     app.state.deferred_media_worker = None
     if settings.run_deferred_media_worker:
         app.state.deferred_media_worker = DeferredMediaWorker(
@@ -255,6 +261,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if app.state.deferred_media_worker is not None:
             await app.state.deferred_media_worker.stop()
+        await app.state.upload_parsing_worker.stop()
         await app.state.notification_email_worker.stop()
         await app.state.consent_delivery_worker.stop()
         await app.state.scheduled_job_runner.stop()

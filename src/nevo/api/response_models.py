@@ -758,7 +758,7 @@ class LessonProgressResponse(CamelResponse):
 class SocraticHandoffPrompt(CamelResponse):
     id: str
     prompt: str
-    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean"] = "single_choice"
+    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean", "text"] = "single_choice"
     options: list[CheckpointOption] = Field(default_factory=list)
 
 

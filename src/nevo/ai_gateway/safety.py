@@ -135,7 +135,7 @@ class ContentSafetyGuard:
                             operation=f"safety_{phase}",
                             retry_number=1,
                             headers=self._headers(),
-                            json=self._payload(content),
+                            json=self._payload(content, phase),
                             timeout=30,
                         )
                     else:
@@ -151,7 +151,7 @@ class ContentSafetyGuard:
                                 operation=f"safety_{phase}",
                                 retry_number=1,
                                 headers=self._headers(),
-                                json=self._payload(content),
+                                json=self._payload(content, phase),
                             )
                 response.raise_for_status()
                 body = response.json()
@@ -180,12 +180,23 @@ class ContentSafetyGuard:
             "Content-Type": "application/json",
         }
 
-    def _payload(self, content):
+    def _payload(self, content, phase):
+        phase_policy = ""
+        if phase in {"lesson_rewrite", "rewrite_approval"}:
+            phase_policy = (
+                " This material is a proposed teacher-authored or AI-assisted educational rewrite. "
+                "Evaluate the actions it directs, not precautionary wording. Explicitly telling "
+                "learners not to drink laboratory liquids, asking an adult to pour warm water, "
+                "and similar prohibitions are safety precautions and must be allowed. Do not "
+                "block a passage merely because it names a hazard while prohibiting it. Still "
+                "block instructions that direct a child to perform a genuinely hazardous act, "
+                "even if another sentence contains a warning."
+            )
         return {
             "model": self._model,
             "max_tokens": 256,
             "temperature": 0,
-            "system": SAFETY_INSTRUCTION,
+            "system": SAFETY_INSTRUCTION + phase_policy,
             "tools": [
                 {
                     "name": "content_safety_decision",

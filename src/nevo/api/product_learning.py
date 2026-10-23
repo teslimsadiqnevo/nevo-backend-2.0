@@ -625,15 +625,34 @@ async def _socratic_handoff(
     if deadline is None or datetime.now(UTC) < deadline:
         return [], deadline
     guided = item.question_snapshot.get("guidedSteps") or []
-    return [
+    if guided:
+        return [
+            {
+                "id": step["id"],
+                "prompt": step["prompt"],
+                "answerType": step["answerType"],
+                "options": step.get("options") or [],
+            }
+            for step in guided
+        ], deadline
+    questions = item.question_snapshot.get("guidedQuestions") or []
+    from nevo.intelligence.guided_panel import guided_question_prompt_id
+
+    prompts = [
         {
-            "id": step["id"],
-            "prompt": step["prompt"],
-            "answerType": step["answerType"],
-            "options": step.get("options") or [],
+            "id": guided_question_prompt_id(item.question_id, index),
+            "prompt": question.strip(),
+            "answerType": "text",
+            "options": [],
         }
-        for step in guided
-    ], deadline
+        for index, question in enumerate(questions, start=1)
+        if isinstance(question, str) and question.strip()
+    ]
+    sitting = await session.get(LessonSession, item.session_id)
+    progress = (sitting.delivery_state or {}).get("guidedQuestionProgress", {}) if sitting else {}
+    answered = int((progress.get(item.question_id) or {}).get("answered", 0))
+    prompts = prompts[answered:]
+    return prompts, deadline
 
 
 async def _question_for_attempt(
@@ -961,7 +980,11 @@ async def lesson_detail(
                 "textVariant": item.text_variant,
                 "visualVariant": item.visual_variant
                 if for_teacher
-                else safety_reviewed_visual(item.visual_variant),
+                else (
+                    safety_reviewed_visual(item.visual_variant)
+                    if "visual" in student_modalities(item)
+                    else None
+                ),
                 "audioVariant": item.audio_variant,
                 "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body)
                 if for_teacher
@@ -3258,7 +3281,11 @@ async def _offline_package_payload(
                 "deliveryPreference": segment_choice(sitting, item) or None,
                 "modalityVariants": {
                     "text": item.text_variant,
-                    "visual": safety_reviewed_visual(item.visual_variant),
+                    "visual": (
+                        safety_reviewed_visual(item.visual_variant)
+                        if "visual" in student_modalities(item)
+                        else None
+                    ),
                     "audio": item.audio_variant,
                     "interactive": student_activity(item),
                     "calculation": item.calculation_variant,

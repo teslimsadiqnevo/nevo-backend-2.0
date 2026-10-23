@@ -114,7 +114,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    engine = create_engine(get_settings().database_url)
+    settings = get_settings()
+    settings.assert_database_target_allowed()
+    engine = create_engine(settings.database_url)
     sessions = create_session_factory(engine)
     app.state.db_sessions = sessions
     app.state.db_engine = engine
@@ -184,10 +186,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.ai_gateway,
     )
-    app.state.deferred_media_worker = DeferredMediaWorker(
-        sessions, app.state.content_parsing_service
-    )
-    app.state.deferred_media_worker.start()
+    app.state.deferred_media_worker = None
+    if settings.deferred_media_worker_enabled:
+        app.state.deferred_media_worker = DeferredMediaWorker(
+            sessions, app.state.content_parsing_service
+        )
+        app.state.deferred_media_worker.start()
     app.state.lesson_media_service = build_lesson_media_service()
     app.state.post_lesson_profile_update_service = build_post_lesson_profile_update_service(
         sessions,
@@ -249,7 +253,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await app.state.deferred_media_worker.stop()
+        if app.state.deferred_media_worker is not None:
+            await app.state.deferred_media_worker.stop()
         await app.state.notification_email_worker.stop()
         await app.state.consent_delivery_worker.stop()
         await app.state.scheduled_job_runner.stop()
@@ -437,6 +442,9 @@ async def health(request: Request) -> dict[str, str]:
     )
     return {
         "status": "ok",
+        "deferredMediaWorker": (
+            "running" if getattr(request.app.state, "deferred_media_worker", None) else "disabled"
+        ),
         #: up_to_date, behind, or unknown. "behind" means some writes will
         #: fail at the database however healthy everything else looks.
         "schema": str(schema["state"]),

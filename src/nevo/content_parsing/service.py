@@ -733,6 +733,10 @@ class ContentParsingService:
         # never enter the image pipeline.
         if segment.content_type is LessonContentType.CALCULATION:
             return replace(segment, visual_variant=None)
+        # A picture beside a markable practice question can reveal its answer;
+        # keep this deterministic rather than trusting a probabilistic review.
+        if segment.comprehension_checkpoints:
+            return replace(segment, visual_variant=None)
         if generator is None or ContentModality.VISUAL not in segment.available_modalities:
             return segment
         requested_prompt = None

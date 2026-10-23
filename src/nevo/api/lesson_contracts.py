@@ -41,7 +41,11 @@ def student_modalities(segment):
         available.append("text")
     if (segment.audio_variant or {}).get("audioUrl"):
         available.append("audio")
-    if safety_reviewed_visual(segment.visual_variant) and segment.visual_variant.get("imageUrl"):
+    if (
+        not segment.comprehension_checkpoints
+        and safety_reviewed_visual(segment.visual_variant)
+        and segment.visual_variant.get("imageUrl")
+    ):
         available.append("visual")
     activity = student_activity(segment)
     if segment.calculation_variant or (activity or {}).get("steps"):
@@ -108,7 +112,7 @@ class GuidedStepPrompt(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     id: str
     prompt: str
-    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean"] = Field(
+    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean", "text"] = Field(
         alias="answerType"
     )
     options: list[CheckpointOption] = Field(default_factory=list)

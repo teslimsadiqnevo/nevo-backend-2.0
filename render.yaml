@@ -11,6 +11,12 @@ services:
     startCommand: bash scripts/render-start.sh
     healthCheckPath: /health
     envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEFERRED_MEDIA_WORKER_ENABLED
+        value: "true"
+      - key: PRODUCTION_SUPABASE_PROJECT_REF
+        value: ibavgeinubvmktxufvvr
       - key: DATABASE_URL
         sync: false
       - key: AUTH_PASSWORD_PEPPER

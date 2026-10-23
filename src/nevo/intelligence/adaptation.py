@@ -122,6 +122,28 @@ class AdaptationEngineService:
                         request=request, attempt=attempt, timestamp=datetime.now(UTC)
                     )
                 fallback_plan = replace(fallback_plan, suppressed_attempt=attempt)
+            elif request.signals.replay_count_on_segment >= 3:
+                # Replays alone do not satisfy the multi-signal rule, but make
+                # the reason visible rather than returning an opaque clear.
+                replay_signal = TriggerSignal(
+                    category="engagement",
+                    name="replay_accumulation_without_comprehension_confirmation",
+                    confidence=0.68,
+                )
+                attempt = SuppressedAdaptationAttempt(
+                    attempted_type="modality_shift",
+                    reason="insufficient_aligned_signals",
+                    current_segment_id=request.signals.current_segment_id,
+                    current_modality=request.signals.current_modality,
+                    suggested_modality=None,
+                    confidence=0.68,
+                    trigger_signals=(replay_signal,),
+                )
+                if self._rate_limits is not None and request.session_id:
+                    await self._rate_limits.log_suppressed(
+                        request=request, attempt=attempt, timestamp=datetime.now(UTC)
+                    )
+                fallback_plan = replace(fallback_plan, suppressed_attempt=attempt)
             return await self._apply_rate_limits(request=request, plan=fallback_plan)
         return fallback_plan
 

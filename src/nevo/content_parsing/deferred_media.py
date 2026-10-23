@@ -82,6 +82,7 @@ def enqueue_media(session, row, source, actor_id):
     if (
         ContentModality.VISUAL in source.available_modalities
         and source.content_type != LessonContentType.CALCULATION
+        and not source.comprehension_checkpoints
     ):
         kinds.append("image")
     if source.audio_variant or any(

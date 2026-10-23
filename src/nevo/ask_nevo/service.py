@@ -16,7 +16,7 @@ from nevo.ask_nevo.entities import (
     ThreadTranscript,
 )
 from nevo.ask_nevo.errors import AskNevoDailyLimitError
-from nevo.ask_nevo.formatting import structure_answer
+from nevo.ask_nevo.formatting import render_answer, structure_answer
 from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
 from nevo.ops.background import spawn
@@ -238,6 +238,7 @@ class AskNevoService:
         # pseudonyms throughout, including in every tool result.
         if directory is not None:
             answer = directory.rehydrate(answer)
+        answer = render_answer(answer)
         # Charged on what the provider actually billed, both calls included:
         # a compliance retry is a second answer we paid for, and leaving it
         # off the ledger is a budget that quietly does not hold.

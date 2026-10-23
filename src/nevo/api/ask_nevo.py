@@ -19,7 +19,12 @@ from nevo.ask_nevo.entities import (
     ThreadTranscript,
 )
 from nevo.ask_nevo.errors import AskNevoDailyLimitError
-from nevo.ask_nevo.formatting import AnswerBlockType, AnswerFormat, structure_answer
+from nevo.ask_nevo.formatting import (
+    AnswerBlockType,
+    AnswerFormat,
+    render_answer,
+    structure_answer,
+)
 from nevo.ask_nevo.service import AskNevoService
 from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.domain.ask_nevo.vocabulary import (
@@ -68,8 +73,8 @@ class AnswerBlockResponse(BaseModel):
 class AskResponse(BaseModel):
     model_config = CAMEL_CONFIG
 
-    #: The model's answer exactly as returned, unchanged. Kept so nothing that
-    #: already reads it breaks, and so the raw output stays inspectable.
+    #: Normalized Markdown. Headings are bold; spacing and list markers are
+    #: stable, with malformed emphasis markers removed.
     answer: str
     #: False when Ask Nevo deliberately declined the question. The answer is
     #: still safe to render, and the client can show its handoff action.
@@ -97,7 +102,7 @@ class AskResponse(BaseModel):
     def from_result(cls, result: AskNevoResponse) -> "AskResponse":
         structured = structure_answer(result.answer)
         return cls(
-            answer=result.answer,
+            answer=render_answer(result.answer),
             can_help=result.can_help,
             cannot_help_reason=result.cannot_help_reason,
             blocks=[

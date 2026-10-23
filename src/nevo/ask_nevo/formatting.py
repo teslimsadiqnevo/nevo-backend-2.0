@@ -5,6 +5,7 @@ from enum import StrEnum
 BULLET = re.compile(r"^\s*[-*•·]\s+(?P<text>.+)$")
 NUMBERED = re.compile(r"^\s*(?P<number>\d{1,2})[.)]\s+(?P<text>.+)$")
 HEADING = re.compile(r"^\s*(?P<hashes>#{1,6})\s+(?P<text>.+?)\s*#*$")
+BOLD_HEADING = re.compile(r"^\s*\*\*(?P<text>.+?)\*\*\s*$")
 # A short line ending in a colon reads as a heading even without a hash, which
 # is how models usually introduce a list in prose.
 COLON_HEADING = re.compile(r"^\s*(?P<text>[^\n]{3,60}):\s*$")
@@ -120,6 +121,14 @@ def structure_answer(answer: str) -> StructuredAnswer:
                 )
             continue
 
+        if heading := BOLD_HEADING.match(line):
+            flush_items()
+            flush_paragraph()
+            body = strip_inline_markup(heading.group("text"))
+            if body:
+                blocks.append(AnswerBlock(type=AnswerBlockType.HEADING, text=body, level=2))
+            continue
+
         if bullet := BULLET.match(line):
             flush_paragraph()
             if pending_kind is not AnswerBlockType.BULLETS:
@@ -169,6 +178,24 @@ def structure_answer(answer: str) -> StructuredAnswer:
         plain_text=_as_plain_text(blocks),
         format=detected,
     )
+
+
+def render_answer(answer: str) -> str:
+    """Return clean Markdown suitable for a client that renders the answer string."""
+    structured = structure_answer(answer)
+    rendered: list[str] = []
+    for block in structured.blocks:
+        if block.type is AnswerBlockType.HEADING:
+            rendered.append(f"**{block.text}**")
+        elif block.type is AnswerBlockType.PARAGRAPH:
+            rendered.append(block.text)
+        elif block.type is AnswerBlockType.BULLETS:
+            rendered.append("\n".join(f"- {item}" for item in block.items))
+        elif block.type is AnswerBlockType.STEPS:
+            rendered.append(
+                "\n".join(f"{index}. {item}" for index, item in enumerate(block.items, 1))
+            )
+    return "\n\n".join(part for part in rendered if part).strip()
 
 
 def _as_plain_text(blocks: list[AnswerBlock]) -> str:

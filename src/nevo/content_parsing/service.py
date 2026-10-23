@@ -1222,12 +1222,10 @@ def _fallback_segments(
                 title=_fallback_title(part, sequence_order),
                 body=part,
                 available_modalities=modalities,
-                comprehension_checkpoints=(
-                    {
-                        "prompt": "What is the main idea in this part?",
-                        "position": "after_segment",
-                    },
-                ),
+                # A generic prompt without an authored answer cannot be marked
+                # and must never become a lesson gate. Fallback sections remain
+                # teacher-reviewable, with no fabricated checkpoint.
+                comprehension_checkpoints=(),
                 text_variant={"body": part},
                 audio_variant=_placeholder_audio_variant(part),
                 interactive_variant=_practice_variant(part)

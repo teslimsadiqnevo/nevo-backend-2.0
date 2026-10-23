@@ -118,7 +118,7 @@ async def generate(
     return GenerateResponse.from_result(result)
 
 
-def public_ai_error(error: AiGatewayError) -> HTTPException:
+def public_ai_error(error: AiGatewayError, *, audience: str = "learner") -> HTTPException:
     from nevo.ai_gateway.safety import SafetyBlocked, SafetyUnavailable
 
     status_code = status.HTTP_400_BAD_REQUEST
@@ -130,10 +130,16 @@ def public_ai_error(error: AiGatewayError) -> HTTPException:
         status_code = status.HTTP_403_FORBIDDEN
     elif isinstance(error, SafetyUnavailable):
         status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    message = error.public_message
+    if isinstance(error, SafetyBlocked) and audience == "teacher":
+        message = (
+            "This lesson content did not pass the safety review. "
+            "Please review the wording and try again."
+        )
     return HTTPException(
         status_code=status_code,
         detail={
             "code": error.code,
-            "message": error.public_message,
+            "message": message,
         },
     )

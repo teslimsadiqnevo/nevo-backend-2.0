@@ -176,7 +176,18 @@ class ComprehensionCheckpoint(BaseModel):
             value["options"] = value["choices"]
         key = value.get("answerKey", value.get("answer_key"))
         kind = value.get("answerType", value.get("answer_type"))
-        if kind in {"selection", "choice", "select", "single_select", "multi_select"}:
+        if kind in {
+            "selection",
+            "choice",
+            "select",
+            "single_select",
+            "multi_select",
+            "pick_one",
+            "pick_several",
+            "pick_many",
+            "single_answer",
+            "multiple_answers",
+        }:
             if value.get("options") and key is not None:
                 kind = (
                     "multiple_choice" if isinstance(key, list) and len(key) > 1 else "single_choice"
@@ -184,6 +195,20 @@ class ComprehensionCheckpoint(BaseModel):
                 value["answerType"] = kind
                 if kind == "single_choice" and isinstance(key, list) and len(key) == 1:
                     value["answerKey"] = key[0]
+        elif kind not in {
+            "single_choice",
+            "multiple_choice",
+            "text",
+            "numeric",
+            "boolean",
+        } and value.get("options") and key is not None:
+            # The held answer shape is authoritative when model output invents
+            # a renderer label such as "pick_several".
+            value["answerType"] = (
+                "multiple_choice" if isinstance(key, list) and len(key) > 1 else "single_choice"
+            )
+            if isinstance(key, list) and len(key) == 1:
+                value["answerKey"] = key[0]
         if kind == "multiple_choice" and (
             isinstance(key, (str, int, float, bool)) or (isinstance(key, list) and len(key) == 1)
         ):

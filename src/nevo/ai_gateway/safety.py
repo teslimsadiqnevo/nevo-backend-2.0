@@ -34,7 +34,12 @@ personal information. For requests/disclosures suggesting a child is in danger,
 being abused, groomed or considering self-harm, return safeguard, not assistance
 with harmful actions. Ordinary age-appropriate biology, health education, history,
 fraud prevention and non-graphic discussion of difficult subjects are allowed.
-Distinguish prevention/help-seeking from instructions facilitating harm. For model
+Explicit precautions and prohibitions in supervised educational practicals are
+not dangerous instructions: examples include asking an adult to handle hot water
+and telling learners not to drink laboratory liquids. Assess what the material
+instructs the learner to do, not the mere presence of a hazard word. Do not allow
+an actual hazardous procedure merely because it includes a warning. Distinguish
+prevention/help-seeking from instructions facilitating harm. For model
 outputs and illustrations, withhold unsafe material regardless of source or user
 role. Review all additions to a lesson, not only its source. If uncertain about
 safety return block. Allow requires an empty categories array. Block/safeguard

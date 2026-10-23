@@ -1794,7 +1794,7 @@ async def approve_segment(
                     variants[key]["body"], requester_user_id=user.id, phase="rewrite_approval"
                 )
             except AiGatewayError as error:
-                raise public_ai_error(error) from error
+                raise public_ai_error(error, audience="teacher") from error
             variants[key] = {**variants[key], "safetyPolicyVersion": POLICY_VERSION}
         if isinstance(variants.get(key), dict) and not (
             variants[key].get("reviewStatus") == "approved"

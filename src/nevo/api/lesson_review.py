@@ -697,7 +697,7 @@ async def edit_rewrite(
                 payload.body, requester_user_id=actor.id, phase="lesson_rewrite"
             )
         except AiGatewayError as error:
-            raise public_ai_error(error) from error
+            raise public_ai_error(error, audience="teacher") from error
         await _invalidate_signoffs(session, lesson.id, "rewrites")
         changed = {
             **original,

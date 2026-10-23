@@ -1349,7 +1349,12 @@ async def lesson_detail(
         confirmationSummary=lesson.confirmation_summary,
         recap=lesson.recap,
         assessment=[
-            ComprehensionCheckpoint.model_validate(item) for item in (lesson.assessment or [])
+            ComprehensionCheckpoint.model_validate(item)
+            for item in checkpoint_payloads(
+                lesson.assessment or [],
+                segment_key="lesson-assessment",
+                presentation_seed=str(actor.id),
+            )
         ],
         segments=[
             LessonSegmentResponse(
@@ -1376,7 +1381,9 @@ async def lesson_detail(
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,
                 comprehensionCheckpoints=checkpoint_payloads(
-                    item.comprehension_checkpoints, segment_key=item.segment_key
+                    item.comprehension_checkpoints,
+                    segment_key=item.segment_key,
+                    presentation_seed=str(actor.id),
                 ),
                 textVariant=item.text_variant,
                 visualVariant=(

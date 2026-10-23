@@ -61,6 +61,8 @@ async def prepare_adaptation(session, principal, payload, signals):
     )
     if lesson is None or lesson.school_id != actor.school_id or assignment is None:
         raise HTTPException(404, detail="Lesson not found")
+    if lesson.status == "failed":
+        raise HTTPException(409, detail={"code": "lesson_content_requires_review"})
     query = select(LessonSession).where(
         LessonSession.student_id == actor.id,
         LessonSession.lesson_id == lesson.id,

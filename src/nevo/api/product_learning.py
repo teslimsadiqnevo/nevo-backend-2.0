@@ -614,9 +614,14 @@ async def _question_for_attempt(
     session: DatabaseSession,
     lesson: Lesson,
     payload: LessonQuestionAttemptWrite,
+    presentation_seed: str = "lesson",
 ) -> tuple[dict[str, object], UUID | None]:
     if payload.source == "assessment":
-        questions = checkpoint_payloads(lesson.assessment or [], segment_key="lesson-assessment")
+        questions = checkpoint_payloads(
+            lesson.assessment or [],
+            segment_key="lesson-assessment",
+            presentation_seed=presentation_seed,
+        )
         segment_id = None
     else:
         if payload.segment_id is None:
@@ -662,6 +667,7 @@ async def _question_for_attempt(
                 segment.comprehension_checkpoints,
                 segment_key=segment.segment_key,
                 concept_id=segment.concept_id,
+                presentation_seed=presentation_seed,
             )
         segment_id = segment.id
     question = next(
@@ -750,6 +756,14 @@ async def _lesson_for_actor(
         )
         if assignment is None:
             raise HTTPException(status_code=404, detail="Lesson not found")
+        if lesson.status == "failed":
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "lesson_content_requires_review",
+                    "message": "This lesson needs your teacher's review before it can be opened.",
+                },
+            )
         from nevo.intelligence.learning_runtime import ONBOARDING_MODULES, onboarding_modules
 
         if not set(ONBOARDING_MODULES).issubset(onboarding_modules(actor.baseline_profile or {})):
@@ -885,7 +899,11 @@ async def lesson_detail(
         "classes": await _classes_for_lesson(session, lesson.id),
         "confirmationSummary": lesson.confirmation_summary,
         "recap": lesson.recap,
-        "assessment": list(lesson.assessment or []),
+        "assessment": checkpoint_payloads(
+            lesson.assessment or [],
+            segment_key="lesson-assessment",
+            presentation_seed=str(actor.id),
+        ),
         "segments": [
             {
                 "id": str(item.id),
@@ -909,7 +927,9 @@ async def lesson_detail(
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,
                 "comprehensionCheckpoints": checkpoint_payloads(
-                    item.comprehension_checkpoints, segment_key=item.segment_key
+                    item.comprehension_checkpoints,
+                    segment_key=item.segment_key,
+                    presentation_seed=str(actor.id),
                 ),
                 "textVariant": item.text_variant,
                 "visualVariant": item.visual_variant
@@ -1496,7 +1516,9 @@ async def save_lesson_question_attempt(
                     },
                 )
             return await _attempt_payload_with_outcome(session, existing)
-    question, segment_id = await _question_for_attempt(session, lesson, payload)
+    question, segment_id = await _question_for_attempt(
+        session, lesson, payload, presentation_seed=str(actor.id)
+    )
     if question.get("conceptId"):
         await ensure_prerequisites(session, actor.id, lesson.id, UUID(str(question["conceptId"])))
     attempt_number = int(
@@ -3061,7 +3083,11 @@ async def _offline_package_payload(
             for module in modules
         ],
         "recap": lesson.recap,
-        "assessment": checkpoint_payloads(lesson.assessment or [], segment_key="lesson-assessment"),
+        "assessment": checkpoint_payloads(
+            lesson.assessment or [],
+            segment_key="lesson-assessment",
+            presentation_seed=str(actor.id),
+        ),
         "segments": [
             {
                 "id": str(item.id),
@@ -3095,7 +3121,9 @@ async def _offline_package_payload(
                     item.depth_variants, item.text_variant, for_student=True
                 ),
                 "comprehensionCheckpoints": checkpoint_payloads(
-                    item.comprehension_checkpoints, segment_key=item.segment_key
+                    item.comprehension_checkpoints,
+                    segment_key=item.segment_key,
+                    presentation_seed=str(actor.id),
                 ),
             }
             for item in segments

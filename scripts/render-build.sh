@@ -3,4 +3,5 @@ set -euo pipefail
 
 python -m pip install --upgrade pip
 python -m pip install .
+python -m nevo.legal.prepare
 

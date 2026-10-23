@@ -115,13 +115,6 @@ class ComprehensionCheckpoint(BaseModel):
         ):
             value["answerType"] = "single_choice"
             value["answerKey"] = key[0] if isinstance(key, list) else key
-        options = value.get("options")
-        if options and all(isinstance(option, dict) and "value" in option for option in options):
-            from nevo.probe.presentation import ordered_options
-
-            value["options"] = ordered_options(
-                options, seed=f"{value.get('id')}:{value.get('prompt')}"
-            )
         return value
 
     id: str
@@ -855,6 +848,7 @@ def checkpoint_payloads(
     segment_key: str,
     concept_id: UUID | None = None,
     strict: bool = False,
+    presentation_seed: str = "lesson",
 ) -> list[dict[str, object]]:
     """Normalize older parser output into the documented checkpoint contract."""
     result: list[dict[str, object]] = []
@@ -923,12 +917,14 @@ def checkpoint_payloads(
             options = [option.value for option in question.options]
             if len(options) < 2 or not keys or any(key not in options for key in keys):
                 raise UnclassifiableQuestionError(f"Unmarkable choice question in {segment_key}")
-        result.append(
-            question.model_dump(
-                by_alias=True,
-                mode="json",
-            )
+        from nevo.probe.presentation import ordered_options
+
+        rendered = question.model_dump(by_alias=True, mode="json")
+        rendered["options"] = ordered_options(
+            rendered["options"],
+            seed=f"{presentation_seed}:{segment_key}:{question.id}:{question.prompt}",
         )
+        result.append(rendered)
     return result
 
 

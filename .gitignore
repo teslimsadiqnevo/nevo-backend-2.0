@@ -16,3 +16,4 @@ build/
 .idea/
 .vscode/
 backups/
+src/nevo/legal/generated_notices.json

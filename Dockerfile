@@ -10,7 +10,8 @@ COPY alembic ./alembic
 COPY src ./src
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir .
+    && python -m pip install --no-cache-dir . \
+    && python -m nevo.legal.prepare
 
 EXPOSE 8000
 

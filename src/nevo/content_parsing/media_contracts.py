@@ -66,6 +66,12 @@ class LessonMediaItem(BaseModel):
     withdrawal_reason_by: UUID | None = None
     withdrawal_reason_at: datetime | None = None
     can_undo: bool = False
+    undo_unavailable_reason: Literal[
+        "media_withdrawal_already_restored",
+        "media_withdrawal_undo_expired",
+        "media_restore_source_changed",
+        "media_restore_review_required",
+    ] | None = None
     undo_available_until: datetime | None = None
     restored_at: datetime | None = None
     restored_by: UUID | None = None

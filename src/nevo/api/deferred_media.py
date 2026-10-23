@@ -23,7 +23,7 @@ from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
-WITHDRAWAL_UNDO_WINDOW = timedelta(minutes=5)
+WITHDRAWAL_UNDO_WINDOW = timedelta(hours=24)
 
 
 def reviewable_media():
@@ -80,13 +80,51 @@ async def _lesson(session, principal, lesson_id):
     return actor
 
 
+def _restore_unavailable_reason(job, segment, now):
+    if job.status != "withdrawn" or job.withdrawn_at is None:
+        return "media_not_withdrawn"
+    if job.restored_at is not None:
+        return "media_withdrawal_already_restored"
+    if now >= job.withdrawn_at + WITHDRAWAL_UNDO_WINDOW:
+        return "media_withdrawal_undo_expired"
+    if source_hash(segment) != job.source_hash:
+        return "media_restore_source_changed"
+    result = job.result or {}
+    if job.kind == "image":
+        image = result.get("image") or {}
+        if (
+            image.get("safetyPolicyVersion") != POLICY_VERSION
+            or not image.get("imageUrl")
+        ):
+            return "media_restore_review_required"
+    else:
+        narrations = result.get("stepNarrations") or []
+        has_narration = any(
+            isinstance(item, dict)
+            and isinstance(item.get("stepId"), str)
+            and isinstance(item.get("audio"), dict)
+            for item in narrations
+        )
+        if job.approved_at is None or not (
+            (result.get("audio") or {}).get("audioUrl") or has_narration
+        ):
+            return "media_restore_review_required"
+    return None
+
+
 def _view(job, segment):
-    undo_until = (
-        job.withdrawn_at + WITHDRAWAL_UNDO_WINDOW
-        if job.status == "withdrawn" and job.withdrawn_at and job.restored_at is None
+    now = datetime.now(UTC)
+    unavailable_reason = (
+        _restore_unavailable_reason(job, segment, now)
+        if job.status == "withdrawn"
         else None
     )
-    can_undo = bool(undo_until and datetime.now(UTC) < undo_until)
+    can_undo = unavailable_reason is None and job.status == "withdrawn"
+    undo_until = (
+        job.withdrawn_at + WITHDRAWAL_UNDO_WINDOW
+        if can_undo and job.withdrawn_at
+        else None
+    )
     return LessonMediaItem(
         id=job.id,
         segment_id=job.segment_id,
@@ -107,6 +145,7 @@ def _view(job, segment):
         withdrawal_reason_by=job.withdrawal_reason_by,
         withdrawal_reason_at=job.withdrawal_reason_at,
         can_undo=can_undo,
+        undo_unavailable_reason=unavailable_reason,
         undo_available_until=undo_until,
         restored_at=job.restored_at,
         restored_by=job.restored_by,
@@ -248,35 +287,27 @@ async def restore_media(
     actor = await _lesson(session, principal, lesson_id)
     job, segment = await _job(session, lesson_id, media_id, require_current=False)
     now = datetime.now(UTC)
-    undo_until = job.withdrawn_at + WITHDRAWAL_UNDO_WINDOW if job.withdrawn_at else None
-    if (
-        job.status != "withdrawn"
-        or job.restored_at is not None
-        or undo_until is None
-        or now >= undo_until
-    ):
-        raise HTTPException(409, detail={"code": "media_withdrawal_undo_expired"})
-    if source_hash(segment) != job.source_hash:
-        raise HTTPException(409, detail={"code": "media_restore_source_changed"})
+    unavailable_reason = _restore_unavailable_reason(job, segment, now)
+    if unavailable_reason:
+        raise HTTPException(409, detail={"code": unavailable_reason})
     result = job.result or {}
     if job.kind == "image":
         image = result.get("image") or {}
-        if (
-            image.get("safetyPolicyVersion") != POLICY_VERSION
-            or not image.get("imageUrl")
-        ):
-            raise HTTPException(409, detail={"code": "media_restore_review_required"})
         segment.visual_variant = image
     else:
         audio = result.get("audio") or {}
         narrations = result.get("stepNarrations") or []
-        if job.approved_at is None or (not audio.get("audioUrl") and not narrations):
-            raise HTTPException(409, detail={"code": "media_restore_review_required"})
         if audio.get("audioUrl"):
             segment.audio_variant = audio
         if narrations:
             calculation = deepcopy(segment.calculation_variant or {})
-            by_step = {item["stepId"]: item["audio"] for item in narrations}
+            by_step = {
+                item["stepId"]: item["audio"]
+                for item in narrations
+                if isinstance(item, dict)
+                and isinstance(item.get("stepId"), str)
+                and isinstance(item.get("audio"), dict)
+            }
             for step in calculation.get("steps", []):
                 if step.get("stepId") in by_step:
                     step["narrationAudio"] = by_step[step["stepId"]]

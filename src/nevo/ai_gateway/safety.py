@@ -88,6 +88,22 @@ def _has_concrete_privacy_indicator(text: str) -> bool:
     return bool(_DIRECT_PERSONAL_DATA.search(text))
 
 
+def _is_lesson_generation_phase(phase: str) -> bool:
+    if phase in {
+        "lesson_source",
+        "lesson_rewrite",
+        "rewrite_approval",
+        "illustration_source",
+        "lesson_narration",
+    }:
+        return True
+    return phase in {
+        f"{direction}:{prompt}"
+        for direction in ("input", "output", "final")
+        for prompt in ("content_parse.default", "lesson_depth.default")
+    }
+
+
 class SafetyUnavailable(AiGatewayError):
     code = "safety_check_unavailable"
     public_message = "Nevo cannot complete its safety check right now. Please try again later."
@@ -205,7 +221,7 @@ class ContentSafetyGuard:
                 else:
                     decision = SafetyDecision.model_validate_json("".join(blocks))
                 if (
-                    phase == "lesson_source"
+                    _is_lesson_generation_phase(phase)
                     and decision.action == "block"
                     and decision.categories == ["privacy_abuse"]
                     and not _has_concrete_privacy_indicator(chunk)

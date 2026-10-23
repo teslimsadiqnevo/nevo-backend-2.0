@@ -33,3 +33,7 @@ A break offer persists until it is taken or declined. A decline removes the pers
 ## Deployment
 
 Migration `20261023_0115` adds withdrawal audit fields and brings the held lesson-review signoff table onto main. It was applied to the configured shared Supabase database. The backend code still requires deployment on Render.
+
+## Local HTTP verification
+
+Using isolated synthetic lesson records and existing cached media, verified teacher/student authentication; safety-blocked entries absent from lists/counts and refused by approval/retry; student withdrawal refused; stale review hash refused; first-step bulk approval publishes image and narration together with named records; individual image/audio and legacy withdrawal; idempotent withdrawal; retry refused after withdrawal; existing review signoff retained; student text-only fallback; mid-sitting state unchanged; unavailable format choice refused; engine/offline activity suppression; persistent frustration-triggered break offer; and real break-decline ingestion followed by dismissal. Synthetic assignments were cancelled afterwards. No frontend files or test files were added or edited, and no fresh provider generation was required.

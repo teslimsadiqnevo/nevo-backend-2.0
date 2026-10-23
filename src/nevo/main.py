@@ -187,7 +187,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.ai_gateway,
     )
     app.state.deferred_media_worker = None
-    if settings.deferred_media_worker_enabled:
+    if settings.run_deferred_media_worker:
         app.state.deferred_media_worker = DeferredMediaWorker(
             sessions, app.state.content_parsing_service
         )

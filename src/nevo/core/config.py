@@ -49,10 +49,7 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
     def assert_database_target_allowed(self) -> None:
-        if (
-            self.app_environment.strip().casefold() == "production"
-            or os.environ.get("RENDER", "").strip().casefold() == "true"
-        ):
+        if self.is_production_runtime:
             return
         parsed = urlsplit(self.database_url)
         username = unquote(parsed.username or "")
@@ -65,6 +62,19 @@ class Settings(BaseSettings):
                 "Refusing to start a non-production backend against the production "
                 "Supabase project. Set DATABASE_URL to the test database."
             )
+
+    @property
+    def is_production_runtime(self) -> bool:
+        on_render_main = (
+            os.environ.get("RENDER", "").strip().casefold() == "true"
+            and os.environ.get("RENDER_GIT_BRANCH", "").strip().casefold() == "main"
+            and os.environ.get("IS_PULL_REQUEST", "").strip().casefold() != "true"
+        )
+        return self.app_environment.strip().casefold() == "production" or on_render_main
+
+    @property
+    def run_deferred_media_worker(self) -> bool:
+        return self.deferred_media_worker_enabled or self.is_production_runtime
 
 
 @lru_cache

@@ -119,6 +119,7 @@ class AiGatewayService:
             material_keys = {
                 "content_parse.default": frozenset({"source_text", "lesson_title"}),
                 "lesson_depth.default": frozenset({"body", "title"}),
+                "content_question_repair.default": frozenset({"source_text", "questions"}),
             }.get(request.prompt_name, frozenset())
             variables, lesson_characters = self._privacy.mask_lesson_characters(
                 variables,

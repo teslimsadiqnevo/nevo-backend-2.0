@@ -65,3 +65,22 @@ library. It is not automatically approved or assigned.
 Media recovery is not claimed: local narration calls returned HTTP 402 and no
 local OpenAI image key is configured. The local server remains available at
 http://127.0.0.1:8000 with the corrected repository code. No migration is needed.
+
+## Transport in plants: production verification
+
+Fresh production upload `c92d337f-cc79-4b1e-8dc7-d32ac26b4339` returned HTTP 201
+in 1.42 seconds, then failed after 114.5 seconds with incident `2766d9a7d333`.
+The whole-lesson correction changed the question set, and preservation validation
+correctly rejected it. This was not a successful upload.
+
+Correction now operates on invalid question fields only, using the dedicated
+`content_question_repair.default` prompt. Each invalid question receives a
+server-created repair ID. Every repair must be present exactly once and pass
+strict marking validation. The server copies back only marking/rendering fields;
+it keeps original IDs, prompts, hints, section structure and all other questions.
+Fallback prose cannot be accepted as a repaired question. A real Claude call
+successfully corrected a malformed selection question through this path.
+
+Migration `20261023_0113` installs the prompt and has been applied to the shared
+production database. The updated code requires deployment before the new
+production retry. No test files were added or changed.

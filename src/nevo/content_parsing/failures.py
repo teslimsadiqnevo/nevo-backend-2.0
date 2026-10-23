@@ -52,6 +52,7 @@ def failure_code(error: BaseException | str) -> UploadReasonCode:
                 "unclassifiable question",
                 "unmarkable choice question",
                 "unsupported question type",
+                "question correction",
             ),
         ),
         (UploadReasonCode.FILE_TOO_LARGE, ("exceeds 50 mb", "file_too_large")),
@@ -92,6 +93,7 @@ FAILURE_REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
             "unclassifiable question",
             "unmarkable choice question",
             "unsupported question type",
+            "question correction",
         ),
         "A question could not be prepared with a usable answer. The lesson has not been "
         "published. Please retry preparation and share the reference if it happens again.",

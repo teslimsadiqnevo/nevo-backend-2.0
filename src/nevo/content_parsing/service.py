@@ -4,7 +4,6 @@ import logging
 import math
 import re
 import time
-from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 from datetime import timedelta
@@ -269,60 +268,37 @@ class ContentParsingService:
 
         pass_limit = asyncio.Semaphore(2)
 
-        def question_items(payload):
-            return [
-                question
-                for section in _dict_list(payload.get("segments"))
-                for question in _question_list(
-                    section.get("comprehension_checkpoints")
-                    or section.get("comprehensionCheckpoints")
-                )
-            ] + _question_list(payload.get("assessment"))
-
         async def read_pass(index: int, chunk: str):
             async with pass_limit:
-                correction = ""
-                required_questions = None
-                for attempt in range(2):
+                calls = 1
+                generated = None
+                try:
+                    generated = await generate_pass(index, "")
+                    candidate = _json_payload(generated.text)
                     try:
-                        generated = await generate_pass(index, correction)
-                        candidate = _json_payload(generated.text)
-                        if (
-                            required_questions is not None
-                            and Counter(
-                                str(q.get("prompt", "")).strip() for q in question_items(candidate)
-                            )
-                            != required_questions
-                        ):
-                            raise UnclassifiableQuestionError(
-                                "Question correction changed or dropped an original question"
-                            )
                         _segments_from_payload_list(candidate, sequence_offset=0)
                         if index == len(chunks):
                             _assessment_questions(candidate)
-                        return generated, attempt + 1
-                    except UnclassifiableQuestionError as error:
-                        if attempt == 1:
-                            return error, attempt + 1
-                        original_questions = question_items(candidate)
-                        required_questions = Counter(
-                            str(q.get("prompt", "")).strip() for q in original_questions
+                    except UnclassifiableQuestionError:
+                        from nevo.content_parsing.question_repair import repair_questions
+
+                        calls += 1
+                        candidate = await repair_questions(
+                            candidate,
+                            source=_pass_source(chunks, index),
+                            gateway=self._ai_gateway,
+                            requester_user_id=requested_by_user_id,
                         )
-                        correction = (
-                            "The previous output failed question validation: "
-                            + str(error)
-                            + ". Correct the question schema using the supplied source. "
-                            "Do not drop questions or invent answer keys. "
-                            "Preserve every question prompt and its occurrence count exactly. "
-                            "Original questions: "
-                            + json.dumps(original_questions)
-                            + ". Return the full lesson JSON.\n\n"
-                        )
-                    except json.JSONDecodeError:
-                        # Keep provider stop/token metadata on the fallback diagnostic.
-                        return generated, attempt + 1
-                    except (AiGatewayError, ValueError) as error:
-                        return error, attempt + 1
+                        _segments_from_payload_list(candidate, sequence_offset=0)
+                        if index == len(chunks):
+                            _assessment_questions(candidate)
+                        generated = replace(generated, text=json.dumps(candidate))
+                    return generated, calls
+                except json.JSONDecodeError:
+                    # Keep provider stop/token metadata on the fallback diagnostic.
+                    return generated, calls
+                except (AiGatewayError, ValueError) as error:
+                    return error, calls
 
         async def generate_pass(index: int, correction: str):
             try:

@@ -261,13 +261,16 @@ async def restore_media(
     result = job.result or {}
     if job.kind == "image":
         image = result.get("image") or {}
-        if not image.get("imageUrl"):
+        if (
+            image.get("safetyPolicyVersion") != POLICY_VERSION
+            or not image.get("imageUrl")
+        ):
             raise HTTPException(409, detail={"code": "media_restore_review_required"})
         segment.visual_variant = image
     else:
         audio = result.get("audio") or {}
         narrations = result.get("stepNarrations") or []
-        if not audio.get("audioUrl") and not narrations:
+        if job.approved_at is None or (not audio.get("audioUrl") and not narrations):
             raise HTTPException(409, detail={"code": "media_restore_review_required"})
         if audio.get("audioUrl"):
             segment.audio_variant = audio

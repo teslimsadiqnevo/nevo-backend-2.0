@@ -358,6 +358,7 @@ class ProactiveAdjustmentResponse(BaseModel):
     #: different one, it will say so here rather than silently. Ask B46.
     segment_id: str | None = Field(default=None, alias="segmentId")
     suggested_modality: ContentModality | None = Field(default=None, alias="suggestedModality")
+    scaffold_level: ScaffoldingLevel | None = Field(default=None, alias="scaffoldLevel")
     guided_steps: list[GuidedStepPrompt] = Field(default_factory=list, alias="guidedSteps")
     requires_choice: bool = Field(default=False, alias="requiresChoice")
 
@@ -976,6 +977,7 @@ async def adapt_lesson(
                 "slower": "slower",
                 "rechunk": "rechunk",
                 "panel": "show_socratic_panel",
+                "calculation_scaffold": ProactiveAction.CALCULATION_SCAFFOLD,
             }
             from nevo.intelligence.guided_panel import public_prompt
 
@@ -983,7 +985,7 @@ async def adapt_lesson(
             guided_questions = latest.question_snapshot.get("guidedQuestions", [])
             steps = [public_prompt(step) for step in guided_steps]
             response.proactive_adjustment = ProactiveAdjustmentResponse(
-                action=actions[route.action],
+                action=ProactiveAction(actions[route.action]),
                 reason=route.label,
                 confidence=1.0,
                 trigger_signals=[
@@ -993,6 +995,11 @@ async def adapt_lesson(
                 ],
                 segment_id=str(current_row.id),
                 suggested_modality=route.format,
+                scaffold_level=(
+                    ScaffoldingLevel.STRONG
+                    if route.action == "calculation_scaffold"
+                    else None
+                ),
                 requires_choice=route.action in {"format", "simplify"},
                 guided_questions=(
                     [str(question) for question in guided_questions if isinstance(question, str)]
@@ -1101,6 +1108,7 @@ async def adapt_lesson(
                 ProactiveAction.RECHUNK,
                 ProactiveAction.SIMPLIFY,
                 ProactiveAction.SLOWER,
+                ProactiveAction.CALCULATION_SCAFFOLD,
             }
             and latest is not None
             and current_row is not None

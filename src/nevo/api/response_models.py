@@ -56,7 +56,10 @@ from nevo.domain.intelligence.vocabulary import (
     UploadStatus,
 )
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
-from nevo.intelligence.comprehension import ComprehensionGate, ComprehensionPolicy
+from nevo.intelligence.comprehension import (
+    ComprehensionGate,
+    ComprehensionPolicy,
+)
 from nevo.intelligence.delivery_preferences import LessonChoice, SegmentChoice, SegmentFormatChoice
 
 
@@ -1110,7 +1113,7 @@ class OfflinePackage(CamelResponse):
     """
 
     id: UUID
-    comprehension_policy: ComprehensionPolicy = Field(default_factory=ComprehensionPolicy)
+    comprehension_policy: ComprehensionPolicy = Field(default_factory=ComprehensionPolicy.current)
     title: str
     #: The parser version the lesson was built by, so a client can tell a
     #: cached package from a newer parse of the same lesson.

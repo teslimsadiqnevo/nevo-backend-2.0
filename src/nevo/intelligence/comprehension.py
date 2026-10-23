@@ -9,18 +9,31 @@ from sqlalchemy import select
 
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.lesson_contracts import checkpoint_payloads, depth_approved, student_modalities
-from nevo.content_parsing.chunks import reading_chunks
+from nevo.core.config import get_settings
 from nevo.db.models.account import StudentClassEnrollment, User
 from nevo.db.models.content import LessonSegment
 from nevo.db.models.frontend_support import Notification
 from nevo.db.models.product import LessonModule, LessonQuestionAttempt
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
+from nevo.domain.intelligence.vocabulary import LessonContentType, ScaffoldingLevel
+
+
+def comprehension_gate_enabled() -> bool:
+    return get_settings().comprehension_gate_enabled
 
 
 class TeachingRoute(BaseModel):
     model_config = CAMEL_CONFIG
 
-    action: Literal["format", "simplify", "simpler_presentation", "slower", "rechunk", "panel"]
+    action: Literal[
+        "format",
+        "simplify",
+        "simpler_presentation",
+        "slower",
+        "rechunk",
+        "panel",
+        "calculation_scaffold",
+    ]
     label: str
     format: Literal["text", "audio", "visual", "interactive"] | None = None
     requires_choice: bool = True
@@ -33,6 +46,7 @@ class TeachingPresentation(BaseModel):
     pacing: Literal["slow"] = "slow"
     recheck_required: Literal[True] = True
     body: str | None = None
+    scaffold_level: ScaffoldingLevel | None = None
 
 
 class ReteachingResponse(BaseModel):
@@ -52,7 +66,7 @@ class ReteachingResponse(BaseModel):
 class ComprehensionGate(BaseModel):
     model_config = CAMEL_CONFIG
 
-    required: bool = True
+    required: bool = False
     can_advance: bool
     segment_id: str | None = None
     question_ids: list[str] = Field(default_factory=list)
@@ -64,7 +78,7 @@ class ComprehensionGate(BaseModel):
 
 class ComprehensionPolicy(BaseModel):
     model_config = CAMEL_CONFIG
-    in_lesson_checks_gate: Literal[True] = True
+    in_lesson_checks_gate: bool = False
     assessment_gates: Literal[False] = False
     panel_completion_unlocks: Literal[False] = False
     attempt_limit: None = None
@@ -73,6 +87,10 @@ class ComprehensionPolicy(BaseModel):
     teacher_override_allowed: Literal[False] = False
     supported_pass_counts_as_independent: Literal[False] = False
     sync_order: Literal["answers_before_progress"] = "answers_before_progress"
+
+    @classmethod
+    def current(cls):
+        return cls(in_lesson_checks_gate=comprehension_gate_enabled())
 
 
 class BreakControlRequest(BaseModel):
@@ -113,6 +131,8 @@ def segment_questions(segment):
 
 
 async def gate_for_position(session, sitting, position=None, *, complete=False):
+    if not comprehension_gate_enabled():
+        return ComprehensionGate(required=False, can_advance=True)
     rows = list(
         await session.scalars(
             select(LessonSegment)
@@ -141,12 +161,14 @@ async def gate_for_position(session, sitting, position=None, *, complete=False):
         questions = segment_questions(row)
         unresolved = [str(q["id"]) for q in questions if (row.id, str(q["id"])) not in passed]
         if unresolved:
+            next_question_id = unresolved[0]
             state = (sitting.delivery_state or {}).get("reteaching", {}).get(str(row.id)) or {}
             return ComprehensionGate(
+                required=True,
                 can_advance=False,
                 segment_id=str(row.id),
-                question_ids=[str(q["id"]) for q in questions],
-                unresolved_question_ids=unresolved,
+                question_ids=[next_question_id],
+                unresolved_question_ids=[next_question_id],
                 reteaching=current_teaching(
                     row,
                     state.get("response"),
@@ -156,7 +178,7 @@ async def gate_for_position(session, sitting, position=None, *, complete=False):
                 if state.get("questionId") in unresolved
                 else None,
             )
-    return ComprehensionGate(can_advance=True)
+    return ComprehensionGate(required=True, can_advance=True)
 
 
 async def require_gate(session, sitting, position=None, *, complete=False):
@@ -170,6 +192,35 @@ async def require_gate(session, sitting, position=None, *, complete=False):
                     "Try this check again before the next part. You can pause or leave anytime."
                 ),
                 "gate": gate.model_dump(mode="json", by_alias=True),
+            },
+        )
+
+
+async def require_next_question(session, sitting, segment, question_id):
+    """When enabled, accept only the next authored check in the current section."""
+    if not comprehension_gate_enabled():
+        return
+    passed = set(
+        await session.scalars(
+            select(LessonQuestionAttempt.question_id).where(
+                LessonQuestionAttempt.session_id == sitting.id,
+                LessonQuestionAttempt.segment_id == segment.id,
+                LessonQuestionAttempt.source.in_(["checkpoint", "calculation"]),
+                LessonQuestionAttempt.correct.is_(True),
+            )
+        )
+    )
+    expected = next(
+        (str(item["id"]) for item in segment_questions(segment) if str(item["id"]) not in passed),
+        None,
+    )
+    if expected is not None and str(question_id) != expected:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "comprehension_check_out_of_order",
+                "message": "Complete this section's checks one at a time.",
+                "expectedQuestionId": expected,
             },
         )
 
@@ -210,7 +261,21 @@ async def cursor_index(session, lesson_id, module_position, segment_position):
     return positions[str(keys[segment_position])]
 
 
-def teaching_routes(segment, current_format="text", current_depth="original"):
+def teaching_routes(segment, current_format="text", current_depth="original", question=None):
+    if segment.content_type == LessonContentType.CALCULATION:
+        return [
+            TeachingRoute(
+                action="calculation_scaffold",
+                label="Show more support in this step",
+                requires_choice=False,
+            ),
+            TeachingRoute(
+                action="simpler_presentation",
+                label="Show fewer steps at once",
+                requires_choice=False,
+            ),
+            TeachingRoute(action="slower", label="Take it more slowly", requires_choice=False),
+        ]
     formats = student_modalities(segment)
     labels = {
         "visual": "Try it as a picture",
@@ -233,10 +298,8 @@ def teaching_routes(segment, current_format="text", current_depth="original"):
             TeachingRoute(action="rechunk", label="Try smaller parts"),
         ]
     )
-    if any(
-        q.get("guidedSteps") or q.get("guidedQuestions")
-        for q in segment.comprehension_checkpoints or []
-    ):
+    question = question or {}
+    if question.get("guidedSteps") or question.get("guidedQuestions"):
         routes.append(TeachingRoute(action="panel", label="Work through it together"))
     return routes
 
@@ -311,11 +374,25 @@ async def note_attempt(session, sitting, segment, attempt):
         current_format = choice.get(
             "modality", available_formats[0] if available_formats else "text"
         )
-        routes = teaching_routes(segment, current_format, choice.get("depth", "original"))
+        routes = teaching_routes(
+            segment,
+            current_format,
+            choice.get("depth", "original"),
+            attempt.question_snapshot,
+        )
         recommended = routes[(misses - 1) % len(routes)]
+        question_snapshot = attempt.question_snapshot or {}
         screens = [
-            str(chunk["text"]) for chunk in reading_chunks(segment.segment_key, segment.body)
+            str(step.get("prompt"))
+            for step in question_snapshot.get("guidedSteps", [])
+            if isinstance(step, dict) and step.get("prompt")
+        ] or [
+            str(item)
+            for item in question_snapshot.get("guidedQuestions", [])
+            if isinstance(item, str) and item.strip()
         ]
+        if not screens and question_snapshot.get("prompt"):
+            screens = [str(question_snapshot["prompt"])]
         # These are rendering settings over existing text, not invented lesson content.
         presentation = {
             "density": "low",
@@ -323,6 +400,8 @@ async def note_attempt(session, sitting, segment, attempt):
             "pacing": "slow",
             "recheckRequired": True,
         }
+        if segment.content_type == LessonContentType.CALCULATION:
+            presentation["scaffoldLevel"] = ScaffoldingLevel.STRONG.value
         if recommended.action == "simplify":
             presentation["body"] = segment.depth_variants["simplified"]["body"]
         response = ReteachingResponse(

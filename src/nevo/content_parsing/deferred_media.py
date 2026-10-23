@@ -17,6 +17,7 @@ from nevo.content_parsing.entities import ParsedLessonSegment
 from nevo.db.models.content import LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
 from nevo.domain.intelligence.vocabulary import ContentModality, LessonContentType
+from nevo.visuals.service import VisualGenerationError
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,13 @@ class DeferredMediaWorker:
             raise
         except SafetyBlocked:
             await self._finish(identity, token, failure="content_safety_blocked")
+        except VisualGenerationError as error:
+            failure = (
+                "educational_review_failed"
+                if "failed educational review" in str(error).casefold()
+                else "generation_unavailable"
+            )
+            await self._finish(identity, token, failure=failure)
         except MediaPreparationFailure as error:
             await self._finish(identity, token, failure=str(error))
         except Exception:
@@ -247,6 +255,11 @@ class DeferredMediaWorker:
                 or not asset.get("imageUrl")
                 or asset.get("safetyPolicyVersion") != POLICY_VERSION
             ):
+                if any(
+                    "failed educational review" in str(note.get("reason") or "").casefold()
+                    for note in notes
+                ):
+                    raise MediaPreparationFailure("educational_review_failed")
                 raise ValueError("Image generation or safety review did not complete")
             image = VisualVariant.model_validate(asset).model_dump(mode="json", by_alias=True)
             return {"image": image, "safetyPolicyVersion": POLICY_VERSION}

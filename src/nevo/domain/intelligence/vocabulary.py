@@ -275,6 +275,8 @@ class ProactiveAction(StrEnum):
     OFFER_MODALITY_SHIFT = "offer_modality_shift"
     #: Re-chunk the section into smaller screens
     RECHUNK = "rechunk"
+    #: Add visual scaffold and an authored hint within the current calculation step.
+    CALCULATION_SCAFFOLD = "calculation_scaffold"
 
 
 class ManipulativeKind(StrEnum):

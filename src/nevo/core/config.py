@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=10, ge=1, le=100)
     database_max_overflow: int = Field(default=10, ge=0, le=100)
     cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    comprehension_gate_enabled: bool = Field(
+        default=False,
+        validation_alias="COMPREHENSION_GATE_ENABLED",
+        description=(
+            "Hold lesson progress at missed checks only after the player supports all "
+            "re-teaching routes and an always-reachable break."
+        ),
+    )
 
     @field_validator("database_url")
     @classmethod

@@ -1559,11 +1559,17 @@ async def save_lesson_question_attempt(
     question, segment_id = await _question_for_attempt(
         session, lesson, payload, presentation_seed=str(actor.id)
     )
-    from nevo.intelligence.comprehension import note_attempt, require_gate
+    from nevo.intelligence.comprehension import (
+        note_attempt,
+        require_gate,
+        require_next_question,
+    )
 
     segment = await session.get(LessonSegment, segment_id) if segment_id else None
     if segment:
         await require_gate(session, lesson_session, segment.sequence_order - 1)
+        if payload.source in {"checkpoint", "calculation"}:
+            await require_next_question(session, lesson_session, segment, payload.question_id)
     else:
         await require_gate(session, lesson_session, complete=True)
     if question.get("answerKey") is None:

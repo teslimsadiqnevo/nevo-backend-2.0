@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import re
 from typing import Literal
 
 import httpx
@@ -62,6 +63,29 @@ the test liquids" are allowed; instructions to taste, ingest, mix, heat, or hand
 hazardous substances unsafely remain dangerous_instructions even if a warning is
 also present.
 """
+
+_DIRECT_PERSONAL_DATA = re.compile(
+    r"(?:\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
+    r"|\b(?:password|passcode|access token|api key|secret key|student pin|otp)"
+    r"\s*(?:is|:|=)\s*\S+"
+    r"|\b(?:home address|street address|phone number|email address|date of birth|"
+    r"national id|medical record|student record|class roster)\b"
+    r"|\b(?:share|send|publish|post|collect|give|write down|enter)\b"
+    r".{0,80}\b(?:your|student|child|personal|private)\s+"
+    r"(?:name|address|phone|email|password|pin|health|medical|family|location|details)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _has_concrete_privacy_indicator(text: str) -> bool:
+    """Ground lesson-source privacy blocks in actual identifiers or data requests.
+
+    The model remains responsible for the other safety categories. This small
+    check prevents an unrelated precaution or textbook example being called
+    privacy abuse without any personal-data evidence in the source.
+    """
+
+    return bool(_DIRECT_PERSONAL_DATA.search(text))
 
 
 class SafetyUnavailable(AiGatewayError):
@@ -180,6 +204,13 @@ class ContentSafetyGuard:
                     decision = SafetyDecision.model_validate(tools[0]["input"])
                 else:
                     decision = SafetyDecision.model_validate_json("".join(blocks))
+                if (
+                    phase == "lesson_source"
+                    and decision.action == "block"
+                    and decision.categories == ["privacy_abuse"]
+                    and not _has_concrete_privacy_indicator(chunk)
+                ):
+                    decision = SafetyDecision(action="allow", categories=[])
                 await self._record(decision, phase, context, body.get("usage") or {})
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
                 raise SafetyUnavailable() from error

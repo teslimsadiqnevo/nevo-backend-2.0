@@ -456,12 +456,18 @@ class ContentParsingService:
         # segment the learner never sees, which is why each has a cap.
         media_notes: list[dict[str, object]] = []
         await _report(on_stage, UploadStage.PREPARING_ADAPTATIONS)
-        prepared_segments = await self._generate_media(
+        prepared_segments = await _in_parallel(
+            lambda segment: self._generate_segment_depth(
+                segment, media_notes, requested_by_user_id=requested_by_user_id
+            ),
             segments,
-            media_notes,
-            requested_by_user_id=requested_by_user_id,
+            limit=DEPTH_CONCURRENCY,
         )
-        normalized_segments = [_normalize_segment(segment) for segment in prepared_segments]
+        from nevo.content_parsing.deferred_media import core_only
+
+        normalized_segments = [
+            _normalize_segment(core_only(segment)) for segment in prepared_segments
+        ]
 
         review_notes.extend(_in_segment_order(media_notes, segments))
         parsed = ParsedLesson(
@@ -475,6 +481,8 @@ class ContentParsingService:
             gemini_call_count=ai_call_count,
             chunk_count=len(chunks),
             modules=tuple(complete_modules(normalized_segments, modules)),
+            defer_optional_media=True,
+            optional_media_sources=tuple(prepared_segments),
         )
         return await self._repository.store(
             request=request,

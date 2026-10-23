@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from nevo.core.config import get_settings
+
 TRANSACTION_POOLER_PORT = 6543
 """Supabase serves transaction-mode pooling here and session mode on 5432."""
 
@@ -42,6 +44,7 @@ def create_engine(database_url: str) -> AsyncEngine:
     every request, so the defaults here trade a little safety margin for not
     paying that repeatedly.
     """
+    settings = get_settings()
     connect_args = {"statement_cache_size": statement_cache_size(database_url)}
     if _is_transaction_pooler(database_url):
         # Reuse client connections without reusing another transaction's prepared statements.
@@ -59,8 +62,8 @@ def create_engine(database_url: str) -> AsyncEngine:
         pool_recycle=280,
         # Connections are expensive to establish here - the handshake costs
         # far more than a query - so hold a few open rather than reopening.
-        pool_size=10,
-        max_overflow=10,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
         pool_timeout=10,
         connect_args=connect_args,
     )

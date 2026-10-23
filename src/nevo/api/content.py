@@ -4,9 +4,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
+from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.api.auth import PrincipalDependency
+from nevo.api.consent import require_learning_consent_if_student
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
 from nevo.content_parsing.entities import (
@@ -16,6 +18,7 @@ from nevo.content_parsing.entities import (
 )
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.content import Lesson, LessonSegment
+from nevo.db.models.deferred_media import DeferredLessonMedia
 from nevo.domain.intelligence.vocabulary import (
     ContentParseStatus,
     LessonSourceType,
@@ -304,15 +307,18 @@ async def read_parse_run(
 @router.post(
     "/media/url",
     response_model=MediaUrlResponse,
+    dependencies=[Depends(require_learning_consent_if_student)],
     responses={
         400: {"description": "invalid_storage_path"},
         502: {"description": "storage_unavailable"},
+        404: {"description": "Media is not available to this account or is awaiting approval"},
     },
 )
 async def refresh_media_url(
     payload: MediaUrlRequest,
     principal: PrincipalDependency,
     service: LessonMediaDependency,
+    session: DatabaseSession,
 ) -> MediaUrlResponse:
     """Re-issue a playable URL for stored lesson audio or imagery.
 
@@ -321,6 +327,68 @@ async def refresh_media_url(
     playable.
     """
     try:
+        path = service._validate(payload.storage_path)
+        lookup_path = (
+            path.removesuffix("-preview.webp") + ".webp" if path.endswith("-preview.webp") else path
+        )
+        from nevo.api.product_learning import _lesson_for_actor
+
+        matches = list(
+            await session.scalars(
+                select(LessonSegment).where(
+                    or_(
+                        LessonSegment.visual_variant["storagePath"].astext == lookup_path,
+                        LessonSegment.audio_variant["storagePath"].astext == lookup_path,
+                        LessonSegment.calculation_variant["steps"].contains(
+                            [{"narrationAudio": {"storagePath": lookup_path}}]
+                        ),
+                    )
+                )
+            )
+        )
+        permitted = False
+        for segment in matches:
+            try:
+                actor, _ = await _lesson_for_actor(segment.lesson_id, principal, session)
+            except HTTPException as error:
+                if error.status_code in {403, 404, 409}:
+                    continue
+                raise
+            if actor.role == "student":
+                if segment.needs_review and segment.approved_at is None:
+                    continue
+                if (
+                    path.startswith("images/")
+                    and (segment.visual_variant or {}).get("safetyPolicyVersion") != POLICY_VERSION
+                ):
+                    continue
+            permitted = True
+            break
+        if not permitted and principal.role in {"teacher", "senco_admin", "other_admin"}:
+            actor = await require_school_actor(session, principal)
+            pending = await session.scalar(
+                select(DeferredLessonMedia.id)
+                .join(
+                    Lesson,
+                    Lesson.id == DeferredLessonMedia.lesson_id,
+                )
+                .where(
+                    Lesson.school_id == actor.school_id,
+                    DeferredLessonMedia.status.in_(["awaiting_review", "approved"]),
+                    DeferredLessonMedia.result["safetyPolicyVersion"].astext == POLICY_VERSION,
+                    or_(
+                        DeferredLessonMedia.result["image"]["storagePath"].astext == lookup_path,
+                        DeferredLessonMedia.result["audio"]["storagePath"].astext == lookup_path,
+                        DeferredLessonMedia.result["stepNarrations"].contains(
+                            [{"audio": {"storagePath": lookup_path}}]
+                        ),
+                    ),
+                )
+                .limit(1)
+            )
+            permitted = pending is not None
+        if not permitted:
+            raise HTTPException(404, detail={"code": "media_not_available"})
         url, expires_in_seconds = await service.url_for(payload.storage_path)
     except InvalidMediaPathError as error:
         raise HTTPException(

@@ -21,6 +21,7 @@ from nevo.api.billing import router as billing_router
 from nevo.api.client_errors import router as client_errors_router
 from nevo.api.consent import router as consent_router
 from nevo.api.content import router as content_router
+from nevo.api.deferred_media import router as deferred_media_router
 from nevo.api.docs import (
     API_DESCRIPTION,
     OPENAPI_TAGS,
@@ -71,6 +72,7 @@ from nevo.billing.wiring import build_billing_service
 from nevo.consent.config import ConsentSettings
 from nevo.consent.wiring import build_consent_service
 from nevo.consent.worker import ConsentDeliveryWorker
+from nevo.content_parsing.deferred_media import DeferredMediaWorker
 from nevo.content_parsing.wiring import build_content_parsing_service
 from nevo.core.config import get_settings
 from nevo.db.session import create_engine, create_session_factory
@@ -182,6 +184,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.ai_gateway,
     )
+    app.state.deferred_media_worker = DeferredMediaWorker(
+        sessions, app.state.content_parsing_service
+    )
+    app.state.deferred_media_worker.start()
     app.state.lesson_media_service = build_lesson_media_service()
     app.state.post_lesson_profile_update_service = build_post_lesson_profile_update_service(
         sessions,
@@ -243,6 +249,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await app.state.deferred_media_worker.stop()
         await app.state.notification_email_worker.stop()
         await app.state.consent_delivery_worker.stop()
         await app.state.scheduled_job_runner.stop()
@@ -403,6 +410,7 @@ app.include_router(sso_router)
 app.include_router(teacher_assignment_router)
 app.include_router(media_ops_router)
 app.include_router(licences_router)
+app.include_router(deferred_media_router)
 
 
 @app.get("/health", tags=["system"])

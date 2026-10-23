@@ -27,6 +27,7 @@ from nevo.api.lesson_contracts import (
 )
 from nevo.content_parsing.descriptions import clean_lesson_description
 from nevo.content_parsing.failures import UploadReasonCode
+from nevo.content_parsing.media_contracts import MediaPreparation
 from nevo.domain.accounts.age_bands import AgeBand
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
@@ -1133,6 +1134,7 @@ class UploadCreatedResponse(CamelResponse):
     status: UploadStatus
     stage: UploadStage
     reused: bool = False
+    review_ready: bool = False
 
 
 class BatchUploadItemResponse(CamelResponse):
@@ -1180,6 +1182,8 @@ class UploadStatusResponse(CamelResponse):
     id: UUID
     status: UploadStatus
     stage: UploadStage
+    review_ready: bool = False
+    media_preparation: "MediaPreparation | None" = None
     #: Lesson title for this upload, so a batch screen can show titles rather
     #: than filenames from the one poll it already makes.
     lesson_title: str | None = None

@@ -2897,6 +2897,7 @@ async def upload_list(
             "status": job.status,
             "stage": job.stage,
             "lessonTitle": _title_of(job, titles),
+            "reviewReady": job.status in {"ready", "confirmed"},
             # Deliberately not the segments: this is the list, and a school
             # with twenty uploads of eleven segments each would be sending a
             # lesson's worth of body text to render a progress bar.
@@ -2935,10 +2936,14 @@ async def upload_status(
         if lesson_id
         else []
     )
+    from nevo.api.deferred_media import media_summary
+
     return {
         "id": str(job.id),
         "status": job.status,
         "stage": job.stage,
+        "reviewReady": job.status in {"ready", "confirmed"},
+        "mediaPreparation": await media_summary(session, lesson_id) if lesson_id else None,
         "lessonTitle": lesson.title if lesson else None,
         "segments": [
             {

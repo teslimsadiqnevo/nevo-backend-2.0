@@ -37,6 +37,7 @@ from nevo.db.models.consent import (
     ParentLink,
 )
 from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
+from nevo.db.models.deferred_media import DeferredLessonMedia
 from nevo.db.models.export import IepExport, IepExportShare, StudentRecordEvent
 from nevo.db.models.frontend_support import (
     Concept,
@@ -131,6 +132,7 @@ __all__ = [
     "ContentParseRun",
     "ContentSafetyEvent",
     "Contract",
+    "DeferredLessonMedia",
     "DpaAcceptance",
     "EnrollmentHistory",
     "Escalation",

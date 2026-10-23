@@ -125,6 +125,7 @@ class SegmentReviewReason(StrEnum):
     #: the console can render, rather than as prose it cannot.
     MODEL_FLAGGED_FOR_REVIEW = "model_flagged_for_review"
     DEPTH_VARIANT_REVIEW_REQUIRED = "depth_variant_review_required"
+    OPTIONAL_MEDIA_PENDING_REVIEW = "optional_media_pending_review"
 
 
 class UploadStatus(StrEnum):

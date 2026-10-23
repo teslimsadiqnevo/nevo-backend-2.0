@@ -71,6 +71,8 @@ class ParsedLesson:
     gemini_call_count: int = 0
     chunk_count: int = 1
     modules: tuple[ParsedLessonModule, ...] = ()
+    defer_optional_media: bool = False
+    optional_media_sources: tuple[ParsedLessonSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

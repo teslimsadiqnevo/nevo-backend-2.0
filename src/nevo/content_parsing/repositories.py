@@ -541,6 +541,19 @@ class SqlAlchemyContentParsingRepository:
                 session.add(row)
                 await session.flush()
                 _add_key_points(session, row)
+                if parsed.defer_optional_media:
+                    from nevo.content_parsing.deferred_media import enqueue_media
+
+                    source = next(
+                        (
+                            item
+                            for item in parsed.optional_media_sources
+                            if item.segment_key == segment.segment_key
+                        ),
+                        None,
+                    )
+                    if source is not None:
+                        enqueue_media(session, row, source, requested_by_user_id)
             await session.execute(delete(LessonModule).where(LessonModule.lesson_id == lesson_id))
             for position, module in enumerate(parsed.modules, start=1):
                 module_row = LessonModule(

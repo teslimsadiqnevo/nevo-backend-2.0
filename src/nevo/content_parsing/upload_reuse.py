@@ -109,4 +109,10 @@ async def record_reused_media(session: AsyncSession, job: UploadJob) -> None:
 
 
 def reuse_response(job: UploadJob) -> dict[str, object]:
-    return {"uploadId": str(job.id), "status": job.status, "stage": job.stage, "reused": True}
+    return {
+        "uploadId": str(job.id),
+        "status": job.status,
+        "stage": job.stage,
+        "reused": True,
+        "reviewReady": job.status in {"ready", "confirmed"},
+    }

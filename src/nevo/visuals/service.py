@@ -135,7 +135,13 @@ class EducationalImageService:
         width = height = byte_size = 0
         try:
             if not await self._storage.exists(object_path):
-                accepted, attempts = await self._draw_until_approved(prompt, safe_text)
+                answer_safe_prompt = self._answer_safe_prompt(title)
+                accepted, attempts, used_prompt = await self._draw_until_approved(
+                    prompt,
+                    safe_text,
+                    answer_safe_prompt=answer_safe_prompt,
+                    context=context,
+                )
                 await self._safety.check(
                     safe_text, phase="image_output", context=context, image=accepted
                 )
@@ -177,7 +183,7 @@ class EducationalImageService:
             "height": height,
             "byteSize": byte_size,
             "storagePath": object_path,
-            "prompt": prompt,
+            "prompt": used_prompt if byte_size else prompt,
             "provider": self._settings.image_model,
             "reviewedBy": self._settings.validator_model,
             "reviewAttempts": attempts,
@@ -190,9 +196,19 @@ class EducationalImageService:
             ),
         }
 
-    async def _draw_until_approved(self, prompt: str, lesson_text: str) -> tuple[bytes, int]:
+    async def _draw_until_approved(
+        self,
+        prompt: str,
+        lesson_text: str,
+        *,
+        answer_safe_prompt: str,
+        context=None,
+    ) -> tuple[bytes, int, str]:
         issues = ""
         category = "educational_quality"
+        active_prompt = prompt
+        active_prompt_checked = True
+        answer_safe_retry = False
         deadline = time.monotonic() + self._settings.budget_seconds
         for attempt in range(1, self._settings.max_attempts + 1):
             if time.monotonic() >= deadline:
@@ -200,10 +216,16 @@ class EducationalImageService:
                     f"Image generation ran out of time after {attempt - 1} attempts"
                 )
             correction = f"\n\nCorrect these problems from the previous attempt: {issues}"
+            sent_prompt = active_prompt + (correction if issues else "")
             try:
+                if not active_prompt_checked:
+                    await self._safety.check(
+                        active_prompt, phase="image_prompt", context=context
+                    )
+                    active_prompt_checked = True
                 image = await asyncio.wait_for(
                     self._generate_image(
-                        prompt + (correction if issues else ""),
+                        sent_prompt,
                         deadline=deadline,
                     ),
                     timeout=max(1.0, deadline - time.monotonic()),
@@ -218,10 +240,37 @@ class EducationalImageService:
                 # is better than the whole parse never finishing.
                 raise VisualGenerationError("Image generation exceeded its time budget") from error
             if approved and category != "answer_revealing_content":
-                return image, attempt
-            if category == "answer_revealing_content" and not issues:
-                issues = "The image reveals an answer to a question or check in this section."
+                return image, attempt, sent_prompt
+            if category == "answer_revealing_content":
+                # Do not repeat the question or its answer in a corrective
+                # prompt. Rebuild from the section title alone; the reviewer
+                # still receives the complete lesson text above.
+                active_prompt = answer_safe_prompt
+                active_prompt_checked = False
+                answer_safe_retry = True
+                issues = (
+                    "Do not show, calculate, label, or otherwise reveal any answer to a question "
+                    "or check in this section. Illustrate only the broad concept."
+                )
+            elif answer_safe_retry:
+                issues = f"The previous concept-only picture had these issues: {issues}"
         raise VisualEducationalReviewError(category, issues)
+
+    def _answer_safe_prompt(self, title: str | None) -> str:
+        safe_title = self._privacy.sanitize_text(title or "", pseudonym="the learner")
+        # A question-like or answer-bearing title is not safe context for a
+        # retry either. The original section remains available to the reviewer.
+        if "?" in safe_title or any(
+            marker in safe_title.casefold()
+            for marker in ("answer", "solution", "correct option", "how many", "what is")
+        ):
+            safe_title = ""
+        return self._prompt(
+            safe_title or "the broad lesson concept",
+            "",
+            "Illustrate the broad concept only. Do not include a worked example, "
+            "question, answer choice, numeric result, or solved assessment.",
+        )
 
     def _prompt(self, title: str | None, text: str, requested: str | None) -> str:
         return (

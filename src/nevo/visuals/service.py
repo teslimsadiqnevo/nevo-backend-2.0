@@ -56,14 +56,25 @@ REVIEW_SCHEMA: dict[str, Any] = {
     "properties": {
         "approved": {"type": "boolean"},
         "issues": {"type": "string"},
+        "category": {
+            "type": "string",
+            "enum": ["answer_revealing_content", "educational_quality"],
+        },
     },
-    "required": ["approved", "issues"],
+    "required": ["approved", "issues", "category"],
     "additionalProperties": False,
 }
 
 
 class VisualGenerationError(RuntimeError):
     pass
+
+
+class VisualEducationalReviewError(VisualGenerationError):
+    def __init__(self, category: str, reason: str):
+        self.category = category
+        self.reason = reason[:500]
+        super().__init__(f"Generated image failed {category}: {self.reason[:300]}")
 
 
 class EducationalImageService:
@@ -181,6 +192,7 @@ class EducationalImageService:
 
     async def _draw_until_approved(self, prompt: str, lesson_text: str) -> tuple[bytes, int]:
         issues = ""
+        category = "educational_quality"
         deadline = time.monotonic() + self._settings.budget_seconds
         for attempt in range(1, self._settings.max_attempts + 1):
             if time.monotonic() >= deadline:
@@ -196,7 +208,7 @@ class EducationalImageService:
                     ),
                     timeout=max(1.0, deadline - time.monotonic()),
                 )
-                approved, issues = await asyncio.wait_for(
+                approved, issues, category = await asyncio.wait_for(
                     self._review_image(image=image, lesson_text=lesson_text),
                     timeout=max(1.0, deadline - time.monotonic()),
                 )
@@ -205,9 +217,11 @@ class EducationalImageService:
                 # segment loses its picture and is flagged for review, which
                 # is better than the whole parse never finishing.
                 raise VisualGenerationError("Image generation exceeded its time budget") from error
-            if approved:
+            if approved and category != "answer_revealing_content":
                 return image, attempt
-        raise VisualGenerationError(f"Generated image failed educational review: {issues[:300]}")
+            if category == "answer_revealing_content" and not issues:
+                issues = "The image reveals an answer to a question or check in this section."
+        raise VisualEducationalReviewError(category, issues)
 
     def _prompt(self, title: str | None, text: str, requested: str | None) -> str:
         return (
@@ -296,8 +310,10 @@ class EducationalImageService:
                         "You review images used to teach children. Approve an image only if it is "
                         "factually correct, numerically exact, clearly readable, relevant to the "
                         "lesson, and age-appropriate. Reject anything misleading, mislabelled, "
-                        "cluttered, or decorative rather than instructional. When rejecting, state "
-                        "the specific correction the illustrator must make."
+                        "cluttered, or decorative rather than instructional. Reject any image "
+                        "that reveals an answer to a question/check in the lesson, even if it is "
+                        "otherwise correct, and classify it as answer_revealing_content. When "
+                        "rejecting, state the specific reason and correction."
                     ),
                     "messages": [
                         {
@@ -314,7 +330,13 @@ class EducationalImageService:
                                 {
                                     "type": "text",
                                     "text": (
-                                        "Review this image against the lesson content below.\n\n"
+                                        "Review this image against the lesson content below. Set "
+                                        "category to answer_revealing_content if the picture "
+                                        "gives away an answer to a question, check or practice "
+                                        "item in this section, including a worked result, answer "
+                                        "value or completed solution; otherwise use "
+                                        "educational_quality. Reject answer-revealing images "
+                                        "even when factually correct.\n\n"
                                         f"Lesson content: {lesson_text}"
                                     ),
                                 },
@@ -337,7 +359,7 @@ class EducationalImageService:
         return self._parse_review(response.json())
 
     @staticmethod
-    def _parse_review(body: Any) -> tuple[bool, str]:
+    def _parse_review(body: Any) -> tuple[bool, str, str]:
         try:
             text = next(
                 block["text"]
@@ -345,7 +367,10 @@ class EducationalImageService:
                 if block.get("type") == "text" and block.get("text")
             )
             payload = json.loads(text)
-            return bool(payload["approved"]), str(payload.get("issues") or "")
+            category = payload.get("category", "educational_quality")
+            if category not in {"answer_revealing_content", "educational_quality"}:
+                raise ValueError("Image review category is missing or invalid")
+            return bool(payload["approved"]), str(payload.get("issues") or ""), category
         except (
             KeyError,
             StopIteration,

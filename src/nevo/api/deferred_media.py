@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 
@@ -12,6 +12,7 @@ from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
+from nevo.api.response_models import CamelResponse
 from nevo.content_parsing.deferred_media import source_hash
 from nevo.content_parsing.media_contracts import (
     LessonMediaItem,
@@ -24,13 +25,68 @@ from nevo.db.models.deferred_media import DeferredLessonMedia
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 WITHDRAWAL_UNDO_WINDOW = timedelta(hours=24)
+REVIEW_EXCLUDED_FAILURES = frozenset(
+    {"content_safety_blocked", "answer_revealing_content"}
+)
+
+
+class MediaQualityEvent(CamelResponse):
+    lesson_id: UUID
+    lesson_title: str
+    segment_id: UUID
+    segment_title: str | None
+    kind: Literal["image"]
+    category: Literal["answer_revealing_content"]
+    reason: str
+    detected_at: datetime | None
 
 
 def reviewable_media():
     return or_(
         DeferredLessonMedia.failure_code.is_(None),
-        DeferredLessonMedia.failure_code != "content_safety_blocked",
+        DeferredLessonMedia.failure_code.notin_(REVIEW_EXCLUDED_FAILURES),
     )
+
+
+@router.get(
+    "/admin/media-quality-events",
+    response_model=list[MediaQualityEvent],
+    tags=["school administration"],
+)
+async def media_quality_events(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    limit: int = Query(100, ge=1, le=200),
+):
+    """Show answer-revealing image rejections to school administrators only."""
+    actor = await require_school_actor(
+        session, principal, roles={"senco_admin", "other_admin"}
+    )
+    rows = await session.execute(
+        select(DeferredLessonMedia, Lesson, LessonSegment)
+        .join(Lesson, Lesson.id == DeferredLessonMedia.lesson_id)
+        .join(LessonSegment, LessonSegment.id == DeferredLessonMedia.segment_id)
+        .where(
+            Lesson.school_id == actor.school_id,
+            DeferredLessonMedia.kind == "image",
+            DeferredLessonMedia.failure_code == "answer_revealing_content",
+        )
+        .order_by(DeferredLessonMedia.completed_at.desc())
+        .limit(limit)
+    )
+    return [
+        MediaQualityEvent(
+            lesson_id=lesson.id,
+            lesson_title=lesson.title,
+            segment_id=segment.id,
+            segment_title=segment.title,
+            kind="image",
+            category="answer_revealing_content",
+            reason=str((job.result or {}).get("reviewReason") or "Image revealed a check answer."),
+            detected_at=job.completed_at,
+        )
+        for job, lesson, segment in rows
+    ]
 
 
 async def media_summary(session, lesson_id):
@@ -177,7 +233,11 @@ async def lesson_media(lesson_id: UUID, principal: PrincipalDependency, session:
 
 async def _job(session, lesson_id, media_id, *, require_current=True):
     job = await session.get(DeferredLessonMedia, media_id, with_for_update=True)
-    if job is None or job.lesson_id != lesson_id or job.failure_code == "content_safety_blocked":
+    if (
+        job is None
+        or job.lesson_id != lesson_id
+        or job.failure_code in REVIEW_EXCLUDED_FAILURES
+    ):
         raise HTTPException(404, detail="Media preparation not found")
     segment = await session.get(LessonSegment, job.segment_id, with_for_update=True)
     if segment is None or (require_current and source_hash(segment) != job.source_hash):

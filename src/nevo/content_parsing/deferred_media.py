@@ -17,7 +17,7 @@ from nevo.content_parsing.entities import ParsedLessonSegment
 from nevo.db.models.content import LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
 from nevo.domain.intelligence.vocabulary import ContentModality, LessonContentType
-from nevo.visuals.service import VisualGenerationError
+from nevo.visuals.service import VisualEducationalReviewError, VisualGenerationError
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +221,17 @@ class DeferredMediaWorker:
             raise
         except SafetyBlocked:
             await self._finish(identity, token, failure="content_safety_blocked")
+        except VisualEducationalReviewError as error:
+            await self._finish(
+                identity,
+                token,
+                failure=(
+                    "answer_revealing_content"
+                    if error.category == "answer_revealing_content"
+                    else "educational_review_failed"
+                ),
+                result={"reviewReason": error.reason},
+            )
         except VisualGenerationError as error:
             failure = (
                 "educational_review_failed"

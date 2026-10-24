@@ -56,11 +56,9 @@ def student_modalities(segment):
 
 
 def student_activity(segment):
-    # Temporary SCRUM-280 guard until the player renders mandatory safety instructions.
     from nevo.content_parsing.activity import activity_for_delivery
 
-    activity = activity_for_delivery(segment.interactive_variant, segment.body)
-    return None if (activity or {}).get("safety") else activity
+    return activity_for_delivery(segment.interactive_variant, segment.body)
 
 
 def segment_modalities(content_type, available, calculation):

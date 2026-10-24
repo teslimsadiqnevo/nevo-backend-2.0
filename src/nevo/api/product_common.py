@@ -188,7 +188,7 @@ async def require_approved_lessons(
     wanted = list(dict.fromkeys(lesson_ids))
     if not wanted:
         return
-    rows = (
+    section_rows = (
         await session.execute(
             select(Lesson.id, Lesson.title, func.count(LessonSegment.id))
             .join(LessonSegment, LessonSegment.lesson_id == Lesson.id)
@@ -201,7 +201,21 @@ async def require_approved_lessons(
         )
     ).all()
     unsettled = await outstanding_key_points(session, wanted)
-    titles = {lesson_id: title for lesson_id, title, _ in rows}
+    titles = {lesson_id: title for lesson_id, title, _ in section_rows}
+    section_counts = {lesson_id: int(count) for lesson_id, _, count in section_rows}
+    if section_counts:
+        # Bulk review is the current teacher sign-off. Its content hashes make
+        # this safe to use here: edits invalidate the sign-off, while older
+        # per-section approvals continue to work as before.
+        from nevo.api.lesson_review import _review_result
+
+        lessons = await session.scalars(
+            select(Lesson).where(Lesson.id.in_(section_counts))
+        )
+        for lesson in lessons:
+            review = await _review_result(session, lesson)
+            if review.review_complete:
+                section_counts.pop(lesson.id, None)
     if unsettled:
         missing = [key for key in unsettled if key not in titles]
         if missing:
@@ -209,7 +223,7 @@ async def require_approved_lessons(
                 select(Lesson.id, Lesson.title).where(Lesson.id.in_(missing))
             )
             titles.update({row[0]: row[1] for row in named.all()})
-    segments_left = {lesson_id: int(count) for lesson_id, _, count in rows}
+    segments_left = section_counts
     outstanding = sorted(set(segments_left) | set(unsettled), key=lambda key: str(titles.get(key)))
     if not outstanding:
         return

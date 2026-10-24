@@ -231,12 +231,23 @@ async def lesson_media(lesson_id: UUID, principal: PrincipalDependency, session:
     )
 
 
-async def _job(session, lesson_id, media_id, *, require_current=True):
+async def _job(
+    session,
+    lesson_id,
+    media_id,
+    *,
+    require_current=True,
+    allow_answer_revealing_retry=False,
+):
     job = await session.get(DeferredLessonMedia, media_id, with_for_update=True)
+    excluded_failure = job.failure_code in REVIEW_EXCLUDED_FAILURES if job else False
+    answer_revealing_retry = (
+        allow_answer_revealing_retry and job and job.failure_code == "answer_revealing_content"
+    )
     if (
         job is None
         or job.lesson_id != lesson_id
-        or job.failure_code in REVIEW_EXCLUDED_FAILURES
+        or (excluded_failure and not answer_revealing_retry)
     ):
         raise HTTPException(404, detail="Media preparation not found")
     segment = await session.get(LessonSegment, job.segment_id, with_for_update=True)
@@ -511,11 +522,16 @@ async def approve_media_batch(
 async def retry_media(
     lesson_id: UUID, media_id: UUID, principal: PrincipalDependency, session: DatabaseSession
 ):
-    await _lesson(session, principal, lesson_id)
-    job, segment = await _job(session, lesson_id, media_id, require_current=False)
-    changed = source_hash(segment) != job.source_hash
+    actor = await _lesson(session, principal, lesson_id)
+    job, segment = await _job(
+        session,
+        lesson_id,
+        media_id,
+        require_current=False,
+        allow_answer_revealing_retry=True,
+    )
     if (
-        job.status not in {"failed", "stale"} and not (changed and job.status == "awaiting_review")
+        job.status not in {"failed", "stale", "awaiting_review"}
     ) or job.approved_at is not None:
         raise HTTPException(409, detail={"code": "media_retry_not_allowed"})
     if source_hash(segment) != job.source_hash:
@@ -531,6 +547,7 @@ async def retry_media(
         payload["calculation_variant"] = calculation
         job.payload = payload
         job.source_hash = source_hash(segment)
+    job.requested_by = actor.id
     job.status, job.attempts = "queued", 0
     job.result = job.failure_code = job.completed_at = job.lease_token = job.lease_until = None
     await session.commit()

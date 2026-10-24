@@ -210,11 +210,13 @@ class EducationalImageService:
         active_prompt_checked = True
         answer_safe_retry = False
         deadline = time.monotonic() + self._settings.budget_seconds
-        for attempt in range(1, self._settings.max_attempts + 1):
+        for attempt in range(1, self._settings.max_attempts + 2):
             if time.monotonic() >= deadline:
                 raise VisualGenerationError(
                     f"Image generation ran out of time after {attempt - 1} attempts"
                 )
+            if attempt > self._settings.max_attempts and not answer_safe_retry:
+                break
             correction = f"\n\nCorrect these problems from the previous attempt: {issues}"
             sent_prompt = active_prompt + (correction if issues else "")
             try:
@@ -241,6 +243,8 @@ class EducationalImageService:
                 raise VisualGenerationError("Image generation exceeded its time budget") from error
             if approved and category != "answer_revealing_content":
                 return image, attempt, sent_prompt
+            if answer_safe_retry:
+                raise VisualEducationalReviewError(category, issues)
             if category == "answer_revealing_content":
                 # Do not repeat the question or its answer in a corrective
                 # prompt. Rebuild from the section title alone; the reviewer

@@ -3350,6 +3350,7 @@ async def confirm_upload(
     await session.execute(delete(LessonModule).where(LessonModule.lesson_id == root_id))
 
     lesson_ids: list[UUID] = []
+    pending_module_segments: list[tuple[LessonModule, list[str]]] = []
     for index, entry in enumerate(entries):
         modules = [item for item in entry.get("modules", []) if isinstance(item, dict)]
         entry_id = _uuid(entry.get("lessonId"))
@@ -3409,9 +3410,16 @@ async def confirm_upload(
                 ),
             )
             session.add(module_row)
-            for key in module_row.segment_ids:
-                if key in segments:
-                    segments[key].module_id = module_row.id
+            pending_module_segments.append((module_row, module_row.segment_ids))
+
+    # These rows are referenced by lesson_segments.module_id. Flush their
+    # inserts before assigning those foreign keys; without this boundary,
+    # SQLAlchemy may batch segment updates ahead of the module inserts.
+    await session.flush()
+    for module_row, segment_keys in pending_module_segments:
+        for key in segment_keys:
+            if key in segments:
+                segments[key].module_id = module_row.id
 
     job.status = "confirmed"
     job.stage = UploadStage.READY_TO_ASSIGN.value

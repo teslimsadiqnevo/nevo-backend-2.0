@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -178,6 +179,7 @@ class ComprehensionCheckpoint(BaseModel):
             ("accepted_answers", "acceptedAnswers"),
             ("guided_questions", "guidedQuestions"),
             ("guided_steps", "guidedSteps"),
+            ("guided_steps_review_status", "guidedStepsReviewStatus"),
         ):
             if canonical not in value and field in value:
                 value[canonical] = value[field]
@@ -245,6 +247,9 @@ class ComprehensionCheckpoint(BaseModel):
     guided_questions: list[str] = Field(default_factory=list, alias="guidedQuestions", max_length=5)
     guided_steps: list[GuidedCheckStep] = Field(
         default_factory=list, alias="guidedSteps", max_length=8
+    )
+    guided_steps_review_status: Literal["pending_review", "approved"] | None = Field(
+        default=None, alias="guidedStepsReviewStatus"
     )
 
     @model_validator(mode="after")
@@ -1041,6 +1046,7 @@ def checkpoint_payloads(
     strict: bool = False,
     presentation_seed: str = "lesson",
     question_offset: int = 0,
+    include_pending_guidance: bool = False,
 ) -> list[dict[str, object]]:
     """Normalize older parser output into the documented checkpoint contract."""
     result: list[dict[str, object]] = []
@@ -1114,6 +1120,12 @@ def checkpoint_payloads(
         from nevo.probe.presentation import ordered_options
 
         rendered = question.model_dump(by_alias=True, mode="json")
+        if (
+            not include_pending_guidance
+            and rendered.get("guidedStepsReviewStatus") == "pending_review"
+        ):
+            rendered["guidedSteps"] = []
+            rendered.pop("guidedStepsReviewStatus", None)
         rendered["options"] = ordered_options(
             rendered["options"],
             seed=f"{presentation_seed}:{segment_key}",
@@ -1128,6 +1140,38 @@ def checkpoint_payloads(
             )
         result.append(rendered)
     return result
+
+
+def explanation_reveals_answer(step: dict[str, object]) -> bool:
+    """Conservatively detect whether wrong-answer feedback states the key."""
+    if not isinstance(step, dict) and hasattr(step, "model_dump"):
+        step = step.model_dump(by_alias=True, mode="json")
+    explanation = " ".join(str(step.get("explanation") or "").casefold().split())
+    if not explanation:
+        return False
+    candidates = [step.get("answerKey")]
+    candidates.extend(
+        option.get("label")
+        for option in step.get("options", [])
+        if isinstance(option, dict)
+        and option.get("value") in (
+            step.get("answerKey")
+            if isinstance(step.get("answerKey"), list)
+            else [step.get("answerKey")]
+        )
+    )
+    for candidate in candidates:
+        if not isinstance(candidate, (str, int, float, bool)):
+            continue
+        value = " ".join(str(candidate).casefold().split())
+        if not value or len(value) < 2:
+            continue
+        if value.isalnum():
+            if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", explanation):
+                return True
+        elif value in explanation:
+            return True
+    return False
 
 
 def _options(value: object) -> list[dict[str, ScalarAnswer]]:

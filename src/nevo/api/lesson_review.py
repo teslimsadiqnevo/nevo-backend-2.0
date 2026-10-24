@@ -28,6 +28,7 @@ from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.api.ai_gateway import AiGatewayDependency, public_ai_error
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.api.lesson_contracts import GuidedCheckStep, depth_approved, explanation_reveals_answer
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
@@ -75,12 +76,29 @@ class KeyPointResponse(CamelResponse):
 
 class ReviewSignoffResponse(CamelResponse):
     id: UUID
-    kind: Literal["key_points", "rewrites"]
+    kind: Literal["key_points", "rewrites", "guided_steps"]
     approved_by: UUID | None
     approved_by_name: str
     approved_at: datetime
     content_hash: str
     current: bool
+
+
+class GuidedStepsReviewItem(CamelResponse):
+    segment_id: UUID
+    segment_title: str | None
+    question_id: str
+    question_prompt: str
+    review_status: Literal["pending_review", "approved"]
+    guided_questions: list[str] = Field(default_factory=list)
+    steps: list[GuidedCheckStep]
+    answer_leakage_step_ids: list[str] = Field(default_factory=list)
+
+
+class GuidedStepsBulkReviewRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    expected_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class LessonReviewResponse(CamelResponse):
@@ -100,6 +118,10 @@ class LessonReviewResponse(CamelResponse):
     rewrites_content_hash: str = ""
     key_point_approval: ReviewSignoffResponse | None = None
     rewrite_approval: ReviewSignoffResponse | None = None
+    guided_steps_approval: ReviewSignoffResponse | None = None
+    guided_steps_content_hash: str = ""
+    guided_steps: list["GuidedStepsReviewItem"] = Field(default_factory=list)
+    pending_guided_step_count: int = 0
     missing_key_point_segment_ids: list[UUID] = Field(default_factory=list)
     rewrite_count: int = 0
     pending_rewrite_count: int = 0
@@ -410,14 +432,62 @@ async def _review_material(session, lesson):
     return rows, segments, key_material, rewrites
 
 
+def _guided_steps_material(segments):
+    material = []
+    views = []
+    pending_count = 0
+    for segment in segments:
+        for question in segment.comprehension_checkpoints or []:
+            state = question.get("guidedStepsReviewStatus")
+            steps = question.get("pendingGuidedSteps") or question.get("guidedSteps") or []
+            guided_questions = [
+                str(value).strip()
+                for value in question.get("guidedQuestions", [])
+                if isinstance(value, str) and value.strip()
+            ]
+            if not steps or state not in {"pending_review", "approved"}:
+                continue
+            item = {
+                "segmentId": str(segment.id),
+                "questionId": str(question.get("id") or ""),
+                "questionPrompt": str(question.get("prompt") or ""),
+                "guidedQuestions": guided_questions,
+                "steps": steps,
+            }
+            parsed_steps = [GuidedCheckStep.model_validate(step) for step in steps]
+            material.append(item)
+            views.append(
+                GuidedStepsReviewItem(
+                    segment_id=segment.id,
+                    segment_title=segment.title,
+                    question_id=item["questionId"],
+                    question_prompt=item["questionPrompt"],
+                    review_status=state,
+                    guided_questions=guided_questions,
+                    steps=parsed_steps,
+                    answer_leakage_step_ids=[
+                        step.id
+                        for step in parsed_steps
+                        if explanation_reveals_answer(step)
+                    ],
+                )
+            )
+            if state == "pending_review":
+                pending_count += len(steps)
+    return material, views, pending_count
+
+
 async def _review_result(session, lesson):
     from nevo.api.deferred_media import _view as media_view
     from nevo.api.deferred_media import media_summary, reviewable_media
-    from nevo.api.lesson_contracts import depth_approved
-
     rows, segments, points, rewrites = await _review_material(session, lesson)
+    guided_material, guided_views, pending_guided_count = _guided_steps_material(segments)
     result = _review(lesson, rows)
-    hashes = {"key_points": _hash(points), "rewrites": _hash(rewrites)}
+    hashes = {
+        "key_points": _hash(points),
+        "rewrites": _hash(rewrites),
+        "guided_steps": _hash(guided_material),
+    }
     approvals = {}
     media_rows = await session.execute(
         select(DeferredLessonMedia, LessonSegment)
@@ -468,7 +538,15 @@ async def _review_result(session, lesson):
                 and (segment.depth_variants or {})[kind].get("body")
             ),
             "review_complete": bool(approvals.get("key_points") and approvals["key_points"].current)
-            and (not rewrites or bool(approvals.get("rewrites") and approvals["rewrites"].current)),
+            and (not rewrites or bool(approvals.get("rewrites") and approvals["rewrites"].current))
+            and (
+                not guided_material
+                or bool(approvals.get("guided_steps") and approvals["guided_steps"].current)
+            ),
+            "guided_steps": guided_views,
+            "guided_steps_content_hash": hashes["guided_steps"],
+            "guided_steps_approval": approvals.get("guided_steps"),
+            "pending_guided_step_count": pending_guided_count,
         }
     )
 
@@ -607,6 +685,97 @@ async def approve_all_rewrites(
     """One sign-off over all existing Simplify/Expand rewrites; no generation."""
     lesson, actor = await _lesson_for_review(session, principal, lesson_id)
     return await _bulk_approve(session, lesson, actor, payload, "rewrites")
+
+
+@router.post(
+    "/lessons/{lesson_id}/guided-steps/approve-all",
+    response_model=LessonReviewResponse,
+    responses={409: {"description": "review_content_changed or no_guided_steps_to_approve"}},
+)
+async def approve_all_guided_steps(
+    lesson_id: UUID,
+    payload: GuidedStepsBulkReviewRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> LessonReviewResponse:
+    """Teacher sign-off over all generated, answer-bearing guided steps."""
+
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    segments = list(
+        await session.scalars(
+            select(LessonSegment)
+            .where(LessonSegment.lesson_id == lesson.id)
+            .order_by(LessonSegment.sequence_order, LessonSegment.id)
+            .with_for_update()
+        )
+    )
+    material, _, pending_count = _guided_steps_material(segments)
+    digest = _hash(material)
+    if digest != payload.expected_content_hash:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "review_content_changed",
+                "message": "The lesson changed. Read the guided steps again before approving.",
+            },
+        )
+    if not material:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "no_guided_steps_to_approve",
+                "message": "This lesson has no generated guided steps awaiting review.",
+            },
+        )
+    latest = await session.scalar(
+        select(LessonReviewSignoff)
+        .where(
+            LessonReviewSignoff.lesson_id == lesson.id,
+            LessonReviewSignoff.kind == "guided_steps",
+        )
+        .order_by(LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc())
+        .limit(1)
+    )
+    now = datetime.now(UTC)
+    if pending_count:
+        reviewer_name = " ".join(
+            part for part in (actor.first_name, actor.last_name) if part
+        ) or actor.email or str(actor.id)
+        session.add(
+            LessonReviewSignoff(
+                lesson_id=lesson.id,
+                kind="guided_steps",
+                approved_by=actor.id,
+                approved_by_name=reviewer_name,
+                approved_at=now,
+                content_hash=digest,
+                content_snapshot=material,
+            )
+        )
+        for segment in segments:
+            checkpoints = [dict(question) for question in segment.comprehension_checkpoints or []]
+            changed = False
+            for question in checkpoints:
+                pending_steps = question.pop("pendingGuidedSteps", None)
+                if pending_steps:
+                    question["guidedSteps"] = pending_steps
+                    question["guidedStepsReviewStatus"] = "approved"
+                    changed = True
+                elif question.get("guidedSteps") and question.get("guidedStepsReviewStatus") == "pending_review":
+                    question["guidedStepsReviewStatus"] = "approved"
+                    changed = True
+            if changed:
+                segment.comprehension_checkpoints = checkpoints
+    elif latest is None or latest.content_hash != digest or latest.invalidated_at is not None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "guided_steps_already_reviewed",
+                "message": "These guided steps were already reviewed; refresh the lesson review.",
+            },
+        )
+    await session.commit()
+    return await _review_result(session, lesson)
 
 
 @router.put(

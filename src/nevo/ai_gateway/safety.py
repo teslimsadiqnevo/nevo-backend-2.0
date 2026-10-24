@@ -100,7 +100,11 @@ def _is_lesson_generation_phase(phase: str) -> bool:
     return phase in {
         f"{direction}:{prompt}"
         for direction in ("input", "output", "final")
-        for prompt in ("content_parse.default", "lesson_depth.default")
+        for prompt in (
+            "content_parse.default",
+            "lesson_depth.default",
+            "content_guided_steps_backfill.default",
+        )
     }
 
 

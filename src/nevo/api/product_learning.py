@@ -968,6 +968,7 @@ async def lesson_detail(
                     segment_key=item.segment_key,
                     presentation_seed=str(actor.id),
                     question_offset=item.sequence_order - 1,
+                    include_pending_guidance=for_teacher,
                 ),
                 "textVariant": item.text_variant,
                 "visualVariant": item.visual_variant

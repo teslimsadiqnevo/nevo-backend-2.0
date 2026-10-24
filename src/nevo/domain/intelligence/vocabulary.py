@@ -127,6 +127,7 @@ class SegmentReviewReason(StrEnum):
     MODEL_FLAGGED_FOR_REVIEW = "model_flagged_for_review"
     DEPTH_VARIANT_REVIEW_REQUIRED = "depth_variant_review_required"
     OPTIONAL_MEDIA_PENDING_REVIEW = "optional_media_pending_review"
+    GUIDED_STEPS_REVIEW_REQUIRED = "guided_steps_review_required"
 
 
 class UploadStatus(StrEnum):

@@ -11,7 +11,7 @@ from nevo.db.base import Base
 class LessonReviewSignoff(Base):
     __tablename__ = "lesson_review_signoffs"
     __table_args__ = (
-        CheckConstraint("kind IN ('key_points', 'rewrites')", name="kind_valid"),
+        CheckConstraint("kind IN ('key_points', 'rewrites', 'guided_steps')", name="kind_valid"),
         Index("ix_lesson_review_signoffs_lesson_kind", "lesson_id", "kind", "approved_at"),
     )
 

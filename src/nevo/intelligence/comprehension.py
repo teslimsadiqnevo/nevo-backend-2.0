@@ -152,6 +152,9 @@ async def gate_for_position(session, sitting, position=None, *, complete=False):
         )
     )
     passed = {(row.segment_id, row.question_id) for row in attempts}
+    from nevo.api.lesson_review import approved_check_ids
+
+    reviewed = await approved_check_ids(session, sitting.lesson_id)
     from nevo.intelligence.delivery_preferences import lesson_choices, segment_choice
 
     preferences = lesson_choices(sitting)
@@ -159,7 +162,13 @@ async def gate_for_position(session, sitting, position=None, *, complete=False):
     for index, row in enumerate(rows):
         if not complete and position is not None and index >= position:
             break
-        questions = segment_questions(row)
+        questions = [
+            question for question in segment_questions(row)
+            if (str(row.id), str(question["id"])) in reviewed
+            or str(question["id"]) in {
+                str(step.get("stepId")) for step in (row.calculation_variant or {}).get("steps", [])
+            }
+        ]
         unresolved = [str(q["id"]) for q in questions if (row.id, str(q["id"])) not in passed]
         if unresolved:
             next_question_id = unresolved[0]
@@ -201,6 +210,9 @@ async def require_next_question(session, sitting, segment, question_id):
     """When enabled, accept only the next authored check in the current section."""
     if not comprehension_gate_enabled():
         return
+    from nevo.api.lesson_review import approved_check_ids
+
+    reviewed = await approved_check_ids(session, sitting.lesson_id)
     passed = set(
         await session.scalars(
             select(LessonQuestionAttempt.question_id).where(
@@ -212,7 +224,12 @@ async def require_next_question(session, sitting, segment, question_id):
         )
     )
     expected = next(
-        (str(item["id"]) for item in segment_questions(segment) if str(item["id"]) not in passed),
+        (str(item["id"]) for item in segment_questions(segment)
+         if str(item["id"]) not in passed
+         and ((str(segment.id), str(item["id"])) in reviewed
+              or str(item["id"]) in {
+                  str(step.get("stepId")) for step in (segment.calculation_variant or {}).get("steps", [])
+              })),
         None,
     )
     if expected is not None and str(question_id) != expected:

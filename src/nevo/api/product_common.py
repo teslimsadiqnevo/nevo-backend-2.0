@@ -171,13 +171,9 @@ async def require_approved_lessons(
     and several at once - so the check lives here rather than in either of
     them. A gate on one door is not a gate.
 
-    SCRUM-153 narrowed what "cleared" means, and this is the reconciliation.
-    The gate used to demand approval of every segment, which made a teacher
-    click through a whole lesson Nevo had no doubts about - the tax on the
-    common case that ticket's ruling exists to prevent. Outstanding now means
-    a segment Nevo itself flagged and nobody approved, or a key point Nevo
-    could not ground in its own source. A lesson with neither was never in
-    doubt and assigns without ceremony.
+    The current lesson-wide sign-offs are mandatory. Per-section approvals
+    remain visible for review, but cannot substitute for the professional
+    decision over the complete lesson.
     """
 
     from sqlalchemy import func
@@ -203,19 +199,15 @@ async def require_approved_lessons(
     unsettled = await outstanding_key_points(session, wanted)
     titles = {lesson_id: title for lesson_id, title, _ in section_rows}
     section_counts = {lesson_id: int(count) for lesson_id, _, count in section_rows}
-    if section_counts:
-        # Bulk review is the current teacher sign-off. Its content hashes make
-        # this safe to use here: edits invalidate the sign-off, while older
-        # per-section approvals continue to work as before.
-        from nevo.api.lesson_review import _review_result
+    from nevo.api.lesson_review import _review_result
 
-        lessons = await session.scalars(
-            select(Lesson).where(Lesson.id.in_(section_counts))
-        )
-        for lesson in lessons:
-            review = await _review_result(session, lesson)
-            if review.review_complete:
-                section_counts.pop(lesson.id, None)
+    lessons = await session.scalars(select(Lesson).where(Lesson.id.in_(wanted)))
+    for lesson in lessons:
+        review = await _review_result(session, lesson)
+        if not review.review_complete:
+            section_counts[lesson.id] = max(1, section_counts.get(lesson.id, 0))
+        else:
+            section_counts.pop(lesson.id, None)
     if unsettled:
         missing = [key for key in unsettled if key not in titles]
         if missing:

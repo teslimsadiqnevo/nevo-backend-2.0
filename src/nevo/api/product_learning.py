@@ -547,6 +547,15 @@ async def _attempt_payload_with_outcome(
     sitting = await session.get(LessonSession, item.session_id)
     if sitting:
         segment = await session.get(LessonSegment, item.segment_id) if item.segment_id else None
+        reteaching = (
+            (sitting.delivery_state or {}).get("reteaching", {}).get(str(item.segment_id), {})
+            if item.segment_id else {}
+        )
+        payload["reteaching"] = (
+            reteaching.get("response")
+            if item.correct is False and reteaching.get("questionId") == item.question_id
+            else None
+        )
         gate = await gate_for_position(
             session,
             sitting,
@@ -905,6 +914,9 @@ async def lesson_detail(
         )
     )
     recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
+    from nevo.api.lesson_review import approved_check_ids
+
+    reviewed_checks = await approved_check_ids(session, lesson.id)
     return {
         **_lesson_summary(
             lesson,
@@ -949,6 +961,7 @@ async def lesson_detail(
                     presentation_seed=str(actor.id),
                     question_offset=item.sequence_order - 1,
                     include_pending_guidance=for_teacher,
+                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
                 ),
                 "textVariant": item.text_variant,
                 "visualVariant": item.visual_variant
@@ -3135,6 +3148,9 @@ async def _offline_package_payload(
     ).all()
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
+    from nevo.api.lesson_review import approved_check_ids
+
+    reviewed_checks = await approved_check_ids(session, lesson_id)
     modules = delivery_modules(lesson.id, segments, modules)
     # Built as a dict and then validated through OfflinePackage, so the shape
     # the spec publishes is the shape that actually ships. Ask B60.
@@ -3206,6 +3222,7 @@ async def _offline_package_payload(
                     segment_key=item.segment_key,
                     presentation_seed=str(actor.id),
                     question_offset=item.sequence_order - 1,
+                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
                 ),
             }
             for item in segments

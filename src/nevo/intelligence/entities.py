@@ -91,6 +91,7 @@ class RuntimeSignals:
     #: Device-derived transient cue; never stored on the learner or in signal events.
     frustration_detected: bool = False
     reteaching_exhausted: bool = False
+    check_miss_pending: bool = False
 
 
 @dataclass(frozen=True, slots=True)

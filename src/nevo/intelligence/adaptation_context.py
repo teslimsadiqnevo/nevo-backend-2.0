@@ -205,11 +205,7 @@ async def prepare_adaptation(session, principal, payload, signals):
         shifts = [
             event
             for event in events
-            if event.event_type
-            in {
-                SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
-                SignalEventType.MODALITY_MANUAL_SWITCH,
-            }
+            if event.event_type is SignalEventType.MODALITY_SUGGESTION_ACCEPTED
         ]
         now = datetime.now(UTC)
         current = by_key.get(signals.current_segment_id or "")
@@ -309,6 +305,17 @@ async def prepare_adaptation(session, principal, payload, signals):
         signals = replace(
             signals,
             **derived,
+            check_miss_pending=bool(
+                current
+                and attempts
+                and attempts[0].segment_id == current.id
+                and attempts[0].source in {"checkpoint", "calculation"}
+                and attempts[0].correct is False
+                and not any(
+                    event.timestamp >= attempts[0].submitted_at
+                    for event in adaptations
+                )
+            ),
             current_depth=(
                 (segment_choice(sitting, current).get("depth") or "original")
                 if current and sitting

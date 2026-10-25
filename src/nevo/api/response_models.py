@@ -59,6 +59,7 @@ from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 from nevo.intelligence.comprehension import (
     ComprehensionGate,
     ComprehensionPolicy,
+    ReteachingResponse,
 )
 from nevo.intelligence.delivery_preferences import LessonChoice, SegmentChoice, SegmentFormatChoice
 
@@ -777,6 +778,7 @@ class LessonQuestionAttemptResponse(CamelResponse):
     correct: bool | None
     support_status: Literal["supported", "independent"] = "independent"
     comprehension_gate: ComprehensionGate | None = None
+    reteaching: ReteachingResponse | None = None
     submitted_at: datetime
     result_state: Literal["landed", "partly_landed", "nothing_landed", "not_attempted"]
     handoff_to: Literal["socratic_panel"] | None = None

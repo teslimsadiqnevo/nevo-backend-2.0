@@ -46,13 +46,11 @@ ADAPTATION_HISTORY_EVENT_TYPES = {
     SignalEventType.EXPAND_TRIGGER,
     SignalEventType.SLOWER_TRIGGER,
     SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
-    SignalEventType.MODALITY_MANUAL_SWITCH,
     SignalEventType.HINT_OFFERED,
     SignalEventType.GUIDED_QUESTION_SHOWN,
 }
 MODALITY_SHIFT_EVENT_TYPES = {
     SignalEventType.MODALITY_SUGGESTION_ACCEPTED,
-    SignalEventType.MODALITY_MANUAL_SWITCH,
 }
 
 
@@ -351,6 +349,7 @@ def _rate_limit_violation_from_signals(
         plan.modality_suggestion is not None
         and signals.current_segment_elapsed_seconds is not None
         and signals.current_segment_elapsed_seconds < MIN_MODALITY_DWELL_SECONDS
+        and not signals.check_miss_pending
     ):
         return _suppression_attempt(
             request=request,
@@ -360,6 +359,7 @@ def _rate_limit_violation_from_signals(
     if (
         signals.seconds_since_last_adaptation is not None
         and signals.seconds_since_last_adaptation < ADAPTATION_COOLDOWN_SECONDS
+        and not signals.check_miss_pending
     ):
         return _suppression_attempt(
             request=request,
@@ -390,7 +390,7 @@ def _rate_limit_violation_from_history(
         return None
     if state.last_adaptation_at is not None:
         seconds_since = (now - state.last_adaptation_at).total_seconds()
-        if seconds_since < ADAPTATION_COOLDOWN_SECONDS:
+        if seconds_since < ADAPTATION_COOLDOWN_SECONDS and not request.signals.check_miss_pending:
             return _suppression_attempt(
                 request=request,
                 plan=plan,

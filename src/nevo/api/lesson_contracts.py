@@ -256,6 +256,7 @@ class ComprehensionCheckpoint(BaseModel):
     guided_steps_review_status: Literal["pending_review", "approved"] | None = Field(
         default=None, alias="guidedStepsReviewStatus"
     )
+    teacher_reviewed: bool = Field(default=False, alias="teacherReviewed")
 
     @model_validator(mode="after")
     def unique_guided_steps(self):
@@ -1066,6 +1067,7 @@ def checkpoint_payloads(
     presentation_seed: str = "lesson",
     question_offset: int = 0,
     include_pending_guidance: bool = False,
+    reviewed_question_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """Normalize older parser output into the documented checkpoint contract."""
     result: list[dict[str, object]] = []
@@ -1139,6 +1141,7 @@ def checkpoint_payloads(
         from nevo.probe.presentation import ordered_options
 
         rendered = question.model_dump(by_alias=True, mode="json")
+        rendered["teacherReviewed"] = str(rendered["id"]) in (reviewed_question_ids or set())
         if (
             not include_pending_guidance
             and rendered.get("guidedStepsReviewStatus") == "pending_review"

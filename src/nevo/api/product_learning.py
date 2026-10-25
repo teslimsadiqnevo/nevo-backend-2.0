@@ -206,13 +206,8 @@ class ProgressWrite(BaseModel):
 
     session_id: UUID = Field(alias="sessionId")
     assignment_id: UUID | None = Field(default=None, alias="assignmentId")
-    #: Where the learner is, as a zero-based index. The first module is 0 and
-    #: the first segment in it is 0.
-    #:
-    #: Deliberately not the same counting as a segment's ``sequenceOrder``,
-    #: which is one-based and is the segment's own number in the lesson. These
-    #: are a cursor; that is an ordinal. Both were correct and neither said so,
-    #: which is why a client had to guess.
+    #: Module ordinal is zero-based. segmentPosition is the zero-based index
+    #: across the entire lesson, not within the module.
     module_position: int = Field(default=0, alias="modulePosition", ge=0)
     segment_position: int = Field(default=0, alias="segmentPosition", ge=0)
     #: How far into the after-lesson check the child got, when they left part
@@ -543,7 +538,9 @@ async def _attempt_payload_with_outcome(
     prompts, deadline = await _socratic_handoff(session, item)
     payload["handoffTo"] = "socratic_panel" if prompts else None
     payload["guidedPrompts"] = prompts
-    payload["advanceAfterHandoff"] = False
+    from nevo.intelligence.comprehension import comprehension_gate_enabled
+
+    payload["advanceAfterHandoff"] = bool(prompts) and not comprehension_gate_enabled()
     payload["handoffAvailableAt"] = deadline
     from nevo.intelligence.comprehension import gate_for_position
 
@@ -616,35 +613,18 @@ async def _socratic_handoff(
     deadline = guidance_deadline(recent, student) if student else None
     if deadline is None or datetime.now(UTC) < deadline:
         return [], deadline
+    if item.question_snapshot.get("guidedStepsReviewStatus") != "approved":
+        return [], deadline
     guided = item.question_snapshot.get("guidedSteps") or []
-    if guided:
-        return [
-            {
-                "id": step["id"],
-                "prompt": step["prompt"],
-                "answerType": step["answerType"],
-                "options": step.get("options") or [],
-            }
-            for step in guided
-        ], deadline
-    questions = item.question_snapshot.get("guidedQuestions") or []
-    from nevo.intelligence.guided_panel import guided_question_prompt_id
-
-    prompts = [
+    return [
         {
-            "id": guided_question_prompt_id(item.question_id, index),
-            "prompt": question.strip(),
-            "answerType": "text",
-            "options": [],
+            "id": step["id"],
+            "prompt": step["prompt"],
+            "answerType": step["answerType"],
+            "options": step.get("options") or [],
         }
-        for index, question in enumerate(questions, start=1)
-        if isinstance(question, str) and question.strip()
-    ]
-    sitting = await session.get(LessonSession, item.session_id)
-    progress = (sitting.delivery_state or {}).get("guidedQuestionProgress", {}) if sitting else {}
-    answered = int((progress.get(item.question_id) or {}).get("answered", 0))
-    prompts = prompts[answered:]
-    return prompts, deadline
+        for step in guided
+    ], deadline
 
 
 async def _question_for_attempt(
@@ -1011,6 +991,12 @@ async def lesson_detail(
                 "preview": item.preview,
                 "sequenceOrder": item.sequence_order,
                 "segmentIds": item.segment_ids,
+                "segmentRecordIds": [
+                    str(segment.id)
+                    for key in item.segment_ids
+                    for segment in segments
+                    if key in {segment.segment_key, str(segment.id)}
+                ],
             }
             for item in modules
         ],
@@ -3162,6 +3148,12 @@ async def _offline_package_payload(
                 "title": module.title,
                 "sequenceOrder": module.sequence_order,
                 "segmentIds": module.segment_ids,
+                "segmentRecordIds": [
+                    str(segment.id)
+                    for key in module.segment_ids
+                    for segment in segments
+                    if key in {segment.segment_key, str(segment.id)}
+                ],
                 "recap": module.recap,
                 "preview": module.preview,
             }

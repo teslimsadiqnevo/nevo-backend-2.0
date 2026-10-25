@@ -981,8 +981,12 @@ async def adapt_lesson(
             }
             from nevo.intelligence.guided_panel import public_prompt
 
-            guided_steps = latest.question_snapshot.get("guidedSteps", [])
-            guided_questions = latest.question_snapshot.get("guidedQuestions", [])
+            approved_guidance = (
+                latest.question_snapshot.get("guidedStepsReviewStatus") == "approved"
+            )
+            guided_steps = (
+                latest.question_snapshot.get("guidedSteps", []) if approved_guidance else []
+            )
             steps = [public_prompt(step) for step in guided_steps]
             response.proactive_adjustment = ProactiveAdjustmentResponse(
                 action=ProactiveAction(actions[route.action]),
@@ -1001,11 +1005,7 @@ async def adapt_lesson(
                     else None
                 ),
                 requires_choice=route.action in {"format", "simplify"},
-                guided_questions=(
-                    [str(question) for question in guided_questions if isinstance(question, str)]
-                    if route.action == "panel"
-                    else []
-                ),
+                guided_questions=[],
                 guided_steps=steps if route.action == "panel" else [],
                 hint=teaching.hint,
             )

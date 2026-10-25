@@ -17,6 +17,7 @@ from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.db.models.account import School, User
 from nevo.db.models.permission import Admin, AdminScopeAssignment, LearningSupportGrant
+from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import PermissionScope
 
 router = APIRouter(prefix="/api/v1/learning-support", tags=["permissions"])
@@ -65,8 +66,8 @@ async def _holders(session: AsyncSession, school_id: UUID | None) -> list[Learni
             LearningSupportGrant.school_id == school_id,
             LearningSupportGrant.revoked_at.is_(None),
             User.school_id == school_id,
-            User.status == "active",
-            User.role.in_(["teacher", "other_admin", "senco_admin"]),
+            User.status == UserStatus.ACTIVE,
+            User.role.in_([UserRole.TEACHER, UserRole.OTHER_ADMIN, UserRole.SENCO_ADMIN]),
         )
         .order_by(LearningSupportGrant.granted_at)
     )
@@ -82,10 +83,15 @@ async def holds_learning_support(session: AsyncSession, user: User) -> bool:
     """
 
     grant = await session.scalar(
-        select(LearningSupportGrant.id).where(
+        select(LearningSupportGrant.id)
+        .join(User, User.id == LearningSupportGrant.holder_user_id)
+        .where(
             LearningSupportGrant.school_id == user.school_id,
             LearningSupportGrant.holder_user_id == user.id,
             LearningSupportGrant.revoked_at.is_(None),
+            User.school_id == user.school_id,
+            User.status == UserStatus.ACTIVE,
+            User.role.in_([UserRole.TEACHER, UserRole.OTHER_ADMIN, UserRole.SENCO_ADMIN]),
         )
     )
     return grant is not None

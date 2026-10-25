@@ -24,11 +24,11 @@ All routes are staff-only and school-scoped:
 - `GET /api/v1/lessons/{lessonId}/media`: lessonId, summary and items.
 - `POST /api/v1/lessons/{lessonId}/media/{mediaId}/approve`: approve one prepared asset.
 - `POST /api/v1/lessons/{lessonId}/media/approve`: atomic approval of explicit IDs, body `{"mediaIds":["uuid"]}`.
-- `POST /api/v1/lessons/{lessonId}/media/{mediaId}/retry`: requeue an unapproved failed/stale job, or prepared media whose source changed.
+- `POST /api/v1/lessons/{lessonId}/media/{mediaId}/retry`: explicitly request a remake of unapproved `awaiting_review`, failed or stale media; source-changed prepared media is refreshed from current lesson content. The new candidate returns to normal teacher review and is never auto-approved.
 
 Items include id, segmentId, kind, status, asset, sourceChanged, failureCode, createdAt, completedAt, approvedAt, approvedBy and approvedByName. Prepared assets are available to staff for review but are not attached to the student lesson until approved. Future arrivals are never implicitly approved. Approval retries preserve the original actor and timestamp.
 
-Source changes invalidate prepared media. Approved assets cannot be overwritten through retry. Generation uses existing media caches; unchanged upload reuse keeps existing jobs. Crash recovery uses leases and bounded attempts, not an exactly-once billing guarantee.
+Source changes invalidate prepared media. Approved assets cannot be overwritten through retry. Generation uses existing media caches; unchanged upload reuse keeps existing jobs. Crash recovery uses leases and bounded attempts, not an exactly-once billing guarantee. Student picture availability is withheld for `practice_question` sections; teaching sections with checks may serve a safety-reviewed picture, with check/answer context provided only to the image reviewer.
 
 409 codes: media_source_changed, media_not_ready, media_safety_review_required, media_retry_not_allowed. Failure codes include provider_not_configured, provider_quota, generation_unavailable and generation_interrupted.
 

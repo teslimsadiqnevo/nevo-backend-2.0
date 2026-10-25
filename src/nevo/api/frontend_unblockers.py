@@ -1434,6 +1434,12 @@ async def lesson_detail(
                 preview=item.preview,
                 sequenceOrder=item.sequence_order,
                 segmentIds=item.segment_ids,
+                segmentRecordIds=[
+                    segment.id
+                    for key in item.segment_ids
+                    for segment in segments
+                    if key in {segment.segment_key, str(segment.id)}
+                ],
             )
             for item in modules
         ],

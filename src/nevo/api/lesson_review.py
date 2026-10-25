@@ -89,6 +89,9 @@ class GuidedStepsReviewItem(CamelResponse):
     segment_title: str | None
     question_id: str
     question_prompt: str
+    question_answer_type: str | None = None
+    question_options: list[dict[str, object]] = Field(default_factory=list)
+    question_answer_key: object | None = None
     review_status: Literal["pending_review", "approved"]
     guided_questions: list[str] = Field(default_factory=list)
     steps: list[GuidedCheckStep]
@@ -451,6 +454,9 @@ def _guided_steps_material(segments):
                 "segmentId": str(segment.id),
                 "questionId": str(question.get("id") or ""),
                 "questionPrompt": str(question.get("prompt") or ""),
+                "questionAnswerType": question.get("answerType"),
+                "questionOptions": question.get("options") or [],
+                "questionAnswerKey": question.get("answerKey"),
                 "guidedQuestions": guided_questions,
                 "steps": steps,
             }
@@ -462,6 +468,9 @@ def _guided_steps_material(segments):
                     segment_title=segment.title,
                     question_id=item["questionId"],
                     question_prompt=item["questionPrompt"],
+                    question_answer_type=item["questionAnswerType"],
+                    question_options=item["questionOptions"],
+                    question_answer_key=item["questionAnswerKey"],
                     review_status=state,
                     guided_questions=guided_questions,
                     steps=parsed_steps,
@@ -622,15 +631,6 @@ async def _bulk_approve(session, lesson, actor, payload, kind):
         now = latest.approved_at
     reviewer = latest.approved_by if reuse else actor.id
     if kind == "key_points":
-        from nevo.api.deferred_media import _approve
-
-        # Only assets in the exact snapshot signed by the teacher, never work
-        # which completed between hashing the review and applying the approval.
-        media_ids = [UUID(item["mediaId"]) for item in points if "mediaId" in item]
-        for media_id in media_ids:
-            job = await session.get(DeferredLessonMedia, media_id)
-            if job.status == "awaiting_review":
-                await _approve(session, actor, lesson.id, media_id)
         for point, _ in rows:
             if point.review_state != KeyPointReviewState.REMOVED:
                 point.review_state = (

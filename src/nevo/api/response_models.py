@@ -609,6 +609,8 @@ class LessonModuleResponse(CamelResponse):
     preview: str | None
     sequence_order: int
     segment_ids: list[str]
+    #: UUIDs for the same ordered sections; segmentIds remains the legacy key list.
+    segment_record_ids: list[UUID] = Field(default_factory=list)
     segments: list[LessonSegmentResponse] = Field(default_factory=list)
 
 

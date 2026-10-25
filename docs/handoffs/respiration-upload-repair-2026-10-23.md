@@ -84,3 +84,18 @@ successfully corrected a malformed selection question through this path.
 Migration `20261023_0113` installs the prompt and has been applied to the shared
 production database. The updated code requires deployment before the new
 production retry. No test files were added or changed.
+
+After deployment, fresh production job `0762adca-d015-4792-8c25-be1df34be08b`
+reached ready in 456.7 seconds (7 minutes 37 seconds). Saved lesson:
+`15189e6a-c53c-48f7-bad9-149132657221`, Transport in Plants.
+Both content and v1 lesson reads returned HTTP 200: 12 sections, six checkpoints,
+three assessment questions and eight images. The production audit records the
+targeted question repair succeeding in 4.4 seconds.
+
+This is a successful upload/save/read, not full media recovery. All 12 sections
+have audio-generation failure notes; production reports YarnGPT QUOTA_EXCEEDED.
+Seven sections qualify for depth rewrites: all seven have Expand, five have
+Simplify. Simplify for sections 3 and 4 was rejected for missing source-claim
+anchors. Five shorter sections do not qualify for depth generation. No teacher
+approval or class assignment was performed. The generation latency remains a
+performance gap and is not represented as resolved.

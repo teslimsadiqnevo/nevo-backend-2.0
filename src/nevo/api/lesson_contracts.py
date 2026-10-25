@@ -15,7 +15,7 @@ from pydantic import (
 
 from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.content_parsing.chunks import reading_chunks as reading_chunks
-from nevo.domain.intelligence.vocabulary import ManipulativeKind
+from nevo.domain.intelligence.vocabulary import LessonContentType, ManipulativeKind
 
 ScalarAnswer = str | int | float | bool
 
@@ -36,6 +36,11 @@ def safety_reviewed_visual(value):
     )
 
 
+def is_practice_question(segment):
+    content_type = getattr(segment.content_type, "value", segment.content_type)
+    return content_type == LessonContentType.PRACTICE_QUESTION.value
+
+
 def student_modalities(segment):
     available = []
     if segment.body:
@@ -43,7 +48,7 @@ def student_modalities(segment):
     if (segment.audio_variant or {}).get("audioUrl"):
         available.append("audio")
     if (
-        not segment.comprehension_checkpoints
+        not is_practice_question(segment)
         and safety_reviewed_visual(segment.visual_variant)
         and segment.visual_variant.get("imageUrl")
     ):

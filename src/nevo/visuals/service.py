@@ -113,12 +113,16 @@ class EducationalImageService:
         title: str | None,
         lesson_text: str,
         requested_prompt: str | None,
+        review_context: str | None = None,
         context=None,
         source_check=None,
     ) -> dict[str, object]:
         if not self.configured:
             raise VisualGenerationError("Image generation, review, or storage is not configured")
         safe_text = self._privacy.sanitize_text(lesson_text, pseudonym="the learner")[:4_000]
+        safe_review_context = self._privacy.sanitize_text(
+            review_context or lesson_text, pseudonym="the learner"
+        )[:8_000]
         prompt = self._prompt(title, safe_text, requested_prompt)
         try:
             if source_check is not None:
@@ -126,8 +130,9 @@ class EducationalImageService:
             await self._safety.check(prompt, phase="image_prompt", context=context)
         except (SafetyBlocked, SafetyUnavailable) as error:
             raise VisualGenerationError(error.public_message) from error
+        review_key = "" if safe_review_context == safe_text else safe_review_context
         digest = hashlib.sha256(
-            f"{POLICY_VERSION}\0{self._settings.image_model}\0{prompt}".encode()
+            f"{POLICY_VERSION}\0{self._settings.image_model}\0{prompt}\0{review_key}".encode()
         ).hexdigest()
         object_path = f"images/lessons/{digest}.webp"
         preview_path = f"images/lessons/{digest}-preview.webp"
@@ -135,10 +140,10 @@ class EducationalImageService:
         width = height = byte_size = 0
         try:
             if not await self._storage.exists(object_path):
-                answer_safe_prompt = self._answer_safe_prompt(title)
+                answer_safe_prompt = self._answer_safe_prompt()
                 accepted, attempts, used_prompt = await self._draw_until_approved(
                     prompt,
-                    safe_text,
+                    safe_review_context,
                     answer_safe_prompt=answer_safe_prompt,
                     context=context,
                 )
@@ -247,8 +252,8 @@ class EducationalImageService:
                 raise VisualEducationalReviewError(category, issues)
             if category == "answer_revealing_content":
                 # Do not repeat the question or its answer in a corrective
-                # prompt. Rebuild from the section title alone; the reviewer
-                # still receives the complete lesson text above.
+                # prompt. Use content-free instructions; the reviewer still
+                # receives the complete lesson text above.
                 active_prompt = answer_safe_prompt
                 active_prompt_checked = False
                 answer_safe_retry = True
@@ -256,21 +261,13 @@ class EducationalImageService:
                     "Do not show, calculate, label, or otherwise reveal any answer to a question "
                     "or check in this section. Illustrate only the broad concept."
                 )
-            elif answer_safe_retry:
-                issues = f"The previous concept-only picture had these issues: {issues}"
         raise VisualEducationalReviewError(category, issues)
 
-    def _answer_safe_prompt(self, title: str | None) -> str:
-        safe_title = self._privacy.sanitize_text(title or "", pseudonym="the learner")
-        # A question-like or answer-bearing title is not safe context for a
-        # retry either. The original section remains available to the reviewer.
-        if "?" in safe_title or any(
-            marker in safe_title.casefold()
-            for marker in ("answer", "solution", "correct option", "how many", "what is")
-        ):
-            safe_title = ""
+    def _answer_safe_prompt(self) -> str:
+        # The title, body and teacher direction can all contain the answer.
+        # Keep this retry context-free; full source context is reviewer-only.
         return self._prompt(
-            safe_title or "the broad lesson concept",
+            "the broad lesson concept",
             "",
             "Illustrate the broad concept only. Do not include a worked example, "
             "question, answer choice, numeric result, or solved assessment.",

@@ -12,7 +12,7 @@ from uuid import uuid4
 from sqlalchemy import or_, select, update
 
 from nevo.ai_gateway.safety import POLICY_VERSION, SafetyBlocked
-from nevo.api.lesson_contracts import AudioVariant, VisualVariant
+from nevo.api.lesson_contracts import AudioVariant, VisualVariant, is_practice_question
 from nevo.content_parsing.entities import ParsedLessonSegment
 from nevo.db.models.content import LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
@@ -82,7 +82,7 @@ def enqueue_media(session, row, source, actor_id):
     if (
         ContentModality.VISUAL in source.available_modalities
         and source.content_type != LessonContentType.CALCULATION
-        and not source.comprehension_checkpoints
+        and not is_practice_question(source)
     ):
         kinds.append("image")
     if source.audio_variant or any(

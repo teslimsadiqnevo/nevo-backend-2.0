@@ -326,7 +326,10 @@ class ContentParsingService:
                                 "three question-specific markable steps, each with unique id, "
                                 "prompt, answerType (single_choice, multiple_choice, numeric or "
                                 "boolean), options as value-label objects and a source-supported "
-                                "answerKey. These lead toward the checkpoint, not a new topic. "
+                                "answerKey. Any explanation is feedback after a wrong answer: "
+                                "it must explain the reasoning without stating, repeating, or "
+                                "naming the correct answer or its option label. These steps lead "
+                                "toward the checkpoint, not a new topic. "
                                 "No free-text judgement or generic concept-key prompts. "
                                 "Do not invent facts or add a new topic.\n\n"
                                 "For activities, inProgress and outcome are optional "
@@ -733,9 +736,10 @@ class ContentParsingService:
         # never enter the image pipeline.
         if segment.content_type is LessonContentType.CALCULATION:
             return replace(segment, visual_variant=None)
-        # A picture beside a markable practice question can reveal its answer;
-        # keep this deterministic rather than trusting a probabilistic review.
-        if segment.comprehension_checkpoints:
+        # Practice-question pictures can reveal the answer. Teaching sections
+        # with a separate check may have a picture, but the reviewer receives
+        # the check and expected answer as review-only context.
+        if segment.content_type == LessonContentType.PRACTICE_QUESTION:
             return replace(segment, visual_variant=None)
         if generator is None or ContentModality.VISUAL not in segment.available_modalities:
             return segment
@@ -745,6 +749,13 @@ class ContentParsingService:
         started = time.perf_counter()
         try:
             kwargs = {}
+            if isinstance(generator, EducationalImageService):
+                if segment.comprehension_checkpoints:
+                    kwargs["review_context"] = (
+                        f"{segment.body}\n\nAssessment checks and expected answers "
+                        f"(review only): {json.dumps(segment.comprehension_checkpoints, default=str)}"
+                    )
+
             if isinstance(generator, EducationalImageService) and requested_by_user_id is not None:
 
                 async def source_check():
@@ -1169,6 +1180,10 @@ def _segment_from_payload(
             "conceptName",
             str(item.get("concept_name") or item.get("title") or body[:80]),
         )
+        # Generated guidance is never published directly to a learner. Teacher
+        # approval covers both the open-ended prompts and their markable steps.
+        if checkpoint.get("guidedSteps") or checkpoint.get("guidedQuestions"):
+            checkpoint["guidedStepsReviewStatus"] = "pending_review"
     checkpoints = checkpoint_payloads(
         [{**checkpoint, "conceptId": None} for checkpoint in checkpoints],
         segment_key=str(item.get("segment_key") or sequence_order),

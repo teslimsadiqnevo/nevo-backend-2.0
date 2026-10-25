@@ -13,7 +13,7 @@ from nevo.core.config import get_settings
 from nevo.db.models.account import StudentClassEnrollment, User
 from nevo.db.models.content import LessonSegment
 from nevo.db.models.frontend_support import Notification
-from nevo.db.models.product import LessonModule, LessonQuestionAttempt
+from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import NotificationCategory, NotificationType
 from nevo.domain.intelligence.vocabulary import LessonContentType, ScaffoldingLevel
@@ -227,9 +227,7 @@ async def require_next_question(session, sitting, segment, question_id):
 
 
 async def cursor_index(session, lesson_id, module_position, segment_position):
-    """Map the documented module-local cursor to the lesson's ordered sections."""
-    from nevo.content_parsing.modules import delivery_modules
-
+    """Validate and return the lesson-wide, zero-based section cursor."""
     rows = list(
         await session.scalars(
             select(LessonSegment)
@@ -237,29 +235,11 @@ async def cursor_index(session, lesson_id, module_position, segment_position):
             .order_by(LessonSegment.sequence_order)
         )
     )
-    modules = list(
-        await session.scalars(
-            select(LessonModule)
-            .where(LessonModule.lesson_id == lesson_id)
-            .order_by(LessonModule.sequence_order)
-        )
-    )
-    modules = delivery_modules(lesson_id, rows, modules)
-    if not modules:
-        if module_position != 0 or segment_position > len(rows):
-            raise HTTPException(422, detail={"code": "invalid_lesson_position"})
-        return segment_position
-    if module_position >= len(modules):
+    # modulePosition identifies the containing module for display; the saved
+    # section cursor has always been lesson-wide, like LessonProgress and resume.
+    if segment_position > len(rows):
         raise HTTPException(422, detail={"code": "invalid_lesson_position"})
-    keys = modules[module_position].segment_ids
-    if segment_position > len(keys):
-        raise HTTPException(422, detail={"code": "invalid_lesson_position"})
-    positions = {
-        key: index for index, row in enumerate(rows) for key in (str(row.id), row.segment_key)
-    }
-    if segment_position == len(keys):
-        return max((positions[str(key)] for key in keys), default=-1) + 1
-    return positions[str(keys[segment_position])]
+    return segment_position
 
 
 def teaching_routes(segment, current_format="text", current_depth="original", question=None):
@@ -300,7 +280,10 @@ def teaching_routes(segment, current_format="text", current_depth="original", qu
         ]
     )
     question = question or {}
-    if question.get("guidedSteps") or question.get("guidedQuestions"):
+    if (
+        question.get("guidedStepsReviewStatus") == "approved"
+        and question.get("guidedSteps")
+    ):
         routes.append(TeachingRoute(action="panel", label="Work through it together"))
     return routes
 
@@ -387,10 +370,6 @@ async def note_attempt(session, sitting, segment, attempt):
             str(step.get("prompt"))
             for step in question_snapshot.get("guidedSteps", [])
             if isinstance(step, dict) and step.get("prompt")
-        ] or [
-            str(item)
-            for item in question_snapshot.get("guidedQuestions", [])
-            if isinstance(item, str) and item.strip()
         ]
         if not screens and question_snapshot.get("prompt"):
             screens = [str(question_snapshot["prompt"])]

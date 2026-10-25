@@ -1041,7 +1041,11 @@ async def teacher_detail(
 ) -> dict[str, object]:
     actor = await require_school_actor(session, principal)
     teacher = await session.get(User, teacher_id)
-    if teacher is None or teacher.school_id != actor.school_id:
+    if (
+        teacher is None
+        or teacher.school_id != actor.school_id
+        or teacher.role is not UserRole.TEACHER
+    ):
         raise HTTPException(status_code=404, detail="Teacher not found")
     assignments = (
         await session.scalars(
@@ -1091,7 +1095,11 @@ async def revoke_teacher(
         session, principal, roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
     )
     teacher = await session.get(User, teacher_id)
-    if teacher is None or teacher.school_id != actor.school_id:
+    if (
+        teacher is None
+        or teacher.school_id != actor.school_id
+        or teacher.role is not UserRole.TEACHER
+    ):
         raise HTTPException(status_code=404, detail="Teacher not found")
     await refuse_last_holder_change(
         session,
@@ -1117,9 +1125,13 @@ async def _learning_support_metadata(
         return {}
     grants = list(
         await session.scalars(
-            select(LearningSupportGrant).where(
+            select(LearningSupportGrant)
+            .join(User, User.id == LearningSupportGrant.holder_user_id)
+            .where(
                 LearningSupportGrant.holder_user_id.in_(user_ids),
                 LearningSupportGrant.revoked_at.is_(None),
+                User.status == UserStatus.ACTIVE,
+                User.role.in_((UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN)),
             )
         )
     )
@@ -1404,7 +1416,11 @@ async def _set_student_status(
     active: bool,
 ) -> None:
     student = await db.get(User, student_id)
-    if student is None or student.school_id != actor.school_id:
+    if (
+        student is None
+        or student.school_id != actor.school_id
+        or student.role is not UserRole.STUDENT
+    ):
         raise HTTPException(status_code=404, detail="Student not found")
     if active:
         if student.retention_purged_at is not None:
@@ -1472,7 +1488,11 @@ async def anonymize_student(
         session, principal, roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
     )
     student = await session.get(User, student_id)
-    if student is None or student.school_id != actor.school_id:
+    if (
+        student is None
+        or student.school_id != actor.school_id
+        or student.role is not UserRole.STUDENT
+    ):
         raise HTTPException(status_code=404, detail="Student not found")
     anonymise_student(student, now=datetime.now(UTC))
     await session.commit()

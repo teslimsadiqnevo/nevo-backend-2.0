@@ -7,16 +7,28 @@ roster data, or uploaded school document is read by this script.
 import argparse
 import asyncio
 import json
-import os
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from nevo.ai_gateway.safety import ContentSafetyGuard, SafetyBlocked, SafetyUnavailable
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "evaluations" / "lesson_safety_cases.json"
+
+
+class EvalSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
+
+    anthropic_key: str = Field(default="", validation_alias="AI_ANTHROPIC_API_KEY")
+    anthropic_base: str = Field(
+        default="https://api.anthropic.com/v1", validation_alias="AI_ANTHROPIC_BASE_URL"
+    )
+    anthropic_model: str = Field(default="claude-haiku-4-5", validation_alias="AI_ANTHROPIC_MODEL")
+    anthropic_version: str = Field(default="2023-06-01", validation_alias="AI_ANTHROPIC_VERSION")
+    openai_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
 
 
 class ObservedClient(httpx.AsyncClient):
@@ -33,13 +45,13 @@ class ObservedClient(httpx.AsyncClient):
         return response
 
 
-async def current_checker(case, client, key):
+async def current_checker(case, client, settings):
     client.verdict = None
     guard = ContentSafetyGuard(
-        api_key=key,
-        base_url=os.getenv("AI_ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"),
-        model=os.getenv("AI_ANTHROPIC_MODEL", "claude-haiku-4-5"),
-        version=os.getenv("AI_ANTHROPIC_VERSION", "2023-06-01"),
+        api_key=settings.anthropic_key,
+        base_url=settings.anthropic_base,
+        model=settings.anthropic_model,
+        version=settings.anthropic_version,
         client=client,
     )
     try:
@@ -71,8 +83,8 @@ async def main():
     parser.add_argument("--provider", choices=("current", "openai"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    load_dotenv(ROOT / ".env")
-    key = os.getenv("AI_ANTHROPIC_API_KEY" if args.provider == "current" else "OPENAI_API_KEY")
+    settings = EvalSettings()
+    key = settings.anthropic_key if args.provider == "current" else settings.openai_key
     if not key:
         raise SystemExit(f"{args.provider} key is not configured locally")
     cases = json.loads(CASES.read_text())
@@ -81,7 +93,7 @@ async def main():
         for case in cases:
             try:
                 if args.provider == "current":
-                    actual, detail = await current_checker(case, client, key)
+                    actual, detail = await current_checker(case, client, settings)
                 else:
                     actual, detail = await openai_checker(case, client, key)
             except (httpx.HTTPError, KeyError, ValueError) as error:

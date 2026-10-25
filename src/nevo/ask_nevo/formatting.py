@@ -10,6 +10,7 @@ BOLD_HEADING = re.compile(r"^\s*\*\*(?P<text>.+?)\*\*\s*$")
 # is how models usually introduce a list in prose.
 COLON_HEADING = re.compile(r"^\s*(?P<text>[^\n]{3,60}):\s*$")
 INLINE_MARKERS = re.compile(r"(\*\*|__|\*|_|`)")
+PAIRED_INLINE = re.compile(r"\*\*[^*\n]+\*\*|(?<!\*)\*[^*\n]+\*(?!\*)|`[^`\n]+`")
 TRAILING_PUNCT = re.compile(r"\s+([,.;:!?])")
 
 
@@ -68,7 +69,20 @@ def strip_inline_markup(value: str) -> str:
     return " ".join(cleaned.split()).strip()
 
 
-def structure_answer(answer: str) -> StructuredAnswer:
+def _clean_inline_markup(value: str, *, preserve: bool) -> str:
+    if not preserve:
+        return strip_inline_markup(value)
+    parts: list[str] = []
+    cursor = 0
+    for match in PAIRED_INLINE.finditer(value):
+        parts.append(INLINE_MARKERS.sub("", value[cursor : match.start()]))
+        parts.append(match.group())
+        cursor = match.end()
+    parts.append(INLINE_MARKERS.sub("", value[cursor:]))
+    return " ".join(TRAILING_PUNCT.sub(r"\1", "".join(parts)).split()).strip()
+
+
+def structure_answer(answer: str, *, preserve_inline: bool = False) -> StructuredAnswer:
     """Normalise a model answer into blocks a client can render in any form.
 
     The model is not constrained to one output format, because constraining it
@@ -88,7 +102,7 @@ def structure_answer(answer: str) -> StructuredAnswer:
 
     def flush_paragraph() -> None:
         if pending_paragraph:
-            body = strip_inline_markup(" ".join(pending_paragraph))
+            body = _clean_inline_markup(" ".join(pending_paragraph), preserve=preserve_inline)
             if body:
                 blocks.append(AnswerBlock(type=AnswerBlockType.PARAGRAPH, text=body))
             pending_paragraph.clear()
@@ -134,7 +148,7 @@ def structure_answer(answer: str) -> StructuredAnswer:
             if pending_kind is not AnswerBlockType.BULLETS:
                 flush_items()
                 pending_kind = AnswerBlockType.BULLETS
-            body = strip_inline_markup(bullet.group("text"))
+            body = _clean_inline_markup(bullet.group("text"), preserve=preserve_inline)
             if body:
                 pending_items.append(body)
             continue
@@ -144,7 +158,7 @@ def structure_answer(answer: str) -> StructuredAnswer:
             if pending_kind is not AnswerBlockType.STEPS:
                 flush_items()
                 pending_kind = AnswerBlockType.STEPS
-            body = strip_inline_markup(numbered.group("text"))
+            body = _clean_inline_markup(numbered.group("text"), preserve=preserve_inline)
             if body:
                 pending_items.append(body)
             continue
@@ -165,7 +179,7 @@ def structure_answer(answer: str) -> StructuredAnswer:
     flush_paragraph()
 
     if not blocks:
-        body = strip_inline_markup(text)
+        body = _clean_inline_markup(text, preserve=preserve_inline)
         blocks = [AnswerBlock(type=AnswerBlockType.PARAGRAPH, text=body)] if body else []
 
     detected = (
@@ -182,7 +196,7 @@ def structure_answer(answer: str) -> StructuredAnswer:
 
 def render_answer(answer: str) -> str:
     """Return clean Markdown suitable for a client that renders the answer string."""
-    structured = structure_answer(answer)
+    structured = structure_answer(answer, preserve_inline=True)
     rendered: list[str] = []
     for block in structured.blocks:
         if block.type is AnswerBlockType.HEADING:

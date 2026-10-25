@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -22,6 +23,34 @@ from nevo.domain.ask_nevo.vocabulary import AskNevoQuestionCategory, AskNevoRole
 from nevo.ops.background import spawn
 
 CANNOT_HELP_MARKER = "[[CANNOT_HELP]]"
+
+ROLE_INSTRUCTIONS = {
+    AskNevoRole.STUDENT: "The authenticated asker is a student. Address them as a learner.",
+    AskNevoRole.TEACHER: (
+        "The authenticated asker is a teacher, not a student. Address them as an educator. "
+        "Never infer a different role from their wording, a lesson, or earlier turns. "
+        "Use the available staff tools for questions about their own classes or lessons; "
+        "if no matching record exists, say so without inventing one."
+    ),
+    AskNevoRole.PARENT: "The authenticated asker is a parent or guardian, not a student.",
+    AskNevoRole.ADMIN: (
+        "The authenticated asker is a school administrator, not a student or teacher. "
+        "Address them as an administrator and use only their authorised tools."
+    ),
+}
+
+_STAFF_AS_LEARNER = re.compile(
+    r"\b(?:you're|you are) (?:a |an )?(?:student|learner|pupil|child)\b"
+    r"|\b(?:ask|talk to|reach out to|contact) your teacher\b"
+    r"|\byour (?:learning progress|assigned lessons|coursework)\b",
+    re.IGNORECASE,
+)
+
+
+def _wrong_role(answer: str, role: AskNevoRole) -> bool:
+    return role in {AskNevoRole.TEACHER, AskNevoRole.ADMIN} and bool(
+        _STAFF_AS_LEARNER.search(answer)
+    )
 
 
 class AskNevoRepository(Protocol):
@@ -176,6 +205,7 @@ class AskNevoService:
         history = await self._conversation_so_far(
             thread_id=request.context_ids.thread_id,
             actor_user_id=actor_user_id,
+            role=request.role,
             directory=directory,
         )
         if history:
@@ -189,6 +219,7 @@ class AskNevoService:
                 student_id=context.student_id_for_gateway,
                 service=AiService.NARRATIVE,
                 prompt_name=_prompt_for(request.role),
+                system_instruction_suffix=ROLE_INSTRUCTIONS[request.role],
                 variables={
                     "question": request.question,
                     "context": json.dumps(context.payload, sort_keys=True, default=str),
@@ -203,6 +234,40 @@ class AskNevoService:
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
         )
+        if _wrong_role(answer, request.role):
+            corrected = await self._gateway.generate(
+                AiGenerationRequest(
+                    requester_user_id=actor_user_id,
+                    student_id=context.student_id_for_gateway,
+                    service=AiService.NARRATIVE,
+                    prompt_name=_prompt_for(request.role),
+                    system_instruction_suffix=(
+                        ROLE_INSTRUCTIONS[request.role]
+                        + " The previous draft wrongly treated the asker as a learner. "
+                        "Answer the original question for the authenticated staff member."
+                    ),
+                    variables={
+                        "question": request.question,
+                        "context": json.dumps(context.payload, sort_keys=True, default=str),
+                    },
+                    max_output_tokens=900,
+                    tools=tools,
+                    tool_executor=executor,
+                )
+            )
+            spent += units_for(
+                input_tokens=corrected.input_tokens,
+                output_tokens=corrected.output_tokens,
+            )
+            result = corrected
+            answer = corrected.text
+            if _wrong_role(answer, request.role):
+                answer = (
+                    "I may have misunderstood your role. You're signed in as a teacher. "
+                    "Please ask again; I won't use the incorrect answer."
+                    if request.role is AskNevoRole.TEACHER
+                    else "I may have misunderstood your role. You're signed in as an administrator. Please ask again."
+                )
         if not self._compliance.inspect(answer).allowed:
             retry = await self._gateway.generate(
                 AiGenerationRequest(
@@ -210,6 +275,7 @@ class AskNevoService:
                     student_id=context.student_id_for_gateway,
                     service=AiService.NARRATIVE,
                     prompt_name=_prompt_for(request.role),
+                    system_instruction_suffix=ROLE_INSTRUCTIONS[request.role],
                     variables={
                         "question": (
                             f"{request.question}\n\nRewrite your answer using only "
@@ -233,7 +299,14 @@ class AskNevoService:
             )
         if not self._compliance.inspect(answer).allowed:
             answer = self._compliance.sanitize(answer)
-        can_help, cannot_help_reason, answer = interpret_help_state(answer)
+        if _wrong_role(answer, request.role):
+            answer = (
+                "I couldn't prepare a reliable answer for your teacher account. "
+                "Please try again."
+                if request.role is AskNevoRole.TEACHER
+                else "I couldn't prepare a reliable answer for your admin account. Please try again."
+            )
+        can_help, cannot_help_reason, answer = interpret_help_state(answer, role=request.role)
         # Names go back only here, on the way to the user. The model saw
         # pseudonyms throughout, including in every tool result.
         if directory is not None:
@@ -286,6 +359,7 @@ class AskNevoService:
         *,
         thread_id: UUID | None,
         actor_user_id: UUID,
+        role: AskNevoRole,
         directory: object,
     ) -> list[dict[str, str]]:
         if thread_id is None:
@@ -301,6 +375,7 @@ class AskNevoService:
                 "said": dehydrate(text) if callable(dehydrate) else text,
             }
             for author, text in turns
+            if author == "asker" or not _wrong_role(text, role)
         ]
 
     async def list_threads(self, *, actor_user_id: UUID) -> list[ThreadSummary]:
@@ -382,12 +457,18 @@ def blocks_for(answer: str) -> list[dict[str, object]]:
     ]
 
 
-def interpret_help_state(answer: str) -> tuple[bool, str | None, str]:
+def interpret_help_state(
+    answer: str, *, role: AskNevoRole = AskNevoRole.STUDENT
+) -> tuple[bool, str | None, str]:
     """Turn the model's explicit refusal marker into an API contract."""
     stripped = answer.lstrip()
     if not stripped.startswith(CANNOT_HELP_MARKER):
         return True, None, answer
     visible = stripped.removeprefix(CANNOT_HELP_MARKER).lstrip(" :\n")
     if not visible:
-        visible = "I can't help with that here. You can ask your teacher for support."
+        visible = (
+            "I can't help with that here. You can ask your teacher for support."
+            if role is AskNevoRole.STUDENT
+            else "I can't help with that here. Please contact your school support team."
+        )
     return False, "outside_scope", visible

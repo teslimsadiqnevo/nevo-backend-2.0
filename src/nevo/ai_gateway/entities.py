@@ -28,6 +28,7 @@ class AiGenerationRequest:
     prompt_name: str
     variables: dict[str, str]
     student_id: UUID | None = None
+    system_instruction_suffix: str = ""
     max_output_tokens: int = 1_024
     #: Seconds to wait for this call. None uses the configured default.
     timeout_seconds: float | None = None

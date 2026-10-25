@@ -149,6 +149,7 @@ class AiGatewayService:
             provider_request = ProviderRequest(
                 system_instruction=self._privacy.sanitize_text(
                     rendered.system_instruction
+                    + ("\n" + request.system_instruction_suffix if request.system_instruction_suffix else "")
                     + (
                         "\nReturn only a complete valid JSON object, without markdown. "
                         "Escape all backslashes, quotes and control characters in JSON strings, "

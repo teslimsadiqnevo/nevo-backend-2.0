@@ -929,8 +929,8 @@ def _bounded_chunks(source: str, limit: int) -> list[str]:
     boundaries = (
         r"(?m)^\[Page \d+\][ \t]*$",
         r"\n{2,}",
+        r"(?<!\d[.])(?<=[.!?])\s+",
         r"\n",
-        r"(?<=[.!?])\s+",
         r"\s+",
     )
     while len(source) - start > limit:
@@ -1243,9 +1243,7 @@ def _fallback_segments(
                 comprehension_checkpoints=(),
                 text_variant={"body": part},
                 audio_variant=_placeholder_audio_variant(part),
-                interactive_variant=_practice_variant(part)
-                if content_type is LessonContentType.PRACTICE_QUESTION
-                else None,
+                interactive_variant=None,
                 needs_review=True,
                 review_reasons=("deterministic_parse_used",),
             )
@@ -1725,7 +1723,11 @@ def _content_type(value: str) -> LessonContentType:
 
 def _infer_content_type(text: str) -> LessonContentType:
     lowered = text.casefold()
-    if any(marker in lowered for marker in ("solve", "calculate", "=", "+", "-")):
+    lead = re.sub(r"^\[page \d+\]\s*", "", lowered.strip())[:300]
+    if len(text) <= 900 and (
+        re.match(r"^(?:practice question|question \d+|solve\b|calculate\b|compute\b)", lead)
+        or re.search(r"\b\d+\s*[+×÷*/=-]\s*\d+\b", lead)
+    ):
         return LessonContentType.PRACTICE_QUESTION
     if "example" in lowered:
         return LessonContentType.WORKED_EXAMPLE
@@ -1740,25 +1742,24 @@ def _fallback_modalities(
     content_type: LessonContentType,
     text: str,
 ) -> tuple[ContentModality, ...]:
-    if content_type is LessonContentType.PRACTICE_QUESTION:
-        return (ContentModality.TEXT, ContentModality.INTERACTIVE)
     if any(word in text.casefold() for word in ("diagram", "chart", "graph")):
         return (ContentModality.TEXT, ContentModality.VISUAL)
     return (ContentModality.TEXT, ContentModality.AUDIO)
 
 
 def _fallback_title(text: str, sequence_order: int) -> str:
-    first_line = next(
-        (
-            line.strip()
-            for line in text.splitlines()
-            if line.strip() and not re.fullmatch(r"\[Page \d+\]", line.strip())
-        ),
-        "",
-    )
-    if first_line and len(first_line) <= 80:
-        return first_line
-    return f"Segment {sequence_order}"
+    del sequence_order
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not re.fullmatch(r"\[Page \d+\]", line.strip())
+    ]
+    for line in lines[:12]:
+        if len(line) <= 60 and len(line.split()) <= 9 and not line.endswith((".", "?", "!")):
+            return line
+    first = lines[0] if lines else "Teacher review required"
+    sentence = re.split(r"(?<=[.!?])\s+", first, maxsplit=1)[0]
+    return sentence[:80].rsplit(" ", 1)[0] if len(sentence) > 80 else sentence
 
 
 def _audio_variant(value: object, body: str) -> dict[str, object] | None:
@@ -1958,15 +1959,6 @@ def _placeholder_step_narration(
         "audioUrl": "",
         "durationMs": None,
         "provider": "tts_provider_tbd",
-    }
-
-
-def _practice_variant(text: str) -> dict[str, object]:
-    return {
-        "type": "activity",
-        "title": "Try this activity",
-        "materials": [],
-        "steps": [{"id": "step-1", "instruction": text[:500]}],
     }
 
 

@@ -1006,6 +1006,20 @@ class CalculationVariant(BaseModel):
             return value
         item = dict(value)
         item.setdefault("expression", item.get("fullEquation") or item.get("full_equation") or "")
+        steps = item.get("steps")
+        if isinstance(steps, list) and steps and isinstance(steps[0], dict):
+            first = steps[0]
+            answer = first.get("answer")
+            expression = str(item.get("expression") or "")
+            if isinstance(answer, str) and len(answer.strip()) >= 4:
+                compact_answer = re.sub(r"\s+", "", answer).casefold()
+                if compact_answer in re.sub(r"\s+", "", expression).casefold():
+                    masked = str(first.get("equationState") or "")
+                    item["expression"] = (
+                        masked
+                        if compact_answer not in re.sub(r"\s+", "", masked).casefold()
+                        else ""
+                    )
         if "scaffold" not in item and isinstance(item.get("manipulative"), dict):
             source = dict(item["manipulative"])
             source["kind"] = {

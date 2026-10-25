@@ -226,7 +226,7 @@ class ContentSafetyGuard:
                     decision = SafetyDecision.model_validate_json("".join(blocks))
                 if (
                     _is_lesson_generation_phase(phase)
-                    and decision.action == "block"
+                    and decision.action in {"block", "safeguard"}
                     and decision.categories == ["privacy_abuse"]
                     and not _has_concrete_privacy_indicator(chunk)
                 ):

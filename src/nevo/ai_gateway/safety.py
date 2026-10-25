@@ -72,7 +72,10 @@ _DIRECT_PERSONAL_DATA = re.compile(
     r"national id|medical record|student record|class roster)\b"
     r"|\b(?:share|send|publish|post|collect|give|write down|enter)\b"
     r".{0,80}\b(?:your|student|child|personal|private)\s+"
-    r"(?:name|address|phone|email|password|pin|health|medical|family|location|details)\b)",
+    r"(?:name|address|phone|email|password|pin|health|medical|family|location|details)\b"
+    r"|\b(?:ask|tell|instruct|require)\s+(?:pupils|students|children|learners)\b"
+    r".{0,80}\b(?:write down|share|send|give|collect|enter)\b"
+    r".{0,80}\b(?:their|your)\s+(?:passwords?|pins?|passcodes?|credentials?)\b)",
     re.IGNORECASE | re.DOTALL,
 )
 

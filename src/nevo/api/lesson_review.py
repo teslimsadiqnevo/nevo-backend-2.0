@@ -14,6 +14,7 @@ extracted rather than over it, so the screen can always show both.
 
 import hashlib
 import json
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -376,6 +377,16 @@ def _hash(snapshot):
     return hashlib.sha256(json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _current_signoff(record, material):
+    if record.invalidated_at is not None:
+        return False
+    if record.content_hash == _hash(material):
+        return True
+    if record.kind == "key_points" and isinstance(record.content_snapshot, list):
+        return [item for item in record.content_snapshot if "mediaId" not in item] == material
+    return False
+
+
 async def _invalidate_signoffs(session, lesson_id, kind):
     await session.execute(
         update(LessonReviewSignoff)
@@ -443,25 +454,38 @@ def _checks_material(segments):
                 "questionOptions": question.get("options") or [],
                 "questionAnswerKey": question["answerKey"],
             }
-            material.append(item)
+            authored = question.get("authoredBy") == "person"
+            markable = bool(item["questionPrompt"] and item["questionAnswerKey"] is not None)
+            if not authored and markable:
+                material.append(item)
             views.append(CheckReviewItem(
                 segment_id=segment.id, segment_title=segment.title,
                 question_id=item["questionId"], question_prompt=item["questionPrompt"],
                 question_answer_type=item["questionAnswerType"],
                 question_options=item["questionOptions"], question_answer_key=item["questionAnswerKey"],
-                markable=bool(item["questionPrompt"] and item["questionAnswerKey"] is not None),
+                teacher_reviewed=authored and markable,
+                markable=markable,
             ))
     return material, views
 
 
 async def approved_check_ids(session, lesson_id):
+    from nevo.api.lesson_contracts import checkpoint_payloads
     segments = list(await session.scalars(
         select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
         .order_by(LessonSegment.sequence_order, LessonSegment.id)
     ))
     material, _ = _checks_material(segments)
+    authored = {
+        (str(segment.id), str(question["id"]))
+        for segment in segments
+        for question in checkpoint_payloads(
+            segment.comprehension_checkpoints or [], segment_key=segment.segment_key
+        )
+        if question.get("authoredBy") == "person" and question.get("answerKey") is not None
+    }
     if not material:
-        return set()
+        return authored
     approval = await session.scalar(
         select(LessonReviewSignoff).where(
             LessonReviewSignoff.lesson_id == lesson_id,
@@ -470,8 +494,8 @@ async def approved_check_ids(session, lesson_id):
         ).order_by(LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc()).limit(1)
     )
     if approval is None or approval.content_hash != _hash(material):
-        return set()
-    return {(item["segmentId"], item["questionId"]) for item in material}
+        return authored
+    return authored | {(item["segmentId"], item["questionId"]) for item in material}
 
 
 def _guided_steps_material(segments):
@@ -525,6 +549,57 @@ def _guided_steps_material(segments):
     return material, views, pending_count
 
 
+async def review_complete_map(session, lesson_ids):
+    """Calculate library readiness in three reads, without loading review media."""
+    if not lesson_ids:
+        return {}
+    segments_by_lesson = defaultdict(list)
+    for segment in await session.scalars(
+        select(LessonSegment).where(LessonSegment.lesson_id.in_(lesson_ids))
+        .order_by(LessonSegment.lesson_id, LessonSegment.sequence_order, LessonSegment.id)
+    ):
+        segments_by_lesson[segment.lesson_id].append(segment)
+    points_by_lesson = defaultdict(list)
+    for point in await session.scalars(
+        select(LessonKeyPoint).join(LessonSegment, LessonSegment.id == LessonKeyPoint.segment_id)
+        .where(LessonKeyPoint.lesson_id.in_(lesson_ids))
+        .order_by(LessonKeyPoint.lesson_id, LessonSegment.sequence_order, LessonKeyPoint.position)
+    ):
+        points_by_lesson[point.lesson_id].append(point)
+    approvals_by_lesson = defaultdict(dict)
+    for record in await session.scalars(
+        select(LessonReviewSignoff).where(LessonReviewSignoff.lesson_id.in_(lesson_ids))
+        .order_by(LessonReviewSignoff.lesson_id, LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc())
+    ):
+        approvals_by_lesson[record.lesson_id].setdefault(record.kind, record)
+    result = {}
+    for lesson_id in lesson_ids:
+        segments = segments_by_lesson[lesson_id]
+        points = points_by_lesson[lesson_id]
+        key_material = [
+            {"segmentId": str(segment.id), "body": segment.body} for segment in segments
+        ] + [
+            {"id": str(point.id), "segmentId": str(point.segment_id), "text": point.text,
+             "source": point.source_text, "omitted": point.review_state == KeyPointReviewState.REMOVED}
+            for point in points
+        ]
+        rewrites = [
+            {"segmentId": str(segment.id), "kind": kind, "body": item["body"], "source": segment.body}
+            for segment in segments for kind in ("simplified", "expanded")
+            if isinstance(item := (segment.depth_variants or {}).get(kind), dict) and item.get("body")
+        ]
+        guided, _, _ = _guided_steps_material(segments)
+        checks, _ = _checks_material(segments)
+        materials = {"key_points": key_material, "rewrites": rewrites,
+                     "guided_steps": guided, "checks": checks}
+        approvals = approvals_by_lesson[lesson_id]
+        result[lesson_id] = bool(segments) and all(
+            not material or (kind in approvals and _current_signoff(approvals[kind], material))
+            for kind, material in materials.items()
+        ) and "key_points" in approvals and _current_signoff(approvals["key_points"], key_material)
+    return result
+
+
 async def _review_result(session, lesson):
     from nevo.api.deferred_media import _view as media_view
     from nevo.api.deferred_media import media_summary, reviewable_media
@@ -564,8 +639,10 @@ async def _review_result(session, lesson):
                 approved_by_name=record.approved_by_name,
                 approved_at=record.approved_at,
                 content_hash=record.content_hash,
-                current=record.content_hash == hashes[record.kind]
-                and record.invalidated_at is None,
+                current=_current_signoff(record, {
+                    "key_points": points, "rewrites": rewrites,
+                    "guided_steps": guided_material, "checks": checks_material,
+                }[record.kind]),
             ),
         )
     return result.model_copy(
@@ -599,9 +676,9 @@ async def _review_result(session, lesson):
                 or bool(approvals.get("guided_steps") and approvals["guided_steps"].current)
             )
             and (not checks_material or bool(approvals.get("checks") and approvals["checks"].current)),
-            "checks": [item.model_copy(update={"teacher_reviewed": bool(
+            "checks": [item.model_copy(update={"teacher_reviewed": item.markable and (item.teacher_reviewed or bool(
                 approvals.get("checks") and approvals["checks"].current
-            )}) for item in check_views],
+            ))}) for item in check_views],
             "checks_content_hash": hashes["checks"],
             "checks_approval": approvals.get("checks"),
             "guided_steps": guided_views,

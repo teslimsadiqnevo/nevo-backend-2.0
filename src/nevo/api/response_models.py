@@ -490,6 +490,7 @@ class LessonSummaryResponse(CamelResponse):
     review_segment_count: int
     subject: str | None = None
     assignment_count: int = 0
+    review_complete: bool = False
     #: Sum of the lesson's segment estimates, so a list view can show a
     #: duration without fetching every segment.
     estimated_minutes: int = 0

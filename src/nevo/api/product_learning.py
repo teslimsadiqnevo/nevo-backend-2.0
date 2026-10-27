@@ -483,6 +483,7 @@ def _lesson_summary(
     assignment_count: int = 0,
     author_names: dict[UUID, str] | None = None,
     unapproved_segment_count: int = 0,
+    review_complete: bool = False,
 ) -> dict[str, object]:
     return {
         "id": str(lesson.id),
@@ -494,6 +495,7 @@ def _lesson_summary(
         "reviewSegmentCount": lesson.review_segment_count,
         "subject": lesson.subject,
         "assignmentCount": assignment_count,
+        "reviewComplete": review_complete,
         "estimatedMinutes": lesson.estimated_minutes,
         "createdById": str(lesson.created_by_user_id) if lesson.created_by_user_id else None,
         "createdByName": (author_names or {}).get(lesson.created_by_user_id),
@@ -826,12 +828,16 @@ async def lessons(
     )
     authors = await _author_names(session, rows)
     outstanding = await _unapproved_counts(session, [item.id for item in rows])
+    from nevo.api.lesson_review import review_complete_map
+
+    review_complete = await review_complete_map(session, [item.id for item in rows])
     return [
         _lesson_summary(
             item,
             assignment_count=int(counts.get(item.id, 0)),
             author_names=authors,
             unapproved_segment_count=outstanding.get(item.id, 0),
+            review_complete=review_complete.get(item.id, False),
         )
         for item in rows
     ]
@@ -917,10 +923,13 @@ async def lesson_detail(
     from nevo.api.lesson_review import approved_check_ids
 
     reviewed_checks = await approved_check_ids(session, lesson.id)
+    from nevo.api.lesson_review import _review_result
+    review_complete = (await _review_result(session, lesson)).review_complete if for_teacher else False
     return {
         **_lesson_summary(
             lesson,
             assignment_count=int(assignment_count or 0),
+            review_complete=review_complete,
             unapproved_segment_count=(await _unapproved_counts(session, [lesson.id])).get(
                 lesson.id, 0
             ),

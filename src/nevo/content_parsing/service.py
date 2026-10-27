@@ -275,6 +275,7 @@ class ContentParsingService:
                 try:
                     generated = await generate_pass(index, "")
                     candidate = _json_payload(generated.text)
+                    _mark_source_authorship(candidate, chunks[index - 1])
                     try:
                         _segments_from_payload_list(candidate, sequence_offset=0)
                         if index == len(chunks):
@@ -289,6 +290,7 @@ class ContentParsingService:
                             gateway=self._ai_gateway,
                             requester_user_id=requested_by_user_id,
                         )
+                        _mark_source_authorship(candidate, chunks[index - 1])
                         _segments_from_payload_list(candidate, sequence_offset=0)
                         if index == len(chunks):
                             _assessment_questions(candidate)
@@ -360,6 +362,7 @@ class ContentParsingService:
                 if isinstance(result, Exception):
                     raise result
                 payload = _json_payload(result.text)
+                _mark_source_authorship(payload, chunk)
                 chunk_segments = _segments_from_payload_list(payload, sequence_offset=len(segments))
                 from nevo.content_parsing.activity import source_activity_observations
 
@@ -971,6 +974,40 @@ def _assessment_questions(payload: dict[str, object]) -> list[dict[str, object]]
         segment_key="lesson-assessment",
         strict=True,
     )
+
+
+def _source_has_answer(source: str, question: dict[str, object]) -> bool:
+    """Only an explicit source answer beside the same question counts as authored."""
+    prompt = " ".join(str(question.get("prompt") or "").split()).casefold()
+    key = question.get("answerKey")
+    if len(prompt) < 12 or key is None or isinstance(key, (list, dict)):
+        return False
+    normalized = " ".join(source.split()).casefold()
+    start = normalized.find(prompt)
+    if start < 0:
+        return False
+    following = normalized[start + len(prompt):start + len(prompt) + 700]
+    answer = re.escape(str(key).strip().casefold())
+    return bool(re.search(rf"\b(?:correct\s+)?answer\s*[:=-]\s*{answer}(?!\w)", following))
+
+
+def _mark_source_authorship(payload: dict[str, object], source: str) -> None:
+    normalized = " ".join(source.split()).casefold()
+    groups = [item.get("comprehension_checkpoints") or item.get("comprehensionCheckpoints")
+              for item in payload.get("segments", []) if isinstance(item, dict)]
+    groups.append(payload.get("assessment"))
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for question in group:
+            if not isinstance(question, dict):
+                continue
+            prompt = " ".join(str(question.get("prompt") or "").split()).casefold()
+            authored = (
+                _source_has_answer(source, question) if question.get("answerKey") is not None
+                else len(prompt) >= 12 and prompt in normalized
+            )
+            question["authoredBy"] = "person" if authored else "nevo"
 
 
 def _question_list(value):

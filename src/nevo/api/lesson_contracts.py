@@ -1075,7 +1075,9 @@ def checkpoint_payloads(
         item = dict(value)
         item = ComprehensionCheckpoint.canonical_choice_type(item)
         if strict:
-            if not str(item.get("prompt") or "").strip() or item.get("answerKey") is None:
+            if not str(item.get("prompt") or "").strip() or (
+                item.get("answerKey") is None and item.get("authoredBy") != "person"
+            ):
                 raise UnclassifiableQuestionError(
                     f"Unclassifiable question in {segment_key}: prompt and answer required",
                     question_label=str(item.get("prompt") or item.get("id") or f"Question {index}")[
@@ -1136,7 +1138,7 @@ def checkpoint_payloads(
                     ],
                 ) from error
             raise
-        if strict:
+        if strict and question.answer_key is not None:
             _require_markable_checkpoint(question, segment_key)
         from nevo.probe.presentation import ordered_options
 

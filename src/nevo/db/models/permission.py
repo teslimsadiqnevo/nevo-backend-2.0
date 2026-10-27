@@ -66,6 +66,11 @@ class Admin(TimestampMixin, Base):
         default=AdminAccessLevel.STANDARD,
         server_default=AdminAccessLevel.STANDARD.value,
     )
+    senior_promoted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    senior_promoted_by_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    senior_promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AdminScopeAssignment(Base):

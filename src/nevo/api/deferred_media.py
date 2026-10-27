@@ -35,10 +35,11 @@ class MediaQualityEvent(CamelResponse):
     lesson_title: str
     segment_id: UUID
     segment_title: str | None
-    kind: Literal["image"]
-    category: Literal["answer_revealing_content"]
+    kind: Literal["image", "audio"]
+    category: str
     reason: str
     detected_at: datetime | None
+    attempt_count: int
 
 
 def reviewable_media():
@@ -58,7 +59,7 @@ async def media_quality_events(
     session: DatabaseSession,
     limit: int = Query(100, ge=1, le=200),
 ):
-    """Show answer-revealing image rejections to school administrators only."""
+    """Show withheld media and repeat failures to school administrators only."""
     actor = await require_school_actor(
         session, principal, roles={"senco_admin", "other_admin"}
     )
@@ -68,8 +69,8 @@ async def media_quality_events(
         .join(LessonSegment, LessonSegment.id == DeferredLessonMedia.segment_id)
         .where(
             Lesson.school_id == actor.school_id,
-            DeferredLessonMedia.kind == "image",
-            DeferredLessonMedia.failure_code == "answer_revealing_content",
+            DeferredLessonMedia.status.in_(["failed", "stale"]),
+            DeferredLessonMedia.failure_code.is_not(None),
         )
         .order_by(DeferredLessonMedia.completed_at.desc())
         .limit(limit)
@@ -80,10 +81,11 @@ async def media_quality_events(
             lesson_title=lesson.title,
             segment_id=segment.id,
             segment_title=segment.title,
-            kind="image",
-            category="answer_revealing_content",
-            reason=str((job.result or {}).get("reviewReason") or "Image revealed a check answer."),
+            kind=job.kind,
+            category=job.failure_code,
+            reason=str((job.result or {}).get("reviewReason") or job.failure_code),
             detected_at=job.completed_at,
+            attempt_count=job.attempts,
         )
         for job, lesson, segment in rows
     ]

@@ -28,6 +28,7 @@ from nevo.teacher_assignments.errors import (
     SubjectNotOnTeacherError,
     SubjectRequiredError,
     TeacherNotFoundError,
+    TeacherNotActiveError,
 )
 
 
@@ -370,17 +371,18 @@ class SqlAlchemyTeacherAssignmentRepository:
         teacher_id: UUID,
     ) -> None:
         teacher = await session.scalar(
-            select(User.id)
+            select(User)
             .where(
                 User.id == teacher_id,
                 User.school_id == school_id,
                 User.role == UserRole.TEACHER,
-                User.status == UserStatus.ACTIVE,
             )
             .with_for_update()
         )
         if teacher is None:
             raise TeacherNotFoundError
+        if teacher.status != UserStatus.ACTIVE:
+            raise TeacherNotActiveError
 
     @staticmethod
     async def _ensure_primary_available(

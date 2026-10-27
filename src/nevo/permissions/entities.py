@@ -30,6 +30,9 @@ class AdminTeamMember:
     founding: bool = False
     last_active_at: datetime | None = None
     access_level: AdminAccessLevel = AdminAccessLevel.STANDARD
+    senior_promoted_by: UUID | None = None
+    senior_promoted_by_name: str | None = None
+    senior_promoted_at: datetime | None = None
     learning_support: bool = False
     learning_support_granted_at: datetime | None = None
     learning_support_granted_by: UUID | None = None

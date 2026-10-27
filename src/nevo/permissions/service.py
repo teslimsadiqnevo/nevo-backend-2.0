@@ -216,6 +216,8 @@ class PermissionService:
             school_id=actor.school_id,
             target_user_id=target_user_id,
             access_level=AdminAccessLevel.SENIOR,
+            changed_by_user_id=actor.user_id,
+            changed_at=self._now(),
         )
         if member is None:
             raise TeamMemberNotFoundError
@@ -234,6 +236,8 @@ class PermissionService:
             school_id=actor.school_id,
             target_user_id=target_user_id,
             access_level=AdminAccessLevel.STANDARD,
+            changed_by_user_id=actor.user_id,
+            changed_at=self._now(),
         )
         if member is None:
             raise TeamMemberNotFoundError

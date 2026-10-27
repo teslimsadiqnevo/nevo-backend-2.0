@@ -33,6 +33,7 @@ from nevo.teacher_assignments.errors import (
     TeacherAssignmentError,
     TeacherNotAssignedError,
     TeacherNotFoundError,
+    TeacherNotActiveError,
 )
 from nevo.teacher_assignments.service import TeacherAssignmentService
 
@@ -322,6 +323,7 @@ def public_assignment_error(error: TeacherAssignmentError) -> HTTPException:
         (
             AssignmentConflictError,
             PrimaryTeacherExistsError,
+            TeacherNotActiveError,
         ),
     ):
         status_code = status.HTTP_409_CONFLICT

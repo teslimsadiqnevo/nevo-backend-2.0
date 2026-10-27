@@ -984,6 +984,18 @@ async def lesson_detail(
                 "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body)
                 if for_teacher
                 else student_activity(item),
+                **(
+                    {"activityAvailability": {
+                        "reachableByStudents": False,
+                        "reason": "safety_instruction_not_rendered",
+                    }}
+                    if for_teacher
+                    and isinstance(item.interactive_variant, dict)
+                    and item.interactive_variant.get("steps")
+                    and activity_for_delivery(item.interactive_variant, item.body).get("safety")
+                    and student_activity(item) is None
+                    else {}
+                ),
                 "calculationVariant": item.calculation_variant,
                 "depthVariants": depth_payloads(
                     item.depth_variants,

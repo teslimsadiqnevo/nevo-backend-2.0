@@ -18,6 +18,11 @@ class TeacherNotFoundError(TeacherAssignmentError):
     public_message = "The requested teacher was not found."
 
 
+class TeacherNotActiveError(TeacherAssignmentError):
+    code = "teacher_not_active"
+    public_message = "This teacher must accept their invitation and be active before assignment."
+
+
 class AssignmentConflictError(TeacherAssignmentError):
     code = "assignment_conflict"
     public_message = "This teacher already has an active assignment to the class."

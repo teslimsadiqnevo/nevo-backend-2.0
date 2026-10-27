@@ -100,9 +100,10 @@ async def resolve(
             display_name=names.get(existing.id, existing.name),
             origin=existing.origin,
         )
+    canonical_name = spelling.expand(name)
     canonical = await session.scalar(
         select(CanonicalSubject).where(
-            CanonicalSubject.display_name.ilike(name),
+            CanonicalSubject.display_name.ilike(canonical_name),
         )
     )
     if canonical is not None:
@@ -145,7 +146,7 @@ async def ensure(
     if folded is not None:
         return folded
     canonical = await session.scalar(
-        select(CanonicalSubject).where(CanonicalSubject.display_name.ilike(name))
+        select(CanonicalSubject).where(CanonicalSubject.display_name.ilike(spelling.expand(name)))
     )
     subject = SchoolSubject(
         school_id=school_id,

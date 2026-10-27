@@ -24,6 +24,7 @@ from nevo.permissions.errors import (
     InvalidAdminRoleError,
     InvalidInvitationError,
     LastLearningSupportHolderError,
+    LearningSupportGrantActiveError,
     LastOversightAdminError,
     LastSeniorAdminError,
     PermissionDeniedError,
@@ -76,6 +77,9 @@ class TeamMemberResponse(BaseModel):
     founding: bool = False
     last_active_at: datetime | None = Field(default=None, alias="lastActiveAt")
     access_level: AdminAccessLevel = Field(alias="accessLevel")
+    senior_promoted_by: UUID | None = Field(default=None, alias="seniorPromotedBy")
+    senior_promoted_by_name: str | None = Field(default=None, alias="seniorPromotedByName")
+    senior_promoted_at: datetime | None = Field(default=None, alias="seniorPromotedAt")
     learning_support: bool = Field(default=False, alias="learningSupport")
     learning_support_granted_at: datetime | None = Field(
         default=None, alias="learningSupportGrantedAt"
@@ -99,6 +103,9 @@ class TeamMemberResponse(BaseModel):
             founding=member.founding,
             lastActiveAt=member.last_active_at,
             accessLevel=member.access_level,
+            seniorPromotedBy=member.senior_promoted_by,
+            seniorPromotedByName=member.senior_promoted_by_name,
+            seniorPromotedAt=member.senior_promoted_at,
             learningSupport=member.learning_support,
             learningSupportGrantedAt=member.learning_support_granted_at,
             learningSupportGrantedBy=member.learning_support_granted_by,
@@ -428,6 +435,7 @@ def public_permission_error(error: PermissionError) -> HTTPException:
             LastOversightAdminError,
             LastSeniorAdminError,
             LastLearningSupportHolderError,
+            LearningSupportGrantActiveError,
             SelfScopeRemovalError,
             SelfDeactivationError,
             SsoManagedTeamError,

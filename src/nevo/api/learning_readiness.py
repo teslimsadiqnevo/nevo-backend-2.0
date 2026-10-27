@@ -54,8 +54,13 @@ async def readiness(
     student = await actor_user(session, principal)
     if student.role != "student":
         raise HTTPException(403, detail="Student account required")
-    if lesson_id is None and (student.baseline_profile or {}).get("onboarding_return_lesson_id"):
-        lesson_id = UUID(student.baseline_profile["onboarding_return_lesson_id"])
+    remembered_lesson = (student.baseline_profile or {}).get("onboarding_return_lesson_id")
+    using_remembered = lesson_id is None and bool(remembered_lesson)
+    if using_remembered:
+        try:
+            lesson_id = UUID(remembered_lesson)
+        except (TypeError, ValueError):
+            lesson_id = None
     subjects, available = await refresh_onboarding(session, student)
     preferred = None
     lesson_status = None
@@ -72,24 +77,34 @@ async def readiness(
             )
         )
         if lesson is None or lesson.school_id != student.school_id or assignment is None:
-            raise HTTPException(404, detail={"code": "lesson_not_found"})
-        preferred = next(
-            (
-                subject.id
-                for subject in subjects
-                if normalise(subject.name) == normalise(lesson.subject or "")
-            ),
-            None,
-        )
-        lesson_status = (
-            "subject_unmapped"
-            if preferred is None
-            else "available"
-            if preferred in available
-            else "unavailable"
-        )
+            if not using_remembered:
+                raise HTTPException(404, detail={"code": "lesson_not_found"})
+            profile = dict(student.baseline_profile or {})
+            profile.pop("onboarding_return_lesson_id", None)
+            student.baseline_profile = profile
+            lesson_id = None
+        else:
+            preferred = next(
+                (
+                    subject.id
+                    for subject in subjects
+                    if normalise(subject.name) == normalise(lesson.subject or "")
+                ),
+                None,
+            )
+            lesson_status = (
+                "subject_unmapped"
+                if preferred is None
+                else "available"
+                if preferred in available
+                else "unavailable"
+            )
+            profile = dict(student.baseline_profile or {})
+            profile["onboarding_return_lesson_id"] = str(lesson_id)
+            student.baseline_profile = profile
+    elif using_remembered:
         profile = dict(student.baseline_profile or {})
-        profile["onboarding_return_lesson_id"] = str(lesson_id)
+        profile.pop("onboarding_return_lesson_id", None)
         student.baseline_profile = profile
     completed = onboarding_modules(student.baseline_profile or {})
     unavailable = (student.baseline_profile or {}).get(

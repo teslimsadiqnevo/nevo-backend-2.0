@@ -25,6 +25,7 @@ from nevo.permissions.entities import (
 from nevo.permissions.errors import (
     AdminSeatLimitReachedError,
     LastLearningSupportHolderError,
+    LearningSupportGrantActiveError,
     LastOversightAdminError,
     LastSeniorAdminError,
     TeamMemberAlreadyExistsError,
@@ -283,6 +284,17 @@ class SqlAlchemyPermissionRepository:
             current = await self._active_scopes_for_update(session, admin.id)
             removed = current - scopes
 
+            if PermissionScope.SENCO in removed:
+                support_grant = await session.scalar(
+                    select(LearningSupportGrant.id).where(
+                        LearningSupportGrant.school_id == school_id,
+                        LearningSupportGrant.holder_user_id == target_user_id,
+                        LearningSupportGrant.revoked_at.is_(None),
+                    )
+                )
+                if support_grant is not None:
+                    raise LearningSupportGrantActiveError
+
             if PermissionScope.OVERSIGHT in removed:
                 oversight_count = await session.scalar(
                     select(func.count())
@@ -397,6 +409,8 @@ class SqlAlchemyPermissionRepository:
         school_id: UUID,
         target_user_id: UUID,
         access_level: AdminAccessLevel,
+        changed_by_user_id: UUID,
+        changed_at: datetime,
     ) -> AdminTeamMember | None:
         async with self._sessions.begin() as session:
             if await session.get(School, school_id, with_for_update=True) is None:
@@ -430,6 +444,14 @@ class SqlAlchemyPermissionRepository:
                 )
                 if other_senior is None:
                     raise LastSeniorAdminError
+            if admin.access_level != access_level and access_level is AdminAccessLevel.SENIOR:
+                granter = await session.get(User, changed_by_user_id)
+                admin.senior_promoted_by = changed_by_user_id
+                admin.senior_promoted_by_name = (
+                    " ".join(part for part in (granter.first_name, granter.last_name) if part)
+                    or granter.email or str(changed_by_user_id)
+                ) if granter else str(changed_by_user_id)
+                admin.senior_promoted_at = changed_at
             admin.access_level = access_level
             scopes = await self._active_scopes_for_update(session, admin.id)
             await session.flush()
@@ -568,6 +590,9 @@ class SqlAlchemyPermissionRepository:
             founding=admin.created_by_user_id is None,
             last_active_at=last_active_at,
             access_level=admin.access_level,
+            senior_promoted_by=admin.senior_promoted_by,
+            senior_promoted_by_name=admin.senior_promoted_by_name,
+            senior_promoted_at=admin.senior_promoted_at,
             learning_support=grant is not None,
             learning_support_granted_at=grant.granted_at if grant else None,
             learning_support_granted_by=grant.granted_by_user_id if grant else None,

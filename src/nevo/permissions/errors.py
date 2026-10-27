@@ -40,6 +40,11 @@ class LastLearningSupportHolderError(PermissionError):
     public_message = "Grant Learning Support to another person before changing the final holder."
 
 
+class LearningSupportGrantActiveError(PermissionError):
+    code = "learning_support_grant_active"
+    public_message = "Remove this person's Learning Support grant before removing the SENCo scope."
+
+
 class SelfScopeRemovalError(PermissionError):
     code = "cannot_remove_own_oversight"
     public_message = "You cannot remove your own oversight permission."

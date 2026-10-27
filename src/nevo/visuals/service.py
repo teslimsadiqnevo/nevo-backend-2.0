@@ -60,8 +60,9 @@ REVIEW_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": ["answer_revealing_content", "educational_quality"],
         },
+        "description": {"type": "string"},
     },
-    "required": ["approved", "issues", "category"],
+    "required": ["approved", "issues", "category", "description"],
     "additionalProperties": False,
 }
 
@@ -106,6 +107,34 @@ class EducationalImageService:
             and self._storage.configured
         )
 
+    @property
+    def recheck_configured(self) -> bool:
+        return self._storage.configured and self._safety.configured and bool(
+            self._settings.anthropic_api_key
+        )
+
+    async def recheck_existing(self, *, storage_path: str, lesson_text: str) -> str:
+        """Recheck stored bytes after a safety-policy change without regenerating them."""
+        if not self.recheck_configured:
+            raise VisualGenerationError("Image safety review or storage is not configured")
+        stored = await self._storage.download(storage_path)
+        with Image.open(io.BytesIO(stored)) as picture:
+            picture = picture.convert("RGB")
+            picture.thumbnail((1024, 1024))
+            buffer = io.BytesIO()
+            picture.save(buffer, format="PNG")
+        image = buffer.getvalue()
+        if len(image) > 3_500_000:
+            raise VisualGenerationError("Stored image is too large for safety review")
+        safe_text = self._privacy.sanitize_text(lesson_text, pseudonym="the learner")[:4_000]
+        await self._safety.check(safe_text, phase="image_cached", image=image)
+        approved, issues, category, description = await self._review_image(
+            image=image, lesson_text=safe_text
+        )
+        if not approved or category == "answer_revealing_content":
+            raise VisualEducationalReviewError(category, issues)
+        return description
+
     @tracked_generation("image")
     async def generate(
         self,
@@ -141,7 +170,7 @@ class EducationalImageService:
         try:
             if not await self._storage.exists(object_path):
                 answer_safe_prompt = self._answer_safe_prompt()
-                accepted, attempts, used_prompt = await self._draw_until_approved(
+                accepted, attempts, used_prompt, description = await self._draw_until_approved(
                     prompt,
                     safe_review_context,
                     answer_safe_prompt=answer_safe_prompt,
@@ -163,6 +192,11 @@ class EducationalImageService:
                 await self._safety.check(
                     safe_text, phase="image_cached", context=context, image=buffer.getvalue()
                 )
+                approved, issues, category, description = await self._review_image(
+                    image=buffer.getvalue(), lesson_text=safe_review_context
+                )
+                if not approved or category == "answer_revealing_content":
+                    raise VisualEducationalReviewError(category, issues)
             image_url = await self._storage.url_for(object_path)
             preview_url = await self._storage.url_for(preview_path)
         except (SafetyBlocked, SafetyUnavailable) as error:
@@ -193,7 +227,8 @@ class EducationalImageService:
             "reviewedBy": self._settings.validator_model,
             "reviewAttempts": attempts,
             "generatedAt": datetime.now(UTC).isoformat(),
-            "caption": title or "Lesson visual",
+            "caption": description,
+            "altText": description,
             "qualityValidated": True,
             "safetyPolicyVersion": POLICY_VERSION,
             "urlExpiresInSeconds": (
@@ -208,7 +243,7 @@ class EducationalImageService:
         *,
         answer_safe_prompt: str,
         context=None,
-    ) -> tuple[bytes, int, str]:
+    ) -> tuple[bytes, int, str, str]:
         issues = ""
         category = "educational_quality"
         active_prompt = prompt
@@ -237,7 +272,7 @@ class EducationalImageService:
                     ),
                     timeout=max(1.0, deadline - time.monotonic()),
                 )
-                approved, issues, category = await asyncio.wait_for(
+                approved, issues, category, description = await asyncio.wait_for(
                     self._review_image(image=image, lesson_text=lesson_text),
                     timeout=max(1.0, deadline - time.monotonic()),
                 )
@@ -247,7 +282,7 @@ class EducationalImageService:
                 # is better than the whole parse never finishing.
                 raise VisualGenerationError("Image generation exceeded its time budget") from error
             if approved and category != "answer_revealing_content":
-                return image, attempt, sent_prompt
+                return image, attempt, sent_prompt, description
             if answer_safe_retry:
                 raise VisualEducationalReviewError(category, issues)
             if category == "answer_revealing_content":
@@ -336,7 +371,7 @@ class EducationalImageService:
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise VisualGenerationError("Image provider returned no valid PNG") from error
 
-    async def _review_image(self, *, image: bytes, lesson_text: str) -> tuple[bool, str]:
+    async def _review_image(self, *, image: bytes, lesson_text: str) -> tuple[bool, str, str, str]:
         encoded = base64.b64encode(image).decode()
         if len(encoded) > MAX_VALIDATION_IMAGE_BYTES:
             raise VisualGenerationError(
@@ -363,7 +398,9 @@ class EducationalImageService:
                         "cluttered, or decorative rather than instructional. Reject any image "
                         "that reveals an answer to a question/check in the lesson, even if it is "
                         "otherwise correct, and classify it as answer_revealing_content. When "
-                        "rejecting, state the specific reason and correction."
+                        "rejecting, state the specific reason and correction. For every image "
+                        "supply a factual, concise description of what is visibly depicted; "
+                        "do not infer unseen details or reveal a check answer."
                     ),
                     "messages": [
                         {
@@ -420,7 +457,11 @@ class EducationalImageService:
             category = payload.get("category", "educational_quality")
             if category not in {"answer_revealing_content", "educational_quality"}:
                 raise ValueError("Image review category is missing or invalid")
-            return bool(payload["approved"]), str(payload.get("issues") or ""), category
+            approved = bool(payload["approved"])
+            description = str(payload.get("description") or "").strip()
+            if approved and (len(description) < 12 or len(description) > 240):
+                raise ValueError("Approved image has no usable description")
+            return approved, str(payload.get("issues") or ""), category, description
         except (
             KeyError,
             StopIteration,

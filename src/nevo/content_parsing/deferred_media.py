@@ -15,7 +15,7 @@ from nevo.ai_gateway.safety import POLICY_VERSION, SafetyBlocked
 from nevo.api.lesson_contracts import AudioVariant, VisualVariant, is_practice_question
 from nevo.content_parsing.entities import ParsedLessonSegment
 from nevo.db.models.content import LessonSegment
-from nevo.db.models.deferred_media import DeferredLessonMedia
+from nevo.db.models.deferred_media import DeferredLessonMedia, VisualSafetyRestamp
 from nevo.domain.intelligence.vocabulary import ContentModality, LessonContentType
 from nevo.visuals.service import VisualEducationalReviewError, VisualGenerationError
 
@@ -126,6 +126,7 @@ class DeferredMediaWorker:
                 for kind, count in (("image", 2), ("audio", 4))
                 for i in range(count)
             ]
+            self.tasks.append(asyncio.create_task(self._run_restamps(), name="lesson-media-restamp"))
 
     async def stop(self):
         for task in self.tasks:
@@ -143,6 +144,146 @@ class DeferredMediaWorker:
             except Exception:
                 logger.exception("Optional lesson media worker failed")
                 await asyncio.sleep(5)
+
+    async def _run_restamps(self):
+        while True:
+            try:
+                if not await self.process_restamp_next():
+                    await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Stored image safety recheck failed")
+                await asyncio.sleep(10)
+
+    async def process_restamp_next(self):
+        if not self.parser._visual_generation or not self.parser._visual_generation.recheck_configured:
+            return False
+        now = datetime.now(UTC)
+        async with self.sessions.begin() as session:
+            await session.execute(
+                update(VisualSafetyRestamp)
+                .where(
+                    VisualSafetyRestamp.status == "processing",
+                    VisualSafetyRestamp.lease_until < now,
+                    VisualSafetyRestamp.attempts >= 3,
+                )
+                .values(status="failed", failure_code="review_unavailable", completed_at=now)
+            )
+            stamp = LessonSegment.visual_variant["safetyPolicyVersion"].astext
+            path = LessonSegment.visual_variant["storagePath"].astext
+            caption = LessonSegment.visual_variant["caption"].astext
+            record = await session.scalar(
+                select(LessonSegment)
+                .where(
+                    LessonSegment.visual_variant.is_not(None),
+                    path.is_not(None),
+                    or_(
+                        stamp.is_(None), stamp != POLICY_VERSION,
+                        caption.is_(None), caption == "Lesson visual",
+                        caption == LessonSegment.title,
+                    ),
+                    ~select(VisualSafetyRestamp.id).where(
+                        VisualSafetyRestamp.segment_id == LessonSegment.id,
+                        VisualSafetyRestamp.policy_version == POLICY_VERSION,
+                        VisualSafetyRestamp.storage_path == path,
+                    ).exists(),
+                )
+                .order_by(LessonSegment.created_at)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            if record is not None:
+                existing = await session.scalar(select(VisualSafetyRestamp).where(
+                    VisualSafetyRestamp.segment_id == record.id,
+                    VisualSafetyRestamp.policy_version == POLICY_VERSION,
+                ).with_for_update())
+                if existing is None:
+                    session.add(VisualSafetyRestamp(
+                        segment_id=record.id, policy_version=POLICY_VERSION,
+                        storage_path=record.visual_variant["storagePath"],
+                        status="queued", attempts=0,
+                    ))
+                else:
+                    existing.storage_path = record.visual_variant["storagePath"]
+                    existing.status, existing.attempts = "queued", 0
+                    existing.failure_code = existing.completed_at = existing.lease_until = None
+                    existing.caption_candidate = existing.caption_approved_at = existing.caption_approved_by = None
+                return True
+            task = await session.scalar(
+                select(VisualSafetyRestamp)
+                .where(
+                    VisualSafetyRestamp.policy_version == POLICY_VERSION,
+                    VisualSafetyRestamp.attempts < 3,
+                    or_(
+                        VisualSafetyRestamp.status == "queued",
+                        (VisualSafetyRestamp.status.in_(["processing", "failed"]))
+                        & (VisualSafetyRestamp.lease_until < now),
+                    ),
+                )
+                .order_by(VisualSafetyRestamp.created_at)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            if task is None:
+                return False
+            task.status, task.attempts = "processing", task.attempts + 1
+            task.lease_until = now + timedelta(minutes=4)
+            identity, segment_id, storage_path = task.id, task.segment_id, task.storage_path
+            segment = await session.get(LessonSegment, segment_id)
+            if segment is None or (segment.visual_variant or {}).get("storagePath") != storage_path:
+                task.status, task.completed_at, task.lease_until = "stale", now, None
+                return True
+            lesson_text = f"{segment.title or ''}\n{segment.body}"
+        try:
+            async with asyncio.timeout(3 * 60):
+                description = await self.parser._visual_generation.recheck_existing(
+                    storage_path=storage_path, lesson_text=lesson_text
+                )
+        except SafetyBlocked:
+            await self._complete_restamp(identity, storage_path, failure="content_safety_blocked")
+        except VisualEducationalReviewError as error:
+            await self._complete_restamp(identity, storage_path, failure=error.category)
+        except Exception:
+            logger.exception("Stored image review could not complete segment=%s", segment_id)
+            await self._complete_restamp(identity, storage_path, failure="review_unavailable")
+        else:
+            await self._complete_restamp(identity, storage_path, description=description)
+        return True
+
+    async def _complete_restamp(self, identity, storage_path, *, failure=None, description=None):
+        now = datetime.now(UTC)
+        async with self.sessions.begin() as session:
+            task = await session.get(VisualSafetyRestamp, identity, with_for_update=True)
+            if task is None or task.storage_path != storage_path:
+                return
+            segment = await session.get(LessonSegment, task.segment_id, with_for_update=True)
+            if segment is None or (segment.visual_variant or {}).get("storagePath") != storage_path:
+                task.status, task.completed_at, task.lease_until = "stale", now, None
+                return
+            task.failure_code = failure
+            task.caption_candidate = description if not failure else None
+            task.completed_at = now
+            task.lease_until = None if failure != "review_unavailable" or task.attempts >= 3 else now + timedelta(minutes=5)
+            task.status = "failed" if failure == "review_unavailable" else "blocked" if failure else "passed"
+            if failure:
+                if task.status == "blocked":
+                    segment.visual_variant = {
+                        key: value for key, value in segment.visual_variant.items()
+                        if key != "safetyPolicyVersion"
+                    }
+                return
+            segment.visual_variant = {**segment.visual_variant, "safetyPolicyVersion": POLICY_VERSION}
+            job = await session.scalar(select(DeferredLessonMedia).where(
+                DeferredLessonMedia.segment_id == segment.id,
+                DeferredLessonMedia.kind == "image",
+            ).with_for_update())
+            if job and (job.result or {}).get("image", {}).get("storagePath") == storage_path:
+                job.result = {
+                    **job.result,
+                    "safetyPolicyVersion": POLICY_VERSION,
+                    "image": {**job.result["image"], "safetyPolicyVersion": POLICY_VERSION},
+                }
 
     async def _renew(self, identity, token):
         while True:

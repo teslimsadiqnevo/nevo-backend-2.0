@@ -691,13 +691,14 @@ async def _question_for_attempt(
                 {
                     "id": str(step.get("stepId")),
                     "prompt": str(step.get("prompt") or ""),
-                    "answerKey": step.get("answer"),
-                    "acceptedAnswers": step.get("acceptedAnswers") or step.get("accepted") or [],
+                    "answerKey": step.get("tapCount") if step.get("input") == "tap" else step.get("answer"),
+                    "acceptedAnswers": [] if step.get("input") == "tap" else step.get("acceptedAnswers") or step.get("accepted") or [],
                     "options": step.get("options") or [],
                     "hint": step.get("hint"),
                     "conceptId": str(concept_id) if concept_id else None,
                     "answerType": "numeric"
-                    if isinstance(step.get("answer"), int | float)
+                    if step.get("input") == "tap" or isinstance(step.get("answer"), int | float)
+                    else "expression" if any(symbol in str(step.get("answer") or "") for symbol in "+-*/=×÷")
                     else "text",
                     "textDensity": 0.1,
                     "calculationComplete": False,
@@ -712,7 +713,7 @@ async def _question_for_attempt(
                     or "Complete the calculation.",
                     "answerKey": variant.get("answer"),
                     "conceptId": str(concept_id) if concept_id else None,
-                    "answerType": "text",
+                    "answerType": "expression" if any(symbol in str(variant.get("answer") or "") for symbol in "+-*/=×÷") else "text",
                     "textDensity": 0.1,
                     "calculationComplete": True,
                 }

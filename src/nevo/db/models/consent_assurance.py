@@ -88,6 +88,7 @@ class AgeCheck(Base):
     school_date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
     #: What the parent confirmed on the consent screen.
     parent_date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    parent_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     state: Mapped[AgeCheckState] = mapped_column(
         age_check_state_enum,
         nullable=False,

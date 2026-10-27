@@ -531,6 +531,7 @@ class VisualVariant(BaseModel):
     review_attempts: int = Field(default=0, alias="reviewAttempts")
     generated_at: str = Field(alias="generatedAt")
     caption: str
+    alt_text: str | None = Field(default=None, alias="altText")
     caption_authored_by: Literal["person", "nevo"] = Field(
         default="nevo", alias="captionAuthoredBy"
     )

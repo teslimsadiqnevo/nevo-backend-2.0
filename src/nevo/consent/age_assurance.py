@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import aliased
 
 from nevo.db.models.account import Class, StudentClassEnrollment, User
+from nevo.db.models.consent import ParentLink
 from nevo.db.models.consent_assurance import AgeCheck
 from nevo.db.models.frontend_support import Notification
 from nevo.domain.accounts.age_bands import (
@@ -108,6 +109,38 @@ async def notify_school(session, check, now):
         )
     if recipients:
         check.school_notified_at = now
+
+
+async def notify_linked_parents(session, check, now):
+    """The existing notification worker also emails each linked parent account."""
+    parents = list(await session.scalars(
+        select(User)
+        .join(ParentLink, ParentLink.parent_id == User.id)
+        .where(
+            ParentLink.student_id == check.student_id,
+            ParentLink.school_id == check.school_id,
+            User.role == UserRole.PARENT_GUARDIAN,
+            User.status == UserStatus.ACTIVE,
+        )
+        .distinct()
+    ))
+    for parent in parents:
+        session.add(Notification(
+            recipient_id=parent.id,
+            recipient_role=parent.role.value,
+            type="consent_action_required",
+            category="consent",
+            title="Please confirm your child's date of birth again",
+            description=(
+                "The school has rechecked its admissions record. Please sign in to Nevo "
+                "and confirm your child's date of birth again. No identity document is needed."
+            ),
+            navigates_to="/parent-portal",
+            created_at=now,
+        ))
+    if parents:
+        check.parent_notified_at = now
+    return bool(parents)
 
 
 async def apply_check(session, check, student, now, *, parent_actor=None):

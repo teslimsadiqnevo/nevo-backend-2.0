@@ -15,6 +15,7 @@ from nevo.consent.age_assurance import (
     apply_check,
     blocking_reasons,
     capture_band,
+    notify_linked_parents,
 )
 from nevo.db.models.account import User
 from nevo.db.models.consent import ParentLink
@@ -47,6 +48,7 @@ class AgeCheckResponse(CamelResponse):
     deletion_due_at: datetime | None
     school_rechecked_at: datetime | None
     parent_reconfirmed_at: datetime | None
+    parent_notified_at: datetime | None = None
 
 
 class DateRecheckRequest(CamelResponse):
@@ -86,6 +88,7 @@ def _view(check, student):
         ),
         school_rechecked_at=check.school_rechecked_at,
         parent_reconfirmed_at=check.parent_reconfirmed_at,
+        parent_notified_at=check.parent_notified_at,
     )
 
 
@@ -145,6 +148,33 @@ async def school_recheck(
     check.parent_reconfirmed_at = check.parent_reconfirmed_by = None
     await capture_band(session, check, now.date())
     await apply_check(session, check, student, now)
+    if check.blocks_access:
+        await notify_linked_parents(session, check, now)
+    result = _view(check, student)
+    await session.commit()
+    return result
+
+
+@router.post(
+    "/{age_check_id}/resend-parent-notice",
+    response_model=AgeCheckResponse,
+    responses={409: {"description": "school_recheck_required or parent_account_unavailable"}},
+)
+async def resend_parent_age_check_notice(
+    age_check_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+):
+    actor = await require_school_actor(session, principal, roles=SCHOOL_ROLES)
+    check, student = await _check(session, age_check_id)
+    if check.school_id != actor.school_id:
+        raise HTTPException(404, detail={"code": "age_check_not_found"})
+    now = datetime.now(UTC)
+    _open_check(check, now)
+    if check.school_rechecked_at is None:
+        raise HTTPException(409, detail={"code": "school_recheck_required"})
+    if check.parent_notified_at and now - check.parent_notified_at < timedelta(minutes=5):
+        raise HTTPException(429, detail={"code": "parent_notice_recently_sent"})
+    if not await notify_linked_parents(session, check, now):
+        raise HTTPException(409, detail={"code": "parent_account_unavailable"})
     result = _view(check, student)
     await session.commit()
     return result

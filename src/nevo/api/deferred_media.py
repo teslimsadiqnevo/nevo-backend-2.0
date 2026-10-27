@@ -21,7 +21,7 @@ from nevo.content_parsing.media_contracts import (
     MediaPreparation,
 )
 from nevo.db.models.content import Lesson, LessonSegment
-from nevo.db.models.deferred_media import DeferredLessonMedia
+from nevo.db.models.deferred_media import DeferredLessonMedia, VisualSafetyRestamp
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 WITHDRAWAL_UNDO_WINDOW = timedelta(hours=24)
@@ -40,6 +40,96 @@ class MediaQualityEvent(CamelResponse):
     reason: str
     detected_at: datetime | None
     attempt_count: int
+
+
+class VisualCaptionReview(CamelResponse):
+    segment_id: UUID
+    segment_title: str | None
+    caption: str
+    image_url: str | None
+    safety_reviewed_at: datetime | None
+
+
+class VisualCaptionApproval(CamelResponse):
+    approved_count: int
+    approved_by: UUID
+    approved_at: datetime
+
+
+@router.get("/lessons/{lesson_id}/visual-captions", response_model=list[VisualCaptionReview])
+async def pending_visual_captions(
+    lesson_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+):
+    await _lesson(session, principal, lesson_id)
+    rows = (await session.execute(
+        select(VisualSafetyRestamp, LessonSegment)
+        .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
+        .where(
+            LessonSegment.lesson_id == lesson_id,
+            VisualSafetyRestamp.policy_version == POLICY_VERSION,
+            VisualSafetyRestamp.status == "passed",
+            VisualSafetyRestamp.caption_candidate.is_not(None),
+            VisualSafetyRestamp.caption_approved_at.is_(None),
+        )
+        .order_by(LessonSegment.sequence_order)
+    )).all()
+    return [
+        VisualCaptionReview(
+            segment_id=segment.id, segment_title=segment.title,
+            caption=restamp.caption_candidate,
+            image_url=(segment.visual_variant or {}).get("imageUrl"),
+            safety_reviewed_at=restamp.completed_at,
+        )
+        for restamp, segment in rows
+        if (segment.visual_variant or {}).get("storagePath") == restamp.storage_path
+    ]
+
+
+@router.post(
+    "/lessons/{lesson_id}/visual-captions/approve-all",
+    response_model=VisualCaptionApproval,
+    responses={409: {"description": "visual_caption_review_changed"}},
+)
+async def approve_visual_captions(
+    lesson_id: UUID,
+    segment_ids: list[UUID],
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    actor = await _lesson(session, principal, lesson_id)
+    if not segment_ids or len(segment_ids) != len(set(segment_ids)):
+        raise HTTPException(422, detail={"code": "invalid_visual_caption_selection"})
+    rows = (await session.execute(
+        select(VisualSafetyRestamp, LessonSegment)
+        .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
+        .where(
+            LessonSegment.lesson_id == lesson_id,
+            LessonSegment.id.in_(segment_ids),
+            VisualSafetyRestamp.policy_version == POLICY_VERSION,
+        )
+        .with_for_update()
+    )).all()
+    if len(rows) != len(segment_ids) or any(
+        restamp.status != "passed"
+        or not restamp.caption_candidate
+        or restamp.caption_approved_at is not None
+        or (segment.visual_variant or {}).get("storagePath") != restamp.storage_path
+        or (segment.visual_variant or {}).get("safetyPolicyVersion") != POLICY_VERSION
+        for restamp, segment in rows
+    ):
+        raise HTTPException(409, detail={"code": "visual_caption_review_changed"})
+    now = datetime.now(UTC)
+    for restamp, segment in rows:
+        restamp.caption_approved_by = actor.id
+        restamp.caption_approved_at = now
+        segment.visual_variant = {
+            **segment.visual_variant,
+            "caption": restamp.caption_candidate,
+            "altText": restamp.caption_candidate,
+            "captionAuthoredBy": "nevo",
+        }
+    await session.commit()
+    return VisualCaptionApproval(approved_count=len(rows), approved_by=actor.id, approved_at=now)
 
 
 def reviewable_media():
@@ -75,7 +165,7 @@ async def media_quality_events(
         .order_by(DeferredLessonMedia.completed_at.desc())
         .limit(limit)
     )
-    return [
+    events = [
         MediaQualityEvent(
             lesson_id=lesson.id,
             lesson_title=lesson.title,
@@ -89,6 +179,33 @@ async def media_quality_events(
         )
         for job, lesson, segment in rows
     ]
+    restamps = (await session.execute(
+        select(VisualSafetyRestamp, Lesson, LessonSegment)
+        .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
+        .join(Lesson, Lesson.id == LessonSegment.lesson_id)
+        .where(
+            Lesson.school_id == actor.school_id,
+            VisualSafetyRestamp.policy_version == POLICY_VERSION,
+            VisualSafetyRestamp.status.in_(["blocked", "failed"]),
+        )
+        .order_by(VisualSafetyRestamp.completed_at.desc())
+        .limit(limit)
+    )).all()
+    events.extend(
+        MediaQualityEvent(
+            lesson_id=lesson.id,
+            lesson_title=lesson.title,
+            segment_id=segment.id,
+            segment_title=segment.title,
+            kind="image",
+            category=review.failure_code or "review_unavailable",
+            reason=review.failure_code or "Stored image review could not complete.",
+            detected_at=review.completed_at,
+            attempt_count=review.attempts,
+        )
+        for review, lesson, segment in restamps
+    )
+    return sorted(events, key=lambda item: item.detected_at or datetime.min.replace(tzinfo=UTC), reverse=True)[:limit]
 
 
 async def media_summary(session, lesson_id):

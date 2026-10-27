@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 
 from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.api.auth import PrincipalDependency
@@ -54,6 +54,34 @@ class VisualCaptionApproval(CamelResponse):
     approved_count: int
     approved_by: UUID
     approved_at: datetime
+
+
+class VisualRestampRetry(CamelResponse):
+    queued_count: int
+
+
+@router.post(
+    "/lessons/{lesson_id}/visual-captions/retry-unavailable",
+    response_model=VisualRestampRetry,
+)
+async def retry_unavailable_visual_reviews(
+    lesson_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+):
+    await _lesson(session, principal, lesson_id)
+    result = await session.execute(
+        update(VisualSafetyRestamp)
+        .where(
+            VisualSafetyRestamp.segment_id.in_(
+                select(LessonSegment.id).where(LessonSegment.lesson_id == lesson_id)
+            ),
+            VisualSafetyRestamp.policy_version == POLICY_VERSION,
+            VisualSafetyRestamp.status == "failed",
+            VisualSafetyRestamp.failure_code == "review_unavailable",
+        )
+        .values(status="queued", attempts=0, lease_until=None, failure_code=None, completed_at=None)
+    )
+    await session.commit()
+    return VisualRestampRetry(queued_count=result.rowcount or 0)
 
 
 @router.get("/lessons/{lesson_id}/visual-captions", response_model=list[VisualCaptionReview])

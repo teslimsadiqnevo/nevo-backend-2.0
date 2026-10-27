@@ -400,7 +400,8 @@ class EducationalImageService:
                         "otherwise correct, and classify it as answer_revealing_content. When "
                         "rejecting, state the specific reason and correction. For every image "
                         "supply a factual, concise description of what is visibly depicted; "
-                        "do not infer unseen details or reveal a check answer."
+                        "do not infer unseen details or reveal a check answer. Keep that "
+                        "description between 12 and 240 characters."
                     ),
                     "messages": [
                         {
@@ -459,7 +460,9 @@ class EducationalImageService:
                 raise ValueError("Image review category is missing or invalid")
             approved = bool(payload["approved"])
             description = str(payload.get("description") or "").strip()
-            if approved and (len(description) < 12 or len(description) > 240):
+            if len(description) > 240:
+                description = description[:240].rsplit(" ", 1)[0].rstrip(" ,;:.") + "."
+            if approved and len(description) < 12:
                 raise ValueError("Approved image has no usable description")
             return approved, str(payload.get("issues") or ""), category, description
         except (

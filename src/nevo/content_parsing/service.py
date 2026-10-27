@@ -1623,6 +1623,13 @@ def _validated_calculation_variant(
             not isinstance(tap_count, int) or isinstance(tap_count, bool) or tap_count < 1
         ):
             return None, "calculation_tap_count_not_whole_number"
+        if input_kind == "tap" and tap_count is None:
+            try:
+                tap_count = int(str(step_answer).strip())
+            except (TypeError, ValueError):
+                return None, "calculation_tap_count_missing"
+            if tap_count < 1 or str(tap_count) != str(step_answer).strip():
+                return None, "calculation_tap_count_missing"
         raw_highlights = step.get("highlights")
         highlights = (
             [

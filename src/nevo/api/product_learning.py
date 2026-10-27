@@ -665,6 +665,21 @@ async def _socratic_handoff(
     ], deadline
 
 
+def _tap_answer(step):
+    count = step.get("tapCount")
+    if count is None:
+        value = step.get("answer")
+        try:
+            count = int(str(value).strip())
+        except (TypeError, ValueError) as error:
+            raise HTTPException(409, detail={"code": "calculation_step_unmarkable"}) from error
+        if str(count) != str(value).strip():
+            raise HTTPException(409, detail={"code": "calculation_step_unmarkable"})
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+        raise HTTPException(409, detail={"code": "calculation_step_unmarkable"})
+    return count
+
+
 async def _question_for_attempt(
     session: DatabaseSession,
     lesson: Lesson,
@@ -691,7 +706,7 @@ async def _question_for_attempt(
                 {
                     "id": str(step.get("stepId")),
                     "prompt": str(step.get("prompt") or ""),
-                    "answerKey": step.get("tapCount") if step.get("input") == "tap" else step.get("answer"),
+                    "answerKey": _tap_answer(step) if step.get("input") == "tap" else step.get("answer"),
                     "acceptedAnswers": [] if step.get("input") == "tap" else step.get("acceptedAnswers") or step.get("accepted") or [],
                     "options": step.get("options") or [],
                     "hint": step.get("hint"),

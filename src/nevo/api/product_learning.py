@@ -56,6 +56,7 @@ from nevo.api.response_models import (
     AssignmentResponse,
     AssignmentUpdatedResponse,
     BatchUploadResponse,
+    CamelResponse,
     ConnectionResponse,
     LessonDetailResponse,
     LessonProgressResponse,
@@ -282,6 +283,32 @@ class UploadRequest(BaseModel):
 
 class UploadStructureWrite(BaseModel):
     structure: UploadStructureDocument
+
+
+class CommittedSegmentEdit(CamelResponse):
+    id: UUID
+    title: str | None = Field(default=None, max_length=255)
+
+
+class CommittedModuleEdit(CamelResponse):
+    id: UUID | None = None
+    title: str = Field(min_length=1, max_length=255)
+    segment_record_ids: list[UUID] = Field(min_length=1)
+    recap: str | None = None
+    preview: str | None = None
+
+
+class CommittedLessonStructureWrite(CamelResponse):
+    title: str = Field(min_length=1, max_length=255)
+    segments: list[CommittedSegmentEdit] = Field(min_length=1)
+    modules: list[CommittedModuleEdit] = Field(default_factory=list)
+
+
+class CommittedLessonStructureResponse(CamelResponse):
+    lesson_id: UUID
+    title: str
+    segments: list[CommittedSegmentEdit]
+    modules: list[CommittedModuleEdit]
 
 
 class CloudImportRequest(BaseModel):
@@ -1035,6 +1062,115 @@ async def lesson_detail(
             for item in modules
         ],
     }
+
+
+@router.put(
+    "/lessons/{lesson_id}/structure",
+    response_model=CommittedLessonStructureResponse,
+    responses={409: {"description": "lesson_structure_in_use"}},
+)
+async def edit_committed_lesson_structure(
+    lesson_id: UUID,
+    payload: CommittedLessonStructureWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> CommittedLessonStructureResponse:
+    actor = await require_school_actor(
+        session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
+    )
+    lesson = await session.get(Lesson, lesson_id, with_for_update=True)
+    if lesson is None or lesson.school_id != actor.school_id:
+        raise HTTPException(404, detail={"code": "lesson_not_found"})
+    if not payload.title.strip() or any(not item.title.strip() for item in payload.modules):
+        raise HTTPException(422, detail={"code": "structure_title_required"})
+    segments = list(await session.scalars(
+        select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
+        .order_by(LessonSegment.sequence_order).with_for_update()
+    ))
+    modules = list(await session.scalars(
+        select(LessonModule).where(LessonModule.lesson_id == lesson_id)
+        .order_by(LessonModule.sequence_order).with_for_update()
+    ))
+    by_segment = {item.id: item for item in segments}
+    requested = [item.id for item in payload.segments]
+    if len(requested) != len(by_segment) or set(requested) != set(by_segment):
+        raise HTTPException(422, detail={"code": "structure_segments_mismatch"})
+    known_modules = {item.id: item for item in modules}
+    module_ids = [item.id for item in payload.modules if item.id is not None]
+    if len(module_ids) != len(set(module_ids)) or not set(module_ids).issubset(known_modules):
+        raise HTTPException(422, detail={"code": "structure_modules_mismatch"})
+    ordered = [sid for module in payload.modules for sid in module.segment_record_ids]
+    if payload.modules and (len(ordered) != len(requested) or set(ordered) != set(requested)):
+        raise HTTPException(422, detail={"code": "structure_module_segments_mismatch"})
+    if not payload.modules:
+        ordered = requested
+    current_membership = {item.id: item.module_id for item in segments}
+    desired_membership = {
+        sid: module.id for module in payload.modules for sid in module.segment_record_ids
+    }
+    structural_change = (
+        ordered != [item.id for item in segments]
+        or set(module_ids) != set(known_modules)
+        or any(current_membership[sid] != desired_membership.get(sid) for sid in requested)
+        or [item.id for item in modules] != module_ids
+    )
+    if structural_change and await session.scalar(
+        select(LessonAssignment.id).where(
+            LessonAssignment.lesson_id == lesson_id,
+            LessonAssignment.status != "cancelled",
+        ).limit(1)
+    ):
+        raise HTTPException(409, detail={"code": "lesson_structure_in_use"})
+    lesson.title = payload.title.strip()
+    for item in payload.segments:
+        by_segment[item.id].title = item.title.strip() if item.title else None
+    if structural_change:
+        segment_offset = max((item.sequence_order for item in segments), default=0) + len(segments)
+        for index, sid in enumerate(ordered, 1):
+            by_segment[sid].sequence_order = segment_offset + index
+            by_segment[sid].module_id = None
+        module_offset = max((item.sequence_order for item in modules), default=0) + len(modules)
+        for index, module in enumerate(modules, 1):
+            module.sequence_order = module_offset + index
+        await session.flush()
+        for module in modules:
+            if module.id not in module_ids:
+                await session.delete(module)
+        await session.flush()
+        for index, item in enumerate(payload.modules, 1):
+            module = known_modules.get(item.id)
+            if module is None:
+                module = LessonModule(id=uuid4(), lesson_id=lesson_id, title=item.title, sequence_order=index)
+                session.add(module)
+            module.sequence_order = index
+            module.title = item.title.strip()
+            module.recap = item.recap
+            module.preview = item.preview
+            module.segment_ids = [by_segment[sid].segment_key for sid in item.segment_record_ids]
+            for sid in item.segment_record_ids:
+                by_segment[sid].module_id = module.id
+        for index, sid in enumerate(ordered, 1):
+            by_segment[sid].sequence_order = index
+    for item in payload.modules:
+        module = known_modules.get(item.id)
+        if module is not None:
+            module.title = item.title.strip()
+            module.recap = item.recap
+            module.preview = item.preview
+    await session.commit()
+    saved_modules = list(await session.scalars(
+        select(LessonModule).where(LessonModule.lesson_id == lesson_id)
+        .order_by(LessonModule.sequence_order)
+    ))
+    return CommittedLessonStructureResponse(
+        lessonId=lesson_id,
+        title=lesson.title,
+        segments=[CommittedSegmentEdit(id=sid, title=by_segment[sid].title) for sid in ordered],
+        modules=[CommittedModuleEdit(
+            id=module.id, title=module.title, recap=module.recap, preview=module.preview,
+            segmentRecordIds=[by_segment[sid].id for sid in ordered if by_segment[sid].module_id == module.id],
+        ) for module in saved_modules],
+    )
 
 
 @router.get("/assignments", response_model=list[AssignmentResponse])

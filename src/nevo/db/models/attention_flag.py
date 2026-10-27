@@ -23,7 +23,7 @@ class AttentionFlag(Base):
         Index(
             "ix_attention_flags_open_student",
             "student_id",
-            postgresql_where=text("acknowledged_at IS NULL"),
+            postgresql_where=text("resolved_at IS NULL"),
         ),
     )
 
@@ -64,6 +64,9 @@ class AttentionFlag(Base):
         Uuid,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
 

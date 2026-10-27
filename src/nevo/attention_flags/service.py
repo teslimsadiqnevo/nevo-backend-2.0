@@ -2,7 +2,7 @@ import json
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -16,6 +16,7 @@ from nevo.db.models.attention_flag import (
     Escalation,
     InterventionRecommendation,
 )
+from nevo.db.models.account import User
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.attention_flags.vocabulary import AttentionFlagType
@@ -87,10 +88,11 @@ class AttentionFlagRepository(Protocol):
         student_id: UUID,
     ) -> AttentionDetectionContext: ...
 
-    async def create_attention_flag(
+    async def reconcile_attention_flag(
         self,
-        draft: AttentionFlagDraft,
-    ) -> AttentionFlagRecord: ...
+        student_id: UUID,
+        draft: AttentionFlagDraft | None,
+    ) -> tuple[AttentionFlagRecord | None, bool]: ...
 
     async def create_intervention_recommendation(
         self,
@@ -135,7 +137,8 @@ class AttentionFlagDetectionService:
             student_id=student_id,
             sessions=context.sessions,
         )
-        if draft is None:
+        flag, created = await self._repository.reconcile_attention_flag(student_id, draft)
+        if flag is None:
             return AttentionFlagOutcome(
                 attention_flag_id=None,
                 recommendation_id=None,
@@ -143,7 +146,13 @@ class AttentionFlagDetectionService:
                 status="no_flag",
             )
 
-        flag = await self._repository.create_attention_flag(draft)
+        if not created:
+            return AttentionFlagOutcome(
+                attention_flag_id=flag.id,
+                recommendation_id=None,
+                flag_type=flag.flag_type,
+                status="flagged",
+            )
         recommendation_text, call_id = await self._generate_recommendation(
             flag=flag,
             draft=draft,
@@ -307,11 +316,36 @@ class SqlAlchemyAttentionFlagRepository:
                 ),
             )
 
-    async def create_attention_flag(
+    async def reconcile_attention_flag(
         self,
-        draft: AttentionFlagDraft,
-    ) -> AttentionFlagRecord:
+        student_id: UUID,
+        draft: AttentionFlagDraft | None,
+    ) -> tuple[AttentionFlagRecord | None, bool]:
         async with self._sessions.begin() as session:
+            await session.scalar(select(User.id).where(User.id == student_id).with_for_update())
+            active = list(await session.scalars(
+                select(AttentionFlag)
+                .where(AttentionFlag.student_id == student_id, AttentionFlag.resolved_at.is_(None))
+                .order_by(AttentionFlag.generated_at.desc())
+            ))
+            matching = next(
+                (item for item in active if draft is not None and item.flag_type == draft.flag_type),
+                None,
+            )
+            now = datetime.now(UTC)
+            for item in active:
+                if item is not matching:
+                    item.resolved_at = now
+            if draft is None:
+                return None, False
+            if matching is not None:
+                return AttentionFlagRecord(
+                    id=matching.id,
+                    student_id=matching.student_id,
+                    flag_type=matching.flag_type,
+                    description=matching.description,
+                    generated_at=matching.generated_at,
+                ), False
             record = AttentionFlag(
                 id=uuid.uuid4(),
                 student_id=draft.student_id,
@@ -332,7 +366,7 @@ class SqlAlchemyAttentionFlagRepository:
                 flag_type=record.flag_type,
                 description=record.description,
                 generated_at=record.generated_at,
-            )
+            ), True
 
     async def create_intervention_recommendation(
         self,

@@ -2765,6 +2765,7 @@ async def flags_alias(
     limit: LimitQuery = DEFAULT_LIMIT,
     offset: OffsetQuery = 0,
     unseen_only: bool = Query(default=False, alias="unseenOnly"),
+    open_only: bool = Query(default=False, alias="openOnly"),
 ) -> list[dict[str, object]]:
     """List attention flags.
 
@@ -2774,6 +2775,8 @@ async def flags_alias(
     """
     actor = await actor_user(session, principal)
     query = select(AttentionFlag).order_by(AttentionFlag.generated_at.desc())
+    if open_only:
+        query = query.where(AttentionFlag.resolved_at.is_(None))
     if actor.role is UserRole.TEACHER and not await holds_learning_support(session, actor):
         query = query.where(
             AttentionFlag.student_id.in_(
@@ -2837,6 +2840,7 @@ async def flags_alias(
                 "acknowledgedAt": item.acknowledged_at,
                 "acknowledgedBy": item.acknowledged_by,
                 "acknowledgedByName": _display_name(viewer) if viewer else None,
+                "resolvedAt": item.resolved_at,
                 "evidenceSeries": item.evidence_series,
                 "actionTargets": item.action_targets,
                 "seenByMe": item.id in reads,
@@ -2884,6 +2888,7 @@ async def acknowledge_flag(
         "acknowledgedAt": flag.acknowledged_at,
         "acknowledgedBy": flag.acknowledged_by,
         "acknowledgedByName": _display_name(viewer) if viewer else None,
+        "resolvedAt": flag.resolved_at,
         "evidenceSeries": flag.evidence_series,
         "actionTargets": flag.action_targets,
     }
@@ -2921,6 +2926,7 @@ async def mark_flag_seen(flag_id: UUID, principal: PrincipalDependency, session:
         "acknowledgedAt": flag.acknowledged_at,
         "acknowledgedBy": flag.acknowledged_by,
         "acknowledgedByName": _display_name(viewer) if viewer else None,
+        "resolvedAt": flag.resolved_at,
         "evidenceSeries": flag.evidence_series,
         "actionTargets": flag.action_targets,
         "seenByMe": True,

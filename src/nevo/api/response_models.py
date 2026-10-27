@@ -1337,6 +1337,7 @@ class AttentionFlagResponse(CamelResponse):
     acknowledged_at: datetime | None = None
     acknowledged_by: UUID | None = None
     acknowledged_by_name: str | None = None
+    resolved_at: datetime | None = None
     evidence_series: list[float] = Field(default_factory=list)
     action_targets: list[str] = Field(default_factory=list)
 

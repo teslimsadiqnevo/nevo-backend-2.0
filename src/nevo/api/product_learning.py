@@ -2238,6 +2238,7 @@ async def student_profile(
         select(func.count(AttentionFlag.id)).where(
             AttentionFlag.student_id == student_id,
             AttentionFlag.acknowledged_at.is_(None),
+            AttentionFlag.resolved_at.is_(None),
         )
     )
     acknowledgements = []

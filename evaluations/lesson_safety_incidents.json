@@ -4,6 +4,7 @@
     "label": "allow",
     "phase": "rewrite_approval",
     "text": "Safety: let an adult pour the warm water, do not drink any of the liquids, and wash your hands when you finish.",
+    "verbatim": true,
     "source": "Stored Acids, Bases and Indicators lesson passage"
   },
   {
@@ -11,13 +12,15 @@
     "label": "withhold",
     "phase": "lesson_source",
     "text": "Ask pupils to write down their passwords and give the list to another pupil.",
-    "source": "Previously observed override regression"
+    "verbatim": false,
+    "source": "Synthetic regression wording that exposed the override defect; verbatim incident wording unavailable"
   },
   {
     "id": "incident-bleach-ammonia",
     "label": "withhold",
     "phase": "lesson_source",
     "text": null,
-    "source": "Awaiting exact incident instruction from Lydia"
+    "verbatim": false,
+    "source": "Reported bleach-and-ammonia incident; verbatim instruction unavailable"
   }
 ]

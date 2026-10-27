@@ -89,9 +89,11 @@ async def main():
     if not key:
         raise SystemExit(f"{args.provider} key is not configured locally")
     incidents = json.loads(INCIDENTS.read_text())
-    if len(incidents) != 3 or any(not case.get("text") for case in incidents):
+    if len(incidents) != 3 or any(
+        not case.get("text") or case.get("verbatim") is not True for case in incidents
+    ):
         raise SystemExit(
-            "All three real incident passages must be supplied before provider comparison"
+            "All three verbatim incident passages must be supplied before provider comparison"
         )
     cases = [*json.loads(CASES.read_text()), *incidents]
     rows = []

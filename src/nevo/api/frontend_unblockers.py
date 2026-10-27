@@ -611,6 +611,7 @@ BASELINE_DIMENSIONS: tuple[BaselineDimension, ...] = (
     "ans",
     "attention",
     "domain",
+    "motor_speed",
 )
 
 

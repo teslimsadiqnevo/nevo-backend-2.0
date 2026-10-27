@@ -59,6 +59,7 @@ class ReteachingResponse(BaseModel):
     recommended_route: TeachingRoute
     presentation: TeachingPresentation
     screens: list[str]
+    calculation_steps: list[dict[str, object]] = Field(default_factory=list)
     hint: str | None = None
     teacher_notified: bool = False
     break_available: bool = True
@@ -261,19 +262,24 @@ async def cursor_index(session, lesson_id, module_position, segment_position):
 
 def teaching_routes(segment, current_format="text", current_depth="original", question=None):
     if segment.content_type == LessonContentType.CALCULATION:
-        return [
+        routes = [
             TeachingRoute(
                 action="calculation_scaffold",
                 label="Show more support in this step",
                 requires_choice=False,
             ),
-            TeachingRoute(
-                action="simpler_presentation",
-                label="Show fewer steps at once",
-                requires_choice=False,
-            ),
             TeachingRoute(action="slower", label="Take it more slowly", requires_choice=False),
         ]
+        if any(
+            str(step.get("stepId")) == str((question or {}).get("id"))
+            for step in (segment.calculation_variant or {}).get("steps", [])
+        ):
+            routes.insert(1, TeachingRoute(
+                action="simpler_presentation",
+                label="Show one step at a time",
+                requires_choice=False,
+            ))
+        return routes
     formats = student_modalities(segment)
     labels = {
         "visual": "Try it as a picture",
@@ -399,6 +405,24 @@ async def note_attempt(session, sitting, segment, attempt):
         }
         if segment.content_type == LessonContentType.CALCULATION:
             presentation["scaffoldLevel"] = ScaffoldingLevel.STRONG.value
+            step = next(
+                (
+                    row for row in (segment.calculation_variant or {}).get("steps", [])
+                    if str(row.get("stepId")) == attempt.question_id
+                ),
+                None,
+            )
+            calculation_steps = ([{
+                "stepId": step["stepId"],
+                "prompt": step["prompt"],
+                "input": step.get("input"),
+                "expectedInput": step.get("expectedInput"),
+                "options": step.get("options") or [],
+                "unit": step.get("unit"),
+            }] if step else [])
+            screens = []
+        else:
+            calculation_steps = []
         if recommended.action == "simplify":
             presentation["body"] = segment.depth_variants["simplified"]["body"]
         response = ReteachingResponse(
@@ -408,6 +432,7 @@ async def note_attempt(session, sitting, segment, attempt):
             recommended_route=recommended,
             presentation=presentation,
             screens=screens,
+            calculation_steps=calculation_steps,
             hint=attempt.question_snapshot.get("hint") if misses >= 2 else None,
             teacher_notified=bool(state.get("teacherNotified")),
         )

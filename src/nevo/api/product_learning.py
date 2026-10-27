@@ -634,6 +634,9 @@ async def _socratic_handoff(
 ) -> tuple[list[dict[str, str]], datetime | None]:
     """Return the server-owned SCRUM-241 hand-off after three misses."""
 
+    if item.source == "calculation":
+        return [], None
+
     recent = list(
         await session.scalars(
             select(LessonQuestionAttempt)

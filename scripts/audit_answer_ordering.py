@@ -44,10 +44,13 @@ def inspect(values, *, source, context, totals, issues, demo=None, question_offs
         if isinstance(row["answerKey"], list):
             totals["multipleAnswer"] += 1
             continue
+        option_count = len(row["options"])
+        totals[f"with{option_count}Options"] += 1
         position = next(
             i + 1 for i, item in enumerate(row["options"]) if item["value"] == row["answerKey"]
         )
         totals[f"correctAt{position}"] += 1
+        totals[f"with{option_count}OptionsCorrectAt{position}"] += 1
         original = raw.get("options") or []
         if original:
             first = original[0].get("value") if isinstance(original[0], dict) else original[0]
@@ -130,6 +133,8 @@ async def main(quarantine=False):
                     None,
                 )
                 result["onboardingKnowledge"][f"correctAt{position}"] += 1
+                result["onboardingKnowledge"][f"with{len(options)}Options"] += 1
+                result["onboardingKnowledge"][f"with{len(options)}OptionsCorrectAt{position}"] += 1
                 if position is None:
                     result["issues"].append(
                         {"source": "probe", "context": str(item.id), "error": "unmatched_key"}

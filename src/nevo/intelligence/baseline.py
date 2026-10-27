@@ -18,9 +18,9 @@ def build_baseline_profile(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Reduce device-produced baseline aggregates into bounded engine settings."""
     rows = list(features)
-    interference_rows = [row for row in rows if row.get("dimension") == "interference_control"]
+    interference_rows = [row for row in rows if row.get("dimension") in {"inhibition", "interference_control"}]
     # This measure must not leak into generic accuracy/processing-speed averages.
-    rows = [row for row in rows if row.get("dimension") != "interference_control"]
+    rows = [row for row in rows if row.get("dimension") not in {"inhibition", "interference_control"}]
     values: dict[str, list[float]] = defaultdict(list)
     for row in rows:
         for key, value in row.items():
@@ -57,7 +57,8 @@ def build_baseline_profile(
     confidence = "medium" if len(rows) >= 3 else "low"
     measurements = dict((previous_profile or {}).get("measurements") or {})
     if interference_rows:
-        measurements["interference_control"] = interference_rows[-1]["measurement"]
+        measurements["inhibition"] = interference_rows[-1]["measurement"]
+        measurements.pop("interference_control", None)
     for dimension in ("wmc", "ps", "reading", "ans", "attention", "domain"):
         observed = [
             row
@@ -232,7 +233,7 @@ def build_baseline_profile(
             engine_config["support"]["numericalVisuals"] = (
                 measurements["ans"]["trial_count"] >= 3 and measurements["ans"]["accuracy"] < 0.7
             )
-    interference = measurements.get("interference_control", {})
+    interference = measurements.get("inhibition") or measurements.get("interference_control", {})
     if interference.get("status") == "established":
         if interference["accuracyCost"] >= 0.15 and interference["relativeLatencyCost"] >= 0.2:
             engine_config["support"]["shorterTextBlocks"] = True
@@ -276,10 +277,10 @@ def reduce_trials(
     from collections import defaultdict
 
     trials = list(trials)
-    interference_trials = [row for row in trials if row.get("dimension") == "interference_control"]
+    interference_trials = [row for row in trials if row.get("dimension") in {"inhibition", "interference_control"}]
     buckets: dict[tuple[str, str | None], list[Mapping[str, object]]] = defaultdict(list)
     for trial in trials:
-        if trial.get("dimension") == "interference_control":
+        if trial.get("dimension") in {"inhibition", "interference_control"}:
             continue
         if (
             trial.get("skipped")
@@ -350,7 +351,7 @@ def reduce_trials(
 
         features.append(
             {
-                "dimension": "interference_control",
+                "dimension": "inhibition",
                 "measurement": reduce_interference(interference_trials),
             }
         )

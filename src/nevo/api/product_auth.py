@@ -1174,7 +1174,21 @@ async def revoke_invite(
     if record is None or record.school_id != actor.school_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
     record.status = "revoked"
-    record.revoked_at = datetime.now(UTC)
+    now = datetime.now(UTC)
+    record.revoked_at = now
+    reserved_teacher = await session.get(User, record.id)
+    if reserved_teacher is not None and reserved_teacher.status == UserStatus.INVITED:
+        reserved_teacher.status = UserStatus.DEACTIVATED
+        reserved_teacher.deactivated_at = now
+        reserved_teacher.email = None
+        await session.execute(
+            update(TeacherClassAssignment)
+            .where(
+                TeacherClassAssignment.teacher_id == reserved_teacher.id,
+                TeacherClassAssignment.removed_at.is_(None),
+            )
+            .values(removed_at=now)
+        )
     await session.commit()
 
 
@@ -1253,7 +1267,20 @@ async def accept_join(
             detail="Student PIN or email and password are required",
         )
     identifier = f"NV-{secrets.token_hex(3).upper()}"
-    user = User(
+    user = (
+        await session.get(User, record.id, with_for_update=True)
+        if record.role == "teacher"
+        else None
+    )
+    if user is not None and (
+        user.school_id != record.school_id
+        or user.role != UserRole.TEACHER
+        or user.status != UserStatus.INVITED
+        or user.email != record.email
+    ):
+        raise HTTPException(status_code=409, detail={"code": "invited_teacher_conflict"})
+    new_user = user is None
+    user = user or User(
         school_id=record.school_id,
         role=UserRole(record.role),
         auth_method=(
@@ -1274,7 +1301,13 @@ async def accept_join(
         age_band=band_for_age(payload.age) if record.role == "student" else None,
         status=UserStatus.ACTIVE,
     )
-    session.add(user)
+    if not new_user:
+        user.first_name = payload.first_name or record.first_name
+        user.last_name = payload.last_name or record.last_name
+        user.password_hash = credential_hasher().hash_password(payload.password)
+        user.status = UserStatus.ACTIVE
+    else:
+        session.add(user)
     await session.flush()
     if record.class_id and record.role == "student":
         session.add(StudentClassEnrollment(student_id=user.id, class_id=record.class_id))

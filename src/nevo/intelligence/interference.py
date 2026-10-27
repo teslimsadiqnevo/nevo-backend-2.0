@@ -7,7 +7,7 @@ MIN_VALID_PER_CONDITION = 12
 ANTICIPATION_FLOOR_MS = 200
 SLOW_TAIL_CAP_MS = 5000
 CONGRUENT_ACCURACY_GATE = 0.75
-POLICY = "binary-word-conflict-provisional-v1"
+POLICY = "binary-word-conflict-inhibition-v1"
 
 
 def reduce_interference(trials):

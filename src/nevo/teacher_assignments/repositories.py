@@ -1,15 +1,16 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import Class, User
+from nevo.db.models.product import SchoolInvitation
 from nevo.db.models.subject import ClassSubject, SchoolSubject, TeacherSubject
 from nevo.db.models.teacher_assignment import (
     TeacherClassAssignment as TeacherClassAssignmentModel,
 )
-from nevo.domain.accounts.vocabulary import UserRole, UserStatus
+from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
 from nevo.domain.teacher_assignments.vocabulary import (
     TeacherAssignmentRole,
     TeacherAssignmentSource,
@@ -51,7 +52,17 @@ class SqlAlchemyTeacherAssignmentRepository:
     ) -> TeacherClassAssignment:
         async with self._sessions.begin() as session:
             await self._lock_class(session, school_id, class_id)
-            await self._require_teacher(session, school_id, teacher_id)
+            invited_from_link = await self._require_teacher(session, school_id, teacher_id)
+            if invited_from_link and school_subject_id is not None:
+                existing_subject = await session.scalar(
+                    select(TeacherSubject.id).where(
+                        TeacherSubject.teacher_id == teacher_id,
+                        TeacherSubject.school_subject_id == school_subject_id,
+                    )
+                )
+                if existing_subject is None:
+                    session.add(TeacherSubject(teacher_id=teacher_id, school_subject_id=school_subject_id))
+                    await session.flush()
             await self._require_subject_on_both(
                 session,
                 teacher_id=teacher_id,
@@ -172,7 +183,26 @@ class SqlAlchemyTeacherAssignmentRepository:
             if current is None:
                 raise AssignmentNotFoundError
 
-            await self._require_teacher(session, school_id, new_teacher_id)
+            invited_from_link = await self._require_teacher(session, school_id, new_teacher_id)
+            if invited_from_link and current.school_subject_id is not None:
+                existing_subject = await session.scalar(
+                    select(TeacherSubject.id).where(
+                        TeacherSubject.teacher_id == new_teacher_id,
+                        TeacherSubject.school_subject_id == current.school_subject_id,
+                    )
+                )
+                if existing_subject is None:
+                    session.add(TeacherSubject(
+                        teacher_id=new_teacher_id,
+                        school_subject_id=current.school_subject_id,
+                    ))
+                    await session.flush()
+            await self._require_subject_on_both(
+                session,
+                teacher_id=new_teacher_id,
+                class_id=current.class_id,
+                school_subject_id=current.school_subject_id,
+            )
             next_role = role or current.role
             if current.teacher_id == new_teacher_id and current.role is next_role:
                 return self._assignment(current)
@@ -209,6 +239,7 @@ class SqlAlchemyTeacherAssignmentRepository:
                 teacher_id=new_teacher_id,
                 class_id=current.class_id,
                 role=next_role,
+                school_subject_id=current.school_subject_id,
                 source=TeacherAssignmentSource.MANUAL,
                 assigned_by_user_id=assigned_by_user_id,
                 assigned_at=assigned_at,
@@ -369,7 +400,7 @@ class SqlAlchemyTeacherAssignmentRepository:
         session: AsyncSession,
         school_id: UUID,
         teacher_id: UUID,
-    ) -> None:
+    ) -> bool:
         teacher = await session.scalar(
             select(User)
             .where(
@@ -380,9 +411,48 @@ class SqlAlchemyTeacherAssignmentRepository:
             .with_for_update()
         )
         if teacher is None:
-            raise TeacherNotFoundError
-        if teacher.status != UserStatus.ACTIVE:
+            invitation = await session.scalar(
+                select(SchoolInvitation)
+                .where(
+                    SchoolInvitation.id == teacher_id,
+                    SchoolInvitation.school_id == school_id,
+                    SchoolInvitation.role == UserRole.TEACHER.value,
+                    SchoolInvitation.status == "pending",
+                    SchoolInvitation.revoked_at.is_(None),
+                    SchoolInvitation.expires_at > datetime.now(UTC),
+                )
+                .with_for_update()
+            )
+            if invitation is None or not invitation.email:
+                raise TeacherNotFoundError
+            teacher = User(
+                id=invitation.id,
+                school_id=school_id,
+                role=UserRole.TEACHER,
+                auth_method=AuthMethod.EMAIL_PASSWORD,
+                first_name=invitation.first_name,
+                last_name=invitation.last_name,
+                email=invitation.email,
+                status=UserStatus.INVITED,
+            )
+            session.add(teacher)
+            await session.flush()
+            return True
+        if teacher.status not in {UserStatus.ACTIVE, UserStatus.INVITED}:
             raise TeacherNotActiveError
+        if teacher.status == UserStatus.INVITED:
+            invitation_id = await session.scalar(
+                select(SchoolInvitation.id).where(
+                    SchoolInvitation.id == teacher_id,
+                    SchoolInvitation.school_id == school_id,
+                    SchoolInvitation.role == UserRole.TEACHER.value,
+                    SchoolInvitation.status == "pending",
+                    SchoolInvitation.revoked_at.is_(None),
+                    SchoolInvitation.expires_at > datetime.now(UTC),
+                )
+            )
+            return invitation_id is not None
+        return False
 
     @staticmethod
     async def _ensure_primary_available(

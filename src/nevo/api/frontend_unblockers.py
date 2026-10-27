@@ -427,6 +427,7 @@ BaselineDimension = Literal[
     "domain",
     "motor_speed",
     "interference_control",
+    "inhibition",
 ]
 BaselineFormFactor = Literal["tablet_touch", "desktop_cursor", "phone_touch", "mobile_touch"]
 
@@ -440,11 +441,11 @@ class BaselineTrial(BaseModel):
 
     @model_validator(mode="after")
     def interference_conditions(self):
-        if self.dimension == "interference_control" and self.condition not in {
+        if self.dimension in {"inhibition", "interference_control"} and self.condition not in {
             "congruent",
             "incongruent",
         }:
-            raise ValueError("interference_control requires congruent or incongruent")
+            raise ValueError("inhibition requires congruent or incongruent")
         return self
 
     #: congruent, incongruent, a dot ratio, a reading mode - whatever this
@@ -2237,15 +2238,15 @@ async def submit_baseline_trials(
                 )
     features = reduce_trials(marked)
     interference_trials = [
-        trial for trial in payload.trials if trial.dimension == "interference_control"
+        trial for trial in payload.trials if trial.dimension in {"inhibition", "interference_control"}
     ]
     if interference_trials:
         from nevo.intelligence.interference import reduce_interference
 
-        features = [row for row in features if row.get("dimension") != "interference_control"]
+        features = [row for row in features if row.get("dimension") not in {"inhibition", "interference_control"}]
         features.append(
             {
-                "dimension": "interference_control",
+                "dimension": "inhibition",
                 "measurement": reduce_interference(
                     [trial.model_dump(by_alias=True) for trial in interference_trials]
                 ),

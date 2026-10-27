@@ -5,6 +5,7 @@ from sqlalchemy import or_, select
 
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import Concept, LessonAssignment
+from nevo.db.models.product import LessonProgress
 from nevo.db.models.mastery import StudentConceptMastery, StudentConceptScheduling
 from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
 
@@ -79,6 +80,14 @@ async def next_work(session, student, subject=None, lesson_id=None):
         )
     )
     due_ids = {row.concept_id for row in due}
+    completed_lessons = set(
+        await session.scalars(
+            select(LessonProgress.lesson_id).where(
+                LessonProgress.student_id == student.id,
+                LessonProgress.status == "completed",
+            )
+        )
+    )
     review = next(
         (concept for schedule in due for concept in eligible if concept.id == schedule.concept_id),
         None,
@@ -86,7 +95,9 @@ async def next_work(session, student, subject=None, lesson_id=None):
     pending = [
         concept
         for concept in eligible
-        if str(concept.id) not in mastered and concept.id not in due_ids
+        if str(concept.id) not in mastered
+        and concept.id not in due_ids
+        and targets[concept.id].lesson_id not in completed_lessons
     ]
     placements = (student.baseline_profile or {}).get("subject_placements") or {}
     concept = review

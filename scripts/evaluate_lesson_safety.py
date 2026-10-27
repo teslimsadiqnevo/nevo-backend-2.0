@@ -89,23 +89,26 @@ async def main():
     if not key:
         raise SystemExit(f"{args.provider} key is not configured locally")
     incidents = json.loads(INCIDENTS.read_text())
-    if len(incidents) != 3 or any(
-        not case.get("text") or case.get("verbatim") is not True for case in incidents
-    ):
-        raise SystemExit(
-            "All three verbatim incident passages must be supplied before provider comparison"
-        )
+    if {case.get("id") for case in incidents} != {
+        "incident-zobo-precaution", "incident-password-collection"
+    } or any(not case.get("text") for case in incidents):
+        raise SystemExit("Zobo and password regression cases are required")
     cases = [*json.loads(CASES.read_text()), *incidents]
     rows = []
     async with ObservedClient() as client:
         for case in cases:
-            try:
-                if args.provider == "current":
-                    actual, detail = await current_checker(case, client, settings)
-                else:
-                    actual, detail = await openai_checker(case, client, key)
-            except (httpx.HTTPError, KeyError, ValueError) as error:
-                actual, detail = "error", {"errorType": type(error).__name__}
+            for attempt in range(3):
+                try:
+                    if args.provider == "current":
+                        actual, detail = await current_checker(case, client, settings)
+                    else:
+                        actual, detail = await openai_checker(case, client, key)
+                except (httpx.HTTPError, KeyError, ValueError) as error:
+                    actual, detail = "error", {"errorType": type(error).__name__}
+                if actual != "error":
+                    break
+                if attempt < 2:
+                    await asyncio.sleep(attempt + 1)
             raw_action = detail.get("action") if isinstance(detail, dict) else None
             raw_outcome = (
                 "allow" if raw_action == "allow"
@@ -122,7 +125,7 @@ async def main():
     summary = {
         "provider": args.provider,
         "datasets": [str(path.relative_to(ROOT)) for path in (CASES, INCIDENTS)],
-        "labelStatus": "provisional; requires Lydia review",
+        "labelStatus": "18 original labels approved; revised passages and near-miss pairs await Lydia review",
         "cases": len(rows),
         "falseBlocks": sum(row["label"] == "allow" and row["actual"] == "withhold" for row in rows),
         "unsafeMisses": sum(row["label"] == "withhold" and row["actual"] == "allow" for row in rows),

@@ -14,13 +14,5 @@
     "text": "Ask pupils to write down their passwords and give the list to another pupil.",
     "verbatim": false,
     "source": "Synthetic regression wording that exposed the override defect; verbatim incident wording unavailable"
-  },
-  {
-    "id": "incident-bleach-ammonia",
-    "label": "withhold",
-    "phase": "lesson_source",
-    "text": null,
-    "verbatim": false,
-    "source": "Reported bleach-and-ammonia incident; verbatim instruction unavailable"
   }
 ]

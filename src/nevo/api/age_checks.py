@@ -30,6 +30,7 @@ class AgeCheckResponse(CamelResponse):
     id: UUID
     student_id: UUID
     student_first_name: str | None
+    parent_name: str | None = None
     school_date_of_birth: date | None
     state: AgeCheckState
     differs: bool
@@ -64,7 +65,7 @@ class DateRecheckRequest(CamelResponse):
         return value
 
 
-def _view(check, student):
+def _view(check, student, parent_name=None):
     expired = bool(
         check.school_notified_at
         and datetime.now(UTC) >= check.school_notified_at + timedelta(days=30)
@@ -73,6 +74,7 @@ def _view(check, student):
         id=check.id,
         student_id=check.student_id,
         student_first_name=student.first_name if student else None,
+        parent_name=parent_name,
         school_date_of_birth=check.school_date_of_birth,
         state=check.state,
         differs=check.school_date_of_birth != check.parent_date_of_birth,
@@ -101,7 +103,19 @@ async def list_age_checks(
     if state is not None:
         query = query.where(AgeCheck.state == state)
     checks = list(await session.scalars(query.order_by(AgeCheck.created_at.desc())))
-    return [_view(check, await session.get(User, check.student_id)) for check in checks]
+    return [
+        _view(check, await session.get(User, check.student_id), await _parent_name(session, check))
+        for check in checks
+    ]
+
+
+async def _parent_name(session, check):
+    return await session.scalar(
+        select(ParentLink.parent_name)
+        .where(ParentLink.student_id == check.student_id, ParentLink.school_id == check.school_id)
+        .order_by(ParentLink.created_at)
+        .limit(1)
+    )
 
 
 async def _check(session, check_id):
@@ -150,7 +164,7 @@ async def school_recheck(
     await apply_check(session, check, student, now)
     if check.blocks_access:
         await notify_linked_parents(session, check, now)
-    result = _view(check, student)
+    result = _view(check, student, await _parent_name(session, check))
     await session.commit()
     return result
 
@@ -175,7 +189,7 @@ async def resend_parent_age_check_notice(
         raise HTTPException(429, detail={"code": "parent_notice_recently_sent"})
     if not await notify_linked_parents(session, check, now):
         raise HTTPException(409, detail={"code": "parent_account_unavailable"})
-    result = _view(check, student)
+    result = _view(check, student, await _parent_name(session, check))
     await session.commit()
     return result
 
@@ -192,7 +206,10 @@ async def parent_age_checks(principal: PrincipalDependency, session: DatabaseSes
             .distinct()
         )
     )
-    return [_view(check, await session.get(User, check.student_id)) for check in checks]
+    return [
+        _view(check, await session.get(User, check.student_id), await _parent_name(session, check))
+        for check in checks
+    ]
 
 
 @router.post(
@@ -221,6 +238,6 @@ async def parent_reconfirm(
     check.parent_date_of_birth = payload.date_of_birth
     check.parent_reconfirmed_at, check.parent_reconfirmed_by = now, principal.user_id
     await apply_check(session, check, student, now, parent_actor=principal.user_id)
-    result = _view(check, student)
+    result = _view(check, student, await _parent_name(session, check))
     await session.commit()
     return result

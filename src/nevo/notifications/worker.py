@@ -102,6 +102,7 @@ class NotificationEmailWorker:
                     .where(
                         User.email.is_not(None),
                         or_(
+                            Notification.type == "consent_action_required",
                             NotificationPreference.id.is_(None),
                             NotificationPreference.email.is_(True),
                         ),

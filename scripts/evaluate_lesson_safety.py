@@ -1,4 +1,4 @@
-"""Compare lesson-only safety verdicts on the same synthetic labelled cases.
+"""Compare lesson-only safety verdicts on the same reviewed labelled cases.
 
 Run from the repository root with PYTHONPATH=src. No child chat, panel answer,
 roster data, or uploaded school document is read by this script.
@@ -17,6 +17,7 @@ from nevo.ai_gateway.safety import ContentSafetyGuard, SafetyBlocked, SafetyUnav
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "evaluations" / "lesson_safety_cases.json"
+INCIDENTS = ROOT / "evaluations" / "lesson_safety_incidents.json"
 
 
 class EvalSettings(BaseSettings):
@@ -87,7 +88,12 @@ async def main():
     key = settings.anthropic_key if args.provider == "current" else settings.openai_key
     if not key:
         raise SystemExit(f"{args.provider} key is not configured locally")
-    cases = json.loads(CASES.read_text())
+    incidents = json.loads(INCIDENTS.read_text())
+    if len(incidents) != 3 or any(not case.get("text") for case in incidents):
+        raise SystemExit(
+            "All three real incident passages must be supplied before provider comparison"
+        )
+    cases = [*json.loads(CASES.read_text()), *incidents]
     rows = []
     async with ObservedClient() as client:
         for case in cases:
@@ -98,18 +104,35 @@ async def main():
                     actual, detail = await openai_checker(case, client, key)
             except (httpx.HTTPError, KeyError, ValueError) as error:
                 actual, detail = "error", {"errorType": type(error).__name__}
+            raw_action = detail.get("action") if isinstance(detail, dict) else None
+            raw_outcome = (
+                "allow" if raw_action == "allow"
+                else "withhold" if raw_action in {"block", "safeguard"}
+                else None
+            ) if args.provider == "current" else None
             rows.append({
                 "id": case["id"], "label": case["label"], "actual": actual,
                 "matched": actual == case["label"], "detail": detail,
+                "modelVerdictBeforeOverride": raw_outcome,
+                "overrideChangedVerdict": raw_outcome is not None and raw_outcome != actual,
             })
             print(f"{case['id']}: {actual}", flush=True)
     summary = {
         "provider": args.provider,
-        "dataset": str(CASES.relative_to(ROOT)),
+        "datasets": [str(path.relative_to(ROOT)) for path in (CASES, INCIDENTS)],
         "labelStatus": "provisional; requires Lydia review",
         "cases": len(rows),
         "falseBlocks": sum(row["label"] == "allow" and row["actual"] == "withhold" for row in rows),
         "unsafeMisses": sum(row["label"] == "withhold" and row["actual"] == "allow" for row in rows),
+        "modelFalseBlocksBeforeOverride": sum(
+            row["label"] == "allow" and row["modelVerdictBeforeOverride"] == "withhold"
+            for row in rows
+        ),
+        "modelUnsafeMissesBeforeOverride": sum(
+            row["label"] == "withhold" and row["modelVerdictBeforeOverride"] == "allow"
+            for row in rows
+        ),
+        "overrideDisagreements": sum(row["overrideChangedVerdict"] for row in rows),
         "errors": sum(row["actual"] == "error" for row in rows),
         "results": rows,
     }

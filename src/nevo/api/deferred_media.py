@@ -53,7 +53,20 @@ class VisualCaptionReview(CamelResponse):
 class VisualCaptionApproval(CamelResponse):
     approved_count: int
     approved_by: UUID
+    approved_by_name: str
     approved_at: datetime
+
+
+class VisualCaptionEdit(BaseModel):
+    caption: str = Field(min_length=12, max_length=240)
+
+    @field_validator("caption")
+    @classmethod
+    def clean_caption(cls, value):
+        text = " ".join(value.split())
+        if len(text) < 12:
+            raise ValueError("A descriptive caption is required")
+        return text
 
 
 class VisualRestampRetry(CamelResponse):
@@ -147,8 +160,10 @@ async def approve_visual_captions(
     ):
         raise HTTPException(409, detail={"code": "visual_caption_review_changed"})
     now = datetime.now(UTC)
+    reviewer_name = " ".join(part for part in (actor.first_name, actor.last_name) if part) or actor.email or str(actor.id)
     for restamp, segment in rows:
         restamp.caption_approved_by = actor.id
+        restamp.caption_approved_by_name = reviewer_name
         restamp.caption_approved_at = now
         segment.visual_variant = {
             **segment.visual_variant,
@@ -157,7 +172,52 @@ async def approve_visual_captions(
             "captionAuthoredBy": "nevo",
         }
     await session.commit()
-    return VisualCaptionApproval(approved_count=len(rows), approved_by=actor.id, approved_at=now)
+    return VisualCaptionApproval(approved_count=len(rows), approved_by=actor.id, approved_by_name=reviewer_name, approved_at=now)
+
+
+@router.put(
+    "/lessons/{lesson_id}/visual-captions/{segment_id}",
+    response_model=VisualCaptionApproval,
+    responses={409: {"description": "visual_caption_review_changed"}},
+)
+async def edit_visual_caption(
+    lesson_id: UUID,
+    segment_id: UUID,
+    payload: VisualCaptionEdit,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    actor = await _lesson(session, principal, lesson_id)
+    segment = await session.get(LessonSegment, segment_id, with_for_update=True)
+    restamp = await session.scalar(
+        select(VisualSafetyRestamp)
+        .where(
+            VisualSafetyRestamp.segment_id == segment_id,
+            VisualSafetyRestamp.policy_version == POLICY_VERSION,
+        )
+        .with_for_update()
+    )
+    if segment is None or segment.lesson_id != lesson_id:
+        raise HTTPException(404, detail={"code": "lesson_section_not_found"})
+    if (
+        restamp is None or restamp.status != "passed"
+        or restamp.caption_approved_at is not None
+        or (segment.visual_variant or {}).get("storagePath") != restamp.storage_path
+        or (segment.visual_variant or {}).get("safetyPolicyVersion") != POLICY_VERSION
+    ):
+        raise HTTPException(409, detail={"code": "visual_caption_review_changed"})
+    now = datetime.now(UTC)
+    reviewer_name = " ".join(part for part in (actor.first_name, actor.last_name) if part) or actor.email or str(actor.id)
+    segment.visual_variant = {
+        **segment.visual_variant,
+        "caption": payload.caption,
+        "altText": payload.caption,
+        "captionAuthoredBy": "person",
+    }
+    restamp.caption_approved_by, restamp.caption_approved_at = actor.id, now
+    restamp.caption_approved_by_name = reviewer_name
+    await session.commit()
+    return VisualCaptionApproval(approved_count=1, approved_by=actor.id, approved_by_name=reviewer_name, approved_at=now)
 
 
 def reviewable_media():

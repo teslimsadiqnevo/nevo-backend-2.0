@@ -209,6 +209,7 @@ class DeferredMediaWorker:
                     existing.status, existing.attempts = "queued", 0
                     existing.failure_code = existing.completed_at = existing.lease_until = None
                     existing.caption_candidate = existing.caption_approved_at = existing.caption_approved_by = None
+                    existing.caption_approved_by_name = None
                 return True
             task = await session.scalar(
                 select(VisualSafetyRestamp)

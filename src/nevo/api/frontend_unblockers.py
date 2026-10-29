@@ -446,6 +446,8 @@ class BaselineTrial(BaseModel):
             "incongruent",
         }:
             raise ValueError("inhibition requires congruent or incongruent")
+        if self.dimension in {"inhibition", "interference_control"} and self.target not in {"LEFT", "RIGHT"}:
+            raise ValueError("inhibition requires a LEFT or RIGHT target")
         return self
 
     #: congruent, incongruent, a dot ratio, a reading mode - whatever this
@@ -454,6 +456,7 @@ class BaselineTrial(BaseModel):
     condition: str | None = Field(default=None, max_length=60)
     #: What the child picked. Marked on this side.
     response: str | None = Field(default=None, max_length=200)
+    target: Literal["LEFT", "RIGHT"] | None = None
     #: Whether it was right. Accepted for now because some probe items are
     #: generated on the device and we hold no key for them; where an item came
     #: from the probe bank the server has the answer and marks it itself.
@@ -510,6 +513,28 @@ class BaselineTrialsRequest(BaseModel):
     motor_miss_count: int = Field(default=0, alias="motorMissCount", ge=0, le=8)
     trials: list[BaselineTrial] = Field(min_length=1, max_length=600)
 
+    @model_validator(mode="after")
+    def word_conflict_sequence(self):
+        rows = [row for row in self.trials if row.dimension in {"inhibition", "interference_control"}]
+        if not rows:
+            return self
+        practice = [row for row in rows if row.practice]
+        scored = [row for row in rows if not row.practice]
+        if len(practice) != 8 or len(scored) != 32:
+            raise ValueError("Word Conflict requires eight practice and 32 scored trials")
+        for condition in ("congruent", "incongruent"):
+            for target in ("LEFT", "RIGHT"):
+                if sum(row.condition == condition and row.target == target for row in scored) != 8:
+                    raise ValueError("Word Conflict requires eight scored trials per condition and target")
+        run = 0
+        previous = None
+        for row in scored:
+            run = run + 1 if row.target == previous else 1
+            if run > 3:
+                raise ValueError("Word Conflict cannot repeat a target more than three times")
+            previous = row.target
+        return self
+
     @field_validator("form_factor")
     @classmethod
     def canonical_form_factor(cls, value):
@@ -558,6 +583,10 @@ class BaselinePromptResponse(BaseModel):
     #: Held against the account instead. Ask B10.
     done_today: bool = Field(default=False, alias="doneToday")
     answered_at: datetime | None = Field(default=None, alias="answeredAt")
+    motor_task: dict[str, int] | None = Field(
+        default=None, alias="motorTask",
+        description="Present only on motor-speed days: sampleCount 8, practiceCount 2.",
+    )
 
 
 class BaselinePromptAnswer(BaseModel):
@@ -578,6 +607,12 @@ class BaselinePromptAnswer(BaseModel):
     value: str | None = Field(default=None, max_length=200)
     trials: list[BaselineTrial] = Field(default_factory=list, max_length=100)
     form_factor: BaselineFormFactor | None = Field(default=None, alias="formFactor")
+    motor_samples_ms: list[Annotated[int, Field(ge=0, strict=True)]] | None = Field(
+        default=None, alias="motorSamplesMs", min_length=8, max_length=8,
+        description="Eight reach-and-tap timings; first two are practice, six are scored.",
+    )
+    motor_miss_count: int = Field(default=0, alias="motorMissCount", ge=0, le=8)
+    motor_step_skipped: bool = Field(default=False, alias="motorStepSkipped")
 
     @model_validator(mode="after")
     def _an_answer_or_a_completion(self) -> "BaselinePromptAnswer":
@@ -2186,7 +2221,11 @@ async def submit_baseline_trials(
             # A skipped step and an explicit "not sure" are declines. Neither
             # is evidence that the child answered incorrectly.
             continue
-        correct = trial.correct
+        correct = (
+            (trial.response or "").strip().upper() == trial.target
+            if trial.dimension in {"inhibition", "interference_control"}
+            else trial.correct
+        )
         expected = answers.get(trial.probe_item_id) if trial.probe_item_id else None
         if expected is not None:
             if not (trial.response or "").strip():
@@ -2241,7 +2280,7 @@ async def submit_baseline_trials(
                 )
     features = reduce_trials(marked)
     interference_trials = [
-        trial for trial in payload.trials if not trial.practice and trial.dimension in {"inhibition", "interference_control"}
+        trial for trial in marked if trial["dimension"] in {"inhibition", "interference_control"}
     ]
     if interference_trials:
         from nevo.intelligence.interference import reduce_interference
@@ -2251,7 +2290,7 @@ async def submit_baseline_trials(
             {
                 "dimension": "inhibition",
                 "measurement": reduce_interference(
-                    [trial.model_dump(by_alias=True) for trial in interference_trials]
+                    interference_trials
                 ),
             }
         )
@@ -2398,6 +2437,7 @@ async def recalibrate_prompt(
         served=served,
         doneToday=done,
         answeredAt=answered_at,
+        motorTask={"sampleCount": 8, "practiceCount": 2} if dimension == "motor_speed" else None,
     )
 
 
@@ -2454,6 +2494,17 @@ async def record_recalibrate_answer(
     user = await session.get(User, student_id, with_for_update=True)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
+    done, answered_at = await _warm_up_state(session, student_id)
+    if not done:
+        if dimension == "motor_speed":
+            if payload.trials:
+                raise HTTPException(422, detail={"code": "motor_samples_required", "message": "Send motorSamplesMs, not scored trials, for a motor-speed warm-up."})
+            if not payload.motor_step_skipped and (payload.motor_samples_ms is None or payload.form_factor is None):
+                raise HTTPException(422, detail={"code": "motor_samples_required", "message": "Send eight motorSamplesMs and formFactor, or mark the task skipped."})
+            if payload.motor_step_skipped and payload.motor_samples_ms is not None:
+                raise HTTPException(422, detail={"code": "motor_samples_conflict", "message": "A skipped task cannot carry motor samples."})
+        elif payload.motor_samples_ms is not None or payload.motor_step_skipped:
+            raise HTTPException(422, detail={"code": "motor_task_not_due", "message": "Motor samples are accepted only on a motor-speed day."})
     # A device task carries no answer to mark. It is still a completed
     # warm-up, and the point of recording it is that the next tablet knows.
     correct = (
@@ -2464,7 +2515,6 @@ async def record_recalibrate_answer(
         and payload.value.strip().casefold() != "not_sure"
         else None
     )
-    done, answered_at = await _warm_up_state(session, student_id)
     measurement_status = (
         ((user.preferences or {}).get(_WARM_UP_KEY) or {}).get("measurementStatus", "receipt_only")
         if done
@@ -2480,6 +2530,27 @@ async def record_recalibrate_answer(
                 },
             )
         features = []
+        if dimension == "motor_speed" and payload.motor_samples_ms is not None:
+            form_factor = "phone_touch" if payload.form_factor == "mobile_touch" else payload.form_factor
+            baselines = dict((user.baseline_profile or {}).get("motor_baselines") or {})
+            measurement = {
+                "motorBaselineMs": statistics.median(payload.motor_samples_ms[2:]),
+                "scoredSampleCount": 6,
+                "missCount": payload.motor_miss_count,
+                "measurement": "reach_and_tap",
+                "latencyStatus": "corrected",
+            }
+            baselines[form_factor] = measurement
+            user.baseline_profile = {
+                **dict(user.baseline_profile or {}),
+                "motor_baselines": baselines,
+                "motor_latency_status": "corrected",
+                "motor_baseline_ms": measurement["motorBaselineMs"],
+            }
+            config = dict(user.engine_config or {})
+            config["pacing"] = {**dict(config.get("pacing") or {}), "latencyStatus": "corrected"}
+            user.engine_config = config
+            measurement_status = "recalibrated"
         if served and correct is not None:
             features = reduce_trials([{"dimension": "domain", "correct": correct}])
         elif payload.trials:

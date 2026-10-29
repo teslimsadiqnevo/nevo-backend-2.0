@@ -427,7 +427,7 @@ class InvitationResponse(CamelResponse):
     role: str | None = None
     email: str | None = None
     name: str | None = None
-    status: Literal["pending", "accepted", "revoked", "expired", "conflicted"] | None = None
+    status: Literal["pending", "joined", "accepted", "revoked", "expired", "conflicted"] | None = None
     class_id: UUID | None = None
     created_at: datetime | None = None
     expires_at: datetime

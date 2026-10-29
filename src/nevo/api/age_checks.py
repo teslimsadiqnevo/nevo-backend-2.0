@@ -16,6 +16,7 @@ from nevo.consent.age_assurance import (
     blocking_reasons,
     capture_band,
     notify_linked_parents,
+    notify_unresolved_recheck,
 )
 from nevo.db.models.account import User
 from nevo.db.models.consent import ParentLink
@@ -238,6 +239,8 @@ async def parent_reconfirm(
     check.parent_date_of_birth = payload.date_of_birth
     check.parent_reconfirmed_at, check.parent_reconfirmed_by = now, principal.user_id
     await apply_check(session, check, student, now, parent_actor=principal.user_id)
+    if check.blocks_access:
+        await notify_unresolved_recheck(session, check, now)
     result = _view(check, student, await _parent_name(session, check))
     await session.commit()
     return result

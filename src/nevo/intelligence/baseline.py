@@ -276,7 +276,7 @@ def reduce_trials(
 
     from collections import defaultdict
 
-    trials = list(trials)
+    trials = [trial for trial in trials if not trial.get("practice")]
     interference_trials = [row for row in trials if row.get("dimension") in {"inhibition", "interference_control"}]
     buckets: dict[tuple[str, str | None], list[Mapping[str, object]]] = defaultdict(list)
     for trial in trials:

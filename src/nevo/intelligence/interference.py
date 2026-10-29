@@ -14,6 +14,8 @@ def reduce_interference(trials):
     buckets = {"congruent": [], "incongruent": []}
     discarded = 0
     for row in trials:
+        if row.get("practice"):
+            continue
         condition, time = row.get("condition"), row.get("responseTimeMs")
         if (
             condition not in buckets

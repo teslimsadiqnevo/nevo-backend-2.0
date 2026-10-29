@@ -143,6 +143,43 @@ async def notify_linked_parents(session, check, now):
     return bool(parents)
 
 
+async def notify_unresolved_recheck(session, check, now):
+    """Tell both adults that their fresh dates still disagree; keep the hold open."""
+    recipients = list(await session.scalars(
+        select(User).where(
+            User.school_id == check.school_id,
+            User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
+            User.status == UserStatus.ACTIVE,
+        )
+    ))
+    parents = list(await session.scalars(
+        select(User).join(ParentLink, ParentLink.parent_id == User.id).where(
+            ParentLink.student_id == check.student_id,
+            ParentLink.school_id == check.school_id,
+            User.role == UserRole.PARENT_GUARDIAN,
+            User.status == UserStatus.ACTIVE,
+        ).distinct()
+    ))
+    for recipient in [*recipients, *parents]:
+        is_parent = recipient.role == UserRole.PARENT_GUARDIAN
+        session.add(Notification(
+            recipient_id=recipient.id,
+            recipient_role=recipient.role.value,
+            type="consent_action_required",
+            category="consent",
+            title="Date of birth re-check still needs resolution",
+            description=(
+                "The dates still differ after both re-checks. Your child's account remains on hold; "
+                "the school will contact you about the next step. No identity document is needed."
+                if is_parent else
+                "The school and parent rechecked the date of birth, but their dates still differ. "
+                "The pupil's account remains on hold. Please review the admissions record."
+            ),
+            navigates_to="/parent-portal" if is_parent else f"/admin/students/{check.student_id}",
+            created_at=now,
+        ))
+
+
 async def apply_check(session, check, student, now, *, parent_actor=None):
     reasons = blocking_reasons(check)
     dates_match = (

@@ -964,6 +964,26 @@ async def _create_invitation(
     *,
     defer_delivery: bool = False,
 ) -> dict[str, object]:
+    if payload.role == "teacher" and payload.email:
+        existing = await session.scalar(
+            select(SchoolInvitation).where(
+                SchoolInvitation.school_id == actor.school_id,
+                SchoolInvitation.role == "teacher",
+                SchoolInvitation.email == str(payload.email).casefold(),
+                SchoolInvitation.status == "pending",
+            ).order_by(SchoolInvitation.created_at.desc()).limit(1)
+        )
+        if existing is not None:
+            reserved = await session.get(User, existing.id)
+            conflict = reserved is not None and not _reserved_teacher_matches(existing, reserved)
+            raise HTTPException(409, detail={
+                "code": "invited_teacher_conflict" if conflict else "invitation_already_pending",
+                "message": (
+                    "The reserved teacher account needs an administrator's review before another link is sent."
+                    if conflict else "This teacher already has an invitation. Resend that invitation instead."
+                ),
+                "invitationId": str(existing.id),
+            })
     if payload.class_id:
         school_class = await session.get(Class, payload.class_id)
         if school_class is None or school_class.school_id != actor.school_id:
@@ -1078,13 +1098,20 @@ async def list_invites(
     if status_filter:
         query = query.where(SchoolInvitation.status == status_filter)
     rows = (await session.scalars(query.order_by(SchoolInvitation.created_at.desc()))).all()
+    reserved = {
+        row.id: await session.get(User, row.id)
+        for row in rows if row.role == "teacher" and row.status == "pending"
+    }
     return [
         {
             "id": str(item.id),
             "role": item.role,
             "email": item.email,
             "name": " ".join(filter(None, (item.first_name, item.last_name))),
-            "status": item.status,
+            "status": (
+                "conflicted" if item.id in reserved and reserved[item.id] is not None
+                and not _reserved_teacher_matches(item, reserved[item.id]) else item.status
+            ),
             "classId": item.class_id,
             "createdAt": item.created_at,
             "expiresAt": item.expires_at,
@@ -1092,6 +1119,15 @@ async def list_invites(
         }
         for item in rows
     ]
+
+
+def _reserved_teacher_matches(record: SchoolInvitation, user: User) -> bool:
+    return (
+        user.school_id == record.school_id
+        and user.role == UserRole.TEACHER
+        and user.status == UserStatus.INVITED
+        and user.email == record.email
+    )
 
 
 @router.patch("/invites/{invitation_id}/resend", response_model=InvitationResponse)
@@ -1108,6 +1144,13 @@ async def resend_invite(
     # The role is a stored string, so a row created before SCRUM-215 can still
     # be reached here even though none can be created now.
     _refuse_student_invitation(record.role)
+    if record.role == "teacher":
+        reserved = await session.get(User, record.id)
+        if reserved is not None and not _reserved_teacher_matches(record, reserved):
+            raise HTTPException(409, detail={
+                "code": "invited_teacher_conflict",
+                "message": "This invitation cannot be accepted. Ask a school administrator to review the reserved teacher account before sending another link.",
+            })
     token = secrets.token_urlsafe(32)
     record.token_digest = _digest(token)
     record.expires_at = datetime.now(UTC) + timedelta(days=14)
@@ -1272,13 +1315,11 @@ async def accept_join(
         if record.role == "teacher"
         else None
     )
-    if user is not None and (
-        user.school_id != record.school_id
-        or user.role != UserRole.TEACHER
-        or user.status != UserStatus.INVITED
-        or user.email != record.email
-    ):
-        raise HTTPException(status_code=409, detail={"code": "invited_teacher_conflict"})
+    if user is not None and not _reserved_teacher_matches(record, user):
+        raise HTTPException(status_code=409, detail={
+            "code": "invited_teacher_conflict",
+            "message": "This invitation cannot be accepted. Ask a school administrator to review the reserved teacher account.",
+        })
     new_user = user is None
     user = user or User(
         school_id=record.school_id,

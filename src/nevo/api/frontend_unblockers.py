@@ -466,6 +466,7 @@ class BaselineTrial(BaseModel):
     #: means the activity could not be presented or a motor target was left
     #: untapped. Choosing "not sure" is a response, not a skip.
     skipped: bool = False
+    practice: bool = Field(default=False, description="Practice feedback only; excluded from baseline scoring.")
     reading_word_count: int | None = Field(
         default=None,
         alias="readingWordCount",
@@ -2165,7 +2166,7 @@ async def submit_baseline_trials(
     user = await session.get(User, principal.user_id, with_for_update=True)
     if user is None:
         raise HTTPException(404, detail="Student not found")
-    item_ids = [trial.probe_item_id for trial in payload.trials if trial.probe_item_id]
+    item_ids = [trial.probe_item_id for trial in payload.trials if trial.probe_item_id and not trial.practice]
     answers: dict[UUID, str] = {}
     if item_ids:
         rows = await session.execute(
@@ -2179,6 +2180,8 @@ async def submit_baseline_trials(
         if set(item_ids) != set(answers):
             raise HTTPException(404, detail="Probe item not found")
     for trial in payload.trials:
+        if trial.practice:
+            continue
         if trial.skipped or (trial.response or "").strip().casefold() == "not_sure":
             # A skipped step and an explicit "not sure" are declines. Neither
             # is evidence that the child answered incorrectly.
@@ -2238,7 +2241,7 @@ async def submit_baseline_trials(
                 )
     features = reduce_trials(marked)
     interference_trials = [
-        trial for trial in payload.trials if trial.dimension in {"inhibition", "interference_control"}
+        trial for trial in payload.trials if not trial.practice and trial.dimension in {"inhibition", "interference_control"}
     ]
     if interference_trials:
         from nevo.intelligence.interference import reduce_interference

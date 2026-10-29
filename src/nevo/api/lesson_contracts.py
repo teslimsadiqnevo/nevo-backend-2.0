@@ -67,6 +67,22 @@ def student_activity(segment):
     return activity_for_delivery(segment.interactive_variant, segment.body)
 
 
+def calculation_for_delivery(value, *, for_teacher=False):
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    steps = []
+    for raw in value.get("steps", []):
+        step = dict(raw)
+        if not for_teacher:
+            step.pop("pendingParts", None)
+            if step.pop("partsReviewStatus", None) == "pending_review":
+                step.pop("parts", None)
+        steps.append(step)
+    result["steps"] = steps
+    return result
+
+
 def segment_modalities(content_type, available, calculation):
     values = list(available or [])
     if content_type == "calculation":
@@ -674,6 +690,11 @@ class CalculationStep(BaseModel):
     prompt: str
     expected_input: Literal["selection", "numeric", "text", "drag"] = Field(alias="expectedInput")
     hint: str
+    parts: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="Ordered, teacher-approved pieces revealed while this step is asked. Empty means pace the whole step.",
+    )
     #: What this one step is answered with, in the units the step asks for.
     #: The variant's own answer is the whole problem's total; a step inside a
     #: fraction scaffold might want a numerator, so mapping the total onto the

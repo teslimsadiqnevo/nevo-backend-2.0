@@ -1211,6 +1211,17 @@ def _segment_from_payload(
         calculation_variant, calculation_review = _validated_calculation_variant(
             calculation_variant,
         )
+        if calculation_variant:
+            source = " ".join(body.casefold().split())
+            steps = []
+            for raw in calculation_variant.get("steps", []):
+                step = dict(raw)
+                parts = step.get("pendingParts") or []
+                if parts and all(" ".join(part.casefold().split()) in source for part in parts):
+                    step["parts"] = step.pop("pendingParts")
+                    step["partsReviewStatus"] = "authored"
+                steps.append(step)
+            calculation_variant = {**calculation_variant, "steps": steps}
         if calculation_review:
             review_reasons.append(calculation_review)
             needs_review = True
@@ -1682,6 +1693,10 @@ def _validated_calculation_variant(
                 "prompt": prompt,
                 "expectedInput": expected_input,
                 "hint": hint,
+                "pendingParts": [str(part).strip() for part in step.get("parts", [])
+                                 if isinstance(part, str) and part.strip()][:8]
+                if isinstance(step.get("parts"), list) else [],
+                "partsReviewStatus": "pending_review" if step.get("parts") else None,
                 "answer": step_answer,
                 "options": options,
                 "unit": str(step.get("unit") or "").strip() or None,

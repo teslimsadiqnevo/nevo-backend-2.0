@@ -180,7 +180,33 @@ async def notify_unresolved_recheck(session, check, now):
         ))
 
 
+async def notify_school_operative_date(session, check, now):
+    if check.school_date_of_birth == check.parent_date_of_birth:
+        return
+    recipients = list(await session.scalars(select(User).where(
+        User.school_id == check.school_id,
+        User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
+        User.status == UserStatus.ACTIVE,
+    )))
+    for recipient in recipients:
+        session.add(Notification(
+            recipient_id=recipient.id,
+            recipient_role=recipient.role.value,
+            type="consent_action_required",
+            category="consent",
+            title="Update the pupil's roster date of birth",
+            description=(
+                f"The parent's confirmed date, {check.parent_date_of_birth.isoformat()}, "
+                "is now operative in Nevo and differs from the school's admissions date. "
+                "Please reconcile the roster record."
+            ),
+            navigates_to=f"/admin/students/{check.student_id}",
+            created_at=now,
+        ))
+
+
 async def apply_check(session, check, student, now, *, parent_actor=None):
+    was_resolved = check.state == AgeCheckState.RESOLVED
     reasons = blocking_reasons(check)
     dates_match = (
         check.school_date_of_birth is not None
@@ -214,6 +240,8 @@ async def apply_check(session, check, student, now, *, parent_actor=None):
         else:
             check.state = AgeCheckState.MATCHED
         student.date_of_birth = check.parent_date_of_birth
+        if reconfirmed and not was_resolved and check.school_date_of_birth != check.parent_date_of_birth:
+            await notify_school_operative_date(session, check, now)
     else:
         check.state = AgeCheckState.MISMATCH
         if not reconfirmed:

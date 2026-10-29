@@ -25,6 +25,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.ai_gateway.errors import AiGatewayError
+from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.api.ai_gateway import AiGatewayDependency, public_ai_error
 from nevo.api.auth import PrincipalDependency
@@ -34,11 +35,14 @@ from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.content_parsing.media_contracts import LessonMediaResponse
+from nevo.content_parsing.depth import DepthVariantError, _json_payload
 from nevo.db.models.account import User
+from nevo.db.models.ai_gateway import AiGatewayCall
 from nevo.db.models.content import Lesson, LessonKeyPoint, LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
 from nevo.db.models.lesson_signoff import LessonReviewSignoff
 from nevo.domain.intelligence.vocabulary import KeyPointConfidence, KeyPointReviewState
+from nevo.domain.ai_gateway.vocabulary import AiService
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 
@@ -77,7 +81,7 @@ class KeyPointResponse(CamelResponse):
 
 class ReviewSignoffResponse(CamelResponse):
     id: UUID
-    kind: Literal["key_points", "rewrites", "guided_steps", "checks"]
+    kind: Literal["key_points", "rewrites", "guided_steps", "checks", "calculation_parts"]
     approved_by: UUID | None
     approved_by_name: str
     approved_at: datetime
@@ -99,6 +103,15 @@ class GuidedStepsReviewItem(CamelResponse):
     answer_leakage_step_ids: list[str] = Field(default_factory=list)
 
 
+class CalculationPartsReviewItem(CamelResponse):
+    segment_id: UUID
+    segment_title: str | None
+    step_id: str
+    prompt: str
+    parts: list[str]
+    review_status: Literal["pending_review", "approved"]
+
+
 class CheckReviewItem(CamelResponse):
     segment_id: UUID
     segment_title: str | None
@@ -111,23 +124,11 @@ class CheckReviewItem(CamelResponse):
     markable: bool = True
 
 
-class GuidedStepsBulkReviewRequest(BaseModel):
-    model_config = CAMEL_CONFIG
-
-    expected_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-
 class LessonReviewResponse(CamelResponse):
-    """The lesson's review state, which is what LR-04 counts down."""
-
     lesson_id: UUID
     title: str
-    #: How many points are still waiting for a teacher. Zero means ready.
     outstanding_count: int
     key_point_count: int
-    #: True when nothing is outstanding. The screen enables Assign on this
-    #: rather than counting the list itself, so client and server cannot
-    #: disagree about when a lesson is ready.
     ready_to_assign: bool
     key_points: list[KeyPointResponse]
     key_points_content_hash: str = ""
@@ -135,17 +136,165 @@ class LessonReviewResponse(CamelResponse):
     key_point_approval: ReviewSignoffResponse | None = None
     rewrite_approval: ReviewSignoffResponse | None = None
     guided_steps_approval: ReviewSignoffResponse | None = None
+    calculation_parts_approval: ReviewSignoffResponse | None = None
+    calculation_parts_content_hash: str = ""
+    calculation_parts: list[CalculationPartsReviewItem] = Field(default_factory=list)
     checks_approval: ReviewSignoffResponse | None = None
     checks_content_hash: str = ""
     checks: list[CheckReviewItem] = Field(default_factory=list)
     guided_steps_content_hash: str = ""
-    guided_steps: list["GuidedStepsReviewItem"] = Field(default_factory=list)
+    guided_steps: list[GuidedStepsReviewItem] = Field(default_factory=list)
     pending_guided_step_count: int = 0
     missing_key_point_segment_ids: list[UUID] = Field(default_factory=list)
     rewrite_count: int = 0
     pending_rewrite_count: int = 0
     review_complete: bool = False
     media: LessonMediaResponse | None = None
+
+
+class GuidedStepsBulkReviewRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    expected_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CalculationPartsGenerationResponse(CamelResponse):
+    lesson_id: UUID
+    generated_step_count: int
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: str
+    review: "LessonReviewResponse"
+
+
+@router.post(
+    "/lessons/{lesson_id}/calculation-parts/generate",
+    response_model=CalculationPartsGenerationResponse,
+)
+async def generate_calculation_parts(
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    gateway: AiGatewayDependency,
+):
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    segments = list(await session.scalars(select(LessonSegment).where(
+        LessonSegment.lesson_id == lesson.id,
+    ).order_by(LessonSegment.sequence_order).with_for_update()))
+    tokens_in = tokens_out = generated = 0
+    cost = 0
+    for segment in segments:
+        variant = segment.calculation_variant or {}
+        eligible = [step for step in variant.get("steps", [])
+                    if not step.get("parts") and not step.get("pendingParts")]
+        if not eligible:
+            continue
+        result = await gateway.generate(AiGenerationRequest(
+            requester_user_id=actor.id,
+            service=AiService.LESSON_GENERATION,
+            prompt_name="calculation_parts.default",
+            variables={
+                "source_text": segment.body[:8000],
+                "steps_json": json.dumps([{
+                    "stepId": step.get("stepId"), "prompt": step.get("prompt"),
+                    "answer": step.get("answer"), "hint": step.get("hint"),
+                } for step in eligible]),
+            },
+            max_output_tokens=2048,
+            timeout_seconds=90,
+            json_output=True,
+        ))
+        if result.fallback_used or result.stop_reason == "max_tokens":
+            raise HTTPException(503, detail={"code": "calculation_parts_generation_unavailable"})
+        try:
+            payload = _json_payload(result.text)
+            proposals = payload["steps"]
+            if not isinstance(proposals, list):
+                raise ValueError
+            by_id = {str(item["stepId"]): item["parts"] for item in proposals}
+            if len(by_id) != len(proposals):
+                raise ValueError
+            allowed = {str(step.get("stepId")) for step in eligible}
+            if not set(by_id).issubset(allowed):
+                raise ValueError
+            for parts in by_id.values():
+                if not isinstance(parts, list) or len(parts) > 8 or any(
+                    not isinstance(part, str) or not part.strip() or len(part) > 300
+                    for part in parts
+                ):
+                    raise ValueError
+        except (ValueError, KeyError, TypeError, DepthVariantError):
+            raise HTTPException(502, detail={"code": "calculation_parts_invalid_output"}) from None
+        updated = []
+        for raw in variant["steps"]:
+            step = dict(raw)
+            parts = by_id.get(str(step.get("stepId")), [])
+            if len(parts) >= 2:
+                step["pendingParts"] = [part.strip() for part in parts]
+                step["partsReviewStatus"] = "pending_review"
+                generated += 1
+            updated.append(step)
+        segment.calculation_variant = {**variant, "steps": updated}
+        audit = await session.get(AiGatewayCall, result.call_id)
+        if audit:
+            cost += audit.estimated_cost_usd
+        tokens_in += result.input_tokens
+        tokens_out += result.output_tokens
+    await session.commit()
+    return CalculationPartsGenerationResponse(
+        lesson_id=lesson.id, generated_step_count=generated,
+        input_tokens=tokens_in, output_tokens=tokens_out,
+        estimated_cost_usd=str(cost), review=await _review_result(session, lesson),
+    )
+
+
+@router.post(
+    "/lessons/{lesson_id}/calculation-parts/approve-all",
+    response_model=LessonReviewResponse,
+)
+async def approve_calculation_parts(
+    lesson_id: UUID,
+    payload: GuidedStepsBulkReviewRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    segments = list(await session.scalars(select(LessonSegment).where(
+        LessonSegment.lesson_id == lesson.id,
+    ).order_by(LessonSegment.sequence_order).with_for_update()))
+    material, _ = _calculation_parts_material(segments)
+    digest = _hash(material)
+    if digest != payload.expected_content_hash:
+        raise HTTPException(409, detail={"code": "review_content_changed"})
+    pending = any(step.get("pendingParts") for segment in segments
+                  for step in (segment.calculation_variant or {}).get("steps", []))
+    if not pending:
+        raise HTTPException(409, detail={"code": "no_calculation_parts_to_approve"})
+    now = datetime.now(UTC)
+    reviewer_name = " ".join(part for part in (actor.first_name, actor.last_name) if part)
+    session.add(LessonReviewSignoff(
+        lesson_id=lesson.id, kind="calculation_parts", approved_by=actor.id,
+        approved_by_name=reviewer_name or actor.email or str(actor.id),
+        approved_at=now, content_hash=digest, content_snapshot=material,
+    ))
+    for segment in segments:
+        variant = segment.calculation_variant or {}
+        if not variant:
+            continue
+        changed = False
+        steps = []
+        for raw in variant.get("steps", []):
+            step = dict(raw)
+            parts = step.pop("pendingParts", None)
+            if parts:
+                step["parts"] = parts
+                step["partsReviewStatus"] = "approved"
+                changed = True
+            steps.append(step)
+        if changed:
+            segment.calculation_variant = {**variant, "steps": steps}
+    await session.commit()
+    return await _review_result(session, lesson)
 
 
 class KeyPointAmendment(BaseModel):
@@ -377,6 +526,29 @@ def _hash(snapshot):
     return hashlib.sha256(json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _calculation_parts_material(segments):
+    material, views = [], []
+    for segment in segments:
+        for step in (segment.calculation_variant or {}).get("steps", []):
+            parts = step.get("pendingParts") or step.get("parts") or []
+            state = step.get("partsReviewStatus")
+            if not parts or state not in {"pending_review", "approved"}:
+                continue
+            item = {
+                "segmentId": str(segment.id),
+                "stepId": str(step.get("stepId")),
+                "prompt": str(step.get("prompt")),
+                "parts": parts,
+            }
+            material.append(item)
+            views.append(CalculationPartsReviewItem(
+                segment_id=segment.id, segment_title=segment.title,
+                step_id=item["stepId"], prompt=item["prompt"], parts=parts,
+                review_status=state,
+            ))
+    return material, views
+
+
 def _current_signoff(record, material):
     if record.invalidated_at is not None:
         return False
@@ -606,12 +778,14 @@ async def _review_result(session, lesson):
     rows, segments, points, rewrites = await _review_material(session, lesson)
     guided_material, guided_views, pending_guided_count = _guided_steps_material(segments)
     checks_material, check_views = _checks_material(segments)
+    calculation_material, calculation_views = _calculation_parts_material(segments)
     result = _review(lesson, rows)
     hashes = {
         "key_points": _hash(points),
         "rewrites": _hash(rewrites),
         "guided_steps": _hash(guided_material),
         "checks": _hash(checks_material),
+        "calculation_parts": _hash(calculation_material),
     }
     approvals = {}
     media_rows = await session.execute(
@@ -642,6 +816,7 @@ async def _review_result(session, lesson):
                 current=_current_signoff(record, {
                     "key_points": points, "rewrites": rewrites,
                     "guided_steps": guided_material, "checks": checks_material,
+                    "calculation_parts": calculation_material,
                 }[record.kind]),
             ),
         )
@@ -684,6 +859,9 @@ async def _review_result(session, lesson):
             "guided_steps": guided_views,
             "guided_steps_content_hash": hashes["guided_steps"],
             "guided_steps_approval": approvals.get("guided_steps"),
+            "calculation_parts_approval": approvals.get("calculation_parts"),
+            "calculation_parts_content_hash": hashes["calculation_parts"],
+            "calculation_parts": calculation_views,
             "pending_guided_step_count": pending_guided_count,
         }
     )

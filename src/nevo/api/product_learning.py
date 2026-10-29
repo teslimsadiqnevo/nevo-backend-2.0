@@ -37,6 +37,7 @@ from nevo.api.frontend_unblockers import (
 )
 from nevo.api.learning_support import holds_learning_support, require_learning_support_if_admin
 from nevo.api.lesson_contracts import (
+    calculation_for_delivery,
     checkpoint_payloads,
     depth_payloads,
     depth_reviewer_names,
@@ -1043,7 +1044,7 @@ async def lesson_detail(
                     and student_activity(item) is None
                     else {}
                 ),
-                "calculationVariant": item.calculation_variant,
+                "calculationVariant": calculation_for_delivery(item.calculation_variant, for_teacher=for_teacher),
                 "depthVariants": depth_payloads(
                     item.depth_variants,
                     item.text_variant,
@@ -3383,7 +3384,7 @@ async def _offline_package_payload(
                     ),
                     "audio": item.audio_variant,
                     "interactive": student_activity(item),
-                    "calculation": item.calculation_variant,
+                    "calculation": calculation_for_delivery(item.calculation_variant),
                 },
                 # Offline too: the point of the offline package is a lesson
                 # that still adapts where there is no network, and an

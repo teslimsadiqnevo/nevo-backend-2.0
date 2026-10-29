@@ -119,6 +119,7 @@ class AiGatewayService:
             material_keys = {
                 "content_parse.default": frozenset({"source_text", "lesson_title"}),
                 "lesson_depth.default": frozenset({"body", "title"}),
+                "calculation_parts.default": frozenset({"source_text", "steps_json"}),
                 "content_question_repair.default": frozenset({"source_text", "questions"}),
                 "content_guided_steps_backfill.default": frozenset(
                     {"source_text", "questions"}

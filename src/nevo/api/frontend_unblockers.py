@@ -42,6 +42,7 @@ from nevo.api.dependencies import DatabaseSession
 from nevo.api.learning_support import holds_learning_support, require_learning_support
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
+    calculation_for_delivery,
     checkpoint_payloads,
     depth_payloads,
     safety_reviewed_visual,
@@ -1442,7 +1443,9 @@ async def lesson_detail(
                     and student_activity(item) is None
                     else None
                 ),
-                calculationVariant=item.calculation_variant,
+                calculationVariant=calculation_for_delivery(
+                    item.calculation_variant, for_teacher=actor.role != UserRole.STUDENT
+                ),
                 depthVariants=depth_payloads(
                     item.depth_variants,
                     item.text_variant,

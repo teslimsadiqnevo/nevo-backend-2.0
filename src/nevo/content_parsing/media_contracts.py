@@ -46,6 +46,8 @@ class PreparedMedia(BaseModel):
 class LessonMediaItem(BaseModel):
     model_config = CAMEL_CONFIG
     id: UUID
+    requested_by: UUID
+    remade_at: datetime | None = None
     segment_id: UUID
     kind: Literal["image", "audio"]
     status: Literal[

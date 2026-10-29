@@ -9,6 +9,8 @@ from nevo.api.request_context import current_request
 from nevo.auth.entities import AuthPrincipal
 from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
+from nevo.db.models.permission import Admin, AdminScopeAssignment
+from nevo.domain.permissions.vocabulary import PermissionScope
 
 #: What an administrator may reach before confirming their address. Reading
 #: the console is deliberate - a school owner who registers at night and
@@ -76,6 +78,53 @@ async def require_school_actor(
     if allowed and user.role.value not in allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Role is not permitted")
     return user
+
+
+async def require_teacher_console_actor(session: AsyncSession, principal: AuthPrincipal) -> User:
+    actor = await require_school_actor(session, principal)
+    if actor.role.value == "teacher":
+        return actor
+    if actor.role.value not in ADMIN_ROLES:
+        raise HTTPException(403, detail={"code": "teacher_scope_required"})
+    assigned = await session.scalar(
+        select(AdminScopeAssignment.id)
+        .join(Admin, Admin.id == AdminScopeAssignment.admin_id)
+        .where(
+            Admin.user_id == actor.id,
+            Admin.school_id == actor.school_id,
+            AdminScopeAssignment.scope == PermissionScope.TEACHER,
+            AdminScopeAssignment.revoked_at.is_(None),
+        ).limit(1)
+    )
+    if assigned is None:
+        raise HTTPException(403, detail={"code": "teacher_scope_required"})
+    return actor
+
+
+async def can_be_class_teacher(session: AsyncSession, user: User) -> bool:
+    if user.role.value == "teacher":
+        return True
+    if user.role.value not in ADMIN_ROLES or user.status.value != "active":
+        return False
+    return bool(await session.scalar(
+        select(AdminScopeAssignment.id)
+        .join(Admin, Admin.id == AdminScopeAssignment.admin_id)
+        .where(Admin.user_id == user.id,
+               Admin.school_id == user.school_id,
+               AdminScopeAssignment.scope == PermissionScope.TEACHER,
+               AdminScopeAssignment.revoked_at.is_(None)).limit(1)
+    ))
+
+
+async def require_teacher_console_class(session: AsyncSession, actor: User, class_id: UUID) -> None:
+    assigned = await session.scalar(select(TeacherClassAssignment.id).where(
+        TeacherClassAssignment.class_id == class_id,
+        TeacherClassAssignment.teacher_id == actor.id,
+        TeacherClassAssignment.school_id == actor.school_id,
+        TeacherClassAssignment.removed_at.is_(None),
+    ).limit(1))
+    if assigned is None:
+        raise HTTPException(404, detail={"code": "class_not_assigned"})
 
 
 async def require_school_resource(

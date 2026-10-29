@@ -65,6 +65,7 @@ from nevo.api.product_common import (
     require_approved_lessons,
     require_class_access,
     require_school_actor,
+    require_teacher_console_class,
     require_student_access,
 )
 from nevo.api.response_models import (
@@ -847,16 +848,10 @@ async def class_students(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Class is outside your school",
         )
-    if actor.role == UserRole.TEACHER:
-        assigned = await session.scalar(
-            select(TeacherClassAssignment.id).where(
-                TeacherClassAssignment.class_id == class_id,
-                TeacherClassAssignment.teacher_id == actor.user_id,
-                TeacherClassAssignment.removed_at.is_(None),
-            )
-        )
-        if assigned is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
+    scoped_actor = await session.get(User, actor.user_id)
+    if scoped_actor is None:
+        raise HTTPException(404, detail="Class not found")
+    await require_teacher_console_class(session, scoped_actor, class_id)
     rows = (
         await session.execute(
             select(User, LearnerProfile.id, func.max(LessonSession.started_at))
@@ -965,21 +960,15 @@ async def request_admin_support_for_student(
         or student.status is not UserStatus.DEACTIVATED
     ):
         raise HTTPException(status_code=404, detail="Deactivated student not found")
-    if actor.role is UserRole.TEACHER:
-        assigned = await session.scalar(
-            select(TeacherClassAssignment.id)
-            .join(
-                StudentClassEnrollment,
-                StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
-            )
-            .where(
-                TeacherClassAssignment.teacher_id == actor.user_id,
-                TeacherClassAssignment.removed_at.is_(None),
-                StudentClassEnrollment.student_id == student_id,
-            )
-        )
-        if assigned is None:
-            raise HTTPException(status_code=404, detail="Deactivated student not found")
+    assigned = await session.scalar(
+        select(TeacherClassAssignment.id)
+        .join(StudentClassEnrollment, StudentClassEnrollment.class_id == TeacherClassAssignment.class_id)
+        .where(TeacherClassAssignment.teacher_id == actor.user_id,
+               TeacherClassAssignment.removed_at.is_(None),
+               StudentClassEnrollment.student_id == student_id)
+    )
+    if assigned is None:
+        raise HTTPException(status_code=404, detail="Deactivated student not found")
 
     admins = list(
         await session.scalars(

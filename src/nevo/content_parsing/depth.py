@@ -177,6 +177,11 @@ def rejection_reason(variant: str | None, *, source: str, shorter: bool) -> str 
     return None
 
 
+def missing_key_terms(variant: str, key_terms: list[str]) -> list[str]:
+    text = " ".join(variant.casefold().split())
+    return [term for term in key_terms if " ".join(term.casefold().split()) not in text]
+
+
 def accept(variant: str | None, *, source: str, shorter: bool) -> str | None:
     """Reject missing content or invented facts, not a cosmetic percentage miss."""
     reason = rejection_reason(variant, source=source, shorter=shorter)
@@ -208,6 +213,7 @@ class DepthVariantService:
         title: str | None,
         body: str,
         requested_by_user_id: UUID,
+        key_terms: list[str] | None = None,
     ) -> tuple[DepthVariants, str | None]:
         """Both versions of one segment, and the model that wrote them."""
 
@@ -230,19 +236,22 @@ class DepthVariantService:
                 raise DepthVariantError("Source exceeds the bounded depth-rewrite budget")
             results = [
                 await self.generate(
-                    title=title, body=part, requested_by_user_id=requested_by_user_id
+                    title=title, body=part, requested_by_user_id=requested_by_user_id,
+                    key_terms=[term for term in (key_terms or []) if term.casefold() in part.casefold()],
                 )
                 for part in parts
             ]
             simplified = [result.simplified for result, _ in results]
             expanded = [result.expanded for result, _ in results]
+            simplified_text = "\n\n".join(simplified) if all(simplified) else None
+            expanded_text = "\n\n".join(expanded) if all(expanded) else None
             return (
                 DepthVariants(
-                    simplified=accept("\n\n".join(simplified), source=body, shorter=True)
-                    if all(simplified)
+                    simplified=accept(simplified_text, source=body, shorter=True)
+                    if simplified_text and not missing_key_terms(simplified_text, key_terms or [])
                     else None,
-                    expanded=accept("\n\n".join(expanded), source=body, shorter=False)
-                    if all(expanded)
+                    expanded=accept(expanded_text, source=body, shorter=False)
+                    if expanded_text and not missing_key_terms(expanded_text, key_terms or [])
                     else None,
                 ),
                 results[-1][1],
@@ -286,6 +295,8 @@ class DepthVariantService:
                                 )
                                 + "\n\nSOURCE SEGMENT:\n"
                                 + body
+                                + ("\n\nREQUIRED KEY TERMS (preserve verbatim): "
+                                   + json.dumps(key_terms) if key_terms else "")
                             ),
                         },
                         max_output_tokens=token_budget,
@@ -318,12 +329,15 @@ class DepthVariantService:
                     continue
                 candidate = _text(payload.get(kind))
                 reason = rejection_reason(candidate, source=body, shorter=kind == SIMPLIFIED)
+                if not reason and missing_key_terms(candidate or "", key_terms or []):
+                    reason = "key_terms_missing"
                 if reason:
                     rejected[kind] = reason
                     repair_details[kind] = {
                         "reason": reason,
                         "sourceClaimsToRetain": missing_claim_anchors(body, candidate or ""),
                         "sourceFiguresToRetain": sorted(numbers_in(body)),
+                        "keyTermsToRetain": missing_key_terms(candidate or "", key_terms or []),
                     }
                 else:
                     accepted[kind] = candidate.strip()

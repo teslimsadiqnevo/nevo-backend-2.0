@@ -587,6 +587,11 @@ class ContentParsingService:
                 title=segment.title,
                 body=segment.body,
                 requested_by_user_id=requested_by_user_id,
+                key_terms=[
+                    str(item.get("term"))
+                    for item in (segment.text_variant or {}).get("keyTerms", [])
+                    if isinstance(item, dict) and item.get("term")
+                ],
             )
         except DepthVariantError as error:
             notes.append(

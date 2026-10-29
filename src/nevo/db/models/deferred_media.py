@@ -39,6 +39,7 @@ class DeferredLessonMedia(Base):
         ForeignKey("lesson_segments.id", ondelete="CASCADE")
     )
     requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    remade_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     kind: Mapped[str] = mapped_column(String(10))
     status: Mapped[str] = mapped_column(String(30), default="queued")
     source_hash: Mapped[str] = mapped_column(String(64))

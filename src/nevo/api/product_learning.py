@@ -49,6 +49,7 @@ from nevo.api.product_common import (
     require_approved_lessons,
     require_class_access,
     require_school_actor,
+    require_teacher_console_actor,
     require_student_access,
 )
 from nevo.api.response_models import (
@@ -2453,18 +2454,14 @@ async def teacher_dashboard(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
-    actor = await require_school_actor(
-        session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
-    )
+    actor = await require_teacher_console_actor(session, principal)
     class_query = select(Class).where(Class.school_id == actor.school_id)
-    if actor.role == UserRole.TEACHER:
-        from nevo.db.models.teacher_assignment import TeacherClassAssignment
-
-        class_query = class_query.join(TeacherClassAssignment).where(
+    from nevo.db.models.teacher_assignment import TeacherClassAssignment
+    class_query = class_query.join(TeacherClassAssignment).where(
             TeacherClassAssignment.teacher_id == actor.id,
             TeacherClassAssignment.removed_at.is_(None),
-        )
-    classes = (await session.scalars(class_query.order_by(Class.name))).all()
+    )
+    classes = (await session.scalars(class_query.distinct().order_by(Class.name))).all()
     return {
         "teacher": {"id": str(actor.id), "firstName": actor.first_name},
         "classes": [

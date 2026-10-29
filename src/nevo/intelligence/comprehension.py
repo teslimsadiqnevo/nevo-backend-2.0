@@ -262,24 +262,13 @@ async def cursor_index(session, lesson_id, module_position, segment_position):
 
 def teaching_routes(segment, current_format="text", current_depth="original", question=None):
     if segment.content_type == LessonContentType.CALCULATION:
-        routes = [
+        return [
             TeachingRoute(
                 action="calculation_scaffold",
                 label="Show more support in this step",
                 requires_choice=False,
             ),
-            TeachingRoute(action="slower", label="Take it more slowly", requires_choice=False),
         ]
-        if any(
-            str(step.get("stepId")) == str((question or {}).get("id"))
-            for step in (segment.calculation_variant or {}).get("steps", [])
-        ):
-            routes.insert(1, TeachingRoute(
-                action="simpler_presentation",
-                label="Show one step at a time",
-                requires_choice=False,
-            ))
-        return routes
     formats = student_modalities(segment)
     labels = {
         "visual": "Try it as a picture",

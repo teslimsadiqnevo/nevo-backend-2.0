@@ -390,6 +390,8 @@ def _view(job, segment):
     )
     return LessonMediaItem(
         id=job.id,
+        requested_by=job.requested_by,
+        remade_at=job.remade_at,
         segment_id=job.segment_id,
         kind=job.kind,
         status=job.status,
@@ -755,6 +757,7 @@ async def retry_media(
         job.payload = payload
         job.source_hash = source_hash(segment)
     job.requested_by = actor.id
+    job.remade_at = datetime.now(UTC)
     job.status, job.attempts = "queued", 0
     job.result = job.failure_code = job.completed_at = job.lease_token = job.lease_until = None
     await session.commit()

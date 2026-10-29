@@ -5,6 +5,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import Class, User
+from nevo.db.models.permission import Admin, AdminScopeAssignment
+from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.db.models.product import SchoolInvitation
 from nevo.db.models.subject import ClassSubject, SchoolSubject, TeacherSubject
 from nevo.db.models.teacher_assignment import (
@@ -406,7 +408,7 @@ class SqlAlchemyTeacherAssignmentRepository:
             .where(
                 User.id == teacher_id,
                 User.school_id == school_id,
-                User.role == UserRole.TEACHER,
+                User.role.in_([UserRole.TEACHER, UserRole.OTHER_ADMIN, UserRole.SENCO_ADMIN]),
             )
             .with_for_update()
         )
@@ -438,6 +440,19 @@ class SqlAlchemyTeacherAssignmentRepository:
             session.add(teacher)
             await session.flush()
             return True
+        if teacher.role in {UserRole.OTHER_ADMIN, UserRole.SENCO_ADMIN}:
+            has_teacher_scope = await session.scalar(
+                select(AdminScopeAssignment.id)
+                .join(Admin, Admin.id == AdminScopeAssignment.admin_id)
+                .where(
+                    Admin.user_id == teacher.id,
+                    Admin.school_id == school_id,
+                    AdminScopeAssignment.scope == PermissionScope.TEACHER,
+                    AdminScopeAssignment.revoked_at.is_(None),
+                ).limit(1)
+            )
+            if has_teacher_scope is None:
+                raise TeacherNotFoundError
         if teacher.status not in {UserStatus.ACTIVE, UserStatus.INVITED}:
             raise TeacherNotActiveError
         if teacher.status == UserStatus.INVITED:

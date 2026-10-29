@@ -11,6 +11,8 @@ from nevo.api.learning_support import require_learning_support_if_admin
 from nevo.api.product_common import (
     require_class_access,
     require_school_actor,
+    require_teacher_console_actor,
+    require_teacher_console_class,
     require_student_access,
 )
 from nevo.api.response_models import (
@@ -112,21 +114,16 @@ async def teacher_home(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
-    actor = await require_school_actor(
-        session,
-        principal,
-        roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
-    )
+    actor = await require_teacher_console_actor(session, principal)
     class_query = select(Class).where(
         Class.school_id == actor.school_id,
         Class.archived_at.is_(None),
     )
-    if actor.role is UserRole.TEACHER:
-        class_query = class_query.join(TeacherClassAssignment).where(
+    class_query = class_query.join(TeacherClassAssignment).where(
             TeacherClassAssignment.teacher_id == actor.id,
             TeacherClassAssignment.removed_at.is_(None),
-        )
-    classes = (await session.scalars(class_query.order_by(Class.name))).all()
+    )
+    classes = (await session.scalars(class_query.distinct().order_by(Class.name))).all()
     class_ids = [item.id for item in classes]
     enrollment_rows = (
         await session.execute(
@@ -189,8 +186,9 @@ async def lesson_class_progress(
     session: DatabaseSession,
     class_id: Annotated[UUID, Query(alias="classId")],
 ) -> dict[str, object]:
-    actor = await require_school_actor(session, principal)
+    actor = await require_teacher_console_actor(session, principal)
     await require_class_access(session, actor, class_id)
+    await require_teacher_console_class(session, actor, class_id)
     lesson = await session.get(Lesson, lesson_id)
     if lesson is None or lesson.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Lesson not found")
@@ -400,8 +398,9 @@ async def class_insights_narrative(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
-    actor = await require_school_actor(session, principal)
+    actor = await require_teacher_console_actor(session, principal)
     await require_class_access(session, actor, class_id)
+    await require_teacher_console_class(session, actor, class_id)
     school_class = await session.get(Class, class_id)
     if school_class is None:
         raise HTTPException(status_code=404, detail="Class not found")

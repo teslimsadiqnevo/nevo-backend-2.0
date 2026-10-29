@@ -24,7 +24,7 @@ from sqlalchemy import delete, select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.product_common import require_school_actor
+from nevo.api.product_common import can_be_class_teacher, require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.db.models.account import User
 from nevo.db.models.subject import (
@@ -376,7 +376,7 @@ async def set_teacher_subjects(
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
     school_id = _school_of(actor)
     teacher = await session.get(User, teacher_id)
-    if teacher is None or teacher.school_id != school_id or teacher.role is not UserRole.TEACHER:
+    if teacher is None or teacher.school_id != school_id or not await can_be_class_teacher(session, teacher):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
 
     wanted: set[UUID] = set()
@@ -445,7 +445,7 @@ async def get_teacher_subjects(
     if (
         teacher is None
         or teacher.school_id != actor.school_id
-        or teacher.role is not UserRole.TEACHER
+        or not await can_be_class_teacher(session, teacher)
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
     rows = list(
@@ -486,7 +486,7 @@ async def add_teacher_subject(
     if (
         teacher is None
         or teacher.school_id != actor.school_id
-        or teacher.role is not UserRole.TEACHER
+        or not await can_be_class_teacher(session, teacher)
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
     subject = await ensure(

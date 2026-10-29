@@ -446,8 +446,6 @@ class BaselineTrial(BaseModel):
             "incongruent",
         }:
             raise ValueError("inhibition requires congruent or incongruent")
-        if self.dimension in {"inhibition", "interference_control"} and self.target not in {"LEFT", "RIGHT"}:
-            raise ValueError("inhibition requires a LEFT or RIGHT target")
         return self
 
     #: congruent, incongruent, a dot ratio, a reading mode - whatever this
@@ -520,8 +518,14 @@ class BaselineTrialsRequest(BaseModel):
             return self
         practice = [row for row in rows if row.practice]
         scored = [row for row in rows if not row.practice]
+        if not practice and len(scored) == 32 and all(row.target is None for row in scored):
+            # Compatibility with the deployed SS player until its 40-trial
+            # payload ships. Do not silently accept a partially upgraded run.
+            return self
         if len(practice) != 8 or len(scored) != 32:
             raise ValueError("Word Conflict requires eight practice and 32 scored trials")
+        if any(row.target is None for row in rows):
+            raise ValueError("The 40-trial Word Conflict run requires LEFT or RIGHT targets")
         for condition in ("congruent", "incongruent"):
             for target in ("LEFT", "RIGHT"):
                 if sum(row.condition == condition and row.target == target for row in scored) != 8:
@@ -2223,7 +2227,7 @@ async def submit_baseline_trials(
             continue
         correct = (
             (trial.response or "").strip().upper() == trial.target
-            if trial.dimension in {"inhibition", "interference_control"}
+            if trial.dimension in {"inhibition", "interference_control"} and trial.target is not None
             else trial.correct
         )
         expected = answers.get(trial.probe_item_id) if trial.probe_item_id else None

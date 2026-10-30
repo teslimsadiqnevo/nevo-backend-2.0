@@ -320,7 +320,7 @@ class ContentParsingService:
                                 "text, numeric or boolean, never selection. Choice questions "
                                 "require two or more value-label options and matching answerKey "
                                 "values. Use camelCase answerType and answerKey.\n\n"
-                                "For each in-lesson checkpoint, propose masteryLevel "
+                                "For each checkpoint and after-lesson assessment item, propose masteryLevel "
                                 "as knowledge, application, or analysis. Knowledge tests recall "
                                 "or explanation; application uses the idea in a taught kind of "
                                 "situation; analysis compares, judges, or diagnoses in an "
@@ -1018,7 +1018,7 @@ def _mark_source_authorship(payload: dict[str, object], source: str) -> None:
                 else len(prompt) >= 12 and prompt in normalized
             )
             question["authoredBy"] = "person" if authored else "nevo"
-            if group is not payload.get("assessment") and question.get("masteryLevel") in {
+            if question.get("masteryLevel") in {
                 "knowledge", "application", "analysis"
             }:
                 # The parser's classification is generated even when the underlying

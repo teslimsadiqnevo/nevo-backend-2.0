@@ -692,10 +692,16 @@ async def _question_for_attempt(
     presentation_seed: str = "lesson",
 ) -> tuple[dict[str, object], UUID | None]:
     if payload.source == "assessment":
+        from nevo.api.lesson_review import approved_check_ids
+
+        approved = await approved_check_ids(session, lesson.id)
         questions = checkpoint_payloads(
             lesson.assessment or [],
             segment_key="lesson-assessment",
             presentation_seed=presentation_seed,
+            reviewed_question_ids={
+                question_id for scope, question_id in approved if scope == "assessment"
+            },
         )
         segment_id = None
     else:
@@ -996,6 +1002,7 @@ async def lesson_detail(
             lesson.assessment or [],
             segment_key="lesson-assessment",
             presentation_seed=str(actor.id),
+            reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
         ),
         "segments": [
             {
@@ -3362,6 +3369,7 @@ async def _offline_package_payload(
             lesson.assessment or [],
             segment_key="lesson-assessment",
             presentation_seed=str(actor.id),
+            reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
         ),
         "segments": [
             {

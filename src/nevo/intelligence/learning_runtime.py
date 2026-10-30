@@ -323,7 +323,7 @@ async def apply_marked_attempt(
             setattr(row, name, value)
     level = question.get("masteryLevel")
     if (
-        attempt.source == "checkpoint"
+        attempt.source in {"checkpoint", "assessment"}
         and level in {"knowledge", "application", "analysis"}
         and question.get("teacherReviewed") is True
     ):

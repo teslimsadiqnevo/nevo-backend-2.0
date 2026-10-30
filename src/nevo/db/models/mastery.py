@@ -145,6 +145,29 @@ class StudentConceptMastery(Base):
     )
 
 
+class StudentConceptLevelMastery(Base):
+    __tablename__ = "student_concept_level_mastery"
+    __table_args__ = (
+        UniqueConstraint("student_id", "concept_id", "mastery_level", name="uq_student_concept_level_mastery"),
+        CheckConstraint("mastery_level IN ('knowledge', 'application', 'analysis')", name="level_mastery_level_valid"),
+        CheckConstraint("mastery_probability BETWEEN 0 AND 1", name="level_mastery_probability_range"),
+        CheckConstraint("practice_count >= 0 AND supported_pass_count >= 0", name="level_mastery_counts_nonnegative"),
+        Index("ix_level_mastery_student", "student_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
+    student_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    concept_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    mastery_level: Mapped[str] = mapped_column(String(20), nullable=False)
+    mastery_probability: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.15")
+    practice_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    supported_pass_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_response_correct: Mapped[bool | None] = mapped_column(Boolean)
+    last_updated: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class StudentConceptScheduling(Base):
     __tablename__ = "student_concept_scheduling"
     __table_args__ = (

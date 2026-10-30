@@ -36,5 +36,7 @@ Source: Lydia's 28 October 2026 engine specification, *Application, attention an
 
 ## Current status
 
-- Started: in-lesson check-level fields, parser proposals and review material on this feature branch. Parser-inferred levels require sign-off; the live concept-wide mastery and scheduler remain unchanged.
-- Not yet implemented: assessment-level review, level-specific mastery, level-aware gating/scheduling, transfer generation, paper capture/marking, focus pause, practical surfacing and parent evidence.
+- Implemented on this feature branch: in-lesson check-level fields, parser proposals, review material, and a separate per-level mastery table. Server-marked attempts update the level row only when the check's level is approved; assisted correctness does not inflate the independent estimate. Legacy concept-wide mastery remains unchanged.
+- Migration `20261030_0132` is additive and must be applied at the deployment boundary. It has not been applied to production because this branch is not ready to deploy. Never deploy code referencing the new table before applying that migration.
+- Still in Batch 1: assessment-level review, level-aware gating/scheduling, approved transfer-item generation, distinct-context tracking, pricing and sample-quality review.
+- Still in Batch 2: paper capture/marking, focus pause and device verification, practical surfacing and parent evidence. The backend cannot assert reliable focus detection on school devices until the player emits visibility events and those devices are tested. Person-image rejection and handwritten-step reliability likewise need an evaluated image path before a child-facing paper gate can be enabled.

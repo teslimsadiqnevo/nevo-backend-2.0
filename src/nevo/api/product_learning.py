@@ -739,11 +739,18 @@ async def _question_for_attempt(
                 }
             )
         else:
+            from nevo.api.lesson_review import approved_check_ids
+
+            approved = await approved_check_ids(session, lesson.id)
             questions = checkpoint_payloads(
                 segment.comprehension_checkpoints,
                 segment_key=segment.segment_key,
                 concept_id=segment.concept_id,
                 presentation_seed=presentation_seed,
+                reviewed_question_ids={
+                    question_id for approved_segment_id, question_id in approved
+                    if approved_segment_id == str(segment.id)
+                },
             )
         segment_id = segment.id
     question = next(

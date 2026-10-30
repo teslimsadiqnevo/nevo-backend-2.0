@@ -60,6 +60,7 @@ from nevo.db.models.lesson_signoff import LessonReviewSignoff
 from nevo.db.models.mastery import (
     ScaffoldProblemLog,
     StudentConceptMastery,
+    StudentConceptLevelMastery,
     StudentConceptScaffoldState,
     StudentConceptScheduling,
 )
@@ -185,6 +186,7 @@ __all__ = [
     "StepUpSchedule",
     "StudentClassEnrollment",
     "StudentConceptMastery",
+    "StudentConceptLevelMastery",
     "StudentConceptScaffoldState",
     "StudentConceptScheduling",
     "StudentOnboardingGrant",

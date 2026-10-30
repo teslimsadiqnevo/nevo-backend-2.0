@@ -360,11 +360,13 @@ async def apply_marked_attempt(
                 mastery_probability=prior,
                 practice_count=0,
                 supported_pass_count=0,
+                independent_pass_count=0,
             )
             session.add(level_row)
         level_row.mastery_probability = level_result.state.mastery_probability_concept
         level_row.practice_count = level_result.state.practice_count
         level_row.supported_pass_count += int(attempt.correct and supported)
+        level_row.independent_pass_count += int(attempt.correct and not supported and attempt.response_time_ms is not None and attempt.response_time_ms >= minimum_reading_time(question))
         level_row.last_response_correct = attempt.correct
     trusted = (
         attempt.response_time_ms is not None

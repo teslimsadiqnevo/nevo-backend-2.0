@@ -765,6 +765,14 @@ async def _question_for_attempt(
     )
     if question is None:
         raise HTTPException(status_code=404, detail="Lesson question not found")
+    if payload.source in {"checkpoint", "assessment"} and not question.get("teacherReviewed"):
+        raise HTTPException(
+            409,
+            detail={
+                "code": "lesson_content_requires_review",
+                "message": "This question needs its teacher's review before it can be used.",
+            },
+        )
     if not question.get("conceptId"):
         concepts = list(
             await session.scalars(
@@ -998,12 +1006,15 @@ async def lesson_detail(
         "classes": await _classes_for_lesson(session, lesson.id),
         "confirmationSummary": lesson.confirmation_summary,
         "recap": lesson.recap,
-        "assessment": checkpoint_payloads(
-            lesson.assessment or [],
-            segment_key="lesson-assessment",
-            presentation_seed=str(actor.id),
-            reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
-        ),
+        "assessment": [
+            question for question in checkpoint_payloads(
+                lesson.assessment or [],
+                segment_key="lesson-assessment",
+                presentation_seed=str(actor.id),
+                reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
+            )
+            if for_teacher or question["teacherReviewed"]
+        ],
         "segments": [
             {
                 "id": str(item.id),
@@ -1026,14 +1037,16 @@ async def lesson_detail(
                 "recommendedFormat": recommendations.get(str(item.id))
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,
-                "comprehensionCheckpoints": checkpoint_payloads(
-                    item.comprehension_checkpoints,
-                    segment_key=item.segment_key,
-                    presentation_seed=str(actor.id),
-                    question_offset=item.sequence_order - 1,
-                    include_pending_guidance=for_teacher,
-                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
-                ),
+                "comprehensionCheckpoints": [
+                    question for question in checkpoint_payloads(
+                        item.comprehension_checkpoints,
+                        segment_key=item.segment_key,
+                        presentation_seed=str(actor.id),
+                        question_offset=item.sequence_order - 1,
+                        include_pending_guidance=for_teacher,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    ) if for_teacher or question["teacherReviewed"]
+                ],
                 "textVariant": item.text_variant,
                 "visualVariant": item.visual_variant
                 if for_teacher
@@ -3365,12 +3378,14 @@ async def _offline_package_payload(
             for module in modules
         ],
         "recap": lesson.recap,
-        "assessment": checkpoint_payloads(
-            lesson.assessment or [],
-            segment_key="lesson-assessment",
-            presentation_seed=str(actor.id),
-            reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
-        ),
+        "assessment": [
+            question for question in checkpoint_payloads(
+                lesson.assessment or [],
+                segment_key="lesson-assessment",
+                presentation_seed=str(actor.id),
+                reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
+            ) if question["teacherReviewed"]
+        ],
         "segments": [
             {
                 "id": str(item.id),
@@ -3407,13 +3422,15 @@ async def _offline_package_payload(
                 "depthVariants": depth_payloads(
                     item.depth_variants, item.text_variant, for_student=True
                 ),
-                "comprehensionCheckpoints": checkpoint_payloads(
-                    item.comprehension_checkpoints,
-                    segment_key=item.segment_key,
-                    presentation_seed=str(actor.id),
-                    question_offset=item.sequence_order - 1,
-                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
-                ),
+                "comprehensionCheckpoints": [
+                    question for question in checkpoint_payloads(
+                        item.comprehension_checkpoints,
+                        segment_key=item.segment_key,
+                        presentation_seed=str(actor.id),
+                        question_offset=item.sequence_order - 1,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    ) if question["teacherReviewed"]
+                ],
             }
             for item in segments
         ],

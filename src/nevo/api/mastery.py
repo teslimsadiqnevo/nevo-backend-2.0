@@ -1,7 +1,9 @@
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
 from pydantic import BaseModel, ConfigDict, Field
 
 from nevo.api.auth import PrincipalDependency
@@ -12,6 +14,7 @@ from nevo.api.product_common import (
     require_student_access,
 )
 from nevo.db.models.product import LessonQuestionAttempt
+from nevo.db.models.mastery import StudentConceptLevelMastery
 from nevo.domain.mastery.vocabulary import FailureAttribution
 from nevo.mastery.entities import (
     ConceptMasteryAggregate,
@@ -22,6 +25,43 @@ from nevo.mastery.entities import (
 from nevo.mastery.service import MasteryService
 
 router = APIRouter(prefix="/api/mastery", tags=["mastery"])
+
+
+class ConceptLevelMasteryResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    concept_id: UUID = Field(alias="conceptId")
+    level: Literal["knowledge", "application", "analysis"]
+    probability: float
+    practice_count: int = Field(alias="practiceCount")
+    independent_pass_count: int = Field(alias="independentPassCount")
+    supported_pass_count: int = Field(alias="supportedPassCount")
+    last_updated: datetime = Field(alias="lastUpdated")
+
+
+@router.get("/student/{student_id}/levels", response_model=list[ConceptLevelMasteryResponse])
+async def student_level_mastery(
+    student_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> list[ConceptLevelMasteryResponse]:
+    if principal.role not in {"teacher", "senco_admin", "other_admin"}:
+        raise HTTPException(403, detail={"code": "staff_role_required"})
+    await require_student_access(session, principal, student_id)
+    rows = list(await session.scalars(
+        select(StudentConceptLevelMastery)
+        .where(StudentConceptLevelMastery.student_id == student_id)
+        .order_by(StudentConceptLevelMastery.concept_id, StudentConceptLevelMastery.mastery_level)
+    ))
+    return [ConceptLevelMasteryResponse(
+        concept_id=row.concept_id,
+        level=row.mastery_level,
+        probability=row.mastery_probability,
+        practice_count=row.practice_count,
+        independent_pass_count=row.independent_pass_count,
+        supported_pass_count=row.supported_pass_count,
+        last_updated=row.last_updated,
+    ) for row in rows]
 
 
 class MasteryUpdateRequest(BaseModel):

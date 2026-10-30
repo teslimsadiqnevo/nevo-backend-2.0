@@ -5,9 +5,13 @@ from sqlalchemy import or_, select
 
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import Concept, LessonAssignment
-from nevo.db.models.product import LessonProgress
-from nevo.db.models.mastery import StudentConceptMastery, StudentConceptScheduling
+from nevo.db.models.product import LessonProgress, LessonQuestionAttempt
+from nevo.db.models.mastery import (
+    StudentConceptLevelMastery, StudentConceptMastery, StudentConceptScheduling,
+)
 from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
+
+LEVEL_INDEPENDENT_PASSES = 2
 
 
 async def next_work(session, student, subject=None, lesson_id=None):
@@ -88,10 +92,52 @@ async def next_work(session, student, subject=None, lesson_id=None):
             )
         )
     )
-    review = next(
-        (concept for schedule in due for concept in eligible if concept.id == schedule.concept_id),
-        None,
-    )
+    levels = {
+        (row.concept_id, row.mastery_level): row
+        for row in await session.scalars(
+            select(StudentConceptLevelMastery).where(
+                StudentConceptLevelMastery.student_id == student.id,
+                StudentConceptLevelMastery.concept_id.in_(due_ids),
+            )
+        )
+    }
+    review = None
+    review_item = None
+    lesson_cache = {}
+    for schedule in due:
+        candidate = next((item for item in eligible if item.id == schedule.concept_id), None)
+        if candidate is None:
+            continue
+        candidate_segments = [row for row in segments if row.lesson_id not in blocked]
+        candidate_item = await _due_item(
+            session, student.id, candidate.id, candidate_segments, levels
+        )
+        if candidate_item is None:
+            # No approved, fresh higher-level item: leave the due date in place.
+            # Do not repeat the same answer and call that transfer.
+            has_level_content = any(
+                question.get("masteryLevel") in {"knowledge", "application", "analysis"}
+                and str(question.get("conceptId") or row.concept_id) == str(candidate.id)
+                for row in candidate_segments
+                for question in row.comprehension_checkpoints or []
+            )
+            for row in candidate_segments:
+                if row.lesson_id not in lesson_cache:
+                    lesson_cache[row.lesson_id] = await session.get(Lesson, row.lesson_id)
+                lesson = lesson_cache[row.lesson_id]
+                if lesson and any(
+                    item.get("masteryLevel") in {"knowledge", "application", "analysis"}
+                    and str(item.get("conceptId")) == str(candidate.id)
+                    for item in lesson.assessment or []
+                ):
+                    has_level_content = True
+                    break
+            if any(key[0] == candidate.id for key in levels) or has_level_content:
+                continue
+            review = candidate  # Legacy lessons retain their existing return route.
+            break
+        review, review_item = candidate, candidate_item
+        break
     pending = [
         concept
         for concept in eligible
@@ -117,10 +163,10 @@ async def next_work(session, student, subject=None, lesson_id=None):
         )
     if concept is None:
         return None
-    target = targets[concept.id]
+    target = review_item[0] if review_item else targets[concept.id]
     target_lesson_id = target.lesson_id
     lesson_segments = [row for row in segments if row.lesson_id == target_lesson_id]
-    return {
+    result = {
         "lessonId": target_lesson_id,
         "conceptId": concept.id,
         "conceptName": concept.name,
@@ -128,3 +174,68 @@ async def next_work(session, student, subject=None, lesson_id=None):
         "segmentPosition": lesson_segments.index(target),
         "kind": "review" if review else "new_work",
     }
+    if review_item:
+        result["reviewQuestionId"] = str(review_item[1]["id"])
+    return result
+
+
+async def _due_item(session, student_id, concept_id, segments, levels):
+    from nevo.api.lesson_review import approved_check_ids
+
+    order = ("knowledge", "application", "analysis")
+    target_level = next((
+        level for level in order
+        if not (
+            (state := levels.get((concept_id, level)))
+            and state.mastery_probability >= MASTERY_THRESHOLD
+            and state.independent_pass_count >= LEVEL_INDEPENDENT_PASSES
+        )
+    ), None)
+    if target_level is None:
+        return None
+    seen = set(await session.scalars(
+        select(LessonQuestionAttempt.question_id).where(
+            LessonQuestionAttempt.student_id == student_id,
+            LessonQuestionAttempt.question_snapshot["conceptId"].astext == str(concept_id),
+        )
+    ))
+    approvals = {}
+    lessons = {}
+    by_id = {str(segment.id): segment for segment in segments}
+    for segment in segments:
+        for question in segment.comprehension_checkpoints or []:
+            question_id = str(question.get("id") or "")
+            if (
+                question.get("masteryLevel") != target_level
+                or str(question.get("conceptId") or segment.concept_id) != str(concept_id)
+                or question.get("answerKey") is None
+                or question_id in seen
+            ):
+                continue
+            if segment.lesson_id not in approvals:
+                approvals[segment.lesson_id] = await approved_check_ids(session, segment.lesson_id)
+            if (
+                (str(segment.id), question_id) in approvals[segment.lesson_id]
+            ):
+                return segment, question
+    for segment in segments:
+        if segment.lesson_id not in lessons:
+            lessons[segment.lesson_id] = await session.get(Lesson, segment.lesson_id)
+        lesson = lessons[segment.lesson_id]
+        if lesson is None:
+            continue
+        for question in lesson.assessment or []:
+            question_id = str(question.get("id") or "")
+            if (
+                question.get("masteryLevel") != target_level
+                or str(question.get("conceptId")) != str(concept_id)
+                or str(question.get("sourceSegmentId")) not in by_id
+                or question.get("answerKey") is None
+                or question_id in seen
+            ):
+                continue
+            if segment.lesson_id not in approvals:
+                approvals[segment.lesson_id] = await approved_check_ids(session, segment.lesson_id)
+            if ("assessment", question_id) in approvals[segment.lesson_id]:
+                return by_id[str(question["sourceSegmentId"])], question
+    return None

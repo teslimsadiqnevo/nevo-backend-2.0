@@ -1376,6 +1376,9 @@ async def lesson_detail(
         else None
     )
     recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
+    from nevo.api.lesson_review import approved_check_ids
+
+    reviewed_checks = await approved_check_ids(session, lesson.id)
     return LessonDetailResponse(
         **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)).model_dump(
             by_alias=True
@@ -1388,7 +1391,9 @@ async def lesson_detail(
                 lesson.assessment or [],
                 segment_key="lesson-assessment",
                 presentation_seed=str(actor.id),
+                reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
             )
+            if actor.role != UserRole.STUDENT or item["teacherReviewed"]
         ],
         segments=[
             LessonSegmentResponse(
@@ -1414,13 +1419,17 @@ async def lesson_detail(
                 recommendedFormat=recommendations.get(str(item.id))
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,
-                comprehensionCheckpoints=checkpoint_payloads(
-                    item.comprehension_checkpoints,
-                    segment_key=item.segment_key,
-                    presentation_seed=str(actor.id),
-                    question_offset=item.sequence_order - 1,
-                    include_pending_guidance=actor.role != UserRole.STUDENT,
-                ),
+                comprehensionCheckpoints=[
+                    question for question in checkpoint_payloads(
+                        item.comprehension_checkpoints,
+                        segment_key=item.segment_key,
+                        presentation_seed=str(actor.id),
+                        question_offset=item.sequence_order - 1,
+                        include_pending_guidance=actor.role != UserRole.STUDENT,
+                        reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == str(item.id)},
+                    )
+                    if actor.role != UserRole.STUDENT or question["teacherReviewed"]
+                ],
                 textVariant=item.text_variant,
                 visualVariant=(
                     safety_reviewed_visual(item.visual_variant)

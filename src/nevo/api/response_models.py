@@ -833,6 +833,7 @@ class LearningWorkResponse(CamelResponse):
     segment_id: UUID | None
     segment_position: int
     kind: Literal["review", "new_work"]
+    review_question_id: str | None = None
 
 
 class StudentDashboardResponse(CamelResponse):

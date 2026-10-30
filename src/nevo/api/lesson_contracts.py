@@ -252,6 +252,16 @@ class ComprehensionCheckpoint(BaseModel):
         return value
 
     id: str
+    mastery_level: Literal["knowledge", "application", "analysis"] | None = Field(
+        default=None,
+        alias="masteryLevel",
+        description="Curriculum level assessed by this check; null means unestablished.",
+    )
+    mastery_level_authored_by: Literal["person", "nevo"] | None = Field(
+        default=None,
+        alias="masteryLevelAuthoredBy",
+        description="An inferred level requires teacher review before it contributes level-specific evidence.",
+    )
     concept_id: UUID | None = Field(default=None, alias="conceptId")
     concept_name: str | None = Field(default=None, alias="conceptName")
     prompt: str

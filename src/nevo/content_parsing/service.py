@@ -320,6 +320,12 @@ class ContentParsingService:
                                 "text, numeric or boolean, never selection. Choice questions "
                                 "require two or more value-label options and matching answerKey "
                                 "values. Use camelCase answerType and answerKey.\n\n"
+                                "For each in-lesson checkpoint, propose masteryLevel "
+                                "as knowledge, application, or analysis. Knowledge tests recall "
+                                "or explanation; application uses the idea in a taught kind of "
+                                "situation; analysis compares, judges, or diagnoses in an "
+                                "unfamiliar situation. Omit the field if the level is unclear. "
+                                "The proposed level requires teacher review.\n\n"
                                 + "For every checkpoint and after-lesson assessment question, "
                                 "include a short hint that "
                                 "does not reveal its answer and guidedQuestions with two or "
@@ -1000,8 +1006,7 @@ def _mark_source_authorship(payload: dict[str, object], source: str) -> None:
     normalized = " ".join(source.split()).casefold()
     groups = [item.get("comprehension_checkpoints") or item.get("comprehensionCheckpoints")
               for item in payload.get("segments", []) if isinstance(item, dict)]
-    groups.append(payload.get("assessment"))
-    for group in groups:
+    for group in [*groups, payload.get("assessment")]:
         if not isinstance(group, list):
             continue
         for question in group:
@@ -1013,6 +1018,15 @@ def _mark_source_authorship(payload: dict[str, object], source: str) -> None:
                 else len(prompt) >= 12 and prompt in normalized
             )
             question["authoredBy"] = "person" if authored else "nevo"
+            if group is not payload.get("assessment") and question.get("masteryLevel") in {
+                "knowledge", "application", "analysis"
+            }:
+                # The parser's classification is generated even when the underlying
+                # question and answer are present verbatim in the teacher's source.
+                question["masteryLevelAuthoredBy"] = "nevo"
+            else:
+                question.pop("masteryLevel", None)
+                question.pop("masteryLevelAuthoredBy", None)
 
 
 def _question_list(value):

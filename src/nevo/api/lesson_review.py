@@ -120,6 +120,8 @@ class CheckReviewItem(CamelResponse):
     question_answer_type: str
     question_options: list[dict[str, object]] = Field(default_factory=list)
     question_answer_key: object
+    mastery_level: Literal["knowledge", "application", "analysis"] | None = None
+    mastery_level_authored_by: Literal["person", "nevo"] | None = None
     teacher_reviewed: bool = False
     markable: bool = True
 
@@ -625,17 +627,25 @@ def _checks_material(segments):
                 "questionAnswerType": question["answerType"],
                 "questionOptions": question.get("options") or [],
                 "questionAnswerKey": question["answerKey"],
+                "masteryLevel": question.get("masteryLevel"),
+                "masteryLevelAuthoredBy": question.get("masteryLevelAuthoredBy"),
             }
             authored = question.get("authoredBy") == "person"
+            inferred_level = (
+                item["masteryLevel"] is not None
+                and item["masteryLevelAuthoredBy"] != "person"
+            )
             markable = bool(item["questionPrompt"] and item["questionAnswerKey"] is not None)
-            if not authored and markable:
+            if (not authored or inferred_level) and markable:
                 material.append(item)
             views.append(CheckReviewItem(
                 segment_id=segment.id, segment_title=segment.title,
                 question_id=item["questionId"], question_prompt=item["questionPrompt"],
                 question_answer_type=item["questionAnswerType"],
                 question_options=item["questionOptions"], question_answer_key=item["questionAnswerKey"],
-                teacher_reviewed=authored and markable,
+                mastery_level=item["masteryLevel"],
+                mastery_level_authored_by=item["masteryLevelAuthoredBy"],
+                teacher_reviewed=authored and not inferred_level and markable,
                 markable=markable,
             ))
     return material, views
@@ -654,7 +664,9 @@ async def approved_check_ids(session, lesson_id):
         for question in checkpoint_payloads(
             segment.comprehension_checkpoints or [], segment_key=segment.segment_key
         )
-        if question.get("authoredBy") == "person" and question.get("answerKey") is not None
+        if question.get("authoredBy") == "person"
+        and (question.get("masteryLevel") is None or question.get("masteryLevelAuthoredBy") == "person")
+        and question.get("answerKey") is not None
     }
     if not material:
         return authored

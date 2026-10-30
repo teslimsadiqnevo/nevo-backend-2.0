@@ -523,6 +523,15 @@ class ActivityAvailability(CamelResponse):
     reason: Literal["safety_instruction_not_rendered"]
 
 
+class ClassPractical(CamelResponse):
+    suitable: bool
+    materials: list[str] = Field(default_factory=list)
+    requirements: list[str] = Field(default_factory=list)
+    safety: str | None = None
+    approved_by: UUID
+    approved_at: datetime
+
+
 class LessonSegmentResponse(CamelResponse):
     id: UUID
     segment_key: str
@@ -565,6 +574,7 @@ class LessonSegmentResponse(CamelResponse):
     audio_variant: AudioVariant | None = None
     interactive_variant: InteractiveVariant | None = None
     activity_availability: "ActivityAvailability | None" = None
+    class_practical: ClassPractical | None = None
     calculation_variant: CalculationVariant | None = None
     #: The simpler and the longer version of ``body``. The adaptation plan's
     #: ``simplify`` and ``expand`` actions read from here; null means fall

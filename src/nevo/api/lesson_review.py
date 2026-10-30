@@ -25,7 +25,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.ai_gateway.errors import AiGatewayError
-from nevo.ai_gateway.entities import AiGenerationRequest
+from nevo.ai_gateway.entities import AiGenerationRequest, AiRequestContext
 from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.api.ai_gateway import AiGatewayDependency, public_ai_error
 from nevo.api.auth import PrincipalDependency
@@ -190,6 +190,83 @@ class TransferGenerationResponse(CamelResponse):
     estimated_cost_usd: str
     ai_call_id: UUID
     review: "LessonReviewResponse"
+
+
+class ClassPracticalWrite(BaseModel):
+    model_config = CAMEL_CONFIG
+    suitable: bool
+    materials: list[str] = Field(default_factory=list, max_length=16)
+    requirements: list[str] = Field(default_factory=list, max_length=12)
+
+    @field_validator("materials", "requirements")
+    @classmethod
+    def bounded_entries(cls, entries):
+        clean = [entry.strip() for entry in entries]
+        if any(not entry or len(entry) > 240 for entry in clean):
+            raise ValueError("Each entry must contain 1 to 240 characters")
+        return clean
+
+
+class ClassPracticalResponse(CamelResponse):
+    lesson_id: UUID
+    segment_id: UUID
+    suitable: bool
+    materials: list[str]
+    requirements: list[str]
+    safety: str | None
+    approved_by: UUID
+    approved_at: datetime
+
+
+@router.put(
+    "/lessons/{lesson_id}/segments/{segment_id}/class-practical",
+    response_model=ClassPracticalResponse,
+)
+async def approve_class_practical(
+    lesson_id: UUID,
+    segment_id: UUID,
+    payload: ClassPracticalWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    gateway: AiGatewayDependency,
+) -> ClassPracticalResponse:
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    segment = await session.get(LessonSegment, segment_id, with_for_update=True)
+    if segment is None or segment.lesson_id != lesson.id:
+        raise HTTPException(404, detail={"code": "lesson_section_not_found"})
+    variant = dict(segment.interactive_variant or {})
+    if not variant.get("steps"):
+        raise HTTPException(409, detail={"code": "class_practical_requires_activity"})
+    if payload.suitable and not (payload.materials or payload.requirements):
+        raise HTTPException(422, detail={"code": "class_practical_details_required"})
+    source_safety = variant.get("safety")
+    if payload.suitable:
+        try:
+            await gateway.safety_guard.check(
+                "\n".join([*payload.materials, *payload.requirements]),
+                phase="lesson_source",
+                context=AiRequestContext(
+                    requester_user_id=actor.id,
+                    school_id=actor.school_id,
+                    student_id=None,
+                ),
+            )
+        except AiGatewayError as error:
+            raise public_ai_error(error, audience="teacher") from error
+    at = datetime.now(UTC)
+    record = {
+        "suitable": payload.suitable,
+        "materials": payload.materials if payload.suitable else [],
+        "requirements": payload.requirements if payload.suitable else [],
+        "safety": source_safety if payload.suitable else None,
+        "approvedBy": str(actor.id),
+        "approvedAt": at.isoformat(),
+    }
+    segment.interactive_variant = {**variant, "classPractical": record}
+    await session.commit()
+    return ClassPracticalResponse(
+        lesson_id=lesson.id, segment_id=segment.id, **record,
+    )
 
 
 @router.post(

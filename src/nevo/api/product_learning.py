@@ -1059,6 +1059,8 @@ async def lesson_detail(
                 "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body)
                 if for_teacher
                 else student_activity(item),
+                "classPractical": (item.interactive_variant or {}).get("classPractical")
+                if for_teacher else None,
                 **(
                     {"activityAvailability": {
                         "reachableByStudents": False,
@@ -1812,6 +1814,7 @@ async def save_lesson_question_attempt(
         or 1
     )
     from nevo.content_parsing.answers import answer_matches
+    from nevo.intelligence.away_time import active_response_ms
 
     record = LessonQuestionAttempt(
         student_id=actor.id,
@@ -1825,7 +1828,12 @@ async def save_lesson_question_attempt(
         question_snapshot=question,
         answer=payload.answer,
         correct=answer_matches(payload.answer, question),
-        response_time_ms=payload.response_time_ms,
+        response_time_ms=active_response_ms(
+            lesson_session,
+            payload.response_time_ms,
+            at=datetime.now(UTC),
+            segment_id=str(segment_id) if segment_id else None,
+        ),
         hint_count=max(
             payload.hint_count,
             int(

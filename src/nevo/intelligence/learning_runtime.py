@@ -367,6 +367,12 @@ async def apply_marked_attempt(
         level_row.practice_count = level_result.state.practice_count
         level_row.supported_pass_count += int(attempt.correct and supported)
         level_row.independent_pass_count += int(attempt.correct and not supported and attempt.response_time_ms is not None and attempt.response_time_ms >= minimum_reading_time(question))
+        if (
+            level_row.strengthened_at is None
+            and level_row.mastery_probability >= MASTERY_THRESHOLD
+            and level_row.independent_pass_count >= 2
+        ):
+            level_row.strengthened_at = datetime.now(UTC)
         level_row.last_response_correct = attempt.correct
     trusted = (
         attempt.response_time_ms is not None

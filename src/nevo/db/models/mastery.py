@@ -163,6 +163,7 @@ class StudentConceptLevelMastery(Base):
     practice_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     supported_pass_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     independent_pass_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    strengthened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_response_correct: Mapped[bool | None] = mapped_column(Boolean)
     last_updated: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

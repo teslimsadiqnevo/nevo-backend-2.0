@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nevo.api.auth import PrincipalDependency
+from nevo.api.dependencies import DatabaseSession
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import public_consent_error
 from nevo.api.privacy import validate_signal_privacy
@@ -16,6 +17,8 @@ from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
     SignalEventType,
 )
+from nevo.db.models.signal_event import LessonSession
+from nevo.intelligence.away_time import active_response_ms
 from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 from nevo.signal_events.entities import (
     LessonSessionSnapshot,
@@ -483,6 +486,7 @@ async def ingest_signal_batch(
     principal: PrincipalDependency,
     service: SignalIngestionDependency,
     request: Request,
+    session: DatabaseSession,
 ) -> SignalBatchResponse:
     """Take a batch of signals for the child who sent them.
 
@@ -497,6 +501,38 @@ async def ingest_signal_batch(
             detail={"code": "student_required", "message": "Student account required."},
         )
     await _require_confirmed_consent(request, principal)
+    sitting = await session.get(LessonSession, payload.session.session_id)
+    if sitting is not None and sitting.student_id != principal.user_id:
+        raise HTTPException(404, detail={"code": "lesson_session_not_found"})
+
+    def adjusted_data(event: SignalEventRequest) -> dict[str, Any]:
+        data = dict(event.event_data)
+        duration_key = (
+            "durationMs" if event.event_type in {
+                SignalEventType.TIME_ON_SEGMENT,
+                SignalEventType.READING_CHUNK_VIEWED,
+            } else "timeOnSegment" if event.event_type is SignalEventType.MODALITY_SWITCH_OUTCOME
+            else None
+        )
+        if duration_key is None or not isinstance(data.get(duration_key), int | float) or isinstance(data.get(duration_key), bool):
+            return data
+        if sitting is None:
+            data[duration_key] = 0
+            data["awayTimingUnestablished"] = True
+            return data
+        event_at = event.timestamp if event.timestamp.tzinfo is not None else datetime.now(UTC)
+        effective = active_response_ms(
+            sitting, int(data[duration_key]),
+            at=event_at,
+            segment_id=str(data.get("segmentId")) if data.get("segmentId") else None,
+        )
+        if effective is None:
+            data["awayTimingUnestablished"] = True
+            data[duration_key] = 0
+        else:
+            data[duration_key] = effective
+            data["awayTimeExcluded"] = True
+        return data
     try:
         receipt = await service.ingest(
             SignalIngestionBatch(
@@ -517,7 +553,7 @@ async def ingest_signal_batch(
                         student_id=principal.user_id,
                         session_id=event.session_id,
                         event_type=event.event_type,
-                        event_data=event.event_data,
+                        event_data=adjusted_data(event),
                         timestamp=event.timestamp,
                     )
                     for event in payload.events

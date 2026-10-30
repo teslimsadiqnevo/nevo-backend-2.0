@@ -1452,6 +1452,8 @@ async def lesson_detail(
                     and student_activity(item) is None
                     else None
                 ),
+                classPractical=(item.interactive_variant or {}).get("classPractical")
+                if actor.role != UserRole.STUDENT else None,
                 calculationVariant=calculation_for_delivery(
                     item.calculation_variant, for_teacher=actor.role != UserRole.STUDENT
                 ),

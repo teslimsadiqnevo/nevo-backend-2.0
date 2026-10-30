@@ -20,7 +20,7 @@ from nevo.consent.age_assurance import (
 )
 from nevo.db.models.account import User
 from nevo.db.models.consent import ParentLink
-from nevo.db.models.consent_assurance import AgeCheck
+from nevo.db.models.consent_assurance import AgeCheck, AgeCheckEdit
 from nevo.domain.consent.vocabulary import AgeCheckState
 
 router = APIRouter(prefix="/api/v1/age-checks", tags=["consent"])
@@ -64,6 +64,14 @@ class DateRecheckRequest(CamelResponse):
         if value > datetime.now(UTC).date():
             raise ValueError("Date of birth cannot be in the future")
         return value
+
+
+class AgeCheckEditResponse(CamelResponse):
+    previous_school_date_of_birth: date | None
+    new_school_date_of_birth: date
+    actor_user_id: UUID | None
+    actor_name: str
+    changed_at: datetime
 
 
 def _view(check, student, parent_name=None):
@@ -158,6 +166,16 @@ async def school_recheck(
         raise HTTPException(404, detail={"code": "age_check_not_found"})
     now = datetime.now(UTC)
     _open_check(check, now)
+    session.add(AgeCheckEdit(
+        age_check_id=check.id,
+        student_id=check.student_id,
+        actor_user_id=actor.id,
+        actor_name=" ".join(part for part in (actor.first_name, actor.last_name) if part)
+        or actor.email or str(actor.id),
+        previous_school_date_of_birth=check.school_date_of_birth,
+        new_school_date_of_birth=payload.date_of_birth,
+        changed_at=now,
+    ))
     check.school_date_of_birth = payload.date_of_birth
     check.school_rechecked_at, check.school_rechecked_by = now, actor.id
     check.parent_reconfirmed_at = check.parent_reconfirmed_by = None
@@ -168,6 +186,20 @@ async def school_recheck(
     result = _view(check, student, await _parent_name(session, check))
     await session.commit()
     return result
+
+
+@router.get("/{age_check_id}/history", response_model=list[AgeCheckEditResponse])
+async def school_recheck_history(
+    age_check_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+):
+    actor = await require_school_actor(session, principal, roles=SCHOOL_ROLES)
+    check = await session.get(AgeCheck, age_check_id)
+    if check is None or check.school_id != actor.school_id:
+        raise HTTPException(404, detail={"code": "age_check_not_found"})
+    rows = await session.scalars(select(AgeCheckEdit).where(
+        AgeCheckEdit.age_check_id == age_check_id,
+    ).order_by(AgeCheckEdit.changed_at, AgeCheckEdit.id))
+    return [AgeCheckEditResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
 @router.post(

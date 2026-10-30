@@ -140,6 +140,25 @@ class AgeCheck(Base):
         return self.state is AgeCheckState.MISMATCH
 
 
+class AgeCheckEdit(Base):
+    __tablename__ = "age_check_edits"
+    __table_args__ = (Index("ix_age_check_edits_check_changed", "age_check_id", "changed_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
+    age_check_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("age_checks.id", ondelete="CASCADE"), nullable=False
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_name: Mapped[str] = mapped_column(String(250), nullable=False)
+    previous_school_date_of_birth: Mapped[date | None] = mapped_column(Date)
+    new_school_date_of_birth: Mapped[date] = mapped_column(Date, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
 class ConsentRefusal(Base):
     """A parent who was asked and is not to be asked again.
 

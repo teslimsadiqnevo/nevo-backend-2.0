@@ -92,6 +92,12 @@ async def next_work(session, student, subject=None, lesson_id=None):
             )
         )
     )
+    from nevo.core.config import get_settings
+
+    level_returns_enabled = (
+        get_settings().collect_level_mastery
+        and get_settings().level_aware_return_enabled
+    )
     levels = {
         (row.concept_id, row.mastery_level): row
         for row in await session.scalars(
@@ -100,11 +106,18 @@ async def next_work(session, student, subject=None, lesson_id=None):
                 StudentConceptLevelMastery.concept_id.in_(due_ids),
             )
         )
-    }
+    } if level_returns_enabled else {}
     review = None
     review_item = None
     lesson_cache = {}
+    if not level_returns_enabled:
+        review = next(
+            (concept for schedule in due for concept in eligible if concept.id == schedule.concept_id),
+            None,
+        )
     for schedule in due:
+        if not level_returns_enabled:
+            break
         candidate = next((item for item in eligible if item.id == schedule.concept_id), None)
         if candidate is None:
             continue
@@ -180,7 +193,7 @@ async def next_work(session, student, subject=None, lesson_id=None):
 
 
 async def _due_item(session, student_id, concept_id, segments, levels):
-    from nevo.api.lesson_review import approved_check_ids
+    from nevo.api.lesson_review import approved_check_ids, approved_level_ids
 
     order = ("knowledge", "application", "analysis")
     target_level = next((
@@ -200,6 +213,7 @@ async def _due_item(session, student_id, concept_id, segments, levels):
         )
     ))
     approvals = {}
+    level_approvals = {}
     lessons = {}
     by_id = {str(segment.id): segment for segment in segments}
     for segment in segments:
@@ -214,8 +228,10 @@ async def _due_item(session, student_id, concept_id, segments, levels):
                 continue
             if segment.lesson_id not in approvals:
                 approvals[segment.lesson_id] = await approved_check_ids(session, segment.lesson_id)
+                level_approvals[segment.lesson_id] = await approved_level_ids(session, segment.lesson_id)
             if (
                 (str(segment.id), question_id) in approvals[segment.lesson_id]
+                and (str(segment.id), question_id) in level_approvals[segment.lesson_id]
             ):
                 return segment, question
     for segment in segments:
@@ -236,6 +252,7 @@ async def _due_item(session, student_id, concept_id, segments, levels):
                 continue
             if segment.lesson_id not in approvals:
                 approvals[segment.lesson_id] = await approved_check_ids(session, segment.lesson_id)
-            if ("assessment", question_id) in approvals[segment.lesson_id]:
+                level_approvals[segment.lesson_id] = await approved_level_ids(session, segment.lesson_id)
+            if ("assessment", question_id) in approvals[segment.lesson_id] and ("assessment", question_id) in level_approvals[segment.lesson_id]:
                 return by_id[str(question["sourceSegmentId"])], question
     return None

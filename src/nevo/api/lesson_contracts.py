@@ -1103,6 +1103,7 @@ def checkpoint_payloads(
     question_offset: int = 0,
     include_pending_guidance: bool = False,
     reviewed_question_ids: set[str] | None = None,
+    reviewed_level_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """Normalize older parser output into the documented checkpoint contract."""
     result: list[dict[str, object]] = []
@@ -1179,6 +1180,14 @@ def checkpoint_payloads(
 
         rendered = question.model_dump(by_alias=True, mode="json")
         rendered["teacherReviewed"] = str(rendered["id"]) in (reviewed_question_ids or set())
+        if (
+            reviewed_level_ids is not None
+            and rendered.get("masteryLevel") is not None
+            and rendered.get("masteryLevelAuthoredBy") != "person"
+            and str(rendered["id"]) not in reviewed_level_ids
+        ):
+            rendered["masteryLevel"] = None
+            rendered["masteryLevelAuthoredBy"] = None
         if (
             not include_pending_guidance
             and rendered.get("guidedStepsReviewStatus") == "pending_review"

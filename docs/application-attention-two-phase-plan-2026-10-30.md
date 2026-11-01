@@ -34,6 +34,21 @@ Source: Lydia's 28 October 2026 engine specification, *Application, attention an
 - Release Batch 1 behind server-controlled activation and verify with pilot lessons before enabling the gate. Batch 2's paper feature needs its own privacy and device acceptance before activation.
 - The frontend must receive advance contract notes for check levels, transfer items, paper capture, pause/resume and adult-facing reads. This plan authorises backend work only; frontend changes remain Yinka's lane.
 
+## Lydia's revised rollout order (1 November)
+
+1. Ship the focus event contract first, with `clientEventId` for retry safety. The player must send `return` when a lesson section first becomes visible, `away` on visibility loss, and `return` when visible again, always with the same sitting and section IDs. Use server timestamps; never infer cognition or claim device locking from visibility. Keep `FOCUS_TIMING_VERIFIED=false` until the device matrix passes. With the flag off, existing mastery, gate and return timing remain unchanged.
+2. Review level tags and answer keys separately. An authored, markable answer keeps its existing gating behaviour even if an inferred level is pending. A level inferred by Nevo is omitted from student and offline reads until the teacher's current check sign-off covers it. Generated answer keys still require teacher sign-off before delivery.
+3. Turn on `FOCUS_TIMING_VERIFIED=true` only after the player emits verified events and the device matrix passes. Time windows before the first observed return, during an open away interval, or older than retained interval history are unestablished; they cannot update per-level mastery. Then, separately enable `LEVEL_MASTERY_COLLECTION_ENABLED=true`. Both are required for level accumulation.
+4. Keep `LEVEL_AWARE_RETURN_ENABLED=false` and the existing comprehension gate setting unchanged while the complete level-aware gate and return are integrated with the player. The return flag also requires both focus verification and level collection. No inferred, unreviewed level may select a return item.
+5. Paper photographs remain last and disabled until privacy approval, person-image rejection and real-device OCR reliability are demonstrated. The typed no-camera route is separate and cannot itself pass a check.
+
+### Device acceptance matrix
+
+- Run the current student player on each target school tablet and browser. Verify first-visible, away, return, reload, navigation away, network loss, reconnect and duplicate retry events retain one coherent sitting state.
+- Compare observed elapsed and active time across short and long departures, including a response window straddling an away interval. An absent or unclosed visibility event must yield unestablished timing, not a clean active duration.
+- Verify a class teacher can read only their pupils' recent browser-reported state; students and unrelated staff cannot read it. Do not interpret `unknown` as an absence or a diagnosis.
+- Record device, OS/browser version, event delivery result, server interval, expected active duration and observed active duration for each case. Require all cases to pass before setting `FOCUS_TIMING_VERIFIED=true`; school-device management, not the browser, owns any lock-down claim.
+
 ## Current status
 
 - Implemented on this feature branch: check-level fields, parser proposals, teacher-review material for both in-lesson and after-lesson questions, and a separate per-level mastery table. Server-marked attempts update the level row only when the check's level is approved; assisted correctness does not inflate the independent estimate. Legacy concept-wide mastery remains unchanged. Old in-lesson check sign-off hashes remain unchanged when no level is present.

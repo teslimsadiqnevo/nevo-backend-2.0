@@ -28,6 +28,7 @@ from nevo.access import accessible_lessons
 from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
+from nevo.core.config import get_settings
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.frontend_unblockers import (
     MAX_LESSON_UPLOAD_BYTES,
@@ -989,9 +990,10 @@ async def lesson_detail(
         )
     )
     recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
-    from nevo.api.lesson_review import approved_check_ids
+    from nevo.api.lesson_review import approved_check_ids, approved_level_ids
 
     reviewed_checks = await approved_check_ids(session, lesson.id)
+    reviewed_levels = await approved_level_ids(session, lesson.id) if not for_teacher else set()
     from nevo.api.lesson_review import _review_result
     review_complete = (await _review_result(session, lesson)).review_complete if for_teacher else False
     return {
@@ -1012,6 +1014,7 @@ async def lesson_detail(
                 segment_key="lesson-assessment",
                 presentation_seed=str(actor.id),
                 reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
+                reviewed_level_ids={qid for scope, qid in reviewed_levels if scope == "assessment"} if not for_teacher else None,
             )
             if for_teacher or question["teacherReviewed"]
         ],
@@ -1045,6 +1048,7 @@ async def lesson_detail(
                         question_offset=item.sequence_order - 1,
                         include_pending_guidance=for_teacher,
                         reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)} if not for_teacher else None,
                     ) if for_teacher or question["teacherReviewed"]
                 ],
                 "textVariant": item.text_variant,
@@ -1828,11 +1832,13 @@ async def save_lesson_question_attempt(
         question_snapshot=question,
         answer=payload.answer,
         correct=answer_matches(payload.answer, question),
-        response_time_ms=active_response_ms(
-            lesson_session,
-            payload.response_time_ms,
-            at=datetime.now(UTC),
-            segment_id=str(segment_id) if segment_id else None,
+        response_time_ms=(
+            active_response_ms(
+                lesson_session,
+                payload.response_time_ms,
+                at=datetime.now(UTC),
+                segment_id=str(segment_id) if segment_id else None,
+            ) if get_settings().focus_timing_verified else payload.response_time_ms
         ),
         hint_count=max(
             payload.hint_count,
@@ -3358,9 +3364,10 @@ async def _offline_package_payload(
     ).all()
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
-    from nevo.api.lesson_review import approved_check_ids
+    from nevo.api.lesson_review import approved_check_ids, approved_level_ids
 
     reviewed_checks = await approved_check_ids(session, lesson_id)
+    reviewed_levels = await approved_level_ids(session, lesson_id)
     modules = delivery_modules(lesson.id, segments, modules)
     # Built as a dict and then validated through OfflinePackage, so the shape
     # the spec publishes is the shape that actually ships. Ask B60.
@@ -3392,6 +3399,7 @@ async def _offline_package_payload(
                 segment_key="lesson-assessment",
                 presentation_seed=str(actor.id),
                 reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
+                reviewed_level_ids={qid for scope, qid in reviewed_levels if scope == "assessment"},
             ) if question["teacherReviewed"]
         ],
         "segments": [
@@ -3437,6 +3445,7 @@ async def _offline_package_payload(
                         presentation_seed=str(actor.id),
                         question_offset=item.sequence_order - 1,
                         reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
                     ) if question["teacherReviewed"]
                 ],
             }

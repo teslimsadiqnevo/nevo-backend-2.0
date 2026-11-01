@@ -1376,9 +1376,10 @@ async def lesson_detail(
         else None
     )
     recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
-    from nevo.api.lesson_review import approved_check_ids
+    from nevo.api.lesson_review import approved_check_ids, approved_level_ids
 
     reviewed_checks = await approved_check_ids(session, lesson.id)
+    reviewed_levels = await approved_level_ids(session, lesson.id) if actor.role == UserRole.STUDENT else set()
     return LessonDetailResponse(
         **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)).model_dump(
             by_alias=True
@@ -1392,6 +1393,7 @@ async def lesson_detail(
                 segment_key="lesson-assessment",
                 presentation_seed=str(actor.id),
                 reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
+                reviewed_level_ids={qid for scope, qid in reviewed_levels if scope == "assessment"} if actor.role == UserRole.STUDENT else None,
             )
             if actor.role != UserRole.STUDENT or item["teacherReviewed"]
         ],
@@ -1427,6 +1429,7 @@ async def lesson_detail(
                         question_offset=item.sequence_order - 1,
                         include_pending_guidance=actor.role != UserRole.STUDENT,
                         reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == str(item.id)},
+                        reviewed_level_ids={qid for scope, qid in reviewed_levels if scope == str(item.id)} if actor.role == UserRole.STUDENT else None,
                     )
                     if actor.role != UserRole.STUDENT or question["teacherReviewed"]
                 ],

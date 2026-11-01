@@ -25,6 +25,7 @@ router = APIRouter(prefix="/api/v1", tags=["learning product"])
 class AttentionTransition(BaseModel):
     action: Literal["away", "return"]
     segment_id: UUID = Field(alias="segmentId")
+    client_event_id: UUID | None = Field(default=None, alias="clientEventId")
 
 
 class AttentionState(CamelResponse):
@@ -73,7 +74,10 @@ async def record_attention_transition(
     segment = await session.get(LessonSegment, payload.segment_id)
     if segment is None or segment.lesson_id != sitting.lesson_id:
         raise HTTPException(404, detail={"code": "lesson_section_not_found"})
-    transition(sitting, action=payload.action, segment_id=str(segment.id))
+    transition(
+        sitting, action=payload.action, segment_id=str(segment.id),
+        client_event_id=str(payload.client_event_id) if payload.client_event_id else None,
+    )
     await session.commit()
     return _view(sitting)
 

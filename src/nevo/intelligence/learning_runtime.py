@@ -321,12 +321,22 @@ async def apply_marked_attempt(
     else:
         for name, value in values.items():
             setattr(row, name, value)
+    from nevo.core.config import get_settings
+
     level = question.get("masteryLevel")
-    if (
-        attempt.source in {"checkpoint", "assessment"}
+    collect_level = (
+        get_settings().collect_level_mastery
+        and attempt.source in {"checkpoint", "assessment"}
         and level in {"knowledge", "application", "analysis"}
         and question.get("teacherReviewed") is True
-    ):
+        and attempt.response_time_ms is not None
+    )
+    if collect_level:
+        from nevo.api.lesson_review import approved_level_ids
+
+        level_scope = "assessment" if attempt.source == "assessment" else str(attempt.segment_id)
+        collect_level = (level_scope, attempt.question_id) in await approved_level_ids(session, attempt.lesson_id)
+    if collect_level:
         level_row = await session.scalar(
             select(StudentConceptLevelMastery)
             .where(

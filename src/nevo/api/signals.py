@@ -507,6 +507,10 @@ async def ingest_signal_batch(
 
     def adjusted_data(event: SignalEventRequest) -> dict[str, Any]:
         data = dict(event.event_data)
+        from nevo.core.config import get_settings
+
+        if not get_settings().focus_timing_verified:
+            return data
         duration_key = (
             "durationMs" if event.event_type in {
                 SignalEventType.TIME_ON_SEGMENT,
@@ -520,7 +524,14 @@ async def ingest_signal_batch(
             data[duration_key] = 0
             data["awayTimingUnestablished"] = True
             return data
-        event_at = event.timestamp if event.timestamp.tzinfo is not None else datetime.now(UTC)
+        event_at = datetime.now(UTC)
+        if (
+            event.timestamp.tzinfo is None
+            or abs((event_at - event.timestamp).total_seconds()) > 30
+        ):
+            data["awayTimingUnestablished"] = True
+            data[duration_key] = 0
+            return data
         effective = active_response_ms(
             sitting, int(data[duration_key]),
             at=event_at,

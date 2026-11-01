@@ -894,14 +894,12 @@ async def approved_check_ids(session, lesson_id):
             segment.comprehension_checkpoints or [], segment_key=segment.segment_key
         )
         if question.get("authoredBy") == "person"
-        and (question.get("masteryLevel") is None or question.get("masteryLevelAuthoredBy") == "person")
         and question.get("answerKey") is not None
     }
     authored.update(
         ("assessment", str(question["id"]))
         for question in checkpoint_payloads(assessment, segment_key="lesson-assessment")
         if question.get("authoredBy") == "person"
-        and (question.get("masteryLevel") is None or question.get("masteryLevelAuthoredBy") == "person")
         and question.get("answerKey") is not None
     )
     if not material:
@@ -918,6 +916,43 @@ async def approved_check_ids(session, lesson_id):
     return authored | {(
         item["segmentId"] or "assessment", item["questionId"]
     ) for item in material}
+
+
+async def approved_level_ids(session, lesson_id):
+    lesson = await session.get(Lesson, lesson_id)
+    if lesson is None:
+        return set()
+    segments = list(await session.scalars(
+        select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
+        .order_by(LessonSegment.sequence_order, LessonSegment.id)
+    ))
+    material, _ = _checks_material(segments, lesson.assessment or [])
+    authored_levels = {
+        (str(segment.id) if segment else "assessment", str(question.get("id")))
+        for segment, questions in [
+            *((item, item.comprehension_checkpoints or []) for item in segments),
+            (None, lesson.assessment or []),
+        ]
+        for question in questions
+        if question.get("masteryLevel") in {"knowledge", "application", "analysis"}
+        and question.get("masteryLevelAuthoredBy") == "person"
+        and question.get("answerKey") is not None
+    }
+    if not material:
+        return authored_levels
+    approval = await session.scalar(
+        select(LessonReviewSignoff).where(
+            LessonReviewSignoff.lesson_id == lesson_id,
+            LessonReviewSignoff.kind == "checks",
+            LessonReviewSignoff.invalidated_at.is_(None),
+        ).order_by(LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc()).limit(1)
+    )
+    if approval is None or approval.content_hash != _hash(material):
+        return authored_levels
+    return authored_levels | {
+        (item["segmentId"] or "assessment", item["questionId"])
+        for item in material if item.get("masteryLevel") in {"knowledge", "application", "analysis"}
+    }
 
 
 def _guided_steps_material(segments):

@@ -63,6 +63,7 @@ from nevo.api.product_admin import merge_preferences
 from nevo.api.product_common import (
     actor_user,
     can_access_student,
+    can_be_class_teacher,
     require_approved_lessons,
     require_class_access,
     require_school_actor,
@@ -1727,7 +1728,7 @@ async def list_escalations(
         .where(User.school_id == actor.school_id)
         .order_by(Escalation.generated_at.desc())
     )
-    if actor.role is UserRole.TEACHER and not await holds_learning_support(session, actor):
+    if await can_be_class_teacher(session, actor) and not await holds_learning_support(session, actor):
         query = query.where(
             Escalation.student_id.in_(
                 select(StudentClassEnrollment.student_id)
@@ -2039,7 +2040,11 @@ async def message_threads(
             )
             await session.commit()
     query = select(MessageThread).where(MessageThread.school_id == user.school_id)
-    query = query.where(_thread_access_clause(user))
+    query = query.where(_thread_access_clause(
+        user,
+        teacher_scope=await can_be_class_teacher(session, user)
+        and not await holds_learning_support(session, user),
+    ))
     records = (await session.scalars(query.order_by(MessageThread.last_message_at.desc()))).all()
     threads = [await _thread_response(session, item, user.id) for item in records]
     return MessageThreadListResponse(threads=threads, total=len(threads))
@@ -2868,7 +2873,7 @@ async def flags_alias(
     query = select(AttentionFlag).order_by(AttentionFlag.generated_at.desc())
     if open_only:
         query = query.where(AttentionFlag.resolved_at.is_(None))
-    if actor.role is UserRole.TEACHER and not await holds_learning_support(session, actor):
+    if await can_be_class_teacher(session, actor) and not await holds_learning_support(session, actor):
         query = query.where(
             AttentionFlag.student_id.in_(
                 select(StudentClassEnrollment.student_id)
@@ -3507,7 +3512,11 @@ async def _require_thread_access(session, user_id: UUID, thread_id: UUID) -> Mes
     allowed = await session.scalar(
         select(MessageThread.id).where(
             MessageThread.id == thread.id,
-            _thread_access_clause(user),
+            _thread_access_clause(
+                user,
+                teacher_scope=await can_be_class_teacher(session, user)
+                and not await holds_learning_support(session, user),
+            ),
         )
     )
     if allowed is None:
@@ -3617,9 +3626,7 @@ async def _find_or_create_thread(
     return thread
 
 
-def _thread_access_clause(user: User):
-    if user.role in {UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}:
-        return MessageThread.school_id == user.school_id
+def _thread_access_clause(user: User, *, teacher_scope: bool = False):
     if user.role == UserRole.STUDENT:
         enrolled_classes = select(StudentClassEnrollment.class_id).where(
             StudentClassEnrollment.student_id == user.id
@@ -3628,7 +3635,7 @@ def _thread_access_clause(user: User):
             MessageThread.student_id == user.id,
             MessageThread.class_id.in_(enrolled_classes),
         )
-    if user.role == UserRole.TEACHER:
+    if user.role == UserRole.TEACHER or teacher_scope:
         assigned_classes = select(TeacherClassAssignment.class_id).where(
             TeacherClassAssignment.teacher_id == user.id,
             TeacherClassAssignment.removed_at.is_(None),
@@ -3636,11 +3643,15 @@ def _thread_access_clause(user: User):
         assigned_students = select(StudentClassEnrollment.student_id).where(
             StudentClassEnrollment.class_id.in_(assigned_classes)
         )
-        return or_(
-            MessageThread.created_by_id == user.id,
+        allowed = [
             MessageThread.class_id.in_(assigned_classes),
             MessageThread.student_id.in_(assigned_students),
-        )
+        ]
+        if user.role == UserRole.TEACHER:
+            allowed.append(MessageThread.created_by_id == user.id)
+        return or_(*allowed)
+    if user.role in {UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}:
+        return MessageThread.school_id == user.school_id
     if user.role == UserRole.PARENT_GUARDIAN:
         linked_students = select(ParentLink.student_id).where(ParentLink.parent_id == user.id)
         return MessageThread.student_id.in_(linked_students)

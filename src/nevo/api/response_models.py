@@ -322,6 +322,7 @@ class StudentSummaryResponse(CamelResponse):
 
 class StudentDetailResponse(CamelResponse):
     id: UUID
+    date_of_birth: date | None = None
     first_name: str | None
     last_name: str | None
     login_identifier: str | None
@@ -438,6 +439,7 @@ class InvitationResponse(CamelResponse):
 class RejectedInvitationResponse(CamelResponse):
     row: int
     reason: str
+    code: str | None = None
     value: str | None = None
 
 
@@ -491,6 +493,7 @@ class LessonSummaryResponse(CamelResponse):
     subject: str | None = None
     assignment_count: int = 0
     review_complete: bool = False
+    can_assign: bool = False
     #: Sum of the lesson's segment estimates, so a list view can show a
     #: duration without fetching every segment.
     estimated_minutes: int = 0

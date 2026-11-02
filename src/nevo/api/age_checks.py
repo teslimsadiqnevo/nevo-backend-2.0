@@ -33,6 +33,9 @@ class AgeCheckResponse(CamelResponse):
     student_first_name: str | None
     parent_name: str | None = None
     school_date_of_birth: date | None
+    operative_date_of_birth: date | None = None
+    operative_date_source: str | None = None
+    resolved_at: datetime | None = None
     state: AgeCheckState
     differs: bool
     blocks_access: bool
@@ -85,6 +88,9 @@ def _view(check, student, parent_name=None):
         student_first_name=student.first_name if student else None,
         parent_name=parent_name,
         school_date_of_birth=check.school_date_of_birth,
+        operative_date_of_birth=check.agreed_date_of_birth,
+        operative_date_source="parent_reconfirmation" if check.agreed_date_of_birth else None,
+        resolved_at=check.resolved_at,
         state=check.state,
         differs=check.school_date_of_birth != check.parent_date_of_birth,
         blocks_access=check.blocks_access,

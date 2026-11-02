@@ -1006,7 +1006,7 @@ def _guided_steps_material(segments):
     return material, views, pending_count
 
 
-async def review_complete_map(session, lesson_ids):
+async def review_complete_map(session, lesson_ids, *, require_checks=True):
     """Calculate library readiness without loading review media."""
     if not lesson_ids:
         return {}
@@ -1055,7 +1055,9 @@ async def review_complete_map(session, lesson_ids):
             segments, lessons[lesson_id].assessment or [] if lesson_id in lessons else []
         )
         materials = {"key_points": key_material, "rewrites": rewrites,
-                     "guided_steps": guided, "checks": checks}
+                     "guided_steps": guided}
+        if require_checks:
+            materials["checks"] = checks
         approvals = approvals_by_lesson[lesson_id]
         result[lesson_id] = bool(segments) and all(
             not material or (kind in approvals and _current_signoff(approvals[kind], material))
@@ -1117,8 +1119,7 @@ async def _review_result(session, lesson):
             "ready_to_assign": result.outstanding_count == 0
             and bool(approvals.get("key_points") and approvals["key_points"].current)
             and (not rewrites or bool(approvals.get("rewrites") and approvals["rewrites"].current))
-            and (not guided_material or bool(approvals.get("guided_steps") and approvals["guided_steps"].current))
-            and (not checks_material or bool(approvals.get("checks") and approvals["checks"].current)),
+            and (not guided_material or bool(approvals.get("guided_steps") and approvals["guided_steps"].current)),
             "key_points_content_hash": hashes["key_points"],
             "rewrites_content_hash": hashes["rewrites"],
             "key_point_approval": approvals.get("key_points"),

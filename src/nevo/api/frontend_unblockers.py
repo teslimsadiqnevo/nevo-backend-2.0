@@ -1268,11 +1268,20 @@ async def list_lessons(
         ).all()
     )
     authors = await _author_names(session, list(lessons))
+    from nevo.api.lesson_review import review_complete_map
+    from nevo.api.product_learning import _unapproved_counts
+
+    ids = [lesson.id for lesson in lessons]
+    complete = await review_complete_map(session, ids)
+    assignable = await review_complete_map(session, ids, require_checks=False)
+    unapproved = await _unapproved_counts(session, ids)
     return [
         _lesson_summary(
             item,
             assignment_count=int(counts.get(item.id, 0)),
             author_names=authors,
+            review_complete=complete.get(item.id, False),
+            can_assign=assignable.get(item.id, False) and unapproved.get(item.id, 0) == 0,
         )
         for item in lessons
     ]
@@ -1380,8 +1389,17 @@ async def lesson_detail(
 
     reviewed_checks = await approved_check_ids(session, lesson.id)
     reviewed_levels = await approved_level_ids(session, lesson.id) if actor.role == UserRole.STUDENT else set()
+    from nevo.api.lesson_review import _review_result
+    from nevo.api.product_learning import _unapproved_counts
+
+    review = await _review_result(session, lesson) if actor.role != UserRole.STUDENT else None
     return LessonDetailResponse(
-        **_lesson_summary(lesson, assignment_count=int(assignment_count or 0)).model_dump(
+        **_lesson_summary(
+            lesson, assignment_count=int(assignment_count or 0),
+            review_complete=review.review_complete if review else False,
+            can_assign=bool(review and review.ready_to_assign and
+                            (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) == 0),
+        ).model_dump(
             by_alias=True
         ),
         confirmationSummary=lesson.confirmation_summary,
@@ -3237,6 +3255,8 @@ def _lesson_summary(
     *,
     assignment_count: int = 0,
     author_names: dict[UUID, str] | None = None,
+    review_complete: bool = False,
+    can_assign: bool = False,
 ) -> LessonSummaryResponse:
     return LessonSummaryResponse(
         id=lesson.id,
@@ -3248,6 +3268,8 @@ def _lesson_summary(
         reviewSegmentCount=lesson.review_segment_count,
         subject=lesson.subject,
         assignmentCount=assignment_count,
+        reviewComplete=review_complete,
+        canAssign=can_assign,
         estimatedMinutes=lesson.estimated_minutes,
         createdById=lesson.created_by_user_id,
         createdByName=(author_names or {}).get(lesson.created_by_user_id),

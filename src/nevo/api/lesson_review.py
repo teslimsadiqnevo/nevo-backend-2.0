@@ -906,6 +906,23 @@ async def _bulk_approve(session, lesson, actor, payload, kind):
                 "message": "This lesson has no rewrites to approve.",
             },
         )
+    if kind == "rewrites":
+        from nevo.api.lesson_contracts import depth_retains_key_terms
+
+        invalid = [
+            {"segmentId": str(segment.id), "variant": key}
+            for segment in segments
+            for key in ("simplified", "expanded")
+            if isinstance(item := (segment.depth_variants or {}).get(key), dict)
+            and item.get("body")
+            and not depth_retains_key_terms(item, segment.text_variant)
+        ]
+        if invalid:
+            raise HTTPException(409, detail={
+                "code": "rewrite_missing_key_terms",
+                "message": "Edit the listed rewrites so they retain the lesson's key terms before approval.",
+                "rewrites": invalid,
+            })
     latest = await session.scalar(
         select(LessonReviewSignoff)
         .where(LessonReviewSignoff.lesson_id == lesson.id, LessonReviewSignoff.kind == kind)

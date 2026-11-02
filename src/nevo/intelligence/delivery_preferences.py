@@ -10,6 +10,7 @@ class LessonChoice(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     depth: Literal["original", "simplified", "expanded"] | None = None
     slower: bool | None = None
+    more_support: bool | None = Field(default=None, alias="moreSupport")
     updated_at: datetime | None = Field(default=None, alias="updatedAt")
 
 
@@ -22,6 +23,10 @@ class SegmentChoiceWrite(BaseModel):
     slower: bool | None = Field(
         default=None,
         description="Sitting-wide pacing choice; false explicitly switches Slower off.",
+    )
+    more_support: bool | None = Field(
+        default=None, alias="moreSupport",
+        description="Sitting-wide support choice; false explicitly switches it off.",
     )
 
 
@@ -56,7 +61,7 @@ def lesson_choices(sitting):
         key=lambda item: str(item.get("updatedAt") or ""),
     )
     for choice in previous:
-        for field in ("depth", "slower"):
+        for field in ("depth", "slower", "moreSupport"):
             if field in choice:
                 result[field] = choice[field]
                 result["updatedAt"] = choice.get("updatedAt")
@@ -93,10 +98,10 @@ def segment_choice(sitting, segment):
         if choice["modality"] not in student_modalities(segment):
             choice.pop("modality")
     if choice.get("depth") in {"simplified", "expanded"} and hasattr(segment, "depth_variants"):
-        from nevo.api.lesson_contracts import depth_approved
+        from nevo.api.lesson_contracts import depth_approved, depth_retains_key_terms
 
         variant = (segment.depth_variants or {}).get(choice["depth"])
-        if not variant or not depth_approved(variant):
+        if not variant or not depth_approved(variant) or not depth_retains_key_terms(variant, segment.text_variant):
             choice["depth"] = "original"
     return choice
 
@@ -105,9 +110,9 @@ def save_choice(sitting, segment, payload):
     delivery = dict(sitting.delivery_state or {})
     choices = dict(delivery.get("segmentChoices") or {})
     lesson = lesson_choices(sitting)
-    updates = payload.model_dump(exclude_unset=True, exclude={"updated_at"}, mode="json")
+    updates = payload.model_dump(exclude_unset=True, exclude={"updated_at"}, by_alias=True, mode="json")
     now = datetime.now(UTC).isoformat()
-    for field in ("depth", "slower"):
+    for field in ("depth", "slower", "moreSupport"):
         if field in updates:
             lesson[field] = updates[field]
             lesson["updatedAt"] = now

@@ -389,7 +389,7 @@ def depth_payloads(values, text_variant, *, for_student=False, reviewer_names=No
         item = values.get(key)
         if not isinstance(item, dict) or not item.get("body"):
             continue
-        if for_student and not depth_approved(item):
+        if for_student and (not depth_approved(item) or not depth_retains_key_terms(item, text_variant)):
             continue
         result[key] = {
             **item,
@@ -401,6 +401,19 @@ def depth_payloads(values, text_variant, *, for_student=False, reviewer_names=No
             "equationCallouts": source.get("equationCallouts") or [],
         }
     return result
+
+
+def depth_retains_key_terms(value, text_variant):
+    from nevo.content_parsing.depth import missing_key_terms
+
+    if not isinstance(value, dict):
+        return False
+    terms = [
+        str(item["term"])
+        for item in (text_variant or {}).get("keyTerms", [])
+        if isinstance(item, dict) and item.get("term")
+    ]
+    return not missing_key_terms(str(value.get("body") or ""), terms)
 
 
 def depth_approved(value):

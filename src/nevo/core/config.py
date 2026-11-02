@@ -36,6 +36,7 @@ class Settings(BaseSettings):
             "re-teaching routes and an always-reachable break."
         ),
     )
+    focus_timing_verified: bool = Field(default=False, validation_alias="FOCUS_TIMING_VERIFIED")
 
     @field_validator("database_url")
     @classmethod

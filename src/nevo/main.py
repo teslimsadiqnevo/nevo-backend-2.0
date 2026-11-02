@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from nevo.ai_gateway.config import AiGatewaySettings
 from nevo.ai_gateway.wiring import build_ai_gateway
 from nevo.api.admin import router as admin_router
+from nevo.api.application_attention import router as application_attention_router
 from nevo.api.age_checks import router as age_check_router
 from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.ask_nevo import router as ask_nevo_router
@@ -382,6 +383,7 @@ async def request_timing(request: Request, call_next):  # type: ignore[no-untype
 
 app.include_router(safety_retention_router)
 app.include_router(admin_router)
+app.include_router(application_attention_router)
 app.include_router(ai_gateway_router)
 app.include_router(age_check_router)
 app.include_router(ask_nevo_router)

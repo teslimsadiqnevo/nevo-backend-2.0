@@ -513,6 +513,7 @@ def _lesson_summary(
     author_names: dict[UUID, str] | None = None,
     unapproved_segment_count: int = 0,
     review_complete: bool = False,
+    can_assign: bool = False,
 ) -> dict[str, object]:
     return {
         "id": str(lesson.id),
@@ -525,6 +526,7 @@ def _lesson_summary(
         "subject": lesson.subject,
         "assignmentCount": assignment_count,
         "reviewComplete": review_complete,
+        "canAssign": can_assign,
         "estimatedMinutes": lesson.estimated_minutes,
         "createdById": str(lesson.created_by_user_id) if lesson.created_by_user_id else None,
         "createdByName": (author_names or {}).get(lesson.created_by_user_id),
@@ -879,6 +881,7 @@ async def lessons(
     from nevo.api.lesson_review import review_complete_map
 
     review_complete = await review_complete_map(session, [item.id for item in rows])
+    assignable = await review_complete_map(session, [item.id for item in rows], require_checks=False)
     return [
         _lesson_summary(
             item,
@@ -886,6 +889,7 @@ async def lessons(
             author_names=authors,
             unapproved_segment_count=outstanding.get(item.id, 0),
             review_complete=review_complete.get(item.id, False),
+            can_assign=assignable.get(item.id, False) and outstanding.get(item.id, 0) == 0,
         )
         for item in rows
     ]
@@ -972,15 +976,15 @@ async def lesson_detail(
 
     reviewed_checks = await approved_check_ids(session, lesson.id)
     from nevo.api.lesson_review import _review_result
-    review_complete = (await _review_result(session, lesson)).review_complete if for_teacher else False
+    review_state = await _review_result(session, lesson) if for_teacher else None
+    outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0)
     return {
         **_lesson_summary(
             lesson,
             assignment_count=int(assignment_count or 0),
-            review_complete=review_complete,
-            unapproved_segment_count=(await _unapproved_counts(session, [lesson.id])).get(
-                lesson.id, 0
-            ),
+            review_complete=review_state.review_complete if review_state else False,
+            can_assign=bool(review_state and review_state.ready_to_assign and outstanding == 0),
+            unapproved_segment_count=outstanding,
         ),
         "classes": await _classes_for_lesson(session, lesson.id),
         "confirmationSummary": lesson.confirmation_summary,

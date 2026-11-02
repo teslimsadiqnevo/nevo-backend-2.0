@@ -1360,6 +1360,7 @@ async def student_detail(
     consent = await student_consent_summaries(session, [student.id])
     return {
         "id": str(student.id),
+        "dateOfBirth": student.date_of_birth,
         "firstName": student.first_name,
         "lastName": student.last_name,
         "loginIdentifier": student.login_identifier,

@@ -253,7 +253,7 @@ async def require_approved_lessons(
     lessons = await session.scalars(select(Lesson).where(Lesson.id.in_(wanted)))
     for lesson in lessons:
         review = await _review_result(session, lesson)
-        if not review.review_complete:
+        if not review.ready_to_assign:
             section_counts[lesson.id] = max(1, section_counts.get(lesson.id, 0))
         else:
             section_counts.pop(lesson.id, None)

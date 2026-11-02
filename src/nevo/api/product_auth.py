@@ -1096,10 +1096,15 @@ async def create_bulk_invites(
                 )
             )
         except HTTPException as error:
+            detail = error.detail
             rejected.append(
                 {
                     "row": index + 1,
-                    "reason": str(error.detail),
+                    "reason": (
+                        detail.get("message") or detail.get("code") or "Invitation refused"
+                        if isinstance(detail, dict) else str(detail)
+                    ),
+                    "code": detail.get("code") if isinstance(detail, dict) else None,
                     "value": str(payload.email or payload.class_id or payload.role),
                 }
             )

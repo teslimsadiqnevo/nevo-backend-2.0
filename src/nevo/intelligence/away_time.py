@@ -45,6 +45,7 @@ def active_response_ms(sitting, reported_ms: int | None, *, at: datetime, segmen
 def transition(
     sitting, *, action: str, segment_id: str,
     client_event_id: str | None = None, at: datetime | None = None,
+    client_away_duration_ms: int | None = None,
 ) -> dict:
     now = at or datetime.now(UTC)
     delivery = dict(sitting.delivery_state or {})
@@ -60,6 +61,15 @@ def transition(
     elif action == "return" and open_interval is not None:
         if open_interval.get("segmentId") != segment_id:
             return attention
+        if client_away_duration_ms is not None:
+            measured_start = now - timedelta(milliseconds=client_away_duration_ms)
+            if measured_start < sitting.started_at:
+                measured_start = sitting.started_at
+            open_interval = {
+                **open_interval,
+                "awayAt": measured_start.isoformat(),
+                "timingSource": "client_elapsed_duration",
+            }
         closed = {**open_interval, "returnedAt": now.isoformat()}
         intervals = [*(attention.get("intervals") or []), closed]
         if len(intervals) > 200:

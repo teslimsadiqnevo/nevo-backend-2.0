@@ -26,6 +26,10 @@ class AttentionTransition(BaseModel):
     action: Literal["away", "return"]
     segment_id: UUID = Field(alias="segmentId")
     client_event_id: UUID | None = Field(default=None, alias="clientEventId")
+    client_away_duration_ms: int | None = Field(
+        default=None, alias="clientAwayDurationMs", ge=0, le=36_000_000,
+        description="Elapsed away time measured on the device; only valid on return.",
+    )
 
 
 class AttentionState(CamelResponse):
@@ -36,6 +40,7 @@ class AttentionState(CamelResponse):
     segment_id: UUID | None = None
     away_since: datetime | None = None
     recorded_at: datetime | None = None
+    timing_source: Literal["server_arrival", "client_elapsed_duration"] | None = None
     source: Literal["browser_visibility_report"] = "browser_visibility_report"
 
 
@@ -53,6 +58,7 @@ def _view(sitting: LessonSession) -> AttentionState:
         segment_id=current.get("segmentId"),
         away_since=current.get("awayAt"),
         recorded_at=recorded,
+        timing_source=(current or latest).get("timingSource", "server_arrival") if recorded else None,
     )
 
 
@@ -74,9 +80,12 @@ async def record_attention_transition(
     segment = await session.get(LessonSegment, payload.segment_id)
     if segment is None or segment.lesson_id != sitting.lesson_id:
         raise HTTPException(404, detail={"code": "lesson_section_not_found"})
+    if payload.client_away_duration_ms is not None and payload.action != "return":
+        raise HTTPException(422, detail={"code": "away_duration_requires_return"})
     transition(
         sitting, action=payload.action, segment_id=str(segment.id),
         client_event_id=str(payload.client_event_id) if payload.client_event_id else None,
+        client_away_duration_ms=payload.client_away_duration_ms,
     )
     await session.commit()
     return _view(sitting)

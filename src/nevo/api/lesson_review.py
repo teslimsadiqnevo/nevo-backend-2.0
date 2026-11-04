@@ -30,7 +30,12 @@ from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.api.ai_gateway import AiGatewayDependency, public_ai_error
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
-from nevo.api.lesson_contracts import GuidedCheckStep, depth_approved, explanation_reveals_answer
+from nevo.api.lesson_contracts import (
+    CalculationMiniStep,
+    GuidedCheckStep,
+    depth_approved,
+    explanation_reveals_answer,
+)
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
@@ -158,6 +163,65 @@ class GuidedStepsBulkReviewRequest(BaseModel):
     expected_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class GuidedReaskWrite(BaseModel):
+    model_config = CAMEL_CONFIG
+    reask_prompt: str = Field(min_length=8, max_length=500)
+
+
+@router.put(
+    "/lessons/{lesson_id}/segments/{segment_id}/guided-steps/{step_id}/reask",
+    response_model=LessonReviewResponse,
+)
+async def write_guided_reask(
+    lesson_id: UUID,
+    segment_id: UUID,
+    step_id: str,
+    payload: GuidedReaskWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    gateway: AiGatewayDependency,
+) -> LessonReviewResponse:
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    segment = await session.get(LessonSegment, segment_id, with_for_update=True)
+    if segment is None or segment.lesson_id != lesson.id:
+        raise HTTPException(404, detail={"code": "lesson_section_not_found"})
+    text = " ".join(payload.reask_prompt.split())
+    try:
+        await gateway.safety_guard.check(
+            text,
+            phase="lesson_source",
+            context=AiRequestContext(
+                requester_user_id=actor.id, school_id=actor.school_id, student_id=None,
+            ),
+        )
+    except AiGatewayError as error:
+        raise public_ai_error(error, audience="teacher") from error
+    checkpoints = [dict(question) for question in segment.comprehension_checkpoints or []]
+    changed = False
+    for question in checkpoints:
+        steps = [dict(step) for step in (
+            question.get("pendingGuidedSteps") or question.get("guidedSteps") or []
+        )]
+        for step in steps:
+            if str(step.get("id")) != step_id:
+                continue
+            if explanation_reveals_answer({**step, "explanation": text}):
+                raise HTTPException(422, detail={"code": "reask_reveals_answer"})
+            step["reaskPrompt"] = text
+            question["pendingGuidedSteps"] = steps
+            question["guidedStepsReviewStatus"] = "pending_review"
+            changed = True
+            break
+        if changed:
+            break
+    if not changed:
+        raise HTTPException(404, detail={"code": "guided_step_not_found"})
+    segment.comprehension_checkpoints = checkpoints
+    await _invalidate_signoffs(session, lesson.id, "guided_steps")
+    await session.commit()
+    return await _review_result(session, lesson)
+
+
 class CalculationPartsGenerationResponse(CamelResponse):
     lesson_id: UUID
     generated_step_count: int
@@ -165,6 +229,82 @@ class CalculationPartsGenerationResponse(CamelResponse):
     output_tokens: int
     estimated_cost_usd: str
     review: "LessonReviewResponse"
+
+
+class CalculationSupportWrite(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    concept_explanation: str | None = Field(default=None, min_length=12, max_length=1000)
+    mini_steps: list[CalculationMiniStep] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def has_support(self):
+        if not self.concept_explanation and not self.mini_steps:
+            raise ValueError("Provide a concept explanation or answerable mini-steps")
+        ids = [item.id for item in self.mini_steps]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Mini-step IDs must be unique within the step")
+        return self
+
+
+class CalculationSupportResponse(CamelResponse):
+    lesson_id: UUID
+    segment_id: UUID
+    step_id: str
+    approved_by: UUID
+    approved_at: datetime
+
+
+@router.put(
+    "/lessons/{lesson_id}/segments/{segment_id}/calculation-steps/{step_id}/support",
+    response_model=CalculationSupportResponse,
+)
+async def write_calculation_support(
+    lesson_id: UUID,
+    segment_id: UUID,
+    step_id: str,
+    payload: CalculationSupportWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    gateway: AiGatewayDependency,
+) -> CalculationSupportResponse:
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    segment = await session.get(LessonSegment, segment_id, with_for_update=True)
+    if segment is None or segment.lesson_id != lesson.id:
+        raise HTTPException(404, detail={"code": "lesson_section_not_found"})
+    variant = dict(segment.calculation_variant or {})
+    steps = [dict(step) for step in variant.get("steps", [])]
+    target = next((step for step in steps if str(step.get("stepId")) == step_id), None)
+    if target is None:
+        raise HTTPException(404, detail={"code": "calculation_step_not_found"})
+    support_text = "\n".join([
+        payload.concept_explanation or "",
+        *(mini.prompt for mini in payload.mini_steps),
+        *(option.label for mini in payload.mini_steps for option in mini.options),
+        *(str(mini.answer) for mini in payload.mini_steps),
+        *(str(answer) for mini in payload.mini_steps for answer in mini.accepted_answers),
+    ])
+    try:
+        await gateway.safety_guard.check(
+            support_text, phase="lesson_source",
+            context=AiRequestContext(
+                requester_user_id=actor.id, school_id=actor.school_id, student_id=None,
+            ),
+        )
+    except AiGatewayError as error:
+        raise public_ai_error(error, audience="teacher") from error
+    now = datetime.now(UTC)
+    target["conceptExplanation"] = payload.concept_explanation
+    target["miniSteps"] = [mini.model_dump(by_alias=True, exclude_none=True) for mini in payload.mini_steps]
+    target["supportReviewStatus"] = "approved"
+    target["supportApprovedBy"] = str(actor.id)
+    target["supportApprovedAt"] = now.isoformat()
+    segment.calculation_variant = {**variant, "steps": steps}
+    await session.commit()
+    return CalculationSupportResponse(
+        lesson_id=lesson.id, segment_id=segment.id, step_id=step_id,
+        approved_by=actor.id, approved_at=now,
+    )
 
 
 class ClassPracticalWrite(BaseModel):

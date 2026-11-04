@@ -1520,7 +1520,9 @@ async def lesson_detail(
                     else None
                 ),
                 calculationVariant=calculation_for_delivery(
-                    item.calculation_variant, for_teacher=actor.role != UserRole.STUDENT
+                    item.calculation_variant,
+                    for_teacher=actor.role != UserRole.STUDENT,
+                    segment_id=item.id,
                 ),
                 depthVariants=depth_payloads(
                     item.depth_variants,

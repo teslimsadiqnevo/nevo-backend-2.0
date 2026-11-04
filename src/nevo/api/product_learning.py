@@ -37,10 +37,12 @@ from nevo.api.frontend_unblockers import (
 )
 from nevo.api.learning_support import holds_learning_support, require_learning_support_if_admin
 from nevo.api.lesson_contracts import (
+    approved_calculation_support,
     calculation_for_delivery,
     checkpoint_payloads,
     depth_payloads,
     depth_reviewer_names,
+    mini_step_question_id,
     safety_reviewed_visual,
     student_activity,
     student_modalities,
@@ -727,6 +729,31 @@ async def _question_for_attempt(
                 }
                 for step in variant.get("steps", [])
             ]
+            for step in variant.get("steps", []):
+                if not approved_calculation_support(step):
+                    continue
+                for mini in step.get("miniSteps", []):
+                    if not isinstance(mini, dict) or mini.get("answer") is None:
+                        continue
+                    answer = mini.get("answer")
+                    questions.append({
+                        "id": mini_step_question_id(segment.id, step.get("stepId"), mini.get("id")),
+                        "prompt": mini.get("prompt"),
+                        "answerKey": answer,
+                        "acceptedAnswers": mini.get("acceptedAnswers") or [],
+                        "options": mini.get("options") or [],
+                        "hint": None,
+                        "conceptId": None,
+                        "answerType": "numeric" if mini.get("input") in {"tap", "number"}
+                        else "single_choice" if mini.get("input") == "choice"
+                        else "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷")
+                        else "text",
+                        "textDensity": 0.1,
+                        "calculationComplete": False,
+                        "isMiniStep": True,
+                        "supported": True,
+                        "supportStatus": "supported",
+                    })
             questions.append(
                 {
                     "id": str(segment.id),
@@ -1050,7 +1077,9 @@ async def lesson_detail(
                     and student_activity(item) is None
                     else {}
                 ),
-                "calculationVariant": calculation_for_delivery(item.calculation_variant, for_teacher=for_teacher),
+                "calculationVariant": calculation_for_delivery(
+                    item.calculation_variant, for_teacher=for_teacher, segment_id=item.id
+                ),
                 "depthVariants": depth_payloads(
                     item.depth_variants,
                     item.text_variant,
@@ -1815,7 +1844,7 @@ async def save_lesson_question_attempt(
     )
     session.add(record)
     await session.flush()
-    if segment:
+    if segment and not question.get("isMiniStep"):
         await note_attempt(session, lesson_session, segment, record)
     await apply_marked_attempt(session, actor, record)
     await session.commit()
@@ -3390,7 +3419,7 @@ async def _offline_package_payload(
                     ),
                     "audio": item.audio_variant,
                     "interactive": student_activity(item),
-                    "calculation": calculation_for_delivery(item.calculation_variant),
+                    "calculation": calculation_for_delivery(item.calculation_variant, segment_id=item.id),
                 },
                 # Offline too: the point of the offline package is a lesson
                 # that still adapts where there is no network, and an

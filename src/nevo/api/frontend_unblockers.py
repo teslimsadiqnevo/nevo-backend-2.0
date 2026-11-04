@@ -112,7 +112,7 @@ from nevo.db.models.frontend_support import (
 )
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.probe import ProbeItem
-from nevo.db.models.product import LessonModule
+from nevo.db.models.product import LessonModule, LessonProgress
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.subject import ClassSubject, SchoolSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
@@ -231,6 +231,17 @@ class ClassStudentResponse(BaseModel):
     consent: StudentConsentSummaryResponse
     admin_support_request_open: bool = False
     admin_support_requested_at: datetime | None = None
+
+
+class UnfinishedClassCheckResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    student_id: UUID
+    student_name: str
+    lesson_id: UUID
+    lesson_title: str
+    check_position: int
+    resumable_until: datetime
 
 
 class ConceptResponse(BaseModel):
@@ -834,6 +845,45 @@ async def upload_profile_photo(
     }
     await session.commit()
     return ProfilePhotoResponse(profileImageUrl=image_url)
+
+
+@router.get(
+    "/api/v1/classes/{class_id}/unfinished-checks",
+    response_model=list[UnfinishedClassCheckResponse],
+    tags=["learning product"],
+)
+async def class_unfinished_checks(
+    class_id: UUID, actor: TeacherScope, session: DatabaseSession,
+) -> list[UnfinishedClassCheckResponse]:
+    school_class = await session.get(Class, class_id)
+    if school_class is None or school_class.school_id != actor.school_id:
+        raise HTTPException(404, detail={"code": "class_not_found"})
+    teacher = await session.get(User, actor.user_id)
+    if teacher is None:
+        raise HTTPException(404, detail={"code": "class_not_found"})
+    await require_teacher_console_class(session, teacher, class_id)
+    now = datetime.now(UTC)
+    rows = (await session.execute(
+        select(LessonProgress, User, Lesson)
+        .join(User, User.id == LessonProgress.student_id)
+        .join(Lesson, Lesson.id == LessonProgress.lesson_id)
+        .join(StudentClassEnrollment, StudentClassEnrollment.student_id == User.id)
+        .where(
+            StudentClassEnrollment.class_id == class_id,
+            LessonProgress.status != "completed",
+            LessonProgress.check_position.is_not(None),
+            LessonProgress.check_resumable_until > now,
+        )
+        .order_by(User.first_name, User.last_name, Lesson.title)
+    )).all()
+    return [UnfinishedClassCheckResponse(
+        student_id=student.id,
+        student_name=_display_name(student),
+        lesson_id=lesson.id,
+        lesson_title=lesson.title,
+        check_position=progress.check_position,
+        resumable_until=progress.check_resumable_until,
+    ) for progress, student, lesson in rows]
 
 
 @router.get(
@@ -1455,6 +1505,8 @@ async def lesson_detail(
                 interactiveVariant=student_activity(item)
                 if actor.role == UserRole.STUDENT
                 else activity_for_delivery(item.interactive_variant, item.body),
+                classPractical=(item.interactive_variant or {}).get("classPractical")
+                if actor.role != UserRole.STUDENT else None,
                 activityAvailability=(
                     ActivityAvailability(
                         reachableByStudents=False,

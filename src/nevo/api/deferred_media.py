@@ -73,6 +73,42 @@ class VisualRestampRetry(CamelResponse):
     queued_count: int
 
 
+class FailedVisualReview(CamelResponse):
+    segment_id: UUID
+    segment_title: str | None
+    category: str
+    retryable: bool
+    checked_at: datetime | None
+
+
+@router.get(
+    "/lessons/{lesson_id}/visual-captions/failed",
+    response_model=list[FailedVisualReview],
+)
+async def failed_visual_reviews(
+    lesson_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+):
+    await _lesson(session, principal, lesson_id)
+    rows = (await session.execute(
+        select(VisualSafetyRestamp, LessonSegment)
+        .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
+        .where(
+            LessonSegment.lesson_id == lesson_id,
+            VisualSafetyRestamp.policy_version == POLICY_VERSION,
+            VisualSafetyRestamp.status == "failed",
+        )
+        .order_by(LessonSegment.sequence_order)
+    )).all()
+    return [FailedVisualReview(
+        segment_id=segment.id,
+        segment_title=segment.title,
+        category=restamp.failure_code or "review_failed",
+        retryable=restamp.failure_code == "review_unavailable",
+        checked_at=restamp.completed_at,
+    ) for restamp, segment in rows
+      if (segment.visual_variant or {}).get("storagePath") == restamp.storage_path]
+
+
 @router.post(
     "/lessons/{lesson_id}/visual-captions/retry-unavailable",
     response_model=VisualRestampRetry,

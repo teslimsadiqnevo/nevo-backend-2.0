@@ -1036,6 +1036,8 @@ async def lesson_detail(
                 "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body)
                 if for_teacher
                 else student_activity(item),
+                **({"classPractical": (item.interactive_variant or {}).get("classPractical")}
+                   if for_teacher else {}),
                 **(
                     {"activityAvailability": {
                         "reachableByStudents": False,

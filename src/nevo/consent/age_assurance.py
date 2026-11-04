@@ -208,6 +208,17 @@ async def notify_school_operative_date(session, check, now):
 async def apply_check(session, check, student, now, *, parent_actor=None):
     was_resolved = check.state == AgeCheckState.RESOLVED
     reasons = blocking_reasons(check)
+    if check.school_date_of_birth is None or check.parent_date_of_birth is None:
+        # An absent date is not a discrepancy and must not start the removal clock.
+        check.state = AgeCheckState.AWAITING_PARENT
+        check.school_notified_at = None
+        check.resolved_at = None
+        check.resolved_by_user_id = None
+        check.agreed_date_of_birth = None
+        check.hold_reasons = []
+        check.updated_at = now
+        await session.flush()
+        return
     dates_match = (
         check.school_date_of_birth is not None
         and check.school_date_of_birth == check.parent_date_of_birth
@@ -262,6 +273,9 @@ async def record_parent_date(session, *, school_id, student_id, born, now):
     check = await session.scalar(
         select(AgeCheck).where(AgeCheck.student_id == student_id).with_for_update()
     )
+    if born is None:
+        # Omitted DOB does not create a hold, and cannot clear a real one.
+        return check.state if check is not None else AgeCheckState.AWAITING_PARENT
     # Confirmation is final: later consent submissions cannot re-open activation.
     if check is not None and check.state in {AgeCheckState.MATCHED, AgeCheckState.RESOLVED}:
         return check.state

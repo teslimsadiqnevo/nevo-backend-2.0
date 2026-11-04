@@ -71,10 +71,12 @@ class DateRecheckRequest(CamelResponse):
 
 class AgeCheckEditResponse(CamelResponse):
     previous_school_date_of_birth: date | None
-    new_school_date_of_birth: date
+    new_school_date_of_birth: date | None
     actor_user_id: UUID | None
     actor_name: str
     changed_at: datetime
+    date_in_force: date | None = None
+    source: str = "school_recheck"
 
 
 def _view(check, student, parent_name=None):
@@ -205,7 +207,20 @@ async def school_recheck_history(
     rows = await session.scalars(select(AgeCheckEdit).where(
         AgeCheckEdit.age_check_id == age_check_id,
     ).order_by(AgeCheckEdit.changed_at, AgeCheckEdit.id))
-    return [AgeCheckEditResponse.model_validate(row, from_attributes=True) for row in rows]
+    history = [AgeCheckEditResponse.model_validate(row, from_attributes=True) for row in rows]
+    if check.resolved_at and check.agreed_date_of_birth:
+        parent = await session.get(User, check.resolved_by_user_id) if check.resolved_by_user_id else None
+        history.append(AgeCheckEditResponse(
+            previous_school_date_of_birth=check.school_date_of_birth,
+            new_school_date_of_birth=None,
+            actor_user_id=check.resolved_by_user_id,
+            actor_name=(" ".join(part for part in (parent.first_name, parent.last_name) if part)
+                        if parent else "Parent"),
+            changed_at=check.resolved_at,
+            date_in_force=check.agreed_date_of_birth,
+            source="parent_confirmation",
+        ))
+    return sorted(history, key=lambda item: item.changed_at)
 
 
 @router.post(

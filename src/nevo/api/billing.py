@@ -277,9 +277,18 @@ class InvoiceResponse(BaseModel):
         ),
         examples=[Decimal("7.50")],
     )
+    days_overdue: int = Field(default=0, alias="daysOverdue")
+    outstanding_count: int = Field(default=0, alias="outstandingCount")
+    outstanding_total: Decimal = Field(default=Decimal("0"), alias="outstandingTotal")
+    overdue_panel_applies: bool = Field(default=False, alias="overduePanelApplies")
 
     @classmethod
-    def from_record(cls, record: InvoiceRecord) -> "InvoiceResponse":
+    def from_record(
+        cls, record: InvoiceRecord, *, today: date | None = None,
+        outstanding_count: int = 0, outstanding_total: Decimal = Decimal("0"),
+        overdue_panel_applies: bool = False,
+    ) -> "InvoiceResponse":
+        today = today or datetime.now(UTC).date()
         return cls(
             id=record.id,
             invoice_number=record.invoice_number,
@@ -296,6 +305,10 @@ class InvoiceResponse(BaseModel):
             total_before_vat=record.total_before_vat,
             vat_amount=record.vat_amount,
             vat_rate=record.vat_rate,
+            days_overdue=max(0, (today - record.due_at).days) if record.status != InvoiceStatus.PAID else 0,
+            outstanding_count=outstanding_count,
+            outstanding_total=outstanding_total,
+            overdue_panel_applies=overdue_panel_applies,
         )
 
 
@@ -568,9 +581,21 @@ async def invoice_history(
             date_to=date_to,
             status=status_filter,
         )
+        all_records = await service.invoices(school_id=_school_id(actor))
     except BillingError as error:
         raise public_billing_error(error) from error
-    return [InvoiceResponse.from_record(record) for record in records]
+    today = datetime.now(UTC).date()
+    outstanding = [record for record in all_records if record.status != InvoiceStatus.PAID]
+    outstanding_total = sum((item.amount for item in outstanding), Decimal("0"))
+    overdue_panel_applies = any(item.due_at < today for item in outstanding)
+    return [
+        InvoiceResponse.from_record(
+            record, today=today, outstanding_count=len(outstanding),
+            outstanding_total=outstanding_total,
+            overdue_panel_applies=overdue_panel_applies,
+        )
+        for record in records
+    ]
 
 
 @router.get("/upcoming", response_model=UpcomingChargeResponse)

@@ -307,7 +307,11 @@ class EscalationResponse(BaseModel):
     id: UUID
     student_id: UUID = Field(alias="studentId")
     student_first_name: str | None = Field(alias="studentFirstName")
+    student_name: str | None = Field(default=None, alias="studentName")
+    class_id: UUID | None = Field(default=None, alias="classId")
+    class_name: str | None = Field(default=None, alias="className")
     teacher_id: UUID = Field(alias="teacherId")
+    teacher_name: str | None = Field(default=None, alias="teacherName")
     note: str
     recent_picture: str = Field(alias="recentPicture")
     generated_at: datetime = Field(alias="generatedAt")
@@ -1667,6 +1671,22 @@ async def create_lesson_assignments(
     return LessonAssignmentResponse(assignmentIds=created, createdCount=len(created))
 
 
+async def _escalation_class(session: DatabaseSession, student: User | None) -> Class | None:
+    if student is None:
+        return None
+    return await session.scalar(
+        select(Class)
+        .join(StudentClassEnrollment, StudentClassEnrollment.class_id == Class.id)
+        .where(
+            StudentClassEnrollment.student_id == student.id,
+            Class.school_id == student.school_id,
+            Class.archived_at.is_(None),
+        )
+        .order_by(Class.name)
+        .limit(1)
+    )
+
+
 @router.post(
     "/api/v1/escalations",
     response_model=EscalationResponse,
@@ -1694,12 +1714,18 @@ async def create_escalation(
     session.add(record)
     await session.flush()
     picture = await _recent_picture(session, payload.student_id)
+    school_class = await _escalation_class(session, student)
+    teacher = await session.get(User, actor.user_id)
     await session.commit()
     return EscalationResponse(
         id=record.id,
         studentId=record.student_id,
         studentFirstName=student.first_name if student else None,
+        studentName=_display_name(student) if student else None,
+        classId=school_class.id if school_class else None,
+        className=school_class.name if school_class else None,
         teacherId=record.teacher_id,
+        teacherName=_display_name(teacher) if teacher else None,
         note=record.teacher_note,
         recentPicture=picture,
         generatedAt=record.generated_at,
@@ -1726,6 +1752,8 @@ async def list_escalations(
     session: DatabaseSession,
     response: Response,
     open_only: Annotated[bool, Query(alias="openOnly")] = False,
+    student_id: Annotated[UUID | None, Query(alias="studentId")] = None,
+    class_id: Annotated[UUID | None, Query(alias="classId")] = None,
     limit: LimitQuery = DEFAULT_LIMIT,
     offset: OffsetQuery = 0,
 ) -> list[EscalationResponse]:
@@ -1756,6 +1784,14 @@ async def list_escalations(
         )
     if open_only:
         query = query.where(Escalation.acknowledged_at.is_(None))
+    if student_id is not None:
+        query = query.where(Escalation.student_id == student_id)
+    if class_id is not None:
+        query = query.where(Escalation.student_id.in_(
+            select(StudentClassEnrollment.student_id).where(
+                StudentClassEnrollment.class_id == class_id
+            )
+        ))
     total = int(
         await session.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     )
@@ -1764,12 +1800,18 @@ async def list_escalations(
     result: list[EscalationResponse] = []
     for record, student in rows:
         viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
+        teacher = await session.get(User, record.teacher_id)
+        school_class = await _escalation_class(session, student)
         result.append(
             EscalationResponse(
                 id=record.id,
                 studentId=record.student_id,
                 studentFirstName=student.first_name,
+                studentName=_display_name(student),
+                classId=school_class.id if school_class else None,
+                className=school_class.name if school_class else None,
                 teacherId=record.teacher_id,
+                teacherName=_display_name(teacher) if teacher else None,
                 note=record.teacher_note,
                 recentPicture=await _recent_picture(session, record.student_id),
                 generatedAt=record.generated_at,
@@ -1817,12 +1859,18 @@ async def acknowledge_escalation(
         record.acknowledged_at = datetime.now(UTC)
         record.acknowledged_by = actor.id
     picture = await _recent_picture(session, record.student_id)
+    school_class = await _escalation_class(session, student)
+    teacher = await session.get(User, record.teacher_id)
     await session.commit()
     return EscalationResponse(
         id=record.id,
         studentId=record.student_id,
         studentFirstName=student.first_name,
+        studentName=_display_name(student),
+        classId=school_class.id if school_class else None,
+        className=school_class.name if school_class else None,
         teacherId=record.teacher_id,
+        teacherName=_display_name(teacher) if teacher else None,
         note=record.teacher_note,
         recentPicture=picture,
         generatedAt=record.generated_at,

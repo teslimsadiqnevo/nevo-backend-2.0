@@ -14,14 +14,16 @@ hidden button, because a button is not a gate.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import logging
 import secrets
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +39,7 @@ from nevo.billing.service import quote_per_student
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.billing import Invoice
 from nevo.db.models.onboarding import OnboardingRow, SchoolOnboarding
+from nevo.db.models.product import SchoolInvitation
 from nevo.db.models.subject import ClassSubject, SubjectSpellingQuestion, TeacherSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.classes import (
@@ -57,6 +60,7 @@ from nevo.subjects.resolution import ensure
 from nevo.subjects.teacher_import import LEGACY_SEPARATORS, merge_rows
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
+logger = logging.getLogger(__name__)
 
 ADMIN_ROLES = {"senco_admin", "other_admin"}
 
@@ -188,6 +192,7 @@ class OnboardingState(CamelResponse):
     teachers_found: list[str] = Field(default_factory=list)
     teacher_details_found: list[FoundTeacherResponse] = Field(default_factory=list)
     student_count: int
+    delivery_warnings: list[str] = Field(default_factory=list)
     rejected: list[RejectedRow]
     #: Spellings that look like one class, each needing a yes or no before the
     #: headcount can be confirmed. Empty once every one is settled.
@@ -1085,6 +1090,7 @@ async def _commit_classes(
 async def activate(
     principal: PrincipalDependency,
     session: DatabaseSession,
+    request: Request,
 ) -> OnboardingState:
     """Create the accounts, once the invoice is paid and not before.
 
@@ -1114,12 +1120,58 @@ async def activate(
     school = await session.get(School, actor.school_id)
     assert school is not None
     rows = await _rows(session, record.id)
+    from nevo.notifications.email import ResendEmailDelivery
+
+    mailer = getattr(request.app.state, "email_delivery", None)
+    if not isinstance(mailer, ResendEmailDelivery) or not mailer.configured:
+        raise HTTPException(503, detail={"code": "email_provider_not_configured"})
+    if getattr(request.app.state, "consent_service", None) is None:
+        raise HTTPException(503, detail={"code": "consent_service_unavailable"})
     session_label = academic_session(datetime.now(UTC).date())
     classes = await _commit_classes(session, school, rows, session_label)
+    teacher_invites: list[tuple[SchoolInvitation, str]] = []
+    invited_teacher_ids: set[UUID] = set()
+    parent_requests: list[tuple[UUID, str, str]] = []
     for row in rows:
         if not row.countable:
             continue
-        await _create_person(session, school, row, classes)
+        person = await _create_person(session, school, row, classes)
+        if person is None:
+            continue
+        if (
+            person.role is UserRole.TEACHER
+            and person.status is UserStatus.INVITED
+            and person.id not in invited_teacher_ids
+        ):
+            invited_teacher_ids.add(person.id)
+            existing = await session.get(SchoolInvitation, person.id)
+            if existing is None:
+                token = secrets.token_urlsafe(32)
+                invitation = SchoolInvitation(
+                    id=person.id,
+                    school_id=school.id,
+                    role="teacher",
+                    first_name=person.first_name,
+                    last_name=person.last_name,
+                    email=person.email,
+                    token_digest=hashlib.sha256(token.encode()).hexdigest(),
+                    expires_at=datetime.now(UTC) + timedelta(days=14),
+                    created_by_id=actor.id,
+                )
+                session.add(invitation)
+                teacher_invites.append((invitation, token))
+        else:
+            values = row.values or {}
+            contact = str(values.get("guardian_email") or "").strip()
+            if contact:
+                parent_requests.append((
+                    person.id,
+                    " ".join(part for part in (
+                        str(values.get("guardian_first_name") or "").strip(),
+                        str(values.get("guardian_last_name") or "").strip(),
+                    ) if part),
+                    contact,
+                ))
     await session.flush()
     # Subjects after the accounts exist, because a teacher's subject list hangs
     # off their user row. Merged on email across every row that carried it, so
@@ -1131,6 +1183,31 @@ async def activate(
     await session.flush()
     state = await _state_for(session, record)
     await session.commit()
+    from nevo.api.product_auth import _send_invitation
+    from nevo.consent.entities import ConsentActor
+    from nevo.consent.service import DEFAULT_REQUESTED_CONSENT
+    from nevo.domain.consent.vocabulary import ParentContactMethod
+    for invitation, token in teacher_invites:
+        try:
+            await _send_invitation(mailer, invitation, token)
+        except Exception:
+            logger.exception("Could not deliver teacher invitation %s", invitation.id)
+            state.delivery_warnings.append(f"Teacher invitation {invitation.id} needs resending")
+    consent_service = getattr(request.app.state, "consent_service", None)
+    if consent_service is not None:
+        for student_id, parent_name, parent_contact in parent_requests:
+            try:
+                await consent_service.request_parent_consent(
+                    ConsentActor(user_id=actor.id, school_id=school.id),
+                    student_id=student_id,
+                    parent_name=parent_name,
+                    parent_contact=parent_contact,
+                    contact_method=ParentContactMethod.EMAIL,
+                    consent_types=DEFAULT_REQUESTED_CONSENT,
+                )
+            except Exception:
+                logger.exception("Could not queue parent consent for student %s", student_id)
+                state.delivery_warnings.append(f"Parent consent for student {student_id} needs resending")
     return state
 
 
@@ -1236,7 +1313,7 @@ async def _create_person(
     school: School,
     row: OnboardingRow,
     classes: dict[str, Class],
-) -> None:
+) -> User | None:
     """One roster row becomes one account.
 
     Students arrive active: their parent still has to consent before they can
@@ -1261,8 +1338,15 @@ async def _create_person(
                 func.lower(User.admission_number) == admission_number.lower(),
             )
         )
+    if not is_student:
+        email = (values.get("email") or "").strip().casefold()
+        user = await session.scalar(select(User).where(
+            User.school_id == school.id,
+            User.role == UserRole.TEACHER,
+            func.lower(User.email) == email,
+        ))
     if user is not None:
-        return
+        return user if not is_student else None
     else:
         user = User(
             school_id=school.id,
@@ -1280,6 +1364,7 @@ async def _create_person(
     school_class = classes.get(row.normalised_class_name or "")
     if is_student and school_class is not None:
         await _hold_enrollment(session, user.id, school_class.id)
+    return user
 
 
 async def _hold_enrollment(session: AsyncSession, student_id: UUID, class_id: UUID) -> None:

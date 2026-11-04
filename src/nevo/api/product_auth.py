@@ -594,7 +594,10 @@ async def request_pin_reset(
             select(User).where(
                 User.school_id == school.id,
                 User.role == UserRole.STUDENT,
-                func.lower(User.login_identifier) == payload.login_identifier.casefold(),
+                or_(
+                    func.lower(User.login_identifier) == payload.login_identifier.casefold(),
+                    func.lower(User.admission_number) == payload.login_identifier.casefold(),
+                ),
             )
         )
     if student and school:
@@ -628,9 +631,11 @@ async def request_pin_reset(
                     StudentClassEnrollment,
                     StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
                 )
+                .join(User, User.id == TeacherClassAssignment.teacher_id)
                 .where(
                     StudentClassEnrollment.student_id == student.id,
                     TeacherClassAssignment.removed_at.is_(None),
+                    User.status == UserStatus.ACTIVE,
                 )
                 .order_by(TeacherClassAssignment.class_id)
             )
@@ -696,6 +701,7 @@ async def list_auth_sessions(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> list[dict[str, object]]:
+    now = datetime.now(UTC)
     rows = (
         await session.scalars(
             select(AuthSession)
@@ -710,7 +716,7 @@ async def list_auth_sessions(
             "createdAt": item.created_at,
             "lastSeenAt": item.last_seen_at,
             "expiresAt": item.expires_at,
-            "active": item.revoked_at is None,
+            "active": item.revoked_at is None and item.expires_at > now,
         }
         for item in rows
     ]

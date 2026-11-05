@@ -494,6 +494,7 @@ class LessonSummaryResponse(CamelResponse):
     subject: str | None = None
     assignment_count: int = 0
     review_complete: bool = False
+    can_assign: bool = False
     #: Sum of the lesson's segment estimates, so a list view can show a
     #: duration without fetching every segment.
     estimated_minutes: int = 0
@@ -578,6 +579,7 @@ class LessonSegmentResponse(CamelResponse):
     interactive_variant: InteractiveVariant | None = None
     class_practical: ClassPractical | None = None
     activity_availability: "ActivityAvailability | None" = None
+    class_practical: ClassPractical | None = None
     calculation_variant: CalculationVariant | None = None
     #: The simpler and the longer version of ``body``. The adaptation plan's
     #: ``simplify`` and ``expand`` actions read from here; null means fall
@@ -846,6 +848,7 @@ class LearningWorkResponse(CamelResponse):
     segment_id: UUID | None
     segment_position: int
     kind: Literal["review", "new_work"]
+    review_question_id: str | None = None
 
 
 class StudentDashboardResponse(CamelResponse):

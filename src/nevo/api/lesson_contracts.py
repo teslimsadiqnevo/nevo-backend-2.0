@@ -282,6 +282,19 @@ class ComprehensionCheckpoint(BaseModel):
         return value
 
     id: str
+    mastery_level: Literal["knowledge", "application", "analysis"] | None = Field(
+        default=None,
+        alias="masteryLevel",
+        description="Curriculum level assessed by this check; null means unestablished.",
+    )
+    mastery_level_authored_by: Literal["person", "nevo"] | None = Field(
+        default=None,
+        alias="masteryLevelAuthoredBy",
+        description="An inferred level requires teacher review before it contributes level-specific evidence.",
+    )
+    transfer_kind: Literal["application_a", "application_b", "comparison", "diagnosis"] | None = Field(default=None, alias="transferKind")
+    transfer_context: str | None = Field(default=None, alias="transferContext")
+    source_segment_id: UUID | None = Field(default=None, alias="sourceSegmentId")
     concept_id: UUID | None = Field(default=None, alias="conceptId")
     concept_name: str | None = Field(default=None, alias="conceptName")
     prompt: str
@@ -1186,6 +1199,7 @@ def checkpoint_payloads(
     question_offset: int = 0,
     include_pending_guidance: bool = False,
     reviewed_question_ids: set[str] | None = None,
+    reviewed_level_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """Normalize older parser output into the documented checkpoint contract."""
     result: list[dict[str, object]] = []
@@ -1263,6 +1277,14 @@ def checkpoint_payloads(
         rendered = question.model_dump(by_alias=True, mode="json")
         rendered["teacherReviewed"] = str(rendered["id"]) in (reviewed_question_ids or set())
         if (
+            reviewed_level_ids is not None
+            and rendered.get("masteryLevel") is not None
+            and rendered.get("masteryLevelAuthoredBy") != "person"
+            and str(rendered["id"]) not in reviewed_level_ids
+        ):
+            rendered["masteryLevel"] = None
+            rendered["masteryLevelAuthoredBy"] = None
+        if (
             not include_pending_guidance
             and rendered.get("guidedStepsReviewStatus") == "pending_review"
         ):
@@ -1288,6 +1310,7 @@ def student_checkpoint_payloads(
     values: list[dict[str, object]], *, segment_key: str,
     reviewed_question_ids: set[str], presentation_seed: str = "lesson",
     question_offset: int = 0, concept_id: UUID | None = None,
+    reviewed_level_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """Never deliver a generated question before its current teacher sign-off."""
     return [
@@ -1295,6 +1318,7 @@ def student_checkpoint_payloads(
             values, segment_key=segment_key, reviewed_question_ids=reviewed_question_ids,
             presentation_seed=presentation_seed, question_offset=question_offset,
             concept_id=concept_id,
+            reviewed_level_ids=reviewed_level_ids if reviewed_level_ids is not None else set(),
         )
         if question["teacherReviewed"] and question.get("answerKey") is not None
     ]

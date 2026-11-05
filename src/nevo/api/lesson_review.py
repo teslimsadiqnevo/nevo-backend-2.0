@@ -34,6 +34,7 @@ from nevo.api.dependencies import DatabaseSession
 from nevo.api.lesson_contracts import (
     CalculationMiniStep,
     GuidedCheckStep,
+    checkpoint_payloads,
     depth_approved,
     explanation_reveals_answer,
 )
@@ -45,6 +46,7 @@ from nevo.db.models.account import User
 from nevo.db.models.ai_gateway import AiGatewayCall
 from nevo.db.models.content import Lesson, LessonKeyPoint, LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
+from nevo.db.models.frontend_support import Concept
 from nevo.db.models.lesson_signoff import LessonReviewSignoff
 from nevo.domain.ai_gateway.vocabulary import AiService
 from nevo.domain.intelligence.vocabulary import KeyPointConfidence, KeyPointReviewState
@@ -118,13 +120,19 @@ class CalculationPartsReviewItem(CamelResponse):
 
 
 class CheckReviewItem(CamelResponse):
-    segment_id: UUID
+    segment_id: UUID | None
+    scope: Literal["checkpoint", "assessment"] = "checkpoint"
     segment_title: str | None
     question_id: str
     question_prompt: str
     question_answer_type: str
     question_options: list[dict[str, object]] = Field(default_factory=list)
     question_answer_key: object
+    mastery_level: Literal["knowledge", "application", "analysis"] | None = None
+    mastery_level_authored_by: Literal["person", "nevo"] | None = None
+    transfer_kind: str | None = None
+    transfer_context: str | None = None
+    source_segment_id: UUID | None = None
     teacher_reviewed: bool = False
     markable: bool = True
 
@@ -305,6 +313,20 @@ async def write_calculation_support(
         lesson_id=lesson.id, segment_id=segment.id, step_id=step_id,
         approved_by=actor.id, approved_at=now,
     )
+class TransferGenerationRequest(BaseModel):
+    model_config = CAMEL_CONFIG
+    concept_id: UUID
+
+
+class TransferGenerationResponse(CamelResponse):
+    lesson_id: UUID
+    concept_id: UUID
+    generated_count: int
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: str
+    ai_call_id: UUID
+    review: "LessonReviewResponse"
 
 
 class ClassPracticalWrite(BaseModel):
@@ -378,7 +400,120 @@ async def approve_class_practical(
     }
     segment.interactive_variant = {**variant, "classPractical": record}
     await session.commit()
-    return ClassPracticalResponse(lesson_id=lesson.id, segment_id=segment.id, **record)
+    return ClassPracticalResponse(
+        lesson_id=lesson.id, segment_id=segment.id, **record,
+    )
+
+
+@router.post(
+    "/lessons/{lesson_id}/transfer-items/generate",
+    response_model=TransferGenerationResponse,
+)
+async def generate_transfer_items(
+    lesson_id: UUID,
+    payload: TransferGenerationRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    gateway: AiGatewayDependency,
+):
+    """Generate one bounded, review-required transfer set for a lesson concept."""
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    concept = await session.get(Concept, payload.concept_id)
+    if concept is None or concept.school_id != lesson.school_id:
+        raise HTTPException(404, detail={"code": "lesson_concept_not_found"})
+    existing = [
+        item for item in lesson.assessment or []
+        if item.get("transferKind") and str(item.get("conceptId")) == str(concept.id)
+    ]
+    if existing:
+        raise HTTPException(409, detail={"code": "transfer_items_exist"})
+    segments = list(await session.scalars(
+        select(LessonSegment).where(
+            LessonSegment.lesson_id == lesson.id,
+            LessonSegment.concept_id == concept.id,
+        ).order_by(LessonSegment.sequence_order)
+    ))
+    if not segments:
+        raise HTTPException(409, detail={"code": "concept_has_no_source_section"})
+    source = "\n\n".join(segment.body for segment in segments)[:12000]
+    segment_id = segments[0].id
+    concept_name = concept.name
+    await session.commit()
+    try:
+        result = await gateway.generate(AiGenerationRequest(
+            requester_user_id=actor.id,
+            service=AiService.LESSON_GENERATION,
+            prompt_name="content_transfer.default",
+            variables={"concept_name": concept_name, "source_text": source},
+            max_output_tokens=4096,
+            timeout_seconds=90,
+            json_output=True,
+        ))
+    except AiGatewayError as error:
+        raise public_ai_error(error, audience="teacher") from error
+    if result.fallback_used or result.stop_reason == "max_tokens":
+        raise HTTPException(503, detail={"code": "transfer_generation_unavailable"})
+    try:
+        rows = _json_payload(result.text)["items"]
+        kinds = {"application_a", "application_b", "comparison", "diagnosis"}
+        if not isinstance(rows, list) or len(rows) != 4 or {
+            row.get("kind") for row in rows if isinstance(row, dict)
+        } != kinds:
+            raise ValueError("Expected four distinct transfer kinds")
+        contexts = {row["kind"]: str(row.get("context") or "").strip() for row in rows}
+        first_context = set(contexts["application_a"].casefold().split())
+        second_context = set(contexts["application_b"].casefold().split())
+        overlap = len(first_context & second_context) / max(1, len(first_context | second_context))
+        if any(len(value) < 12 for value in contexts.values()) or overlap >= 0.8:
+            raise ValueError("Transfer contexts are missing or identical")
+        questions = []
+        for row in rows:
+            kind = row["kind"]
+            level = "application" if kind.startswith("application") else "analysis"
+            question = {
+                "id": f"transfer-{lesson_id.hex[:12]}-{concept.id.hex[:12]}-{kind}",
+                "conceptId": str(concept.id),
+                "conceptName": concept_name,
+                "sourceSegmentId": str(segment_id),
+                "transferKind": kind,
+                "transferContext": str(row["context"]).strip(),
+                "prompt": row["prompt"],
+                "answerType": "single_choice",
+                "options": row["options"],
+                "answerKey": row["answerKey"],
+                "explanation": row.get("explanation"),
+                "authoredBy": "nevo",
+                "masteryLevel": level,
+                "masteryLevelAuthoredBy": "nevo",
+            }
+            normalized = checkpoint_payloads([question], segment_key="transfer", strict=True)[0]
+            if len(normalized["options"]) < 3:
+                raise ValueError("Transfer item needs at least three options")
+            questions.append(question)
+        if len({str(item["prompt"]).casefold().strip() for item in questions}) != len(questions):
+            raise ValueError("Transfer items repeat a question")
+    except (KeyError, TypeError, ValueError, DepthVariantError) as error:
+        raise HTTPException(502, detail={"code": "transfer_generation_invalid_output"}) from error
+    lesson = await session.get(Lesson, lesson_id, with_for_update=True)
+    if any(
+        item.get("transferKind") and str(item.get("conceptId")) == str(concept.id)
+        for item in lesson.assessment or []
+    ):
+        raise HTTPException(409, detail={"code": "transfer_items_exist"})
+    lesson.assessment = [*(lesson.assessment or []), *questions]
+    await _invalidate_signoffs(session, lesson.id, "checks")
+    await session.commit()
+    audit = await session.get(AiGatewayCall, result.call_id)
+    return TransferGenerationResponse(
+        lesson_id=lesson_id,
+        concept_id=concept.id,
+        generated_count=len(questions),
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        estimated_cost_usd=str(audit.estimated_cost_usd if audit else 0),
+        ai_call_id=result.call_id,
+        review=await _review_result(session, lesson),
+    )
 
 
 @router.post(
@@ -827,15 +962,24 @@ def _checks_material(segments, lesson=None):
 
     material = []
     views = []
-    sources = [(segment.id, segment.title, segment.segment_key, segment.comprehension_checkpoints or [])
-               for segment in segments]
+    # The end-of-lesson questions are owned by the lesson's own id, as on main, so
+    # a checks sign-off given before levels existed still matches its hash. Level
+    # and transfer details join an item only where the question carries them.
+    sources = [
+        (segment.id, segment.title, segment.segment_key,
+         segment.comprehension_checkpoints or [], "checkpoint")
+        for segment in segments
+    ]
     if lesson is not None:
-        sources.append((lesson.id, "End-of-lesson check", "lesson-assessment", lesson.assessment or []))
-    for segment_id, segment_title, segment_key, raw_questions in sources:
+        sources.append((lesson.id, "End-of-lesson check", "lesson-assessment",
+                        lesson.assessment or [], "assessment"))
+    for segment_id, segment_title, segment_key, raw_questions, scope in sources:
+        raw_by_id = {str(item.get("id")): item for item in raw_questions if isinstance(item, dict)}
         questions = checkpoint_payloads(
             raw_questions, segment_key=segment_key
         )
         for question in questions:
+            raw = raw_by_id.get(str(question["id"]), {})
             item = {
                 "segmentId": str(segment_id),
                 "questionId": str(question["id"]),
@@ -844,16 +988,32 @@ def _checks_material(segments, lesson=None):
                 "questionOptions": question.get("options") or [],
                 "questionAnswerKey": question["answerKey"],
             }
+            if question.get("masteryLevel") is not None:
+                item["masteryLevel"] = question["masteryLevel"]
+                item["masteryLevelAuthoredBy"] = question.get("masteryLevelAuthoredBy")
+            if raw.get("transferKind"):
+                item["transferKind"] = raw["transferKind"]
+                item["transferContext"] = raw.get("transferContext")
+                item["sourceSegmentId"] = raw.get("sourceSegmentId")
             authored = question.get("authoredBy") == "person"
+            inferred_level = (
+                item.get("masteryLevel") is not None
+                and item.get("masteryLevelAuthoredBy") != "person"
+            )
             markable = bool(item["questionPrompt"] and item["questionAnswerKey"] is not None)
-            if not authored and markable:
+            if (not authored or inferred_level) and markable:
                 material.append(item)
             views.append(CheckReviewItem(
-                segment_id=segment_id, segment_title=segment_title,
+                segment_id=segment_id, segment_title=segment_title, scope=scope,
                 question_id=item["questionId"], question_prompt=item["questionPrompt"],
                 question_answer_type=item["questionAnswerType"],
                 question_options=item["questionOptions"], question_answer_key=item["questionAnswerKey"],
-                teacher_reviewed=authored and markable,
+                mastery_level=item.get("masteryLevel"),
+                mastery_level_authored_by=item.get("masteryLevelAuthoredBy"),
+                transfer_kind=item.get("transferKind"),
+                transfer_context=item.get("transferContext"),
+                source_segment_id=item.get("sourceSegmentId"),
+                teacher_reviewed=authored and not inferred_level and markable,
                 markable=markable,
             ))
     return material, views
@@ -878,7 +1038,8 @@ async def approved_check_ids(session, lesson_id):
         for question in checkpoint_payloads(
             raw_questions, segment_key=segment_key
         )
-        if question.get("authoredBy") == "person" and question.get("answerKey") is not None
+        if question.get("authoredBy") == "person"
+        and question.get("answerKey") is not None
     }
     if not material:
         return authored
@@ -897,6 +1058,48 @@ async def approved_check_ids(session, lesson_id):
         legacy_material, _ = _checks_material(segments)
         approved = legacy_material if approval.content_hash == _hash(legacy_material) else []
     return authored | {(item["segmentId"], item["questionId"]) for item in approved}
+
+
+async def approved_level_ids(session, lesson_id):
+    """Question ids whose mastery level a person wrote or the current checks sign-off covers.
+
+    Keys match approved_check_ids: (owner id, question id), where the owner of an
+    end-of-lesson question is the lesson itself.
+    """
+    lesson = await session.get(Lesson, lesson_id)
+    if lesson is None:
+        return set()
+    segments = list(await session.scalars(
+        select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
+        .order_by(LessonSegment.sequence_order, LessonSegment.id)
+    ))
+    material, _ = _checks_material(segments, lesson)
+    authored_levels = {
+        (str(owner_id), str(question.get("id")))
+        for owner_id, questions in [
+            *((item.id, item.comprehension_checkpoints or []) for item in segments),
+            (lesson.id, lesson.assessment or []),
+        ]
+        for question in questions
+        if question.get("masteryLevel") in {"knowledge", "application", "analysis"}
+        and question.get("masteryLevelAuthoredBy") == "person"
+        and question.get("answerKey") is not None
+    }
+    if not material:
+        return authored_levels
+    approval = await session.scalar(
+        select(LessonReviewSignoff).where(
+            LessonReviewSignoff.lesson_id == lesson_id,
+            LessonReviewSignoff.kind == "checks",
+            LessonReviewSignoff.invalidated_at.is_(None),
+        ).order_by(LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc()).limit(1)
+    )
+    if approval is None or approval.content_hash != _hash(material):
+        return authored_levels
+    return authored_levels | {
+        (item["segmentId"], item["questionId"])
+        for item in material if item.get("masteryLevel") in {"knowledge", "application", "analysis"}
+    }
 
 
 def _guided_steps_material(segments):

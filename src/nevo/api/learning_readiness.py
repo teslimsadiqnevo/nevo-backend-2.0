@@ -272,6 +272,7 @@ class NextWorkResponse(CamelResponse):
     segment_id: UUID | None
     segment_position: int = Field(ge=0, description="Zero-based position in lesson delivery order.")
     kind: Literal["review", "new_work"]
+    review_question_id: str | None = None
 
 
 @router.get("/students/me/next-work", response_model=NextWorkResponse | None)

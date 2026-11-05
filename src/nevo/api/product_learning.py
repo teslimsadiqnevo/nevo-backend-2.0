@@ -28,6 +28,7 @@ from nevo.access import accessible_lessons
 from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
+from nevo.core.config import get_settings
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.frontend_unblockers import (
     MAX_LESSON_UPLOAD_BYTES,
@@ -697,10 +698,16 @@ async def _question_for_attempt(
     presentation_seed: str = "lesson",
 ) -> tuple[dict[str, object], UUID | None]:
     if payload.source == "assessment":
+        from nevo.api.lesson_review import approved_check_ids
+
+        approved = await approved_check_ids(session, lesson.id)
         questions = checkpoint_payloads(
             lesson.assessment or [],
             segment_key="lesson-assessment",
             presentation_seed=presentation_seed,
+            reviewed_question_ids={
+                question_id for owner_id, question_id in approved if owner_id == str(lesson.id)
+            },
         )
         segment_id = None
     else:
@@ -769,11 +776,18 @@ async def _question_for_attempt(
                 }
             )
         else:
+            from nevo.api.lesson_review import approved_check_ids
+
+            approved = await approved_check_ids(session, lesson.id)
             questions = checkpoint_payloads(
                 segment.comprehension_checkpoints,
                 segment_key=segment.segment_key,
                 concept_id=segment.concept_id,
                 presentation_seed=presentation_seed,
+                reviewed_question_ids={
+                    question_id for approved_segment_id, question_id in approved
+                    if approved_segment_id == str(segment.id)
+                },
             )
         segment_id = segment.id
     question = next(
@@ -1007,9 +1021,10 @@ async def lesson_detail(
         )
     )
     recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
-    from nevo.api.lesson_review import approved_check_ids
+    from nevo.api.lesson_review import approved_check_ids, approved_level_ids
 
     reviewed_checks = await approved_check_ids(session, lesson.id)
+    reviewed_levels = await approved_level_ids(session, lesson.id) if not for_teacher else set()
     from nevo.api.lesson_review import _review_result
     review_state = await _review_result(session, lesson) if for_teacher else None
     outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0)
@@ -1029,6 +1044,7 @@ async def lesson_detail(
             if for_teacher else student_checkpoint_payloads(
                 lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
                 reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+                reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(lesson.id)},
             )
         ),
         "segments": [
@@ -1063,6 +1079,7 @@ async def lesson_detail(
                         item.comprehension_checkpoints, segment_key=item.segment_key,
                         presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
                         reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
                     )
                 ),
                 "textVariant": item.text_variant,
@@ -1834,6 +1851,7 @@ async def save_lesson_question_attempt(
         or 1
     )
     from nevo.content_parsing.answers import answer_matches
+    from nevo.intelligence.away_time import active_response_ms
 
     record = LessonQuestionAttempt(
         student_id=actor.id,
@@ -1847,7 +1865,14 @@ async def save_lesson_question_attempt(
         question_snapshot=question,
         answer=payload.answer,
         correct=answer_matches(payload.answer, question),
-        response_time_ms=payload.response_time_ms,
+        response_time_ms=(
+            active_response_ms(
+                lesson_session,
+                payload.response_time_ms,
+                at=datetime.now(UTC),
+                segment_id=str(segment_id) if segment_id else None,
+            ) if get_settings().focus_timing_verified else payload.response_time_ms
+        ),
         hint_count=max(
             payload.hint_count,
             int(
@@ -3372,9 +3397,10 @@ async def _offline_package_payload(
     ).all()
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
-    from nevo.api.lesson_review import approved_check_ids
+    from nevo.api.lesson_review import approved_check_ids, approved_level_ids
 
     reviewed_checks = await approved_check_ids(session, lesson_id)
+    reviewed_levels = await approved_level_ids(session, lesson_id)
     modules = delivery_modules(lesson.id, segments, modules)
     # Built as a dict and then validated through OfflinePackage, so the shape
     # the spec publishes is the shape that actually ships. Ask B60.
@@ -3405,6 +3431,7 @@ async def _offline_package_payload(
             segment_key="lesson-assessment",
             presentation_seed=str(actor.id),
             reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+            reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(lesson.id)},
         ),
         "segments": [
             {
@@ -3448,6 +3475,7 @@ async def _offline_package_payload(
                     presentation_seed=str(actor.id),
                     question_offset=item.sequence_order - 1,
                     reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
                 ),
             }
             for item in segments

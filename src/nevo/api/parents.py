@@ -6,10 +6,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.response_models import CamelResponse
+from nevo.db.models.frontend_support import Concept
+from nevo.db.models.mastery import StudentConceptLevelMastery, StudentConceptScheduling
+from nevo.db.models.out_of_school import OutOfSchoolLearning
 from nevo.consent.entities import ParentChildView
 from nevo.domain.accounts.vocabulary import UserStatus
 from nevo.domain.parents.vocabulary import GrowthDimension, GrowthTrend
@@ -128,6 +132,81 @@ def require_parent(principal: PrincipalDependency) -> UUID:
 
 
 ParentDependency = Annotated[UUID, Depends(require_parent)]
+
+
+class StrengthenedConcept(CamelResponse):
+    concept_id: UUID
+    concept_name: str
+    recorded_at: datetime
+    source: Literal["server_marked_practice"] = "server_marked_practice"
+
+
+class ScheduledConceptReturn(CamelResponse):
+    concept_id: UUID
+    concept_name: str
+    due_at: datetime
+
+
+class ReportedOutsideWork(CamelResponse):
+    concept_id: UUID
+    concept_name: str
+    activity_kind: Literal["reading", "practice", "discussion", "paper_work"]
+    recorded_at: datetime
+    source: Literal["learner_report"] = "learner_report"
+
+
+class ParentLearningEvidence(CamelResponse):
+    student_id: UUID
+    strengthened_concepts: list[StrengthenedConcept]
+    scheduled_returns: list[ScheduledConceptReturn]
+    out_of_school_learning: list[ReportedOutsideWork]
+
+
+@router.get("/parents/me/children/{student_id}/learning-evidence", response_model=ParentLearningEvidence)
+async def parent_learning_evidence(
+    student_id: UUID,
+    parent_id: ParentDependency,
+    session: DatabaseSession,
+    service: ParentInsightDependency,
+) -> ParentLearningEvidence:
+    await service.require_linked_child(parent_id=parent_id, student_id=student_id)
+    strengthened = (await session.execute(
+        select(StudentConceptLevelMastery, Concept)
+        .join(Concept, Concept.id == StudentConceptLevelMastery.concept_id)
+        .where(StudentConceptLevelMastery.student_id == student_id,
+               StudentConceptLevelMastery.strengthened_at.is_not(None))
+        .order_by(StudentConceptLevelMastery.strengthened_at.desc()).limit(100)
+    )).all()
+    due = (await session.execute(
+        select(StudentConceptScheduling, Concept)
+        .join(Concept, Concept.id == StudentConceptScheduling.concept_id)
+        .where(StudentConceptScheduling.student_id == student_id)
+        .order_by(StudentConceptScheduling.next_review_due).limit(100)
+    )).all()
+    outside = (await session.execute(
+        select(OutOfSchoolLearning, Concept)
+        .join(Concept, Concept.id == OutOfSchoolLearning.concept_id)
+        .where(OutOfSchoolLearning.student_id == student_id)
+        .order_by(OutOfSchoolLearning.created_at.desc()).limit(100)
+    )).all()
+    by_concept = {}
+    for row, concept in strengthened:
+        by_concept.setdefault(concept.id, StrengthenedConcept(
+            concept_id=concept.id, concept_name=concept.name,
+            recorded_at=row.strengthened_at,
+        ))
+    return ParentLearningEvidence(
+        student_id=student_id,
+        strengthened_concepts=list(by_concept.values()),
+        scheduled_returns=[ScheduledConceptReturn(
+            concept_id=concept.id, concept_name=concept.name,
+            due_at=row.next_review_due,
+        ) for row, concept in due],
+        out_of_school_learning=[ReportedOutsideWork(
+            concept_id=concept.id, concept_name=concept.name,
+            activity_kind=row.activity_kind, recorded_at=row.created_at,
+        ) for row, concept in outside],
+    )
 
 
 @router.get("/parents/me/children", response_model=list[ParentChildResponse])

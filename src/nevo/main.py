@@ -43,6 +43,8 @@ from nevo.api.licences import router as licences_router
 from nevo.api.mastery import router as mastery_router
 from nevo.api.media_ops import router as media_ops_router
 from nevo.api.onboarding import router as onboarding_router
+from nevo.api.out_of_school import router as out_of_school_router
+from nevo.api.paper_work import router as paper_work_router
 from nevo.api.parent_rights import router as parent_rights_router
 from nevo.api.parents import router as parent_router
 from nevo.api.partner_inquiries import router as partner_inquiry_router
@@ -411,6 +413,8 @@ app.include_router(signals_router)
 app.include_router(email_confirmation_router)
 app.include_router(lesson_review_router)
 app.include_router(onboarding_router)
+app.include_router(out_of_school_router)
+app.include_router(paper_work_router)
 app.include_router(learning_support_router)
 app.include_router(learning_support_records_router)
 app.include_router(student_entry_router)

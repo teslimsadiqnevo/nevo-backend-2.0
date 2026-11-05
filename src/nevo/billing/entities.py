@@ -68,6 +68,7 @@ class SubscriptionRecord:
     billing_contact: BillingContactRecord | None
     payment_method: PaymentMethodRecord | None
     quote: PerStudentQuote
+    billing_contacts: tuple[BillingContactRecord, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,11 +5,11 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from nevo.db.models.account import User
+from nevo.db.models.account import School, User
 from nevo.db.models.billing import (
     BillingContact,
     BillingPaymentMethod,
@@ -18,7 +18,7 @@ from nevo.db.models.billing import (
     PaymentWebhookEvent,
 )
 from nevo.db.models.permission import Admin, AdminScopeAssignment
-from nevo.domain.accounts.vocabulary import NotificationType, UserStatus
+from nevo.domain.accounts.vocabulary import NotificationType, UserRole, UserStatus
 from nevo.domain.billing.vocabulary import (
     InvoiceStatus,
     PaymentTransactionStatus,
@@ -75,7 +75,8 @@ class SqlAlchemyPaymentRepository:
             row = (
                 await session.execute(
                     select(Invoice, BillingContact.email)
-                    .outerjoin(BillingContact, BillingContact.school_id == Invoice.school_id)
+                    .outerjoin(School, School.id == Invoice.school_id)
+                    .outerjoin(BillingContact, BillingContact.id == School.billing_contact_id)
                     .where(Invoice.id == invoice_id, Invoice.school_id == school_id)
                 )
             ).first()
@@ -185,6 +186,7 @@ class SqlAlchemyPaymentRepository:
                 if invoice is not None and invoice.status is not InvoiceStatus.PAID:
                     invoice.status = InvoiceStatus.PAID
                     invoice.paid_at = record.paid_at
+                    await _activate_paid_students(session, invoice)
                     invoice_paid = True
                     recipients = list(
                         (
@@ -291,10 +293,8 @@ class SqlAlchemyPaymentRepository:
                         BillingPaymentMethod.processor_payment_method_ref,
                         BillingContact.email,
                     )
-                    .join(
-                        BillingContact,
-                        BillingContact.school_id == BillingPaymentMethod.school_id,
-                    )
+                    .join(School, School.id == BillingPaymentMethod.school_id)
+                    .join(BillingContact, BillingContact.id == School.billing_contact_id)
                     .where(
                         BillingPaymentMethod.school_id == school_id,
                         BillingPaymentMethod.is_reusable.is_(True),
@@ -407,5 +407,22 @@ class SqlAlchemyPaymentRepository:
             if invoice is not None and invoice.status is not InvoiceStatus.PAID:
                 invoice.status = InvoiceStatus.PAID
                 invoice.paid_at = confirmed_at
+                await _activate_paid_students(session, invoice)
                 invoice_paid = True
             return transaction_id, invoice_paid
+
+
+async def _activate_paid_students(session: AsyncSession, invoice: Invoice) -> None:
+    if not invoice.activation_student_ids:
+        return
+    student_ids = [UUID(value) for value in invoice.activation_student_ids]
+    await session.execute(
+        update(User)
+        .where(
+            User.id.in_(student_ids),
+            User.school_id == invoice.school_id,
+            User.role == UserRole.STUDENT,
+            User.status == UserStatus.INVITED,
+        )
+        .values(status=UserStatus.ACTIVE)
+    )

@@ -1,6 +1,7 @@
 """Transactional links between onboarding, authored work and local intelligence."""
 
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import (
     ScaffoldProblemLog,
     StudentConceptMastery,
+    StudentConceptLevelMastery,
     StudentConceptScaffoldState,
     StudentConceptScheduling,
 )
@@ -319,6 +321,69 @@ async def apply_marked_attempt(
     else:
         for name, value in values.items():
             setattr(row, name, value)
+    from nevo.core.config import get_settings
+
+    level = question.get("masteryLevel")
+    collect_level = (
+        get_settings().collect_level_mastery
+        and attempt.source in {"checkpoint", "assessment"}
+        and level in {"knowledge", "application", "analysis"}
+        and question.get("teacherReviewed") is True
+        and attempt.response_time_ms is not None
+    )
+    if collect_level:
+        from nevo.api.lesson_review import approved_level_ids
+
+        level_scope = str(attempt.lesson_id) if attempt.source == "assessment" else str(attempt.segment_id)
+        collect_level = (level_scope, attempt.question_id) in await approved_level_ids(session, attempt.lesson_id)
+    if collect_level:
+        level_row = await session.scalar(
+            select(StudentConceptLevelMastery)
+            .where(
+                StudentConceptLevelMastery.student_id == user.id,
+                StudentConceptLevelMastery.concept_id == concept.id,
+                StudentConceptLevelMastery.mastery_level == level,
+            )
+            .with_for_update()
+        )
+        prior = level_row.mastery_probability if level_row is not None else 0.15
+        count = level_row.practice_count if level_row is not None else 0
+        level_result = engine.update(
+            state=replace(state, mastery_probability_concept=prior, practice_count=count),
+            interaction=MasteryUpdate(
+                student_id=user.id,
+                concept_id=concept.id,
+                response_correct=attempt.correct,
+                item_text_density=float(question.get("textDensity") or 0.8),
+                response_time_ms=attempt.response_time_ms,
+                minimum_response_time_ms=minimum_reading_time(question),
+                hint_count=effective_hints,
+            ),
+            related_mastery={},
+        )
+        supported = bool(effective_hints or question.get("supportStatus") == "supported")
+        if level_row is None:
+            level_row = StudentConceptLevelMastery(
+                student_id=user.id,
+                concept_id=concept.id,
+                mastery_level=level,
+                mastery_probability=prior,
+                practice_count=0,
+                supported_pass_count=0,
+                independent_pass_count=0,
+            )
+            session.add(level_row)
+        level_row.mastery_probability = level_result.state.mastery_probability_concept
+        level_row.practice_count = level_result.state.practice_count
+        level_row.supported_pass_count += int(attempt.correct and supported)
+        level_row.independent_pass_count += int(attempt.correct and not supported and attempt.response_time_ms is not None and attempt.response_time_ms >= minimum_reading_time(question))
+        if (
+            level_row.strengthened_at is None
+            and level_row.mastery_probability >= MASTERY_THRESHOLD
+            and level_row.independent_pass_count >= 2
+        ):
+            level_row.strengthened_at = datetime.now(UTC)
+        level_row.last_response_correct = attempt.correct
     trusted = (
         attempt.response_time_ms is not None
         and attempt.response_time_ms >= minimum_reading_time(question)

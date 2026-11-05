@@ -39,7 +39,7 @@ from nevo.api.content import (
     get_lesson_media_service,
 )
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.learning_support import holds_learning_support, require_learning_support
+from nevo.api.learning_support import _holders, holds_learning_support, require_learning_support
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     calculation_for_delivery,
@@ -113,6 +113,7 @@ from nevo.db.models.frontend_support import (
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.probe import ProbeItem
 from nevo.db.models.product import LessonModule, LessonProgress
+from nevo.db.models.permission import Admin
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.subject import ClassSubject, SchoolSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
@@ -129,7 +130,7 @@ from nevo.domain.intelligence.vocabulary import (
     LessonScope,
     LessonSourceType,
 )
-from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
 from nevo.domain.signal_events.vocabulary import (
     LearnerObservationPattern,
     LessonCompletionStatus,
@@ -334,6 +335,11 @@ class EscalationResponse(BaseModel):
     acknowledged_at: datetime | None = Field(default=None, alias="acknowledgedAt")
     acknowledged_by: UUID | None = Field(default=None, alias="acknowledgedBy")
     acknowledged_by_name: str | None = Field(default=None, alias="acknowledgedByName")
+    routed_to: Literal["learning_support", "school_admin"] = Field(alias="routedTo")
+    recipient_id: UUID | None = Field(default=None, alias="recipientId")
+    recipient_name: str | None = Field(default=None, alias="recipientName")
+    received_at: datetime | None = Field(default=None, alias="receivedAt")
+    receipt_line: str | None = Field(default=None, alias="receiptLine")
 
 
 class NotificationResponse(BaseModel):
@@ -1729,6 +1735,37 @@ async def _escalation_class(session: DatabaseSession, student: User | None) -> C
     )
 
 
+async def _escalation_response(session: DatabaseSession, record: Escalation, student: User) -> EscalationResponse:
+    teacher = await session.get(User, record.teacher_id)
+    viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
+    recipient = await session.get(User, record.recipient_user_id) if record.recipient_user_id else None
+    school_class = await _escalation_class(session, student)
+    recipient_name = _display_name(recipient) if recipient else None
+    return EscalationResponse(
+        id=record.id,
+        studentId=record.student_id,
+        studentFirstName=student.first_name,
+        studentName=_display_name(student),
+        classId=school_class.id if school_class else None,
+        className=school_class.name if school_class else None,
+        teacherId=record.teacher_id,
+        teacherName=_display_name(teacher) if teacher else None,
+        note=record.teacher_note,
+        recentPicture=await _recent_picture(session, record.student_id),
+        generatedAt=record.generated_at,
+        acknowledged=record.acknowledged_at is not None,
+        acknowledgedAt=record.acknowledged_at,
+        acknowledgedBy=record.acknowledged_by,
+        acknowledgedByName=_display_name(viewer) if viewer else None,
+        routedTo=record.routed_to,
+        recipientId=record.recipient_user_id,
+        recipientName=recipient_name,
+        receivedAt=record.received_at,
+        receiptLine=(f"Sent to {recipient_name} on {record.received_at:%d %B %Y at %H:%M UTC}"
+                     if recipient_name and record.received_at else None),
+    )
+
+
 @router.post(
     "/api/v1/escalations",
     response_model=EscalationResponse,
@@ -1747,32 +1784,40 @@ async def create_escalation(
         flag = await session.get(AttentionFlag, payload.attention_flag_id)
         if flag is None or flag.student_id != payload.student_id:
             raise HTTPException(status_code=404, detail="Attention flag not found")
+    await session.scalar(select(School.id).where(School.id == actor.school_id).with_for_update())
+    fallback = None
+    if not await _holders(session, actor.school_id):
+        fallback = (await session.execute(
+            select(User)
+            .join(Admin, Admin.user_id == User.id)
+            .where(Admin.school_id == actor.school_id, User.school_id == actor.school_id,
+                   User.status == UserStatus.ACTIVE)
+            .order_by((Admin.access_level == AdminAccessLevel.SENIOR).desc(), Admin.created_at, User.id)
+            .limit(1)
+        )).scalar_one_or_none()
+        if fallback is None:
+            raise HTTPException(status_code=409, detail={"code": "concern_recipient_unavailable"})
     record = Escalation(
         attention_flag_id=payload.attention_flag_id,
         student_id=payload.student_id,
         teacher_id=actor.user_id,
         teacher_note=payload.note.strip(),
+        routed_to="school_admin" if fallback else "learning_support",
+        recipient_user_id=fallback.id if fallback else None,
+        received_at=datetime.now(UTC) if fallback else None,
     )
     session.add(record)
     await session.flush()
-    picture = await _recent_picture(session, payload.student_id)
-    school_class = await _escalation_class(session, student)
-    teacher = await session.get(User, actor.user_id)
+    if fallback:
+        session.add(Notification(
+            recipient_id=fallback.id, recipient_role=fallback.role.value,
+            type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
+            title="A teacher raised a concern", description=f"A concern about {_display_name(student)} needs your attention.",
+            navigates_to="/admin/notifications", category=NotificationCategory.ATTENTION.value,
+        ))
+    result = await _escalation_response(session, record, student)
     await session.commit()
-    return EscalationResponse(
-        id=record.id,
-        studentId=record.student_id,
-        studentFirstName=student.first_name if student else None,
-        studentName=_display_name(student) if student else None,
-        classId=school_class.id if school_class else None,
-        className=school_class.name if school_class else None,
-        teacherId=record.teacher_id,
-        teacherName=_display_name(teacher) if teacher else None,
-        note=record.teacher_note,
-        recentPicture=picture,
-        generatedAt=record.generated_at,
-        acknowledged=False,
-    )
+    return result
 
 
 @router.get(
@@ -1810,9 +1855,8 @@ async def list_escalations(
         .where(User.school_id == actor.school_id)
         .order_by(Escalation.generated_at.desc())
     )
-    if await can_be_class_teacher(session, actor) and not await holds_learning_support(session, actor):
-        query = query.where(
-            Escalation.student_id.in_(
+    is_holder = await holds_learning_support(session, actor)
+    own_class = Escalation.student_id.in_(
                 select(StudentClassEnrollment.student_id)
                 .join(
                     TeacherClassAssignment,
@@ -1823,7 +1867,10 @@ async def list_escalations(
                     TeacherClassAssignment.removed_at.is_(None),
                 )
             )
-        )
+    if is_holder:
+        query = query.where(or_(Escalation.routed_to == "learning_support", Escalation.recipient_user_id == actor.id, own_class))
+    else:
+        query = query.where(or_(Escalation.recipient_user_id == actor.id, own_class))
     if open_only:
         query = query.where(Escalation.acknowledged_at.is_(None))
     if student_id is not None:
@@ -1841,28 +1888,7 @@ async def list_escalations(
     rows = (await session.execute(query.limit(limit).offset(offset))).all()
     result: list[EscalationResponse] = []
     for record, student in rows:
-        viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
-        teacher = await session.get(User, record.teacher_id)
-        school_class = await _escalation_class(session, student)
-        result.append(
-            EscalationResponse(
-                id=record.id,
-                studentId=record.student_id,
-                studentFirstName=student.first_name,
-                studentName=_display_name(student),
-                classId=school_class.id if school_class else None,
-                className=school_class.name if school_class else None,
-                teacherId=record.teacher_id,
-                teacherName=_display_name(teacher) if teacher else None,
-                note=record.teacher_note,
-                recentPicture=await _recent_picture(session, record.student_id),
-                generatedAt=record.generated_at,
-                acknowledged=record.acknowledged_at is not None,
-                acknowledgedAt=record.acknowledged_at,
-                acknowledgedBy=record.acknowledged_by,
-                acknowledgedByName=_display_name(viewer) if viewer else None,
-            )
-        )
+        result.append(await _escalation_response(session, record, student))
     return result
 
 
@@ -1892,35 +1918,21 @@ async def acknowledge_escalation(
         principal,
         roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
     )
-    await require_learning_support(session, actor)
     record = await session.get(Escalation, escalation_id)
     student = await session.get(User, record.student_id) if record else None
     if record is None or student is None or student.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Escalation not found")
+    if record.routed_to == "school_admin":
+        if record.recipient_user_id != actor.id:
+            raise HTTPException(status_code=403, detail={"code": "concern_recipient_required"})
+    else:
+        await require_learning_support(session, actor)
     if record.acknowledged_at is None:
         record.acknowledged_at = datetime.now(UTC)
         record.acknowledged_by = actor.id
-    picture = await _recent_picture(session, record.student_id)
-    school_class = await _escalation_class(session, student)
-    teacher = await session.get(User, record.teacher_id)
+    result = await _escalation_response(session, record, student)
     await session.commit()
-    return EscalationResponse(
-        id=record.id,
-        studentId=record.student_id,
-        studentFirstName=student.first_name,
-        studentName=_display_name(student),
-        classId=school_class.id if school_class else None,
-        className=school_class.name if school_class else None,
-        teacherId=record.teacher_id,
-        teacherName=_display_name(teacher) if teacher else None,
-        note=record.teacher_note,
-        recentPicture=picture,
-        generatedAt=record.generated_at,
-        acknowledged=True,
-        acknowledgedAt=record.acknowledged_at,
-        acknowledgedBy=record.acknowledged_by,
-        acknowledgedByName=_display_name(actor),
-    )
+    return result
 
 
 @router.post(

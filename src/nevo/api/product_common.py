@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nevo.api.request_context import current_request
 from nevo.auth.entities import AuthPrincipal
 from nevo.db.models.account import Class, StudentClassEnrollment, User
-from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.db.models.permission import Admin, AdminScopeAssignment
+from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.permissions.vocabulary import PermissionScope
 
 #: What an administrator may reach before confirming their address. Reading

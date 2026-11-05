@@ -1,7 +1,8 @@
 """Keep concerns reachable when a school has no Learning Support holder."""
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "20261105_0132"
 down_revision = "20261030_0131"

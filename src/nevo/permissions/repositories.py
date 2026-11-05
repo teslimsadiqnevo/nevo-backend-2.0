@@ -25,9 +25,9 @@ from nevo.permissions.entities import (
 from nevo.permissions.errors import (
     AdminSeatLimitReachedError,
     LastLearningSupportHolderError,
-    LearningSupportGrantActiveError,
     LastOversightAdminError,
     LastSeniorAdminError,
+    LearningSupportGrantActiveError,
     TeamMemberAlreadyExistsError,
 )
 

@@ -53,8 +53,8 @@ from nevo.api.product_common import (
     require_approved_lessons,
     require_class_access,
     require_school_actor,
-    require_teacher_console_actor,
     require_student_access,
+    require_teacher_console_actor,
 )
 from nevo.api.response_models import (
     AssignmentCreatedResponse,

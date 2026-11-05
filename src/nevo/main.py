@@ -13,9 +13,9 @@ from fastapi.responses import JSONResponse
 from nevo.ai_gateway.config import AiGatewaySettings
 from nevo.ai_gateway.wiring import build_ai_gateway
 from nevo.api.admin import router as admin_router
-from nevo.api.application_attention import router as application_attention_router
 from nevo.api.age_checks import router as age_check_router
 from nevo.api.ai_gateway import router as ai_gateway_router
+from nevo.api.application_attention import router as application_attention_router
 from nevo.api.ask_nevo import router as ask_nevo_router
 from nevo.api.auth import router as auth_router
 from nevo.api.billing import router as billing_router

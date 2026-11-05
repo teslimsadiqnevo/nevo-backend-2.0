@@ -5,8 +5,8 @@ from sqlalchemy import or_, select
 
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import Concept, LessonAssignment
-from nevo.db.models.product import LessonProgress
 from nevo.db.models.mastery import StudentConceptMastery, StudentConceptScheduling
+from nevo.db.models.product import LessonProgress
 from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
 
 

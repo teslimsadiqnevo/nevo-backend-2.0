@@ -39,7 +39,12 @@ from nevo.api.content import (
     get_lesson_media_service,
 )
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.learning_support import _holders, fallback_school_admin, holds_learning_support, require_learning_support
+from nevo.api.learning_support import (
+    _holders,
+    fallback_school_admin,
+    holds_learning_support,
+    require_learning_support,
+)
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     calculation_for_delivery,
@@ -68,8 +73,8 @@ from nevo.api.product_common import (
     require_approved_lessons,
     require_class_access,
     require_school_actor,
-    require_teacher_console_class,
     require_student_access,
+    require_teacher_console_class,
 )
 from nevo.api.response_models import (
     ActivityAvailability,

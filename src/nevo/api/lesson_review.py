@@ -24,30 +24,30 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.entities import AiGenerationRequest, AiRequestContext
+from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.safety import POLICY_VERSION
 from nevo.api.ai_gateway import AiGatewayDependency, public_ai_error
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.api.dependencies import DatabaseSession
 from nevo.api.lesson_contracts import (
     CalculationMiniStep,
     GuidedCheckStep,
     depth_approved,
     explanation_reveals_answer,
 )
-from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
-from nevo.content_parsing.media_contracts import LessonMediaResponse
 from nevo.content_parsing.depth import DepthVariantError, _json_payload
+from nevo.content_parsing.media_contracts import LessonMediaResponse
 from nevo.db.models.account import User
 from nevo.db.models.ai_gateway import AiGatewayCall
 from nevo.db.models.content import Lesson, LessonKeyPoint, LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
 from nevo.db.models.lesson_signoff import LessonReviewSignoff
-from nevo.domain.intelligence.vocabulary import KeyPointConfidence, KeyPointReviewState
 from nevo.domain.ai_gateway.vocabulary import AiService
+from nevo.domain.intelligence.vocabulary import KeyPointConfidence, KeyPointReviewState
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 

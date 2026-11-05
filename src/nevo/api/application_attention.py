@@ -13,8 +13,8 @@ from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import actor_user
 from nevo.api.response_models import CamelResponse
-from nevo.db.models.content import LessonSegment
 from nevo.db.models.account import StudentClassEnrollment
+from nevo.db.models.content import LessonSegment
 from nevo.db.models.signal_event import LessonSession
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.intelligence.away_time import transition

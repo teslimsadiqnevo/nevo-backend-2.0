@@ -1,7 +1,8 @@
 """Persist when a teacher requested a media remake."""
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "20261029_0128"
 down_revision = "20261027_0127"

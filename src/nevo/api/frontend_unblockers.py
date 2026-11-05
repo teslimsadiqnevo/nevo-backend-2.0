@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import false, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from nevo.access import accessible_lessons_page, accessible_lessons_query
@@ -1890,6 +1890,8 @@ async def list_escalations(
                     TeacherClassAssignment.removed_at.is_(None),
                 )
             )
+    if not await can_be_class_teacher(session, actor):
+        own_class = false()
     if is_holder:
         query = query.where(or_(Escalation.routed_to == "learning_support", Escalation.recipient_user_id == actor.id, own_class))
     else:

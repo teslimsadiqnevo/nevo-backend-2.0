@@ -859,6 +859,12 @@ async def update_class(
     school_class = await require_class_access(session, user, class_id)
     school_class.name = payload.name
     school_class.year_group = payload.year_group
+    if "section" in payload.model_fields_set:
+        school_class.section = payload.section
+    if "capacity" in payload.model_fields_set:
+        school_class.capacity = payload.capacity
+    if "academic_session" in payload.model_fields_set and payload.academic_session is not None:
+        school_class.academic_session = payload.academic_session
     if payload.subjects is not None:
         # Sent, so it is the class's scheme of work. An empty list clears it,
         # which is a school saying it has not decided yet rather than a school

@@ -1447,11 +1447,14 @@ async def lesson_detail(
         else None
     )
     recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
-    from nevo.api.lesson_review import _review_result, approved_check_ids
+    from nevo.api.lesson_review import _review_result, approved_check_ids, approved_level_ids
     from nevo.api.product_learning import _unapproved_counts
 
     review = await _review_result(session, lesson) if actor.role != UserRole.STUDENT else None
     reviewed_checks = await approved_check_ids(session, lesson.id)
+    reviewed_levels = (
+        await approved_level_ids(session, lesson.id) if actor.role == UserRole.STUDENT else set()
+    )
     outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) if review else 0
     return LessonDetailResponse(
         **_lesson_summary(
@@ -1470,10 +1473,12 @@ async def lesson_detail(
                 student_checkpoint_payloads(
                     lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
                     reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+                    reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(lesson.id)},
                 ) if actor.role == UserRole.STUDENT else checkpoint_payloads(
                     lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
                 )
             )
+            if actor.role != UserRole.STUDENT or item["teacherReviewed"]
         ],
         segments=[
             LessonSegmentResponse(
@@ -1504,6 +1509,7 @@ async def lesson_detail(
                         item.comprehension_checkpoints, segment_key=item.segment_key,
                         presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
                         reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
                     ) if actor.role == UserRole.STUDENT else checkpoint_payloads(
                         item.comprehension_checkpoints, segment_key=item.segment_key,
                         presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,

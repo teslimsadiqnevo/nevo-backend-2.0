@@ -37,6 +37,16 @@ class Settings(BaseSettings):
         ),
     )
     focus_timing_verified: bool = Field(default=False, validation_alias="FOCUS_TIMING_VERIFIED")
+    level_mastery_collection_enabled: bool = Field(
+        default=False, validation_alias="LEVEL_MASTERY_COLLECTION_ENABLED"
+    )
+    level_aware_return_enabled: bool = Field(
+        default=False, validation_alias="LEVEL_AWARE_RETURN_ENABLED"
+    )
+
+    @property
+    def collect_level_mastery(self) -> bool:
+        return self.focus_timing_verified and self.level_mastery_collection_enabled
 
     @field_validator("database_url")
     @classmethod

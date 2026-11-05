@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from nevo.api.auth import authenticated_principal
+from nevo.api.dependencies import database_session
 from nevo.api.signals import router
 from nevo.auth.entities import AuthPrincipal
 from nevo.domain.signal_events.vocabulary import SignalEventType
@@ -26,6 +27,11 @@ def client_for() -> tuple[TestClient, MemorySignalIngestionRepository, AuthPrinc
     app.state.signal_ingestion_service = SignalIngestionService(repository)
     app.state.consent_service = SimpleNamespace(require_student_consent=AsyncMock())
     app.dependency_overrides[authenticated_principal] = lambda: principal
+    # The route looks up the lesson sitting to check whose it is; these
+    # batches name sittings that were never stored, so there is none to find.
+    app.dependency_overrides[database_session] = lambda: SimpleNamespace(
+        get=AsyncMock(return_value=None)
+    )
     app.include_router(router)
     return TestClient(app), repository, principal
 

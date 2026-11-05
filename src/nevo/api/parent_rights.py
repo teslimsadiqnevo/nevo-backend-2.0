@@ -308,22 +308,24 @@ async def withdraw_consent(
     )
 
 
-def _refuse_restoring_another_parents_consent(
+async def _refuse_restoring_another_parents_consent(
+    session: AsyncSession,
     records: list[ConsentRecord],
     *,
     wanted: set[ConsentType],
+    student_id: UUID,
     parent_id: UUID,
 ) -> None:
     """A guardian gives back the consent they took away, and nobody else's.
 
-    The mirror of _refuse_another_parents_consent. Without it, adding a
-    guardian would be a way to undo another guardian's withdrawal, which is
-    the same hole the 5 November ruling closed from the other side - and the
-    worse direction of the two, because it puts a child back into processing
-    the person responsible for them had stopped.
+    The mirror of the withdrawal check, and the worse direction of the two:
+    without it, adding a guardian would be a way to put a child back into
+    processing that the person responsible for them had stopped.
 
-    A withdrawal with no recorded actor - one a job or an older release
-    wrote - is not attributed to anybody, so any linked guardian may lift it.
+    It asks _can_withdraw rather than keeping a rule of its own. Whoever owns
+    the decision owns both halves of it, so the two routes cannot come to
+    different answers about whose consent this is - and a rule that is
+    tightened later is tightened for restoring at the same time.
     """
 
     not_theirs = [
@@ -331,15 +333,14 @@ def _refuse_restoring_another_parents_consent(
         for record in records
         if record.consent_type in wanted
         and record.status is ConsentStatus.WITHDRAWN
-        and record.last_actor_user_id is not None
-        and record.last_actor_user_id != parent_id
+        and not await _can_withdraw(session, student_id, parent_id, record)
     ]
     if not not_theirs:
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail={
-            "code": "withdrawal_belongs_to_another_guardian",
+            "code": "consent_decision_belongs_to_another_guardian",
             "message": (
                 "Another of this child's grown-ups took this permission "
                 "back, so only they can give it again. Speak to them, or to "
@@ -378,7 +379,13 @@ async def restore_consent(
             select(ConsentRecord).where(ConsentRecord.subject_user_id == student.id)
         )
     )
-    _refuse_restoring_another_parents_consent(records, wanted=wanted, parent_id=parent_id)
+    await _refuse_restoring_another_parents_consent(
+        session,
+        records,
+        wanted=wanted,
+        student_id=student.id,
+        parent_id=parent_id,
+    )
     restored: list[ConsentType] = []
     for record in records:
         if record.consent_type not in wanted:

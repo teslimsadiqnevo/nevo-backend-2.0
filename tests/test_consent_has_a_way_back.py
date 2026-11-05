@@ -74,12 +74,26 @@ def test_one_guardian_cannot_undo_anothers_withdrawal() -> None:
     # two: this one would put a child back into processing that the person
     # responsible for them had stopped.
     guard = inspect.getsource(parent_rights._refuse_restoring_another_parents_consent)
-    assert "last_actor_user_id is not None" in guard
-    assert "last_actor_user_id != parent_id" in guard
-    assert "withdrawal_belongs_to_another_guardian" in guard
+    # Asks the same question withdrawal asks, rather than keeping a second
+    # rule that could drift from it. The two routes must not disagree about
+    # whose consent this is, and tightening the rule once tightens both.
+    assert "_can_withdraw(session, student_id, parent_id, record)" in guard
+    assert "consent_decision_belongs_to_another_guardian" in guard
     assert "_refuse_restoring_another_parents_consent" in inspect.getsource(
         parent_rights.restore_consent
     )
+
+
+def test_withdrawing_and_restoring_share_one_authority_rule() -> None:
+    # A school-recorded consent has no parent account as its actor, and
+    # _can_withdraw resolves that to the first linked guardian. If restore
+    # kept its own rule, a later-linked guardian refused the withdrawal
+    # could still have reversed one.
+    for source in (
+        inspect.getsource(parent_rights.withdraw_consent),
+        inspect.getsource(parent_rights._refuse_restoring_another_parents_consent),
+    ):
+        assert "_can_withdraw" in source
 
 
 def test_restoring_nothing_is_a_conflict_not_a_silent_success() -> None:

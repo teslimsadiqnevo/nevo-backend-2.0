@@ -47,6 +47,7 @@ from nevo.api.lesson_contracts import (
     depth_payloads,
     safety_reviewed_visual,
     student_activity,
+    student_checkpoint_payloads,
     student_modalities,
 )
 from nevo.api.pagination import (
@@ -1446,10 +1447,11 @@ async def lesson_detail(
         else None
     )
     recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
-    from nevo.api.lesson_review import _review_result
+    from nevo.api.lesson_review import _review_result, approved_check_ids
     from nevo.api.product_learning import _unapproved_counts
 
     review = await _review_result(session, lesson) if actor.role != UserRole.STUDENT else None
+    reviewed_checks = await approved_check_ids(session, lesson.id)
     outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) if review else 0
     return LessonDetailResponse(
         **_lesson_summary(
@@ -1464,10 +1466,13 @@ async def lesson_detail(
         recap=lesson.recap,
         assessment=[
             ComprehensionCheckpoint.model_validate(item)
-            for item in checkpoint_payloads(
-                lesson.assessment or [],
-                segment_key="lesson-assessment",
-                presentation_seed=str(actor.id),
+            for item in (
+                student_checkpoint_payloads(
+                    lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
+                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+                ) if actor.role == UserRole.STUDENT else checkpoint_payloads(
+                    lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
+                )
             )
         ],
         segments=[
@@ -1494,12 +1499,17 @@ async def lesson_detail(
                 recommendedFormat=recommendations.get(str(item.id))
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,
-                comprehensionCheckpoints=checkpoint_payloads(
-                    item.comprehension_checkpoints,
-                    segment_key=item.segment_key,
-                    presentation_seed=str(actor.id),
-                    question_offset=item.sequence_order - 1,
-                    include_pending_guidance=actor.role != UserRole.STUDENT,
+                comprehensionCheckpoints=(
+                    student_checkpoint_payloads(
+                        item.comprehension_checkpoints, segment_key=item.segment_key,
+                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    ) if actor.role == UserRole.STUDENT else checkpoint_payloads(
+                        item.comprehension_checkpoints, segment_key=item.segment_key,
+                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        include_pending_guidance=True,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    )
                 ),
                 textVariant=item.text_variant,
                 visualVariant=(

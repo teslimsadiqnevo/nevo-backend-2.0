@@ -1284,6 +1284,22 @@ def checkpoint_payloads(
     return result
 
 
+def student_checkpoint_payloads(
+    values: list[dict[str, object]], *, segment_key: str,
+    reviewed_question_ids: set[str], presentation_seed: str = "lesson",
+    question_offset: int = 0, concept_id: UUID | None = None,
+) -> list[dict[str, object]]:
+    """Never deliver a generated question before its current teacher sign-off."""
+    return [
+        question for question in checkpoint_payloads(
+            values, segment_key=segment_key, reviewed_question_ids=reviewed_question_ids,
+            presentation_seed=presentation_seed, question_offset=question_offset,
+            concept_id=concept_id,
+        )
+        if question["teacherReviewed"] and question.get("answerKey") is not None
+    ]
+
+
 def explanation_reveals_answer(step: dict[str, object]) -> bool:
     """Conservatively detect whether wrong-answer feedback states the key."""
     if not isinstance(step, dict) and hasattr(step, "model_dump"):

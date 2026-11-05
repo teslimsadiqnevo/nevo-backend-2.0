@@ -822,18 +822,22 @@ async def _review_material(session, lesson):
     return rows, segments, key_material, rewrites
 
 
-def _checks_material(segments):
+def _checks_material(segments, lesson=None):
     from nevo.api.lesson_contracts import checkpoint_payloads
 
     material = []
     views = []
-    for segment in segments:
+    sources = [(segment.id, segment.title, segment.segment_key, segment.comprehension_checkpoints or [])
+               for segment in segments]
+    if lesson is not None:
+        sources.append((lesson.id, "End-of-lesson check", "lesson-assessment", lesson.assessment or []))
+    for segment_id, segment_title, segment_key, raw_questions in sources:
         questions = checkpoint_payloads(
-            segment.comprehension_checkpoints or [], segment_key=segment.segment_key
+            raw_questions, segment_key=segment_key
         )
         for question in questions:
             item = {
-                "segmentId": str(segment.id),
+                "segmentId": str(segment_id),
                 "questionId": str(question["id"]),
                 "questionPrompt": question["prompt"],
                 "questionAnswerType": question["answerType"],
@@ -845,7 +849,7 @@ def _checks_material(segments):
             if not authored and markable:
                 material.append(item)
             views.append(CheckReviewItem(
-                segment_id=segment.id, segment_title=segment.title,
+                segment_id=segment_id, segment_title=segment_title,
                 question_id=item["questionId"], question_prompt=item["questionPrompt"],
                 question_answer_type=item["questionAnswerType"],
                 question_options=item["questionOptions"], question_answer_key=item["questionAnswerKey"],
@@ -861,12 +865,18 @@ async def approved_check_ids(session, lesson_id):
         select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
         .order_by(LessonSegment.sequence_order, LessonSegment.id)
     ))
-    material, _ = _checks_material(segments)
+    lesson = await session.get(Lesson, lesson_id)
+    material, _ = _checks_material(segments, lesson)
     authored = {
-        (str(segment.id), str(question["id"]))
-        for segment in segments
+        (str(segment_id), str(question["id"]))
+        for segment_id, _, segment_key, raw_questions in [
+            *[(segment.id, segment.title, segment.segment_key, segment.comprehension_checkpoints or [])
+              for segment in segments],
+            *([(lesson.id, "End-of-lesson check", "lesson-assessment", lesson.assessment or [])]
+              if lesson is not None else []),
+        ]
         for question in checkpoint_payloads(
-            segment.comprehension_checkpoints or [], segment_key=segment.segment_key
+            raw_questions, segment_key=segment_key
         )
         if question.get("authoredBy") == "person" and question.get("answerKey") is not None
     }
@@ -939,6 +949,9 @@ async def review_complete_map(session, lesson_ids, *, require_checks=True):
     """Calculate library readiness in three reads, without loading review media."""
     if not lesson_ids:
         return {}
+    lessons_by_id = {lesson.id: lesson for lesson in await session.scalars(
+        select(Lesson).where(Lesson.id.in_(lesson_ids))
+    )}
     segments_by_lesson = defaultdict(list)
     for segment in await session.scalars(
         select(LessonSegment).where(LessonSegment.lesson_id.in_(lesson_ids))
@@ -975,7 +988,7 @@ async def review_complete_map(session, lesson_ids, *, require_checks=True):
             if isinstance(item := (segment.depth_variants or {}).get(kind), dict) and item.get("body")
         ]
         guided, _, _ = _guided_steps_material(segments)
-        checks, _ = _checks_material(segments)
+        checks, _ = _checks_material(segments, lessons_by_id.get(lesson_id))
         materials = {"key_points": key_material, "rewrites": rewrites,
                      "guided_steps": guided}
         if require_checks:
@@ -993,7 +1006,7 @@ async def _review_result(session, lesson):
     from nevo.api.deferred_media import media_summary, reviewable_media
     rows, segments, points, rewrites = await _review_material(session, lesson)
     guided_material, guided_views, pending_guided_count = _guided_steps_material(segments)
-    checks_material, check_views = _checks_material(segments)
+    checks_material, check_views = _checks_material(segments, lesson)
     calculation_material, calculation_views = _calculation_parts_material(segments)
     result = _review(lesson, rows)
     hashes = {
@@ -1248,7 +1261,7 @@ async def approve_all_checks(
         select(LessonSegment).where(LessonSegment.lesson_id == lesson.id)
         .order_by(LessonSegment.sequence_order, LessonSegment.id).with_for_update()
     ))
-    material, _ = _checks_material(segments)
+    material, _ = _checks_material(segments, lesson)
     digest = _hash(material)
     if digest != payload.expected_content_hash:
         raise HTTPException(409, detail={"code": "review_content_changed"})

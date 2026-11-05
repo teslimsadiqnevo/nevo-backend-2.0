@@ -45,6 +45,7 @@ from nevo.api.lesson_contracts import (
     mini_step_question_id,
     safety_reviewed_visual,
     student_activity,
+    student_checkpoint_payloads,
     student_modalities,
 )
 from nevo.api.product_common import (
@@ -781,6 +782,13 @@ async def _question_for_attempt(
     )
     if question is None:
         raise HTTPException(status_code=404, detail="Lesson question not found")
+    if payload.source in {"assessment", "checkpoint"} and question.get("authoredBy") != "person":
+        from nevo.api.lesson_review import approved_check_ids
+
+        reviewed = await approved_check_ids(session, lesson.id)
+        owner_id = str(lesson.id if payload.source == "assessment" else segment_id)
+        if (owner_id, str(question["id"])) not in reviewed:
+            raise HTTPException(409, detail={"code": "lesson_content_requires_review"})
     if not question.get("conceptId"):
         concepts = list(
             await session.scalars(
@@ -1016,10 +1024,12 @@ async def lesson_detail(
         "classes": await _classes_for_lesson(session, lesson.id),
         "confirmationSummary": lesson.confirmation_summary,
         "recap": lesson.recap,
-        "assessment": checkpoint_payloads(
-            lesson.assessment or [],
-            segment_key="lesson-assessment",
-            presentation_seed=str(actor.id),
+        "assessment": (
+            checkpoint_payloads(lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id))
+            if for_teacher else student_checkpoint_payloads(
+                lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
+                reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+            )
         ),
         "segments": [
             {
@@ -1043,13 +1053,17 @@ async def lesson_detail(
                 "recommendedFormat": recommendations.get(str(item.id))
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,
-                "comprehensionCheckpoints": checkpoint_payloads(
-                    item.comprehension_checkpoints,
-                    segment_key=item.segment_key,
-                    presentation_seed=str(actor.id),
-                    question_offset=item.sequence_order - 1,
-                    include_pending_guidance=for_teacher,
-                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                "comprehensionCheckpoints": (
+                    checkpoint_payloads(
+                        item.comprehension_checkpoints, segment_key=item.segment_key,
+                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        include_pending_guidance=True,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    ) if for_teacher else student_checkpoint_payloads(
+                        item.comprehension_checkpoints, segment_key=item.segment_key,
+                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    )
                 ),
                 "textVariant": item.text_variant,
                 "visualVariant": item.visual_variant
@@ -3386,10 +3400,11 @@ async def _offline_package_payload(
             for module in modules
         ],
         "recap": lesson.recap,
-        "assessment": checkpoint_payloads(
+        "assessment": student_checkpoint_payloads(
             lesson.assessment or [],
             segment_key="lesson-assessment",
             presentation_seed=str(actor.id),
+            reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
         ),
         "segments": [
             {
@@ -3427,7 +3442,7 @@ async def _offline_package_payload(
                 "depthVariants": depth_payloads(
                     item.depth_variants, item.text_variant, for_student=True
                 ),
-                "comprehensionCheckpoints": checkpoint_payloads(
+                "comprehensionCheckpoints": student_checkpoint_payloads(
                     item.comprehension_checkpoints,
                     segment_key=item.segment_key,
                     presentation_seed=str(actor.id),

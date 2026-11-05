@@ -18,7 +18,28 @@ def segment(key, approved=True):
         "reviewedAt": "now",
         "safetyPolicyVersion": POLICY_VERSION,
     }
-    return SimpleNamespace(id=key, depth_variants={"simplified": variant} if approved else {})
+    # A stub that answers everything the delivery code asks a segment, not
+    # only the field each test is about. Two things are checked before a
+    # stored choice is handed back: that the depth variant still carries the
+    # segment's key terms, which live on text_variant, and that the chosen
+    # modality is one this segment actually offers - which reads the body and
+    # every variant. A real LessonSegment has all of them, so a stub missing
+    # one fails on an attribute instead of on the behaviour under test.
+    return SimpleNamespace(
+        id=key,
+        content_type="explanation",
+        body="Halves and quarters.",
+        depth_variants={"simplified": variant} if approved else {},
+        text_variant=None,
+        audio_variant={"audioUrl": "https://cdn.nevo.app/audio/one.mp3"},
+        visual_variant={
+            "imageUrl": "https://cdn.nevo.app/images/one.webp",
+            "safetyPolicyVersion": POLICY_VERSION,
+        },
+        calculation_variant=None,
+        interactive_variant=None,
+        available_modalities=None,
+    )
 
 
 def test_depth_and_slower_follow_sitting_but_format_does_not():

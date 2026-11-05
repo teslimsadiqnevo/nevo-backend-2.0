@@ -889,9 +889,14 @@ async def approved_check_ids(session, lesson_id):
             LessonReviewSignoff.invalidated_at.is_(None),
         ).order_by(LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc()).limit(1)
     )
-    if approval is None or approval.content_hash != _hash(material):
+    if approval is None:
         return authored
-    return authored | {(item["segmentId"], item["questionId"]) for item in material}
+    if approval.content_hash == _hash(material):
+        approved = material
+    else:
+        legacy_material, _ = _checks_material(segments)
+        approved = legacy_material if approval.content_hash == _hash(legacy_material) else []
+    return authored | {(item["segmentId"], item["questionId"]) for item in approved}
 
 
 def _guided_steps_material(segments):

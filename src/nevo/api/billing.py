@@ -284,8 +284,12 @@ class InvoiceResponse(BaseModel):
 
     @classmethod
     def from_record(
-        cls, record: InvoiceRecord, *, today: date | None = None,
-        outstanding_count: int = 0, outstanding_total: Decimal = Decimal("0"),
+        cls,
+        record: InvoiceRecord,
+        *,
+        today: date | None = None,
+        outstanding_count: int = 0,
+        outstanding_total: Decimal = Decimal("0"),
         overdue_panel_applies: bool = False,
     ) -> "InvoiceResponse":
         today = today or datetime.now(UTC).date()
@@ -305,7 +309,9 @@ class InvoiceResponse(BaseModel):
             total_before_vat=record.total_before_vat,
             vat_amount=record.vat_amount,
             vat_rate=record.vat_rate,
-            days_overdue=max(0, (today - record.due_at).days) if record.status != InvoiceStatus.PAID else 0,
+            days_overdue=max(0, (today - record.due_at).days)
+            if record.status != InvoiceStatus.PAID
+            else 0,
             outstanding_count=outstanding_count,
             outstanding_total=outstanding_total,
             overdue_panel_applies=overdue_panel_applies,
@@ -581,7 +587,20 @@ async def invoice_history(
             date_to=date_to,
             status=status_filter,
         )
-        all_records = await service.invoices(school_id=_school_id(actor))
+        # Deliberately unfiltered: the outstanding count, the amount owed and
+        # the overdue banner describe the school's position, not the page the
+        # filters happen to be showing. Filtering to paid invoices should not
+        # report nothing outstanding.
+        #
+        # The filters have no defaults, here or on the repository, so calling
+        # this with school_id alone raised TypeError - a 500 on every request
+        # to the invoices page rather than on some unusual one.
+        all_records = await service.invoices(
+            school_id=_school_id(actor),
+            date_from=None,
+            date_to=None,
+            status=None,
+        )
     except BillingError as error:
         raise public_billing_error(error) from error
     today = datetime.now(UTC).date()
@@ -590,7 +609,9 @@ async def invoice_history(
     overdue_panel_applies = any(item.due_at < today for item in outstanding)
     return [
         InvoiceResponse.from_record(
-            record, today=today, outstanding_count=len(outstanding),
+            record,
+            today=today,
+            outstanding_count=len(outstanding),
             outstanding_total=outstanding_total,
             overdue_panel_applies=overdue_panel_applies,
         )

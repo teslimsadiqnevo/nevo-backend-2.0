@@ -22,7 +22,12 @@ def test_contrast_uses_own_congruent_baseline_and_both_costs():
     assert 0.57 < result["relativeLatencyCost"] < 0.58
     features = reduce_trials(trials())
     profile, config = build_baseline_profile(session_id="test", features=features)
-    assert profile["measurements"]["interference_control"] == result
+    # Stored under "inhibition". The dimension is accepted under either name
+    # on the way in, because devices in the field send both, and normalised
+    # to one on the way into the profile - build_baseline_profile pops the
+    # other - so a reader never has to try two keys.
+    assert profile["measurements"]["inhibition"] == result
+    assert "interference_control" not in profile["measurements"]
     assert config["support"]["shorterTextBlocks"]
     assert config["support"]["simplifiedLayout"]
 

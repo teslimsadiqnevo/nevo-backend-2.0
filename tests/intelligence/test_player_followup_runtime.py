@@ -220,18 +220,28 @@ def test_engine_emits_engagement_decline_from_sustained_stored_evidence(runtime)
 
 
 @pytest.mark.parametrize(
-    "band,seconds",
-    [("early_primary", 45), ("junior_secondary", 60), ("senior_secondary", 90), (None, 90)],
+    "band", ["early_primary", "junior_secondary", "senior_secondary", None]
 )
-def test_question_guidance_has_age_band_grace_without_a_fabricated_measurement(band, seconds):
+def test_a_marked_miss_opens_guidance_immediately_whatever_the_age_band(band):
+    """SCRUM-281: a miss that has been marked opens guidance there and then.
+
+    This used to wait out an age-band grace - 45 seconds for early primary,
+    90 for senior - on the reasoning that a child should get a moment to
+    think again before help appears. The grace was dropped: the deadline is
+    the first miss on the question, so a child who has already been told
+    they are wrong is not left waiting for help that has been decided on.
+    The age band no longer changes it, and the student is read for nothing.
+    """
+
     now = datetime.now(UTC)
     attempts = [
         SimpleNamespace(question_id="q", correct=False, submitted_at=now - timedelta(seconds=index))
         for index in range(3)
     ]
     student = SimpleNamespace(age_band=band, date_of_birth=None)
-    assert guidance_deadline(attempts, student) == now - timedelta(seconds=2) + timedelta(
-        seconds=seconds
-    )
+    # The earliest of the three misses, not the latest: the clock starts when
+    # the child first got it wrong.
+    assert guidance_deadline(attempts, student) == now - timedelta(seconds=2)
+    # A correct first attempt is not a miss, so nothing opens.
     attempts[0].correct = True
     assert guidance_deadline(attempts, student) is None

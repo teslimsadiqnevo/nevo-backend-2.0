@@ -64,10 +64,15 @@ def test_parent_consent_screen_contracts_are_typed() -> None:
 
     # A generated client should not have to discover these by sending a bad one.
     request_type = schemas["ParentRightRequest"]["properties"]["requestType"]
+    # restore_consent is in the vocabulary because the rights log records and
+    # filters by it, and this token route refuses it with 422: an emailed
+    # link is enough to withdraw, which fails safe, and not enough to give a
+    # child's access back. The route for that is on the parent's account.
     assert schemas["ParentRightType"]["enum"] == [
         "request_data",
         "object",
         "withdraw_consent",
+        "restore_consent",
     ]
     assert "reason" in schemas["ParentRightRequest"]["properties"]
     assert "$ref" in request_type or "allOf" in request_type

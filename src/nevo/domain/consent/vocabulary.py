@@ -55,6 +55,13 @@ class ParentRightType(StrEnum):
     REQUEST_DATA = "request_data"
     OBJECT = "object"
     WITHDRAW_CONSENT = "withdraw_consent"
+    #: Giving back a consent this parent withdrew. A withdrawal used to be
+    #: terminal by accident rather than by policy: it records a refusal that
+    #: stops the school asking again, the confirm paths refuse to overrule it,
+    #: and parent completion only lifts a pending record - so a parent who
+    #: changed their mind had nowhere to say so. Only the parent's own
+    #: account offers this, which is the same ruling that governs withdrawal.
+    RESTORE_CONSENT = "restore_consent"
 
 
 REQUIRED_LEARNING_CONSENT = ConsentType.DATA_PROCESSING

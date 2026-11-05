@@ -31,9 +31,15 @@ from nevo.db.models.account import ConsentRecord, User
 from nevo.db.models.consent import ParentLink
 from nevo.db.models.consent_assurance import ConsentRefusal
 from nevo.db.models.product import ParentDataRequest
-from nevo.domain.accounts.vocabulary import ConsentStatus, ConsentType, UserStatus
+from nevo.domain.accounts.vocabulary import (
+    ConsentMethod,
+    ConsentStatus,
+    ConsentType,
+    UserStatus,
+)
 from nevo.domain.consent.vocabulary import (
     REQUIRED_LEARNING_CONSENT,
+    ConsentConfirmationSource,
     ConsentRefusalReason,
     ParentRightType,
 )
@@ -71,6 +77,26 @@ class WithdrawalRequest(BaseModel):
     reason: Annotated[str | None, Field(default=None, max_length=1000)] = None
 
 
+class RestoreRequest(BaseModel):
+    """Which consents a parent is giving back.
+
+    The same shape as a withdrawal and deliberately its own model: a client
+    generated off a route whose body is called WithdrawalRequest reads as
+    though it withdraws.
+    """
+
+    model_config = CAMEL_CONFIG
+
+    student_id: Annotated[UUID, Field(alias="studentId")]
+    #: Omitted means every consent this parent withdrew, which is what a
+    #: parent pressing "give permission again" means.
+    consent_types: Annotated[
+        list[ConsentType] | None,
+        Field(default=None, alias="consentTypes"),
+    ] = None
+    reason: Annotated[str | None, Field(default=None, max_length=1000)] = None
+
+
 class RightRequest(BaseModel):
     model_config = CAMEL_CONFIG
 
@@ -86,6 +112,11 @@ class RightOutcome(CamelResponse):
     #: they were told would happen.
     effect: str
     withdrawn_types: list[ConsentType] = Field(default_factory=list)
+    #: Consents given back, for the restore route. Kept separate from
+    #: withdrawn_types rather than reusing it: a client reading
+    #: "withdrawnTypes" off a restore would report the opposite of what
+    #: happened to the parent who just did it.
+    restored_types: list[ConsentType] = Field(default_factory=list)
     recorded_at: datetime
 
 
@@ -183,9 +214,7 @@ def _refuse_another_parents_consent(
                 "Another of this child's grown-ups gave this permission, so "
                 "only they can take it back. Speak to them, or to the school."
             ),
-            "consentTypes": sorted(
-                record.consent_type.value for record in theirs_to_give
-            ),
+            "consentTypes": sorted(record.consent_type.value for record in theirs_to_give),
         },
     )
 
@@ -250,6 +279,165 @@ async def withdraw_consent(
         withdrawn_types=sorted(withdrawn, key=lambda item: item.value),
         recorded_at=now,
     )
+
+
+def _refuse_restoring_another_parents_consent(
+    records: list[ConsentRecord],
+    *,
+    wanted: set[ConsentType],
+    parent_id: UUID,
+) -> None:
+    """A guardian gives back the consent they took away, and nobody else's.
+
+    The mirror of _refuse_another_parents_consent. Without it, adding a
+    guardian would be a way to undo another guardian's withdrawal, which is
+    the same hole the 5 November ruling closed from the other side - and the
+    worse direction of the two, because it puts a child back into processing
+    the person responsible for them had stopped.
+
+    A withdrawal with no recorded actor - one a job or an older release
+    wrote - is not attributed to anybody, so any linked guardian may lift it.
+    """
+
+    not_theirs = [
+        record
+        for record in records
+        if record.consent_type in wanted
+        and record.status is ConsentStatus.WITHDRAWN
+        and record.last_actor_user_id is not None
+        and record.last_actor_user_id != parent_id
+    ]
+    if not not_theirs:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "withdrawal_belongs_to_another_guardian",
+            "message": (
+                "Another of this child's grown-ups took this permission "
+                "back, so only they can give it again. Speak to them, or to "
+                "the school."
+            ),
+            "consentTypes": sorted(record.consent_type.value for record in not_theirs),
+        },
+    )
+
+
+@router.post("/consents/restore", response_model=RightOutcome)
+async def restore_consent(
+    payload: RestoreRequest,
+    parent_id: ParentDependency,
+    session: DatabaseSession,
+) -> RightOutcome:
+    """Give back a consent this parent withdrew.
+
+    Withdrawal was terminal, and not on purpose. Three things each correctly
+    refuse to overrule a withdrawal - the school's confirm paths, the written
+    consent form, and the refusal record that stops the school asking the
+    same parent again - and together they left no route back at all. A parent
+    who withdrew in November and changed their mind in January had to ask the
+    school to do something the school is specifically forbidden to do.
+
+    So the way back is the parent's own, like the way out. Restoring also
+    clears the refusal: it exists so the school does not keep asking someone
+    who said no, and a parent saying yes here has answered.
+    """
+
+    student = await _own_child(session, parent_id, payload.student_id)
+    now = datetime.now(UTC)
+    wanted = set(payload.consent_types or list(ConsentType))
+    records = list(
+        await session.scalars(
+            select(ConsentRecord).where(ConsentRecord.subject_user_id == student.id)
+        )
+    )
+    _refuse_restoring_another_parents_consent(records, wanted=wanted, parent_id=parent_id)
+    restored: list[ConsentType] = []
+    for record in records:
+        if record.consent_type not in wanted:
+            continue
+        if record.status is not ConsentStatus.WITHDRAWN:
+            continue
+        record.status = ConsentStatus.CONFIRMED
+        record.confirmed_at = now
+        # confirmation_fields_match_status wants one source and exactly the
+        # actor that goes with it. The record being restored may have been
+        # the school's - confirmed off a paper form, then withdrawn - and
+        # leaving its admin id in place beside a parent id satisfies neither
+        # branch of that constraint. This consent is now the parent's, given
+        # in their own account, so the attribution moves with it.
+        record.confirmation_source = ConsentConfirmationSource.PARENT
+        record.confirmed_by_parent_id = parent_id
+        record.confirmed_by_admin_id = None
+        record.confirmed_via = ConsentMethod.DIGITAL
+        record.last_actor_user_id = parent_id
+        record.last_changed_at = now
+        record.last_channel = "parent_portal"
+        restored.append(record.consent_type)
+    if not restored:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "nothing_to_restore",
+                "message": "There is no withdrawn permission here to give back.",
+            },
+        )
+    resumes_access = REQUIRED_LEARNING_CONSENT in restored
+    if resumes_access and student.status is UserStatus.DEACTIVATED:
+        student.status = UserStatus.ACTIVE
+        student.deactivated_at = None
+    request = ParentDataRequest(
+        student_id=student.id,
+        parent_id=parent_id,
+        request_type=ParentRightType.RESTORE_CONSENT.value,
+        reason=payload.reason,
+    )
+    session.add(request)
+    await _clear_refusal(session, parent_id=parent_id, student_id=student.id)
+    await session.commit()
+    return RightOutcome(
+        request_id=request.id,
+        request_type=ParentRightType.RESTORE_CONSENT,
+        student_id=student.id,
+        effect=(
+            "Your child can use Nevo again. Their school has been told."
+            if resumes_access
+            else "Nevo may do this again. Nothing else about your child's lessons has changed."
+        ),
+        restored_types=sorted(restored, key=lambda item: item.value),
+        recorded_at=now,
+    )
+
+
+async def _clear_refusal(
+    session: AsyncSession,
+    *,
+    parent_id: UUID,
+    student_id: UUID,
+) -> None:
+    """Undo _record_refusal, so the school is not frozen out of asking again.
+
+    The refusal is a standing instruction not to contact this parent about
+    this child. A parent who has just restored consent in their own account
+    has withdrawn that instruction by answering, and leaving it in place
+    would block the next term's request for a consent that is now given.
+    """
+
+    parent = await session.get(User, parent_id)
+    contact = (parent.email if parent else None) or ""
+    if not contact:
+        return
+    refusals = list(
+        await session.scalars(
+            select(ConsentRefusal).where(
+                ConsentRefusal.student_id == student_id,
+                ConsentRefusal.contact_digest == contact_digest(contact),
+                ConsentRefusal.reason == ConsentRefusalReason.WITHDRAWN,
+            )
+        )
+    )
+    for refusal in refusals:
+        await session.delete(refusal)
 
 
 async def _record_refusal(

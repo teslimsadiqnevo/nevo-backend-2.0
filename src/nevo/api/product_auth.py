@@ -1648,7 +1648,23 @@ async def exercise_parent_right(
     The token is hashed by the consent token service, not by this module's
     plain digest. Using the wrong one here meant every valid link resolved to
     "Parent link not found", so no parent could object or withdraw at all.
+
+    Restoring a withdrawn consent is deliberately not available here. This
+    token is a link in an email that may be months old and forwarded; giving
+    a child's access back is not a thing to do on the strength of that. It
+    lives on the parent's signed-in account instead.
     """
+    if payload.request_type is ParentRightType.RESTORE_CONSENT:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "restore_requires_parent_account",
+                "message": (
+                    "To give this permission back, sign in to your parent "
+                    "account. A link from an email is not enough for this."
+                ),
+            },
+        )
     outcome = await service.exercise_parent_right(
         token=token,
         request_type=payload.request_type,

@@ -146,6 +146,50 @@ async def my_consents(
     return out
 
 
+def _refuse_another_parents_consent(
+    records: list[ConsentRecord],
+    *,
+    wanted: set[ConsentType],
+    parent_id: UUID,
+) -> None:
+    """A guardian withdraws the consent they gave, and nobody else's.
+
+    Any link to a child used to carry the right to withdraw, so a second
+    guardian added after consent was given could suspend a child on the
+    strength of a consent the first guardian had given. Ruling from Lydia,
+    5 November: adding a guardian must not be able to withdraw the child.
+
+    Where no parent gave the consent - the school recorded it from a paper
+    form, or confirmed it themselves - any linked guardian may withdraw.
+    Otherwise a school-confirmed consent could never be withdrawn by
+    anybody, which is a worse failure than this one.
+    """
+
+    theirs_to_give = [
+        record
+        for record in records
+        if record.consent_type in wanted
+        and record.status is not ConsentStatus.WITHDRAWN
+        and record.confirmed_by_parent_id is not None
+        and record.confirmed_by_parent_id != parent_id
+    ]
+    if not theirs_to_give:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "consent_belongs_to_another_guardian",
+            "message": (
+                "Another of this child's grown-ups gave this permission, so "
+                "only they can take it back. Speak to them, or to the school."
+            ),
+            "consentTypes": sorted(
+                record.consent_type.value for record in theirs_to_give
+            ),
+        },
+    )
+
+
 @router.post("/consents/withdraw", response_model=RightOutcome)
 async def withdraw_consent(
     payload: WithdrawalRequest,
@@ -164,10 +208,14 @@ async def withdraw_consent(
     student = await _own_child(session, parent_id, payload.student_id)
     now = datetime.now(UTC)
     wanted = set(payload.consent_types or list(ConsentType))
+    records = list(
+        await session.scalars(
+            select(ConsentRecord).where(ConsentRecord.subject_user_id == student.id)
+        )
+    )
+    _refuse_another_parents_consent(records, wanted=wanted, parent_id=parent_id)
     withdrawn: list[ConsentType] = []
-    for record in await session.scalars(
-        select(ConsentRecord).where(ConsentRecord.subject_user_id == student.id)
-    ):
+    for record in records:
         if record.consent_type not in wanted:
             continue
         if record.status is ConsentStatus.WITHDRAWN:

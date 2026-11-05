@@ -339,6 +339,7 @@ class EscalationResponse(BaseModel):
     recipient_name: str | None = Field(default=None, alias="recipientName")
     received_at: datetime | None = Field(default=None, alias="receivedAt")
     receipt_line: str | None = Field(default=None, alias="receiptLine")
+    notified_count: int | None = Field(default=None, alias="notifiedCount")
 
 
 class NotificationResponse(BaseModel):
@@ -1734,7 +1735,9 @@ async def _escalation_class(session: DatabaseSession, student: User | None) -> C
     )
 
 
-async def _escalation_response(session: DatabaseSession, record: Escalation, student: User) -> EscalationResponse:
+async def _escalation_response(
+    session: DatabaseSession, record: Escalation, student: User, *, notified_count: int | None = None
+) -> EscalationResponse:
     teacher = await session.get(User, record.teacher_id)
     viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
     recipient = await session.get(User, record.recipient_user_id) if record.recipient_user_id else None
@@ -1762,6 +1765,7 @@ async def _escalation_response(session: DatabaseSession, record: Escalation, stu
         receivedAt=record.received_at,
         receiptLine=(f"Sent to {recipient_name} on {record.received_at:%d %B %Y at %H:%M UTC}"
                      if recipient_name and record.received_at else None),
+        notifiedCount=notified_count,
     )
 
 
@@ -1784,8 +1788,9 @@ async def create_escalation(
         if flag is None or flag.student_id != payload.student_id:
             raise HTTPException(status_code=404, detail="Attention flag not found")
     await session.scalar(select(School.id).where(School.id == actor.school_id).with_for_update())
+    holders = await _holders(session, actor.school_id)
     fallback = None
-    if not await _holders(session, actor.school_id):
+    if not holders:
         fallback = await fallback_school_admin(session, actor.school_id)
         if fallback is None:
             raise HTTPException(status_code=409, detail={"code": "concern_recipient_unavailable"})
@@ -1807,7 +1812,23 @@ async def create_escalation(
             title="A teacher raised a concern", description=f"A concern about {_display_name(student)} needs your attention.",
             navigates_to="/admin/notifications", category=NotificationCategory.ATTENTION.value,
         ))
-    result = await _escalation_response(session, record, student)
+    else:
+        for grant in holders:
+            holder = await session.get(User, grant.holder_user_id)
+            if holder is None:
+                continue
+            session.add(Notification(
+                recipient_id=holder.id, recipient_role=holder.role.value,
+                type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
+                title="A teacher raised a concern",
+                description=f"A concern about {_display_name(student)} needs your attention.",
+                navigates_to=(f"/teacher/students/{student.id}"
+                              if holder.role == UserRole.TEACHER else "/admin/notifications"),
+                category=NotificationCategory.ATTENTION.value,
+            ))
+    result = await _escalation_response(
+        session, record, student, notified_count=1 if fallback else len(holders)
+    )
     await session.commit()
     return result
 

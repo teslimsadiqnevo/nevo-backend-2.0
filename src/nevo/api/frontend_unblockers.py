@@ -39,7 +39,7 @@ from nevo.api.content import (
     get_lesson_media_service,
 )
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.learning_support import _holders, holds_learning_support, require_learning_support
+from nevo.api.learning_support import _holders, fallback_school_admin, holds_learning_support, require_learning_support
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     calculation_for_delivery,
@@ -113,7 +113,6 @@ from nevo.db.models.frontend_support import (
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.probe import ProbeItem
 from nevo.db.models.product import LessonModule, LessonProgress
-from nevo.db.models.permission import Admin
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.subject import ClassSubject, SchoolSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
@@ -130,7 +129,7 @@ from nevo.domain.intelligence.vocabulary import (
     LessonScope,
     LessonSourceType,
 )
-from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
+from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.signal_events.vocabulary import (
     LearnerObservationPattern,
     LessonCompletionStatus,
@@ -1787,14 +1786,7 @@ async def create_escalation(
     await session.scalar(select(School.id).where(School.id == actor.school_id).with_for_update())
     fallback = None
     if not await _holders(session, actor.school_id):
-        fallback = (await session.execute(
-            select(User)
-            .join(Admin, Admin.user_id == User.id)
-            .where(Admin.school_id == actor.school_id, User.school_id == actor.school_id,
-                   User.status == UserStatus.ACTIVE)
-            .order_by((Admin.access_level == AdminAccessLevel.SENIOR).desc(), Admin.created_at, User.id)
-            .limit(1)
-        )).scalar_one_or_none()
+        fallback = await fallback_school_admin(session, actor.school_id)
         if fallback is None:
             raise HTTPException(status_code=409, detail={"code": "concern_recipient_unavailable"})
     record = Escalation(

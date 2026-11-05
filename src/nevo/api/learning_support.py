@@ -19,7 +19,7 @@ from nevo.db.models.account import School, User
 from nevo.db.models.auth import AuthAuditEvent
 from nevo.db.models.permission import Admin, AdminScopeAssignment, LearningSupportGrant
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
-from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
 
 router = APIRouter(prefix="/api/v1/learning-support", tags=["permissions"])
 
@@ -37,6 +37,11 @@ class LearningSupportHolder(CamelResponse):
     granted_by_name: str
 
 
+class FallbackRecipient(CamelResponse):
+    user_id: UUID
+    name: str
+
+
 class LearningSupportHolders(CamelResponse):
     """What the compliance screen shows, and what a grant screen asks about.
 
@@ -47,6 +52,7 @@ class LearningSupportHolders(CamelResponse):
     holders: list[LearningSupportHolder]
     #: True when the person asking holds it themselves.
     viewer_holds_it: bool
+    fallback_recipient: FallbackRecipient | None = None
 
 
 class LearningSupportHistoryItem(CamelResponse):
@@ -85,6 +91,17 @@ async def _holders(session: AsyncSession, school_id: UUID | None) -> list[Learni
         .order_by(LearningSupportGrant.granted_at)
     )
     return list(rows)
+
+
+async def fallback_school_admin(session: AsyncSession, school_id: UUID) -> User | None:
+    return await session.scalar(
+        select(User)
+        .join(Admin, Admin.user_id == User.id)
+        .where(Admin.school_id == school_id, User.school_id == school_id,
+               User.status == UserStatus.ACTIVE)
+        .order_by((Admin.access_level == AdminAccessLevel.SENIOR).desc(), Admin.created_at, User.id)
+        .limit(1)
+    )
 
 
 async def holds_learning_support(session: AsyncSession, user: User) -> bool:
@@ -167,6 +184,11 @@ async def list_holders(
     return LearningSupportHolders(
         holders=await _view(session, grants),
         viewer_holds_it=any(grant.holder_user_id == actor.id for grant in grants),
+        fallback_recipient=(
+            FallbackRecipient(user_id=admin.id, name=_name(admin))
+            if not grants and (admin := await fallback_school_admin(session, actor.school_id))
+            else None
+        ),
     )
 
 

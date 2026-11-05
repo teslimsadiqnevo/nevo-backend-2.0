@@ -15,28 +15,37 @@ SPEC = app.openapi()
 
 
 def test_b44_the_signal_stream_refuses_a_withdrawn_child() -> None:
-    from nevo.api.signals import _refuse_a_withdrawn_child, ingest_signal_batch
+    from nevo.api.signals import _require_confirmed_consent, ingest_signal_batch
 
     # The gate was on starting a lesson, recording progress, taking one
     # offline and asking Nevo - and not on the stream. So a client that
     # missed a withdrawal went on reporting a child nobody may process.
-    assert "_refuse_a_withdrawn_child" in inspect.getsource(ingest_signal_batch)
-    gate = inspect.getsource(_refuse_a_withdrawn_child)
+    #
+    # The gate was first written as _refuse_a_withdrawn_child, which named
+    # only the case that prompted it. Pending, not-sent and missing consent
+    # are no more a licence to collect than a withdrawal is, so it refuses
+    # anything short of confirmed and is named for that.
+    assert "_require_confirmed_consent" in inspect.getsource(ingest_signal_batch)
+    gate = inspect.getsource(_require_confirmed_consent)
     assert "require_student_consent" in gate
 
 
 def test_b44_the_gate_does_not_turn_a_client_error_into_a_server_fault() -> None:
-    from nevo.api.signals import _refuse_a_withdrawn_child, ingest_signal_batch
+    from nevo.api.signals import _require_confirmed_consent, ingest_signal_batch
 
     # Resolved inside the handler, not injected. A route dependency resolves
     # before the handler, so an unreachable consent service answered 503 to
     # requests this route should have refused with 403 or 422 on its own
     # terms. Second time a route-level gate has done that.
     assert "StudentLearningConsent" not in inspect.getsource(ingest_signal_batch)
-    # And an unconfigured service is not a withdrawal: refusing every child
-    # because one service is down would lose a lesson's evidence to protect
-    # nobody.
-    assert "if service is None:" in inspect.getsource(_refuse_a_withdrawn_child)
+    # An unconfigured gate is not permission to collect. This read the other
+    # way round once - a missing service let the batch through, on the
+    # reasoning that one service being down should not cost a lesson its
+    # evidence. It is the child's evidence either way, and consent that
+    # cannot be checked has not been given, so it fails closed.
+    gate = inspect.getsource(_require_confirmed_consent)
+    assert "if service is None:" in gate
+    assert "consent_service_unavailable" in gate
 
 
 def test_b57_a_session_cannot_renew_forever() -> None:

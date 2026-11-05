@@ -31,7 +31,11 @@ from nevo.api.ai_gateway import AiGatewayDependency, public_ai_error
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.lesson_contracts import (
-    GuidedCheckStep, checkpoint_payloads, depth_approved, explanation_reveals_answer,
+    CalculationMiniStep,
+    GuidedCheckStep,
+    checkpoint_payloads,
+    depth_approved,
+    explanation_reveals_answer,
 )
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor
@@ -167,6 +171,65 @@ class GuidedStepsBulkReviewRequest(BaseModel):
     expected_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class GuidedReaskWrite(BaseModel):
+    model_config = CAMEL_CONFIG
+    reask_prompt: str = Field(min_length=8, max_length=500)
+
+
+@router.put(
+    "/lessons/{lesson_id}/segments/{segment_id}/guided-steps/{step_id}/reask",
+    response_model=LessonReviewResponse,
+)
+async def write_guided_reask(
+    lesson_id: UUID,
+    segment_id: UUID,
+    step_id: str,
+    payload: GuidedReaskWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    gateway: AiGatewayDependency,
+) -> LessonReviewResponse:
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    segment = await session.get(LessonSegment, segment_id, with_for_update=True)
+    if segment is None or segment.lesson_id != lesson.id:
+        raise HTTPException(404, detail={"code": "lesson_section_not_found"})
+    text = " ".join(payload.reask_prompt.split())
+    try:
+        await gateway.safety_guard.check(
+            text,
+            phase="lesson_source",
+            context=AiRequestContext(
+                requester_user_id=actor.id, school_id=actor.school_id, student_id=None,
+            ),
+        )
+    except AiGatewayError as error:
+        raise public_ai_error(error, audience="teacher") from error
+    checkpoints = [dict(question) for question in segment.comprehension_checkpoints or []]
+    changed = False
+    for question in checkpoints:
+        steps = [dict(step) for step in (
+            question.get("pendingGuidedSteps") or question.get("guidedSteps") or []
+        )]
+        for step in steps:
+            if str(step.get("id")) != step_id:
+                continue
+            if explanation_reveals_answer({**step, "explanation": text}):
+                raise HTTPException(422, detail={"code": "reask_reveals_answer"})
+            step["reaskPrompt"] = text
+            question["pendingGuidedSteps"] = steps
+            question["guidedStepsReviewStatus"] = "pending_review"
+            changed = True
+            break
+        if changed:
+            break
+    if not changed:
+        raise HTTPException(404, detail={"code": "guided_step_not_found"})
+    segment.comprehension_checkpoints = checkpoints
+    await _invalidate_signoffs(session, lesson.id, "guided_steps")
+    await session.commit()
+    return await _review_result(session, lesson)
+
+
 class CalculationPartsGenerationResponse(CamelResponse):
     lesson_id: UUID
     generated_step_count: int
@@ -176,6 +239,80 @@ class CalculationPartsGenerationResponse(CamelResponse):
     review: "LessonReviewResponse"
 
 
+class CalculationSupportWrite(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    concept_explanation: str | None = Field(default=None, min_length=12, max_length=1000)
+    mini_steps: list[CalculationMiniStep] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def has_support(self):
+        if not self.concept_explanation and not self.mini_steps:
+            raise ValueError("Provide a concept explanation or answerable mini-steps")
+        ids = [item.id for item in self.mini_steps]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Mini-step IDs must be unique within the step")
+        return self
+
+
+class CalculationSupportResponse(CamelResponse):
+    lesson_id: UUID
+    segment_id: UUID
+    step_id: str
+    approved_by: UUID
+    approved_at: datetime
+
+
+@router.put(
+    "/lessons/{lesson_id}/segments/{segment_id}/calculation-steps/{step_id}/support",
+    response_model=CalculationSupportResponse,
+)
+async def write_calculation_support(
+    lesson_id: UUID,
+    segment_id: UUID,
+    step_id: str,
+    payload: CalculationSupportWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    gateway: AiGatewayDependency,
+) -> CalculationSupportResponse:
+    lesson, actor = await _lesson_for_review(session, principal, lesson_id)
+    segment = await session.get(LessonSegment, segment_id, with_for_update=True)
+    if segment is None or segment.lesson_id != lesson.id:
+        raise HTTPException(404, detail={"code": "lesson_section_not_found"})
+    variant = dict(segment.calculation_variant or {})
+    steps = [dict(step) for step in variant.get("steps", [])]
+    target = next((step for step in steps if str(step.get("stepId")) == step_id), None)
+    if target is None:
+        raise HTTPException(404, detail={"code": "calculation_step_not_found"})
+    support_text = "\n".join([
+        payload.concept_explanation or "",
+        *(mini.prompt for mini in payload.mini_steps),
+        *(option.label for mini in payload.mini_steps for option in mini.options),
+        *(str(mini.answer) for mini in payload.mini_steps),
+        *(str(answer) for mini in payload.mini_steps for answer in mini.accepted_answers),
+    ])
+    try:
+        await gateway.safety_guard.check(
+            support_text, phase="lesson_source",
+            context=AiRequestContext(
+                requester_user_id=actor.id, school_id=actor.school_id, student_id=None,
+            ),
+        )
+    except AiGatewayError as error:
+        raise public_ai_error(error, audience="teacher") from error
+    now = datetime.now(UTC)
+    target["conceptExplanation"] = payload.concept_explanation
+    target["miniSteps"] = [mini.model_dump(by_alias=True, exclude_none=True) for mini in payload.mini_steps]
+    target["supportReviewStatus"] = "approved"
+    target["supportApprovedBy"] = str(actor.id)
+    target["supportApprovedAt"] = now.isoformat()
+    segment.calculation_variant = {**variant, "steps": steps}
+    await session.commit()
+    return CalculationSupportResponse(
+        lesson_id=lesson.id, segment_id=segment.id, step_id=step_id,
+        approved_by=actor.id, approved_at=now,
+    )
 class TransferGenerationRequest(BaseModel):
     model_config = CAMEL_CONFIG
     concept_id: UUID
@@ -239,7 +376,6 @@ async def approve_class_practical(
         raise HTTPException(409, detail={"code": "class_practical_requires_activity"})
     if payload.suitable and not (payload.materials or payload.requirements):
         raise HTTPException(422, detail={"code": "class_practical_details_required"})
-    source_safety = variant.get("safety")
     if payload.suitable:
         try:
             await gateway.safety_guard.check(
@@ -258,7 +394,7 @@ async def approve_class_practical(
         "suitable": payload.suitable,
         "materials": payload.materials if payload.suitable else [],
         "requirements": payload.requirements if payload.suitable else [],
-        "safety": source_safety if payload.suitable else None,
+        "safety": variant.get("safety") if payload.suitable else None,
         "approvedBy": str(actor.id),
         "approvedAt": at.isoformat(),
     }
@@ -821,30 +957,37 @@ async def _review_material(session, lesson):
     return rows, segments, key_material, rewrites
 
 
-def _checks_material(segments, assessment=None):
+def _checks_material(segments, lesson=None):
     from nevo.api.lesson_contracts import checkpoint_payloads
 
     material = []
     views = []
-    for segment in [*segments, None] if assessment else segments:
-        raw_questions = assessment if segment is None else segment.comprehension_checkpoints or []
+    # The end-of-lesson questions are owned by the lesson's own id, as on main, so
+    # a checks sign-off given before levels existed still matches its hash. Level
+    # and transfer details join an item only where the question carries them.
+    sources = [
+        (segment.id, segment.title, segment.segment_key,
+         segment.comprehension_checkpoints or [], "checkpoint")
+        for segment in segments
+    ]
+    if lesson is not None:
+        sources.append((lesson.id, "End-of-lesson check", "lesson-assessment",
+                        lesson.assessment or [], "assessment"))
+    for segment_id, segment_title, segment_key, raw_questions, scope in sources:
         raw_by_id = {str(item.get("id")): item for item in raw_questions if isinstance(item, dict)}
         questions = checkpoint_payloads(
-            raw_questions,
-            segment_key="lesson-assessment" if segment is None else segment.segment_key,
+            raw_questions, segment_key=segment_key
         )
         for question in questions:
             raw = raw_by_id.get(str(question["id"]), {})
             item = {
-                "segmentId": str(segment.id) if segment is not None else None,
+                "segmentId": str(segment_id),
                 "questionId": str(question["id"]),
                 "questionPrompt": question["prompt"],
                 "questionAnswerType": question["answerType"],
                 "questionOptions": question.get("options") or [],
                 "questionAnswerKey": question["answerKey"],
             }
-            if segment is None:
-                item["scope"] = "assessment"
             if question.get("masteryLevel") is not None:
                 item["masteryLevel"] = question["masteryLevel"]
                 item["masteryLevelAuthoredBy"] = question.get("masteryLevelAuthoredBy")
@@ -861,9 +1004,7 @@ def _checks_material(segments, assessment=None):
             if (not authored or inferred_level) and markable:
                 material.append(item)
             views.append(CheckReviewItem(
-                segment_id=segment.id if segment is not None else None,
-                segment_title=segment.title if segment is not None else None,
-                scope=item.get("scope", "checkpoint"),
+                segment_id=segment_id, segment_title=segment_title, scope=scope,
                 question_id=item["questionId"], question_prompt=item["questionPrompt"],
                 question_answer_type=item["questionAnswerType"],
                 question_options=item["questionOptions"], question_answer_key=item["questionAnswerKey"],
@@ -880,28 +1021,26 @@ def _checks_material(segments, assessment=None):
 
 async def approved_check_ids(session, lesson_id):
     from nevo.api.lesson_contracts import checkpoint_payloads
-    lesson = await session.get(Lesson, lesson_id)
     segments = list(await session.scalars(
         select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
         .order_by(LessonSegment.sequence_order, LessonSegment.id)
     ))
-    assessment = lesson.assessment or [] if lesson is not None else []
-    material, _ = _checks_material(segments, assessment)
+    lesson = await session.get(Lesson, lesson_id)
+    material, _ = _checks_material(segments, lesson)
     authored = {
-        (str(segment.id), str(question["id"]))
-        for segment in segments
+        (str(segment_id), str(question["id"]))
+        for segment_id, _, segment_key, raw_questions in [
+            *[(segment.id, segment.title, segment.segment_key, segment.comprehension_checkpoints or [])
+              for segment in segments],
+            *([(lesson.id, "End-of-lesson check", "lesson-assessment", lesson.assessment or [])]
+              if lesson is not None else []),
+        ]
         for question in checkpoint_payloads(
-            segment.comprehension_checkpoints or [], segment_key=segment.segment_key
+            raw_questions, segment_key=segment_key
         )
         if question.get("authoredBy") == "person"
         and question.get("answerKey") is not None
     }
-    authored.update(
-        ("assessment", str(question["id"]))
-        for question in checkpoint_payloads(assessment, segment_key="lesson-assessment")
-        if question.get("authoredBy") == "person"
-        and question.get("answerKey") is not None
-    )
     if not material:
         return authored
     approval = await session.scalar(
@@ -911,14 +1050,22 @@ async def approved_check_ids(session, lesson_id):
             LessonReviewSignoff.invalidated_at.is_(None),
         ).order_by(LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc()).limit(1)
     )
-    if approval is None or approval.content_hash != _hash(material):
+    if approval is None:
         return authored
-    return authored | {(
-        item["segmentId"] or "assessment", item["questionId"]
-    ) for item in material}
+    if approval.content_hash == _hash(material):
+        approved = material
+    else:
+        legacy_material, _ = _checks_material(segments)
+        approved = legacy_material if approval.content_hash == _hash(legacy_material) else []
+    return authored | {(item["segmentId"], item["questionId"]) for item in approved}
 
 
 async def approved_level_ids(session, lesson_id):
+    """Question ids whose mastery level a person wrote or the current checks sign-off covers.
+
+    Keys match approved_check_ids: (owner id, question id), where the owner of an
+    end-of-lesson question is the lesson itself.
+    """
     lesson = await session.get(Lesson, lesson_id)
     if lesson is None:
         return set()
@@ -926,12 +1073,12 @@ async def approved_level_ids(session, lesson_id):
         select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
         .order_by(LessonSegment.sequence_order, LessonSegment.id)
     ))
-    material, _ = _checks_material(segments, lesson.assessment or [])
+    material, _ = _checks_material(segments, lesson)
     authored_levels = {
-        (str(segment.id) if segment else "assessment", str(question.get("id")))
-        for segment, questions in [
-            *((item, item.comprehension_checkpoints or []) for item in segments),
-            (None, lesson.assessment or []),
+        (str(owner_id), str(question.get("id")))
+        for owner_id, questions in [
+            *((item.id, item.comprehension_checkpoints or []) for item in segments),
+            (lesson.id, lesson.assessment or []),
         ]
         for question in questions
         if question.get("masteryLevel") in {"knowledge", "application", "analysis"}
@@ -950,7 +1097,7 @@ async def approved_level_ids(session, lesson_id):
     if approval is None or approval.content_hash != _hash(material):
         return authored_levels
     return authored_levels | {
-        (item["segmentId"] or "assessment", item["questionId"])
+        (item["segmentId"], item["questionId"])
         for item in material if item.get("masteryLevel") in {"knowledge", "application", "analysis"}
     }
 
@@ -1007,14 +1154,12 @@ def _guided_steps_material(segments):
 
 
 async def review_complete_map(session, lesson_ids, *, require_checks=True):
-    """Calculate library readiness without loading review media."""
+    """Calculate library readiness in three reads, without loading review media."""
     if not lesson_ids:
         return {}
-    lessons = {
-        lesson.id: lesson for lesson in await session.scalars(
-            select(Lesson).where(Lesson.id.in_(lesson_ids))
-        )
-    }
+    lessons_by_id = {lesson.id: lesson for lesson in await session.scalars(
+        select(Lesson).where(Lesson.id.in_(lesson_ids))
+    )}
     segments_by_lesson = defaultdict(list)
     for segment in await session.scalars(
         select(LessonSegment).where(LessonSegment.lesson_id.in_(lesson_ids))
@@ -1051,9 +1196,7 @@ async def review_complete_map(session, lesson_ids, *, require_checks=True):
             if isinstance(item := (segment.depth_variants or {}).get(kind), dict) and item.get("body")
         ]
         guided, _, _ = _guided_steps_material(segments)
-        checks, _ = _checks_material(
-            segments, lessons[lesson_id].assessment or [] if lesson_id in lessons else []
-        )
+        checks, _ = _checks_material(segments, lessons_by_id.get(lesson_id))
         materials = {"key_points": key_material, "rewrites": rewrites,
                      "guided_steps": guided}
         if require_checks:
@@ -1071,7 +1214,7 @@ async def _review_result(session, lesson):
     from nevo.api.deferred_media import media_summary, reviewable_media
     rows, segments, points, rewrites = await _review_material(session, lesson)
     guided_material, guided_views, pending_guided_count = _guided_steps_material(segments)
-    checks_material, check_views = _checks_material(segments, lesson.assessment or [])
+    checks_material, check_views = _checks_material(segments, lesson)
     calculation_material, calculation_views = _calculation_parts_material(segments)
     result = _review(lesson, rows)
     hashes = {
@@ -1198,6 +1341,23 @@ async def _bulk_approve(session, lesson, actor, payload, kind):
                 "message": "This lesson has no rewrites to approve.",
             },
         )
+    if kind == "rewrites":
+        from nevo.api.lesson_contracts import depth_retains_key_terms
+
+        invalid = [
+            {"segmentId": str(segment.id), "variant": key}
+            for segment in segments
+            for key in ("simplified", "expanded")
+            if isinstance(item := (segment.depth_variants or {}).get(key), dict)
+            and item.get("body")
+            and not depth_retains_key_terms(item, segment.text_variant)
+        ]
+        if invalid:
+            raise HTTPException(409, detail={
+                "code": "rewrite_missing_key_terms",
+                "message": "Edit the listed rewrites so they retain the lesson's key terms before approval.",
+                "rewrites": invalid,
+            })
     latest = await session.scalar(
         select(LessonReviewSignoff)
         .where(LessonReviewSignoff.lesson_id == lesson.id, LessonReviewSignoff.kind == kind)
@@ -1309,7 +1469,7 @@ async def approve_all_checks(
         select(LessonSegment).where(LessonSegment.lesson_id == lesson.id)
         .order_by(LessonSegment.sequence_order, LessonSegment.id).with_for_update()
     ))
-    material, _ = _checks_material(segments, lesson.assessment or [])
+    material, _ = _checks_material(segments, lesson)
     digest = _hash(material)
     if digest != payload.expected_content_hash:
         raise HTTPException(409, detail={"code": "review_content_changed"})

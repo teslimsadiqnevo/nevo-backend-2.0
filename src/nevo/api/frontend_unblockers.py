@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import false, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from nevo.access import accessible_lessons_page, accessible_lessons_query
@@ -39,7 +39,7 @@ from nevo.api.content import (
     get_lesson_media_service,
 )
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.learning_support import holds_learning_support, require_learning_support
+from nevo.api.learning_support import _holders, fallback_school_admin, holds_learning_support, require_learning_support
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
     calculation_for_delivery,
@@ -47,6 +47,7 @@ from nevo.api.lesson_contracts import (
     depth_payloads,
     safety_reviewed_visual,
     student_activity,
+    student_checkpoint_payloads,
     student_modalities,
 )
 from nevo.api.pagination import (
@@ -63,6 +64,7 @@ from nevo.api.product_admin import merge_preferences
 from nevo.api.product_common import (
     actor_user,
     can_access_student,
+    can_be_class_teacher,
     require_approved_lessons,
     require_class_access,
     require_school_actor,
@@ -111,7 +113,7 @@ from nevo.db.models.frontend_support import (
 )
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.probe import ProbeItem
-from nevo.db.models.product import LessonModule
+from nevo.db.models.product import LessonModule, LessonProgress
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.subject import ClassSubject, SchoolSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
@@ -232,6 +234,17 @@ class ClassStudentResponse(BaseModel):
     admin_support_requested_at: datetime | None = None
 
 
+class UnfinishedClassCheckResponse(BaseModel):
+    model_config = CAMEL_CONFIG
+
+    student_id: UUID
+    student_name: str
+    lesson_id: UUID
+    lesson_title: str
+    check_position: int
+    resumable_until: datetime
+
+
 class ConceptResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -322,6 +335,12 @@ class EscalationResponse(BaseModel):
     acknowledged_at: datetime | None = Field(default=None, alias="acknowledgedAt")
     acknowledged_by: UUID | None = Field(default=None, alias="acknowledgedBy")
     acknowledged_by_name: str | None = Field(default=None, alias="acknowledgedByName")
+    routed_to: Literal["learning_support", "school_admin"] = Field(alias="routedTo")
+    recipient_id: UUID | None = Field(default=None, alias="recipientId")
+    recipient_name: str | None = Field(default=None, alias="recipientName")
+    received_at: datetime | None = Field(default=None, alias="receivedAt")
+    receipt_line: str | None = Field(default=None, alias="receiptLine")
+    notified_count: int | None = Field(default=None, alias="notifiedCount")
 
 
 class NotificationResponse(BaseModel):
@@ -836,6 +855,45 @@ async def upload_profile_photo(
 
 
 @router.get(
+    "/api/v1/classes/{class_id}/unfinished-checks",
+    response_model=list[UnfinishedClassCheckResponse],
+    tags=["learning product"],
+)
+async def class_unfinished_checks(
+    class_id: UUID, actor: TeacherScope, session: DatabaseSession,
+) -> list[UnfinishedClassCheckResponse]:
+    school_class = await session.get(Class, class_id)
+    if school_class is None or school_class.school_id != actor.school_id:
+        raise HTTPException(404, detail={"code": "class_not_found"})
+    teacher = await session.get(User, actor.user_id)
+    if teacher is None:
+        raise HTTPException(404, detail={"code": "class_not_found"})
+    await require_teacher_console_class(session, teacher, class_id)
+    now = datetime.now(UTC)
+    rows = (await session.execute(
+        select(LessonProgress, User, Lesson)
+        .join(User, User.id == LessonProgress.student_id)
+        .join(Lesson, Lesson.id == LessonProgress.lesson_id)
+        .join(StudentClassEnrollment, StudentClassEnrollment.student_id == User.id)
+        .where(
+            StudentClassEnrollment.class_id == class_id,
+            LessonProgress.status != "completed",
+            LessonProgress.check_position.is_not(None),
+            LessonProgress.check_resumable_until > now,
+        )
+        .order_by(User.first_name, User.last_name, Lesson.title)
+    )).all()
+    return [UnfinishedClassCheckResponse(
+        student_id=student.id,
+        student_name=_display_name(student),
+        lesson_id=lesson.id,
+        lesson_title=lesson.title,
+        check_position=progress.check_position,
+        resumable_until=progress.check_resumable_until,
+    ) for progress, student, lesson in rows]
+
+
+@router.get(
     "/api/v1/classes/{class_id}/students",
     response_model=list[ClassStudentResponse],
     tags=["school administration"],
@@ -1278,14 +1336,14 @@ async def list_lessons(
     ids = [lesson.id for lesson in lessons]
     complete = await review_complete_map(session, ids)
     assignable = await review_complete_map(session, ids, require_checks=False)
-    unapproved = await _unapproved_counts(session, ids)
+    outstanding = await _unapproved_counts(session, ids)
     return [
         _lesson_summary(
             item,
             assignment_count=int(counts.get(item.id, 0)),
             author_names=authors,
             review_complete=complete.get(item.id, False),
-            can_assign=assignable.get(item.id, False) and unapproved.get(item.id, 0) == 0,
+            can_assign=assignable.get(item.id, False) and outstanding.get(item.id, 0) == 0,
         )
         for item in lessons
     ]
@@ -1389,20 +1447,21 @@ async def lesson_detail(
         else None
     )
     recommendations = (sitting.delivery_state or {}).get("recommendations", {}) if sitting else {}
-    from nevo.api.lesson_review import approved_check_ids, approved_level_ids
-
-    reviewed_checks = await approved_check_ids(session, lesson.id)
-    reviewed_levels = await approved_level_ids(session, lesson.id) if actor.role == UserRole.STUDENT else set()
-    from nevo.api.lesson_review import _review_result
+    from nevo.api.lesson_review import _review_result, approved_check_ids, approved_level_ids
     from nevo.api.product_learning import _unapproved_counts
 
     review = await _review_result(session, lesson) if actor.role != UserRole.STUDENT else None
+    reviewed_checks = await approved_check_ids(session, lesson.id)
+    reviewed_levels = (
+        await approved_level_ids(session, lesson.id) if actor.role == UserRole.STUDENT else set()
+    )
+    outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) if review else 0
     return LessonDetailResponse(
         **_lesson_summary(
-            lesson, assignment_count=int(assignment_count or 0),
+            lesson,
+            assignment_count=int(assignment_count or 0),
             review_complete=review.review_complete if review else False,
-            can_assign=bool(review and review.ready_to_assign and
-                            (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) == 0),
+            can_assign=bool(review and review.ready_to_assign and outstanding == 0),
         ).model_dump(
             by_alias=True
         ),
@@ -1410,12 +1469,14 @@ async def lesson_detail(
         recap=lesson.recap,
         assessment=[
             ComprehensionCheckpoint.model_validate(item)
-            for item in checkpoint_payloads(
-                lesson.assessment or [],
-                segment_key="lesson-assessment",
-                presentation_seed=str(actor.id),
-                reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
-                reviewed_level_ids={qid for scope, qid in reviewed_levels if scope == "assessment"} if actor.role == UserRole.STUDENT else None,
+            for item in (
+                student_checkpoint_payloads(
+                    lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
+                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+                    reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(lesson.id)},
+                ) if actor.role == UserRole.STUDENT else checkpoint_payloads(
+                    lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
+                )
             )
             if actor.role != UserRole.STUDENT or item["teacherReviewed"]
         ],
@@ -1443,18 +1504,19 @@ async def lesson_detail(
                 recommendedFormat=recommendations.get(str(item.id))
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,
-                comprehensionCheckpoints=[
-                    question for question in checkpoint_payloads(
-                        item.comprehension_checkpoints,
-                        segment_key=item.segment_key,
-                        presentation_seed=str(actor.id),
-                        question_offset=item.sequence_order - 1,
-                        include_pending_guidance=actor.role != UserRole.STUDENT,
-                        reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == str(item.id)},
-                        reviewed_level_ids={qid for scope, qid in reviewed_levels if scope == str(item.id)} if actor.role == UserRole.STUDENT else None,
+                comprehensionCheckpoints=(
+                    student_checkpoint_payloads(
+                        item.comprehension_checkpoints, segment_key=item.segment_key,
+                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
+                    ) if actor.role == UserRole.STUDENT else checkpoint_payloads(
+                        item.comprehension_checkpoints, segment_key=item.segment_key,
+                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        include_pending_guidance=True,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
                     )
-                    if actor.role != UserRole.STUDENT or question["teacherReviewed"]
-                ],
+                ),
                 textVariant=item.text_variant,
                 visualVariant=(
                     safety_reviewed_visual(item.visual_variant)
@@ -1465,6 +1527,8 @@ async def lesson_detail(
                 interactiveVariant=student_activity(item)
                 if actor.role == UserRole.STUDENT
                 else activity_for_delivery(item.interactive_variant, item.body),
+                classPractical=(item.interactive_variant or {}).get("classPractical")
+                if actor.role != UserRole.STUDENT else None,
                 activityAvailability=(
                     ActivityAvailability(
                         reachableByStudents=False,
@@ -1477,10 +1541,10 @@ async def lesson_detail(
                     and student_activity(item) is None
                     else None
                 ),
-                classPractical=(item.interactive_variant or {}).get("classPractical")
-                if actor.role != UserRole.STUDENT else None,
                 calculationVariant=calculation_for_delivery(
-                    item.calculation_variant, for_teacher=actor.role != UserRole.STUDENT
+                    item.calculation_variant,
+                    for_teacher=actor.role != UserRole.STUDENT,
+                    segment_id=item.id,
                 ),
                 depthVariants=depth_payloads(
                     item.depth_variants,
@@ -1687,6 +1751,40 @@ async def _escalation_class(session: DatabaseSession, student: User | None) -> C
     )
 
 
+async def _escalation_response(
+    session: DatabaseSession, record: Escalation, student: User, *, notified_count: int | None = None
+) -> EscalationResponse:
+    teacher = await session.get(User, record.teacher_id)
+    viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
+    recipient = await session.get(User, record.recipient_user_id) if record.recipient_user_id else None
+    school_class = await _escalation_class(session, student)
+    recipient_name = _display_name(recipient) if recipient else None
+    return EscalationResponse(
+        id=record.id,
+        studentId=record.student_id,
+        studentFirstName=student.first_name,
+        studentName=_display_name(student),
+        classId=school_class.id if school_class else None,
+        className=school_class.name if school_class else None,
+        teacherId=record.teacher_id,
+        teacherName=_display_name(teacher) if teacher else None,
+        note=record.teacher_note,
+        recentPicture=await _recent_picture(session, record.student_id),
+        generatedAt=record.generated_at,
+        acknowledged=record.acknowledged_at is not None,
+        acknowledgedAt=record.acknowledged_at,
+        acknowledgedBy=record.acknowledged_by,
+        acknowledgedByName=_display_name(viewer) if viewer else None,
+        routedTo=record.routed_to,
+        recipientId=record.recipient_user_id,
+        recipientName=recipient_name,
+        receivedAt=record.received_at,
+        receiptLine=(f"Sent to {recipient_name} on {record.received_at:%d %B %Y at %H:%M UTC}"
+                     if recipient_name and record.received_at else None),
+        notifiedCount=notified_count,
+    )
+
+
 @router.post(
     "/api/v1/escalations",
     response_model=EscalationResponse,
@@ -1705,32 +1803,50 @@ async def create_escalation(
         flag = await session.get(AttentionFlag, payload.attention_flag_id)
         if flag is None or flag.student_id != payload.student_id:
             raise HTTPException(status_code=404, detail="Attention flag not found")
+    await session.scalar(select(School.id).where(School.id == actor.school_id).with_for_update())
+    holders = await _holders(session, actor.school_id)
+    fallback = None
+    if not holders:
+        fallback = await fallback_school_admin(session, actor.school_id)
+        if fallback is None:
+            raise HTTPException(status_code=409, detail={"code": "concern_recipient_unavailable"})
     record = Escalation(
         attention_flag_id=payload.attention_flag_id,
         student_id=payload.student_id,
         teacher_id=actor.user_id,
         teacher_note=payload.note.strip(),
+        routed_to="school_admin" if fallback else "learning_support",
+        recipient_user_id=fallback.id if fallback else None,
+        received_at=datetime.now(UTC) if fallback else None,
     )
     session.add(record)
     await session.flush()
-    picture = await _recent_picture(session, payload.student_id)
-    school_class = await _escalation_class(session, student)
-    teacher = await session.get(User, actor.user_id)
-    await session.commit()
-    return EscalationResponse(
-        id=record.id,
-        studentId=record.student_id,
-        studentFirstName=student.first_name if student else None,
-        studentName=_display_name(student) if student else None,
-        classId=school_class.id if school_class else None,
-        className=school_class.name if school_class else None,
-        teacherId=record.teacher_id,
-        teacherName=_display_name(teacher) if teacher else None,
-        note=record.teacher_note,
-        recentPicture=picture,
-        generatedAt=record.generated_at,
-        acknowledged=False,
+    if fallback:
+        session.add(Notification(
+            recipient_id=fallback.id, recipient_role=fallback.role.value,
+            type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
+            title="A teacher raised a concern", description=f"A concern about {_display_name(student)} needs your attention.",
+            navigates_to="/admin/notifications", category=NotificationCategory.ATTENTION.value,
+        ))
+    else:
+        for grant in holders:
+            holder = await session.get(User, grant.holder_user_id)
+            if holder is None:
+                continue
+            session.add(Notification(
+                recipient_id=holder.id, recipient_role=holder.role.value,
+                type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
+                title="A teacher raised a concern",
+                description=f"A concern about {_display_name(student)} needs your attention.",
+                navigates_to=(f"/teacher/students/{student.id}"
+                              if holder.role == UserRole.TEACHER else "/admin/notifications"),
+                category=NotificationCategory.ATTENTION.value,
+            ))
+    result = await _escalation_response(
+        session, record, student, notified_count=1 if fallback else len(holders)
     )
+    await session.commit()
+    return result
 
 
 @router.get(
@@ -1768,9 +1884,8 @@ async def list_escalations(
         .where(User.school_id == actor.school_id)
         .order_by(Escalation.generated_at.desc())
     )
-    if actor.role is UserRole.TEACHER and not await holds_learning_support(session, actor):
-        query = query.where(
-            Escalation.student_id.in_(
+    is_holder = await holds_learning_support(session, actor)
+    own_class = Escalation.student_id.in_(
                 select(StudentClassEnrollment.student_id)
                 .join(
                     TeacherClassAssignment,
@@ -1781,7 +1896,12 @@ async def list_escalations(
                     TeacherClassAssignment.removed_at.is_(None),
                 )
             )
-        )
+    if not await can_be_class_teacher(session, actor):
+        own_class = false()
+    if is_holder:
+        query = query.where(or_(Escalation.routed_to == "learning_support", Escalation.recipient_user_id == actor.id, own_class))
+    else:
+        query = query.where(or_(Escalation.recipient_user_id == actor.id, own_class))
     if open_only:
         query = query.where(Escalation.acknowledged_at.is_(None))
     if student_id is not None:
@@ -1799,28 +1919,7 @@ async def list_escalations(
     rows = (await session.execute(query.limit(limit).offset(offset))).all()
     result: list[EscalationResponse] = []
     for record, student in rows:
-        viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
-        teacher = await session.get(User, record.teacher_id)
-        school_class = await _escalation_class(session, student)
-        result.append(
-            EscalationResponse(
-                id=record.id,
-                studentId=record.student_id,
-                studentFirstName=student.first_name,
-                studentName=_display_name(student),
-                classId=school_class.id if school_class else None,
-                className=school_class.name if school_class else None,
-                teacherId=record.teacher_id,
-                teacherName=_display_name(teacher) if teacher else None,
-                note=record.teacher_note,
-                recentPicture=await _recent_picture(session, record.student_id),
-                generatedAt=record.generated_at,
-                acknowledged=record.acknowledged_at is not None,
-                acknowledgedAt=record.acknowledged_at,
-                acknowledgedBy=record.acknowledged_by,
-                acknowledgedByName=_display_name(viewer) if viewer else None,
-            )
-        )
+        result.append(await _escalation_response(session, record, student))
     return result
 
 
@@ -1850,35 +1949,21 @@ async def acknowledge_escalation(
         principal,
         roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
     )
-    await require_learning_support(session, actor)
     record = await session.get(Escalation, escalation_id)
     student = await session.get(User, record.student_id) if record else None
     if record is None or student is None or student.school_id != actor.school_id:
         raise HTTPException(status_code=404, detail="Escalation not found")
+    if record.routed_to == "school_admin":
+        if record.recipient_user_id != actor.id:
+            raise HTTPException(status_code=403, detail={"code": "concern_recipient_required"})
+    else:
+        await require_learning_support(session, actor)
     if record.acknowledged_at is None:
         record.acknowledged_at = datetime.now(UTC)
         record.acknowledged_by = actor.id
-    picture = await _recent_picture(session, record.student_id)
-    school_class = await _escalation_class(session, student)
-    teacher = await session.get(User, record.teacher_id)
+    result = await _escalation_response(session, record, student)
     await session.commit()
-    return EscalationResponse(
-        id=record.id,
-        studentId=record.student_id,
-        studentFirstName=student.first_name,
-        studentName=_display_name(student),
-        classId=school_class.id if school_class else None,
-        className=school_class.name if school_class else None,
-        teacherId=record.teacher_id,
-        teacherName=_display_name(teacher) if teacher else None,
-        note=record.teacher_note,
-        recentPicture=picture,
-        generatedAt=record.generated_at,
-        acknowledged=True,
-        acknowledgedAt=record.acknowledged_at,
-        acknowledgedBy=record.acknowledged_by,
-        acknowledgedByName=_display_name(actor),
-    )
+    return result
 
 
 @router.post(
@@ -2100,7 +2185,11 @@ async def message_threads(
             )
             await session.commit()
     query = select(MessageThread).where(MessageThread.school_id == user.school_id)
-    query = query.where(_thread_access_clause(user))
+    query = query.where(_thread_access_clause(
+        user,
+        teacher_scope=await can_be_class_teacher(session, user)
+        and not await holds_learning_support(session, user),
+    ))
     records = (await session.scalars(query.order_by(MessageThread.last_message_at.desc()))).all()
     threads = [await _thread_response(session, item, user.id) for item in records]
     return MessageThreadListResponse(threads=threads, total=len(threads))
@@ -2929,7 +3018,7 @@ async def flags_alias(
     query = select(AttentionFlag).order_by(AttentionFlag.generated_at.desc())
     if open_only:
         query = query.where(AttentionFlag.resolved_at.is_(None))
-    if actor.role is UserRole.TEACHER and not await holds_learning_support(session, actor):
+    if await can_be_class_teacher(session, actor) and not await holds_learning_support(session, actor):
         query = query.where(
             AttentionFlag.student_id.in_(
                 select(StudentClassEnrollment.student_id)
@@ -3568,7 +3657,11 @@ async def _require_thread_access(session, user_id: UUID, thread_id: UUID) -> Mes
     allowed = await session.scalar(
         select(MessageThread.id).where(
             MessageThread.id == thread.id,
-            _thread_access_clause(user),
+            _thread_access_clause(
+                user,
+                teacher_scope=await can_be_class_teacher(session, user)
+                and not await holds_learning_support(session, user),
+            ),
         )
     )
     if allowed is None:
@@ -3678,9 +3771,7 @@ async def _find_or_create_thread(
     return thread
 
 
-def _thread_access_clause(user: User):
-    if user.role in {UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}:
-        return MessageThread.school_id == user.school_id
+def _thread_access_clause(user: User, *, teacher_scope: bool = False):
     if user.role == UserRole.STUDENT:
         enrolled_classes = select(StudentClassEnrollment.class_id).where(
             StudentClassEnrollment.student_id == user.id
@@ -3689,7 +3780,7 @@ def _thread_access_clause(user: User):
             MessageThread.student_id == user.id,
             MessageThread.class_id.in_(enrolled_classes),
         )
-    if user.role == UserRole.TEACHER:
+    if user.role == UserRole.TEACHER or teacher_scope:
         assigned_classes = select(TeacherClassAssignment.class_id).where(
             TeacherClassAssignment.teacher_id == user.id,
             TeacherClassAssignment.removed_at.is_(None),
@@ -3697,11 +3788,15 @@ def _thread_access_clause(user: User):
         assigned_students = select(StudentClassEnrollment.student_id).where(
             StudentClassEnrollment.class_id.in_(assigned_classes)
         )
-        return or_(
-            MessageThread.created_by_id == user.id,
+        allowed = [
             MessageThread.class_id.in_(assigned_classes),
             MessageThread.student_id.in_(assigned_students),
-        )
+        ]
+        if user.role == UserRole.TEACHER:
+            allowed.append(MessageThread.created_by_id == user.id)
+        return or_(*allowed)
+    if user.role in {UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}:
+        return MessageThread.school_id == user.school_id
     if user.role == UserRole.PARENT_GUARDIAN:
         linked_students = select(ParentLink.student_id).where(ParentLink.parent_id == user.id)
         return MessageThread.student_id.in_(linked_students)

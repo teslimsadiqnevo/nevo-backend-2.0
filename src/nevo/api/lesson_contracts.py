@@ -1,7 +1,7 @@
 from datetime import datetime
 import re
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import (
     BaseModel,
@@ -67,7 +67,22 @@ def student_activity(segment):
     return activity_for_delivery(segment.interactive_variant, segment.body)
 
 
-def calculation_for_delivery(value, *, for_teacher=False):
+def mini_step_question_id(segment_id, step_id, mini_id):
+    return f"mini-{uuid5(NAMESPACE_URL, f'{segment_id}:{step_id}:{mini_id}').hex}"
+
+
+def approved_calculation_support(step):
+    if not isinstance(step, dict) or step.get("supportReviewStatus") != "approved":
+        return False
+    try:
+        UUID(str(step["supportApprovedBy"]))
+        datetime.fromisoformat(str(step["supportApprovedAt"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
+def calculation_for_delivery(value, *, for_teacher=False, segment_id=None):
     if not isinstance(value, dict):
         return value
     result = dict(value)
@@ -75,9 +90,23 @@ def calculation_for_delivery(value, *, for_teacher=False):
     for raw in value.get("steps", []):
         step = dict(raw)
         if not for_teacher:
+            approved_support = approved_calculation_support(step)
+            step.pop("supportApprovedBy", None)
+            step.pop("supportApprovedAt", None)
             step.pop("pendingParts", None)
             if step.pop("partsReviewStatus", None) == "pending_review":
                 step.pop("parts", None)
+            step.pop("supportReviewStatus", None)
+            if not approved_support:
+                step.pop("conceptExplanation", None)
+                step.pop("miniSteps", None)
+            elif segment_id is not None:
+                step["miniSteps"] = [
+                    {**mini, "questionId": mini_step_question_id(
+                        segment_id, step.get("stepId"), mini.get("id")
+                    )}
+                    for mini in step.get("miniSteps", [])
+                ]
         steps.append(step)
     result["steps"] = steps
     return result
@@ -150,6 +179,7 @@ class GuidedCheckStep(BaseModel):
     options: list[CheckpointOption] = Field(default_factory=list)
     answer_key: ScalarAnswer | list[ScalarAnswer] = Field(alias="answerKey")
     explanation: str | None = None
+    reask_prompt: str | None = Field(default=None, alias="reaskPrompt", min_length=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -402,7 +432,7 @@ def depth_payloads(values, text_variant, *, for_student=False, reviewer_names=No
         item = values.get(key)
         if not isinstance(item, dict) or not item.get("body"):
             continue
-        if for_student and not depth_approved(item):
+        if for_student and (not depth_approved(item) or not depth_retains_key_terms(item, text_variant)):
             continue
         result[key] = {
             **item,
@@ -414,6 +444,19 @@ def depth_payloads(values, text_variant, *, for_student=False, reviewer_names=No
             "equationCallouts": source.get("equationCallouts") or [],
         }
     return result
+
+
+def depth_retains_key_terms(value, text_variant):
+    from nevo.content_parsing.depth import missing_key_terms
+
+    if not isinstance(value, dict):
+        return False
+    terms = [
+        str(item["term"])
+        for item in (text_variant or {}).get("keyTerms", [])
+        if isinstance(item, dict) and item.get("term")
+    ]
+    return not missing_key_terms(str(value.get("body") or ""), terms)
 
 
 def depth_approved(value):
@@ -695,6 +738,47 @@ class CalculationEquationToken(BaseModel):
     hidden_until_accepted: bool = Field(default=False, alias="hiddenUntilAccepted")
 
 
+class CalculationMiniStep(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(min_length=1, max_length=160)
+    question_id: str | None = Field(default=None, alias="questionId")
+    prompt: str = Field(min_length=1, max_length=500)
+    input: Literal["tap", "choice", "number", "text"]
+    answer: ScalarAnswer
+    options: list[CheckpointOption] = Field(default_factory=list, max_length=8)
+    accepted_answers: list[ScalarAnswer] = Field(
+        default_factory=list, alias="acceptedAnswers", max_length=12
+    )
+
+    @model_validator(mode="after")
+    def markable(self):
+        if isinstance(self.answer, str) and not self.answer.strip():
+            raise ValueError("A mini-step needs an answer")
+        if self.input == "choice" and (
+            len(self.options) < 2
+            or self.answer not in [option.value for option in self.options]
+        ):
+            raise ValueError("A choice mini-step needs options containing its answer")
+        if self.input == "choice":
+            from nevo.content_parsing.answers import normalise
+
+            wrong = {
+                normalise(value)
+                for option in self.options if option.value != self.answer
+                for value in (option.value, option.label)
+            }
+            if any(normalise(answer) in wrong for answer in self.accepted_answers):
+                raise ValueError("Accepted answers cannot include a distractor")
+        if self.input == "tap" and (
+            isinstance(self.answer, bool)
+            or not str(self.answer).isdigit()
+            or int(self.answer) < 1
+        ):
+            raise ValueError("A tap mini-step needs a positive whole-number answer")
+        return self
+
+
 class CalculationStep(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -703,6 +787,11 @@ class CalculationStep(BaseModel):
     prompt: str
     expected_input: Literal["selection", "numeric", "text", "drag"] = Field(alias="expectedInput")
     hint: str
+    concept_explanation: str | None = Field(default=None, alias="conceptExplanation")
+    mini_steps: list[CalculationMiniStep] = Field(default_factory=list, alias="miniSteps", max_length=8)
+    support_review_status: Literal["pending_review", "approved"] | None = Field(
+        default=None, alias="supportReviewStatus"
+    )
     parts: list[str] = Field(
         default_factory=list,
         max_length=8,
@@ -858,6 +947,13 @@ class CalculationStep(BaseModel):
             highlights.append({"target": result_target_id, "role": "result"})
         item["highlights"] = highlights
         return item
+
+    @model_validator(mode="after")
+    def unique_mini_steps(self):
+        ids = [mini.id for mini in self.mini_steps]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Mini-step IDs must be unique within a calculation step")
+        return self
 
 
 class ScaffoldImage(BaseModel):
@@ -1208,6 +1304,24 @@ def checkpoint_payloads(
             )
         result.append(rendered)
     return result
+
+
+def student_checkpoint_payloads(
+    values: list[dict[str, object]], *, segment_key: str,
+    reviewed_question_ids: set[str], presentation_seed: str = "lesson",
+    question_offset: int = 0, concept_id: UUID | None = None,
+    reviewed_level_ids: set[str] | None = None,
+) -> list[dict[str, object]]:
+    """Never deliver a generated question before its current teacher sign-off."""
+    return [
+        question for question in checkpoint_payloads(
+            values, segment_key=segment_key, reviewed_question_ids=reviewed_question_ids,
+            presentation_seed=presentation_seed, question_offset=question_offset,
+            concept_id=concept_id,
+            reviewed_level_ids=reviewed_level_ids if reviewed_level_ids is not None else set(),
+        )
+        if question["teacherReviewed"] and question.get("answerKey") is not None
+    ]
 
 
 def explanation_reveals_answer(step: dict[str, object]) -> bool:

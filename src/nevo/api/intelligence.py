@@ -978,6 +978,8 @@ async def adapt_lesson(
                 "rechunk": "rechunk",
                 "panel": "show_socratic_panel",
                 "calculation_scaffold": ProactiveAction.CALCULATION_SCAFFOLD,
+                "calculation_mini_steps": ProactiveAction.CALCULATION_SCAFFOLD,
+                "calculation_explanation": ProactiveAction.CALCULATION_SCAFFOLD,
             }
             from nevo.intelligence.guided_panel import public_prompt
 

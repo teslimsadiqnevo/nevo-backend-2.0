@@ -38,12 +38,15 @@ from nevo.api.frontend_unblockers import (
 )
 from nevo.api.learning_support import holds_learning_support, require_learning_support_if_admin
 from nevo.api.lesson_contracts import (
+    approved_calculation_support,
     calculation_for_delivery,
     checkpoint_payloads,
     depth_payloads,
     depth_reviewer_names,
+    mini_step_question_id,
     safety_reviewed_visual,
     student_activity,
+    student_checkpoint_payloads,
     student_modalities,
 )
 from nevo.api.product_common import (
@@ -703,7 +706,7 @@ async def _question_for_attempt(
             segment_key="lesson-assessment",
             presentation_seed=presentation_seed,
             reviewed_question_ids={
-                question_id for scope, question_id in approved if scope == "assessment"
+                question_id for owner_id, question_id in approved if owner_id == str(lesson.id)
             },
         )
         segment_id = None
@@ -734,6 +737,31 @@ async def _question_for_attempt(
                 }
                 for step in variant.get("steps", [])
             ]
+            for step in variant.get("steps", []):
+                if not approved_calculation_support(step):
+                    continue
+                for mini in step.get("miniSteps", []):
+                    if not isinstance(mini, dict) or mini.get("answer") is None:
+                        continue
+                    answer = mini.get("answer")
+                    questions.append({
+                        "id": mini_step_question_id(segment.id, step.get("stepId"), mini.get("id")),
+                        "prompt": mini.get("prompt"),
+                        "answerKey": answer,
+                        "acceptedAnswers": mini.get("acceptedAnswers") or [],
+                        "options": mini.get("options") or [],
+                        "hint": None,
+                        "conceptId": None,
+                        "answerType": "numeric" if mini.get("input") in {"tap", "number"}
+                        else "single_choice" if mini.get("input") == "choice"
+                        else "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷")
+                        else "text",
+                        "textDensity": 0.1,
+                        "calculationComplete": False,
+                        "isMiniStep": True,
+                        "supported": True,
+                        "supportStatus": "supported",
+                    })
             questions.append(
                 {
                     "id": str(segment.id),
@@ -768,14 +796,13 @@ async def _question_for_attempt(
     )
     if question is None:
         raise HTTPException(status_code=404, detail="Lesson question not found")
-    if payload.source in {"checkpoint", "assessment"} and not question.get("teacherReviewed"):
-        raise HTTPException(
-            409,
-            detail={
-                "code": "lesson_content_requires_review",
-                "message": "This question needs its teacher's review before it can be used.",
-            },
-        )
+    if payload.source in {"assessment", "checkpoint"} and question.get("authoredBy") != "person":
+        from nevo.api.lesson_review import approved_check_ids
+
+        reviewed = await approved_check_ids(session, lesson.id)
+        owner_id = str(lesson.id if payload.source == "assessment" else segment_id)
+        if (owner_id, str(question["id"])) not in reviewed:
+            raise HTTPException(409, detail={"code": "lesson_content_requires_review"})
     if not question.get("conceptId"):
         concepts = list(
             await session.scalars(
@@ -1000,31 +1027,26 @@ async def lesson_detail(
     reviewed_levels = await approved_level_ids(session, lesson.id) if not for_teacher else set()
     from nevo.api.lesson_review import _review_result
     review_state = await _review_result(session, lesson) if for_teacher else None
-    review_complete = review_state.review_complete if review_state else False
+    outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0)
     return {
         **_lesson_summary(
             lesson,
             assignment_count=int(assignment_count or 0),
-            review_complete=review_complete,
-            can_assign=bool(review_state and review_state.ready_to_assign and
-                            (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) == 0),
-            unapproved_segment_count=(await _unapproved_counts(session, [lesson.id])).get(
-                lesson.id, 0
-            ),
+            review_complete=review_state.review_complete if review_state else False,
+            can_assign=bool(review_state and review_state.ready_to_assign and outstanding == 0),
+            unapproved_segment_count=outstanding,
         ),
         "classes": await _classes_for_lesson(session, lesson.id),
         "confirmationSummary": lesson.confirmation_summary,
         "recap": lesson.recap,
-        "assessment": [
-            question for question in checkpoint_payloads(
-                lesson.assessment or [],
-                segment_key="lesson-assessment",
-                presentation_seed=str(actor.id),
-                reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
-                reviewed_level_ids={qid for scope, qid in reviewed_levels if scope == "assessment"} if not for_teacher else None,
+        "assessment": (
+            checkpoint_payloads(lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id))
+            if for_teacher else student_checkpoint_payloads(
+                lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
+                reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+                reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(lesson.id)},
             )
-            if for_teacher or question["teacherReviewed"]
-        ],
+        ),
         "segments": [
             {
                 "id": str(item.id),
@@ -1047,17 +1069,19 @@ async def lesson_detail(
                 "recommendedFormat": recommendations.get(str(item.id))
                 if recommendations.get(str(item.id)) in student_modalities(item)
                 else None,
-                "comprehensionCheckpoints": [
-                    question for question in checkpoint_payloads(
-                        item.comprehension_checkpoints,
-                        segment_key=item.segment_key,
-                        presentation_seed=str(actor.id),
-                        question_offset=item.sequence_order - 1,
-                        include_pending_guidance=for_teacher,
+                "comprehensionCheckpoints": (
+                    checkpoint_payloads(
+                        item.comprehension_checkpoints, segment_key=item.segment_key,
+                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        include_pending_guidance=True,
                         reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
-                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)} if not for_teacher else None,
-                    ) if for_teacher or question["teacherReviewed"]
-                ],
+                    ) if for_teacher else student_checkpoint_payloads(
+                        item.comprehension_checkpoints, segment_key=item.segment_key,
+                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
+                    )
+                ),
                 "textVariant": item.text_variant,
                 "visualVariant": item.visual_variant
                 if for_teacher
@@ -1070,8 +1094,8 @@ async def lesson_detail(
                 "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body)
                 if for_teacher
                 else student_activity(item),
-                "classPractical": (item.interactive_variant or {}).get("classPractical")
-                if for_teacher else None,
+                **({"classPractical": (item.interactive_variant or {}).get("classPractical")}
+                   if for_teacher else {}),
                 **(
                     {"activityAvailability": {
                         "reachableByStudents": False,
@@ -1084,7 +1108,9 @@ async def lesson_detail(
                     and student_activity(item) is None
                     else {}
                 ),
-                "calculationVariant": calculation_for_delivery(item.calculation_variant, for_teacher=for_teacher),
+                "calculationVariant": calculation_for_delivery(
+                    item.calculation_variant, for_teacher=for_teacher, segment_id=item.id
+                ),
                 "depthVariants": depth_payloads(
                     item.depth_variants,
                     item.text_variant,
@@ -1857,7 +1883,7 @@ async def save_lesson_question_attempt(
     )
     session.add(record)
     await session.flush()
-    if segment:
+    if segment and not question.get("isMiniStep"):
         await note_attempt(session, lesson_session, segment, record)
     await apply_marked_attempt(session, actor, record)
     await session.commit()
@@ -3400,15 +3426,13 @@ async def _offline_package_payload(
             for module in modules
         ],
         "recap": lesson.recap,
-        "assessment": [
-            question for question in checkpoint_payloads(
-                lesson.assessment or [],
-                segment_key="lesson-assessment",
-                presentation_seed=str(actor.id),
-                reviewed_question_ids={qid for scope, qid in reviewed_checks if scope == "assessment"},
-                reviewed_level_ids={qid for scope, qid in reviewed_levels if scope == "assessment"},
-            ) if question["teacherReviewed"]
-        ],
+        "assessment": student_checkpoint_payloads(
+            lesson.assessment or [],
+            segment_key="lesson-assessment",
+            presentation_seed=str(actor.id),
+            reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+            reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(lesson.id)},
+        ),
         "segments": [
             {
                 "id": str(item.id),
@@ -3437,7 +3461,7 @@ async def _offline_package_payload(
                     ),
                     "audio": item.audio_variant,
                     "interactive": student_activity(item),
-                    "calculation": calculation_for_delivery(item.calculation_variant),
+                    "calculation": calculation_for_delivery(item.calculation_variant, segment_id=item.id),
                 },
                 # Offline too: the point of the offline package is a lesson
                 # that still adapts where there is no network, and an
@@ -3445,16 +3469,14 @@ async def _offline_package_payload(
                 "depthVariants": depth_payloads(
                     item.depth_variants, item.text_variant, for_student=True
                 ),
-                "comprehensionCheckpoints": [
-                    question for question in checkpoint_payloads(
-                        item.comprehension_checkpoints,
-                        segment_key=item.segment_key,
-                        presentation_seed=str(actor.id),
-                        question_offset=item.sequence_order - 1,
-                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
-                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
-                    ) if question["teacherReviewed"]
-                ],
+                "comprehensionCheckpoints": student_checkpoint_payloads(
+                    item.comprehension_checkpoints,
+                    segment_key=item.segment_key,
+                    presentation_seed=str(actor.id),
+                    question_offset=item.sequence_order - 1,
+                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
+                ),
             }
             for item in segments
         ],

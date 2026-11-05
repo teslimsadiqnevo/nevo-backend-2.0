@@ -12,6 +12,7 @@ from nevo.core.config import get_settings
 
 TRANSACTION_POOLER_PORT = 6543
 """Supabase serves transaction-mode pooling here and session mode on 5432."""
+SESSION_POOLER_PORT = 5432
 
 
 def statement_cache_size(database_url: str) -> int:
@@ -37,6 +38,11 @@ def _is_transaction_pooler(database_url: str) -> bool:
     return make_url(database_url).port == TRANSACTION_POOLER_PORT
 
 
+def _is_supabase_session_pooler(database_url: str) -> bool:
+    url = make_url(database_url)
+    return bool(url.host and url.host.endswith(".pooler.supabase.com") and url.port == SESSION_POOLER_PORT)
+
+
 def create_engine(database_url: str) -> AsyncEngine:
     """Engine tuned for a database that is a network hop away.
 
@@ -45,6 +51,7 @@ def create_engine(database_url: str) -> AsyncEngine:
     paying that repeatedly.
     """
     settings = get_settings()
+    session_pooler = _is_supabase_session_pooler(database_url)
     connect_args = {"statement_cache_size": statement_cache_size(database_url)}
     if _is_transaction_pooler(database_url):
         # Reuse client connections without reusing another transaction's prepared statements.
@@ -62,8 +69,10 @@ def create_engine(database_url: str) -> AsyncEngine:
         pool_recycle=280,
         # Connections are expensive to establish here - the handshake costs
         # far more than a query - so hold a few open rather than reopening.
-        pool_size=settings.database_pool_size,
-        max_overflow=settings.database_max_overflow,
+        # The Supabase session pooler has a 15-client project limit. Multiple
+        # services share it, so never let one process reserve most of it.
+        pool_size=min(settings.database_pool_size, 2) if session_pooler else settings.database_pool_size,
+        max_overflow=min(settings.database_max_overflow, 1) if session_pooler else settings.database_max_overflow,
         pool_timeout=10,
         connect_args=connect_args,
     )

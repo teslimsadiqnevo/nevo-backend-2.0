@@ -483,6 +483,7 @@ class ParentRightResponse(CamelResponse):
 
 
 class LessonSummaryResponse(CamelResponse):
+    can_assign: bool = False
     id: UUID
     title: str
     description: str | None = None
@@ -576,6 +577,7 @@ class LessonSegmentResponse(CamelResponse):
     visual_variant: VisualVariant | None = None
     audio_variant: AudioVariant | None = None
     interactive_variant: InteractiveVariant | None = None
+    class_practical: ClassPractical | None = None
     activity_availability: "ActivityAvailability | None" = None
     class_practical: ClassPractical | None = None
     calculation_variant: CalculationVariant | None = None

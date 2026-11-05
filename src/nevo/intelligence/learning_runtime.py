@@ -334,7 +334,7 @@ async def apply_marked_attempt(
     if collect_level:
         from nevo.api.lesson_review import approved_level_ids
 
-        level_scope = "assessment" if attempt.source == "assessment" else str(attempt.segment_id)
+        level_scope = str(attempt.lesson_id) if attempt.source == "assessment" else str(attempt.segment_id)
         collect_level = (level_scope, attempt.question_id) in await approved_level_ids(session, attempt.lesson_id)
     if collect_level:
         level_row = await session.scalar(

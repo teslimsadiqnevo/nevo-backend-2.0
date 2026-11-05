@@ -34,6 +34,8 @@ class TeachingRoute(BaseModel):
         "rechunk",
         "panel",
         "calculation_scaffold",
+        "calculation_mini_steps",
+        "calculation_explanation",
     ]
     label: str
     format: Literal["text", "audio", "visual", "interactive"] | None = None
@@ -234,6 +236,19 @@ async def require_next_question(session, sitting, segment, question_id):
         None,
     )
     if expected is not None and str(question_id) != expected:
+        from nevo.api.lesson_contracts import approved_calculation_support, mini_step_question_id
+
+        current_step = next(
+            (step for step in (segment.calculation_variant or {}).get("steps", [])
+             if str(step.get("stepId")) == expected), None
+        )
+        if current_step and approved_calculation_support(current_step):
+            supported_ids = {
+                mini_step_question_id(segment.id, expected, mini.get("id"))
+                for mini in current_step.get("miniSteps", []) if isinstance(mini, dict)
+            }
+            if str(question_id) in supported_ids:
+                return
         raise HTTPException(
             409,
             detail={
@@ -262,13 +277,28 @@ async def cursor_index(session, lesson_id, module_position, segment_position):
 
 def teaching_routes(segment, current_format="text", current_depth="original", question=None):
     if segment.content_type == LessonContentType.CALCULATION:
-        return [
+        routes = [
             TeachingRoute(
                 action="calculation_scaffold",
                 label="Show more support in this step",
                 requires_choice=False,
             ),
         ]
+        step_id = str((question or {}).get("id") or "")
+        step = next((item for item in (segment.calculation_variant or {}).get("steps", [])
+                     if str(item.get("stepId")) == step_id), None)
+        from nevo.api.lesson_contracts import approved_calculation_support
+
+        if step and approved_calculation_support(step) and step.get("miniSteps"):
+            routes.append(TeachingRoute(
+                action="calculation_mini_steps", label="Try smaller answerable steps"
+            ))
+        if step and approved_calculation_support(step) and step.get("conceptExplanation"):
+            routes.append(TeachingRoute(
+                action="calculation_explanation", label="Revisit the idea behind this step"
+            ))
+        routes.append(TeachingRoute(action="slower", label="Take it more slowly"))
+        return routes
     formats = student_modalities(segment)
     labels = {
         "visual": "Try it as a picture",

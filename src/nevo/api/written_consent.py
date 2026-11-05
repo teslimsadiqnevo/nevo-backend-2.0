@@ -156,6 +156,32 @@ async def record_written_consent(
         if record is None:
             record = ConsentRecord(subject_user_id=student_id, consent_type=consent_type)
             session.add(record)
+        if record.status is ConsentStatus.WITHDRAWN:
+            # A withdrawal a school can overrule is not a withdrawal.
+            #
+            # This wrote CONFIRMED over whatever was there, so uploading a
+            # paper form lifted a suspension a parent had imposed - the one
+            # school-side action that could, and nothing recorded that it
+            # had happened. Suspension lifts on a fresh consent from that
+            # parent and on nothing else.
+            #
+            # A form genuinely signed after the withdrawal is such a consent,
+            # but we cannot tell that from a scan: the date is typed in by
+            # the uploader and the signature is not checked against the
+            # parent who withdrew. So this path refuses, and the parent
+            # re-consents from their own account instead.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "consent_withdrawn",
+                    "message": (
+                        "This parent has withdrawn consent for this learner. "
+                        "Only they can give it again, from their own Nevo "
+                        "account. A form cannot restore it."
+                    ),
+                    "consentType": consent_type.value,
+                },
+            )
         record.status = ConsentStatus.CONFIRMED
         record.confirmation_source = ConsentConfirmationSource.SCHOOL
         record.confirmed_by_admin_id = actor.id

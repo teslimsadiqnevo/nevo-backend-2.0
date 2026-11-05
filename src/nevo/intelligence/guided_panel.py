@@ -15,8 +15,11 @@ def guided_question_prompt_id(question_id: str, index: int) -> str:
     return f"gq-{stable}-{index}"
 
 
-def public_prompt(step):
-    return {key: step[key] for key in ("id", "prompt", "answerType", "options") if key in step}
+def public_prompt(step, *, retry=False):
+    result = {key: step[key] for key in ("id", "prompt", "answerType", "options") if key in step}
+    if retry and step.get("reaskPrompt"):
+        result["prompt"] = step["reaskPrompt"]
+    return result
 
 
 async def answer_step(session, sitting, payload):
@@ -90,7 +93,7 @@ async def answer_step(session, sitting, payload):
         "canAdvance": False,
         "retryCheck": next_step is None,
         "questionId": source.question_id,
-        "prompt": public_prompt(next_step) if next_step else None,
+        "prompt": public_prompt(next_step, retry=not correct and next_step is current) if next_step else None,
         "feedback": (
             current.get("explanation")
             if not correct and not explanation_reveals_answer(current)

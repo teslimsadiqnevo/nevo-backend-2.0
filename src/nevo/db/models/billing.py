@@ -310,7 +310,9 @@ class BillingLedger(Base):
 
 class BillingContact(Base):
     __tablename__ = "billing_contacts"
-    __table_args__ = (UniqueConstraint("school_id", name="uq_billing_contacts_school_id"),)
+    __table_args__ = (
+        UniqueConstraint("school_id", "email", name="uq_billing_contacts_school_email"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -448,6 +450,9 @@ class Invoice(Base):
     # What the amount was worked out from. Head count moves constantly, so an
     # invoice that only stores its total cannot be explained later.
     student_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    activation_student_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
     per_student_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     total_before_vat: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     vat_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)

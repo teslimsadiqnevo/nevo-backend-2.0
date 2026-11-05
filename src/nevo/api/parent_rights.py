@@ -50,6 +50,7 @@ class ConsentHeld(CamelResponse):
     #: True when withdrawing this one stops their child using Nevo. Said
     #: plainly, so a parent is never surprised by what a button does.
     stops_access: bool
+    can_withdraw: bool
 
 
 class ChildConsents(CamelResponse):
@@ -107,6 +108,23 @@ async def _own_child(session: AsyncSession, parent_id: UUID, student_id: UUID) -
     return student
 
 
+async def _can_withdraw(
+    session: AsyncSession, student_id: UUID, parent_id: UUID, record: ConsentRecord,
+) -> bool:
+    if record.confirmed_by_parent_id is not None:
+        return record.confirmed_by_parent_id == parent_id
+    # A school-recorded written consent has no parent account as its actor.
+    # Preserve the original linked guardian's withdrawal route, but do not
+    # let a subsequently linked account reverse that earlier decision.
+    first_link = await session.scalar(
+        select(ParentLink.parent_id)
+        .where(ParentLink.student_id == student_id, ParentLink.parent_id.is_not(None))
+        .order_by(ParentLink.created_at, ParentLink.id)
+        .limit(1)
+    )
+    return first_link == parent_id
+
+
 @router.get("/consents", response_model=list[ChildConsents])
 async def my_consents(
     parent_id: ParentDependency,
@@ -138,6 +156,9 @@ async def my_consents(
                         status=record.status,
                         decided_at=record.confirmed_at or record.last_changed_at,
                         stops_access=record.consent_type is REQUIRED_LEARNING_CONSENT,
+                        can_withdraw=await _can_withdraw(
+                            session, link.student_id, parent_id, record
+                        ),
                     )
                     for record in records
                 ],
@@ -218,6 +239,12 @@ async def withdraw_consent(
     for record in records:
         if record.consent_type not in wanted:
             continue
+        if not await _can_withdraw(session, student.id, parent_id, record):
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "consent_decision_belongs_to_another_guardian",
+                        "message": "Only the guardian who gave this consent can withdraw it."},
+            )
         if record.status is ConsentStatus.WITHDRAWN:
             continue
         record.status = ConsentStatus.WITHDRAWN

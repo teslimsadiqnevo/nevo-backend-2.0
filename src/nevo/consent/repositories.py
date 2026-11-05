@@ -259,6 +259,8 @@ class SqlAlchemyConsentRepository:
                 # a cross-border transfer gets consented to by accident.
                 granted = consent_types & granted_types
                 declined = consent_types - granted_types
+                confirmed_now: set[ConsentType] = set()
+                declined_now: set[ConsentType] = set()
                 for consent_type in granted:
                     record = await self._consent_for_update(
                         session,
@@ -273,6 +275,7 @@ class SqlAlchemyConsentRepository:
                         )
                         session.add(record)
                     if record.status is ConsentStatus.PENDING:
+                        confirmed_now.add(consent_type)
                         record.status = ConsentStatus.CONFIRMED
                         record.confirmation_source = ConsentConfirmationSource.PARENT
                         record.confirmed_by_admin_id = None
@@ -301,9 +304,11 @@ class SqlAlchemyConsentRepository:
                         student_id=invitation.student_id,
                         consent_type=consent_type,
                     )
-                    refused.last_actor_user_id = parent.id
-                    refused.last_changed_at = completed_at
-                    refused.last_channel = ConsentMethod.DIGITAL.value
+                    if refused.status in {ConsentStatus.PENDING, ConsentStatus.NOT_SENT}:
+                        declined_now.add(consent_type)
+                        refused.last_actor_user_id = parent.id
+                        refused.last_changed_at = completed_at
+                        refused.last_channel = ConsentMethod.DIGITAL.value
                 age_check = await self._run_age_check(
                     session,
                     school_id=parent_link.school_id,
@@ -324,26 +329,27 @@ class SqlAlchemyConsentRepository:
                 # The copy the consent page promises. Queued rather than sent
                 # inline so a mail outage cannot fail a consent the parent has
                 # already given.
-                session.add(
-                    ConsentNotificationOutbox(
-                        invitation_id=invitation.id,
-                        contact_method=parent_link.contact_method,
-                        destination=parent_link.parent_contact,
-                        consent_url="",
-                        kind=ConsentNotificationKind.RECEIPT,
+                if confirmed_now:
+                    session.add(
+                        ConsentNotificationOutbox(
+                            invitation_id=invitation.id,
+                            contact_method=parent_link.contact_method,
+                            destination=parent_link.parent_contact,
+                            consent_url="",
+                            kind=ConsentNotificationKind.RECEIPT,
+                        )
                     )
-                )
                 await session.flush()
                 return ParentConsentCompletion(
                     invitation_id=invitation.id,
                     parent_link_id=parent_link.id,
                     parent_id=parent.id,
                     student_id=invitation.student_id,
-                    confirmed_types=frozenset(granted),
-                    declined_types=frozenset(declined),
+                    confirmed_types=frozenset(confirmed_now),
+                    declined_types=frozenset(declined_now),
                     age_check=age_check,
                     completed_at=completed_at,
-                    receipt_sent_to=parent_link.contact_method,
+                    receipt_sent_to=parent_link.contact_method if confirmed_now else None,
                 )
         except IntegrityError as error:
             raise ParentAccountConflictError from error
@@ -685,7 +691,7 @@ class SqlAlchemyConsentRepository:
                     .join(School, School.id == ConsentInvitation.school_id)
                     .outerjoin(
                         BillingContact,
-                        BillingContact.school_id == ConsentInvitation.school_id,
+                        BillingContact.id == School.billing_contact_id,
                     )
                     .where(ConsentInvitation.id == invitation.id)
                 )

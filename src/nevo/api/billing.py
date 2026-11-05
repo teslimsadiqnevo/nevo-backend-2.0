@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from functools import lru_cache
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -33,7 +33,7 @@ from nevo.billing.errors import (
 )
 from nevo.billing.service import ACCESS_WINDOWS, PUBLISHED_RATES_NGN, BillingService
 from nevo.db.models.account import School
-from nevo.db.models.billing import Invoice, PaymentTransaction
+from nevo.db.models.billing import BillingContact, Invoice, PaymentTransaction
 from nevo.domain.billing.vocabulary import (
     AccessWindow,
     InvoiceStatus,
@@ -192,6 +192,7 @@ class SubscriptionResponse(BaseModel):
     renewal_banner_visible: bool = Field(alias="renewalBannerVisible")
     renewal_message: str | None = Field(alias="renewalMessage")
     billing_contact: BillingContactResponse | None = Field(alias="billingContact")
+    billing_contacts: list[BillingContactResponse] = Field(alias="billingContacts")
     payment_method: PaymentMethodResponse | None = Field(alias="paymentMethod")
     pricing: PricingResponse
 
@@ -209,6 +210,9 @@ class SubscriptionResponse(BaseModel):
                 if record.billing_contact
                 else None
             ),
+            billing_contacts=[
+                BillingContactResponse.from_record(item) for item in record.billing_contacts
+            ],
             payment_method=(
                 PaymentMethodResponse.from_record(record.payment_method)
                 if record.payment_method
@@ -305,7 +309,10 @@ class InvoiceResponse(BaseModel):
             total_before_vat=record.total_before_vat,
             vat_amount=record.vat_amount,
             vat_rate=record.vat_rate,
-            days_overdue=max(0, (today - record.due_at).days) if record.status != InvoiceStatus.PAID else 0,
+            days_overdue=(
+                max(0, (today - record.due_at).days)
+                if record.status != InvoiceStatus.PAID else 0
+            ),
             outstanding_count=outstanding_count,
             outstanding_total=outstanding_total,
             overdue_panel_applies=overdue_panel_applies,
@@ -581,7 +588,9 @@ async def invoice_history(
             date_to=date_to,
             status=status_filter,
         )
-        all_records = await service.invoices(school_id=_school_id(actor))
+        all_records = await service.invoices(
+            school_id=_school_id(actor), date_from=None, date_to=None, status=None
+        )
     except BillingError as error:
         raise public_billing_error(error) from error
     today = datetime.now(UTC).date()
@@ -707,6 +716,134 @@ async def update_billing_contact(
     except BillingError as error:
         raise public_billing_error(error) from error
     return BillingContactResponse.from_record(record)
+
+
+def _billing_contact_response(record: BillingContact) -> BillingContactResponse:
+    return BillingContactResponse(
+        id=record.id,
+        email=record.email,
+        phone=record.phone,
+        address_line1=record.address_line1,
+        address_line2=record.address_line2,
+        city=record.city,
+        region=record.region,
+        postal_code=record.postal_code,
+        country=record.country,
+    )
+
+
+@router.get("/billing-contacts", response_model=list[BillingContactResponse])
+async def list_billing_contacts(
+    actor: BillingScopeDependency, session: DatabaseSession,
+) -> list[BillingContactResponse]:
+    records = (await session.scalars(
+        select(BillingContact)
+        .where(BillingContact.school_id == _school_id(actor))
+        .order_by(BillingContact.created_at, BillingContact.id)
+    )).all()
+    return [_billing_contact_response(record) for record in records]
+
+
+@router.post("/billing-contacts", response_model=BillingContactResponse, status_code=201)
+async def add_billing_contact(
+    payload: BillingContactRequest, actor: BillingScopeDependency, session: DatabaseSession,
+) -> BillingContactResponse:
+    school = await session.get(School, _school_id(actor), with_for_update=True)
+    if school is None:
+        raise HTTPException(404, detail={"code": "school_not_found"})
+    existing = await session.scalar(select(BillingContact).where(
+        BillingContact.school_id == school.id,
+        BillingContact.email == str(payload.email),
+    ))
+    if existing is not None:
+        raise HTTPException(409, detail={"code": "billing_contact_exists"})
+    record = BillingContact(
+        id=uuid4(), school_id=school.id, email=str(payload.email),
+        phone=payload.phone, address_line1=payload.address_line1,
+        address_line2=payload.address_line2, city=payload.city,
+        region=payload.region, postal_code=payload.postal_code,
+        country=payload.country, updated_by_user_id=actor.user_id,
+    )
+    session.add(record)
+    await session.flush()
+    if school.billing_contact_id is None:
+        school.billing_contact_id = record.id
+    try:
+        await session.commit()
+    except IntegrityError as error:
+        await session.rollback()
+        raise HTTPException(409, detail={"code": "billing_contact_exists"}) from error
+    return _billing_contact_response(record)
+
+
+@router.put("/billing-contacts/{contact_id}", response_model=BillingContactResponse)
+async def edit_billing_contact(
+    contact_id: UUID, payload: BillingContactRequest,
+    actor: BillingScopeDependency, session: DatabaseSession,
+) -> BillingContactResponse:
+    record = await session.scalar(select(BillingContact).where(
+        BillingContact.id == contact_id,
+        BillingContact.school_id == _school_id(actor),
+    ).with_for_update())
+    if record is None:
+        raise HTTPException(404, detail={"code": "billing_contact_not_found"})
+    duplicate = await session.scalar(select(BillingContact.id).where(
+        BillingContact.school_id == record.school_id,
+        BillingContact.email == str(payload.email),
+        BillingContact.id != record.id,
+    ))
+    if duplicate is not None:
+        raise HTTPException(409, detail={"code": "billing_contact_exists"})
+    for field in (
+        "email", "phone", "address_line1", "address_line2",
+        "city", "region", "postal_code", "country",
+    ):
+        setattr(record, field, str(payload.email) if field == "email" else getattr(payload, field))
+    record.updated_by_user_id = actor.user_id
+    record.updated_at = datetime.now(UTC)
+    try:
+        await session.commit()
+    except IntegrityError as error:
+        await session.rollback()
+        raise HTTPException(409, detail={"code": "billing_contact_exists"}) from error
+    return _billing_contact_response(record)
+
+
+@router.put("/billing-contacts/{contact_id}/primary", response_model=BillingContactResponse)
+async def set_primary_billing_contact(
+    contact_id: UUID, actor: BillingScopeDependency, session: DatabaseSession,
+) -> BillingContactResponse:
+    record = await session.scalar(select(BillingContact).where(
+        BillingContact.id == contact_id,
+        BillingContact.school_id == _school_id(actor),
+    ))
+    if record is None:
+        raise HTTPException(404, detail={"code": "billing_contact_not_found"})
+    school = await session.get(School, record.school_id, with_for_update=True)
+    school.billing_contact_id = record.id
+    await session.commit()
+    return _billing_contact_response(record)
+
+
+@router.delete("/billing-contacts/{contact_id}", status_code=204)
+async def remove_billing_contact(
+    contact_id: UUID, actor: BillingScopeDependency, session: DatabaseSession,
+) -> None:
+    record = await session.scalar(select(BillingContact).where(
+        BillingContact.id == contact_id,
+        BillingContact.school_id == _school_id(actor),
+    ).with_for_update())
+    if record is None:
+        raise HTTPException(404, detail={"code": "billing_contact_not_found"})
+    school = await session.get(School, record.school_id, with_for_update=True)
+    if school.billing_contact_id == record.id:
+        replacement = await session.scalar(select(BillingContact.id).where(
+            BillingContact.school_id == school.id, BillingContact.id != record.id,
+        ).order_by(BillingContact.created_at, BillingContact.id))
+        school.billing_contact_id = replacement
+        await session.flush()
+    await session.delete(record)
+    await session.commit()
 
 
 class StartPaymentRequest(BaseModel):

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.billing.service import quote_per_student
@@ -82,7 +82,7 @@ class InvoiceIssuanceService:
             ).all()
 
             for contract, school in rows:
-                student_count = await self._active_students(session, school.id)
+                student_count, activation_ids = await self._billable_students(session, school.id)
                 term_starts = self._configured_terms(school)
                 # Catch up year by year: a sweep that has not run in a while
                 # still bills every period it missed, in order.
@@ -123,6 +123,7 @@ class InvoiceIssuanceService:
                                 amount=quote.total_with_vat,
                                 currency=quote.currency,
                                 student_count=quote.student_count,
+                                activation_student_ids=activation_ids,
                                 per_student_rate=quote.per_student_rate,
                                 total_before_vat=quote.total_before_vat,
                                 vat_amount=quote.vat_amount,
@@ -167,17 +168,15 @@ class InvoiceIssuanceService:
         return True
 
     @staticmethod
-    async def _active_students(session: AsyncSession, school_id) -> int:  # type: ignore[no-untyped-def]
-        return int(
-            await session.scalar(
-                select(func.count(User.id)).where(
+    async def _billable_students(session: AsyncSession, school_id):  # type: ignore[no-untyped-def]
+        rows = (await session.execute(
+                select(User.id, User.status).where(
                     User.school_id == school_id,
                     User.role == UserRole.STUDENT,
-                    User.status == UserStatus.ACTIVE,
+                    User.status.in_([UserStatus.ACTIVE, UserStatus.INVITED]),
                 )
-            )
-            or 0
-        )
+        )).all()
+        return len(rows), [str(user_id) for user_id, state in rows if state == UserStatus.INVITED]
 
     @classmethod
     def periods_for(

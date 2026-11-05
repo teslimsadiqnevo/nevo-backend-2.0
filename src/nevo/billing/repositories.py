@@ -40,6 +40,11 @@ class SqlAlchemyBillingRepository:
             if school is None:
                 raise BillingNotFoundError
             contact = await _billing_contact(session, school.billing_contact_id)
+            contacts = (await session.scalars(
+                select(BillingContact)
+                .where(BillingContact.school_id == school_id)
+                .order_by(BillingContact.created_at, BillingContact.id)
+            )).all()
             payment_method = await session.scalar(
                 select(BillingPaymentMethod).where(BillingPaymentMethod.school_id == school_id)
             )
@@ -48,7 +53,7 @@ class SqlAlchemyBillingRepository:
                     select(func.count(User.id)).where(
                         User.school_id == school_id,
                         User.role == UserRole.STUDENT,
-                        User.status == UserStatus.ACTIVE,
+                        User.status.in_([UserStatus.ACTIVE, UserStatus.INVITED]),
                     )
                 )
                 or 0
@@ -62,6 +67,7 @@ class SqlAlchemyBillingRepository:
             renewal_banner_visible=visible,
             renewal_message=message,
             billing_contact=_contact_record(contact) if contact else None,
+            billing_contacts=tuple(_contact_record(item) for item in contacts),
             payment_method=(_payment_method_record(payment_method) if payment_method else None),
             quote=quote_per_student(
                 plan=school.pricing_plan,
@@ -188,7 +194,9 @@ class SqlAlchemyBillingRepository:
     ) -> BillingContactRecord:
         async with self._sessions.begin() as session:
             record = await session.scalar(
-                select(BillingContact).where(BillingContact.school_id == school_id)
+                select(BillingContact)
+                .join(School, School.billing_contact_id == BillingContact.id)
+                .where(School.id == school_id)
             )
             values = {
                 "email": update_data.email,

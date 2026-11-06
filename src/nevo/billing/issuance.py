@@ -300,10 +300,29 @@ async def _notify_billing_contacts(
 async def queue_billing_emails(
     session: AsyncSession, *, invoice: Invoice, kind: str
 ) -> int:
-    """Queue each invoice message once per listed address and milestone."""
+    """Queue each invoice message once per listed address and milestone.
+
+    Every contact the school has listed, not only the primary one. The
+    primary is who checkout is attributed to; being able to read the bill is
+    a different question, and naming several people is the point of the
+    screen.
+    """
+
     emails = set(await session.scalars(
         select(BillingContact.email).where(BillingContact.school_id == invoice.school_id)
     ))
+    if not emails:
+        # A school that has never filled the contacts screen in. Nothing is
+        # queued, so the invoice reaches nobody by email - the in-app notice
+        # is all there is, and it goes to admins who may be exactly the
+        # people who cannot act on it. Said out loud because the alternative
+        # is an unpaid invoice nobody was ever sent.
+        logger.warning(
+            "Invoice %s for school %s has no billing contact to email",
+            invoice.invoice_number,
+            invoice.school_id,
+        )
+        return 0
     existing = set(await session.scalars(
         select(BillingEmailDelivery.email).where(
             BillingEmailDelivery.invoice_id == invoice.id,

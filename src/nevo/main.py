@@ -70,6 +70,7 @@ from nevo.attention_flags.wiring import build_attention_flag_detection_service
 from nevo.auth.config import AuthSettings
 from nevo.auth.parent_codes import ParentLoginCodes
 from nevo.auth.wiring import build_auth_service, build_credential_hasher
+from nevo.billing.email_worker import BillingEmailWorker
 from nevo.billing.issuance import InvoiceIssuanceService
 from nevo.billing.wiring import build_billing_service
 from nevo.consent.config import ConsentSettings
@@ -142,6 +143,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         delivery=app.state.email_delivery,
     )
     app.state.notification_email_worker.start()
+    app.state.billing_email_worker = BillingEmailWorker(sessions, app.state.email_delivery)
+    app.state.billing_email_worker.start()
     app.state.permission_service = build_permission_service(
         sessions,
         credential_hasher=credential_hasher,
@@ -266,6 +269,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.deferred_media_worker.stop()
         await app.state.upload_parsing_worker.stop()
         await app.state.notification_email_worker.stop()
+        await app.state.billing_email_worker.stop()
         await app.state.consent_delivery_worker.stop()
         await app.state.scheduled_job_runner.stop()
         await app.state.post_lesson_worker.stop()

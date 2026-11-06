@@ -1,3 +1,5 @@
+from base64 import b64encode
+
 import httpx
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -50,6 +52,7 @@ class ResendEmailDelivery:
         subject: str,
         text: str,
         html: str | None = None,
+        attachment: tuple[str, bytes] | None = None,
     ) -> None:
         """Send one email.
 
@@ -74,6 +77,13 @@ class ResendEmailDelivery:
                         "subject": subject,
                         "text": text,
                         **({"html": html} if html else {}),
+                        **(
+                            {"attachments": [{
+                                "filename": attachment[0],
+                                "content": b64encode(attachment[1]).decode("ascii"),
+                            }]}
+                            if attachment else {}
+                        ),
                     },
                 )
         except httpx.HTTPError as error:

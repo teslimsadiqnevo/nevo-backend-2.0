@@ -216,7 +216,16 @@ NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {
     NotificationType.MODALITY_SHIFT: NotificationCategory.ATTENTION,
     NotificationType.CONCEPT_SUPPORT_NEEDED: NotificationCategory.ATTENTION,
     NotificationType.PIN_RESET_REQUESTED: NotificationCategory.ACCOUNT,
-    NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: NotificationCategory.ACCOUNT,
+    #: A colleague asking an administrator to do something, not a change to
+    #: the administrator's own account. Filed under ACCOUNT - the switch the
+    #: settings screen calls Platform - it meant an admin who muted platform
+    #: notices stopped hearing teachers asking for help with a locked-out
+    #: child. MESSAGES is the switch for a person asking a person.
+    #:
+    #: PIN_RESET_REQUESTED above has the same shape and is left alone,
+    #: because nobody has asked for that one to move and it is a decision
+    #: about which switch governs it rather than a defect.
+    NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: NotificationCategory.MESSAGES,
     NotificationType.ADMIN_WELCOME: NotificationCategory.ACCOUNT,
     NotificationType.CONSENT_ACTION_REQUIRED: NotificationCategory.CONSENT,
     NotificationType.ROSTER_SYNC_COMPLETED: NotificationCategory.REPORTS,
@@ -319,19 +328,9 @@ class InvitationDeliveryStatus(StrEnum):
     EMAIL_NOT_CONFIGURED = "email_not_configured"
 
 
-NOTIFICATION_CATEGORY_BY_TYPE.update(
-    {
-        NotificationType.ATTENTION_SUMMARY: NotificationCategory.ATTENTION,
-        NotificationType.MODALITY_SHIFT: NotificationCategory.ATTENTION,
-        NotificationType.CONCEPT_SUPPORT_NEEDED: NotificationCategory.ATTENTION,
-        NotificationType.PIN_RESET_REQUESTED: NotificationCategory.ACCOUNT,
-        NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: NotificationCategory.ACCOUNT,
-        NotificationType.ADMIN_WELCOME: NotificationCategory.ACCOUNT,
-        NotificationType.CONSENT_ACTION_REQUIRED: NotificationCategory.CONSENT,
-        NotificationType.ROSTER_SYNC_COMPLETED: NotificationCategory.REPORTS,
-        NotificationType.ROSTER_SYNC_NEEDS_ATTENTION: NotificationCategory.REPORTS,
-        NotificationType.SSO_NEEDS_ATTENTION: NotificationCategory.ACCOUNT,
-        NotificationType.INVOICE_ISSUED: NotificationCategory.BILLING,
-        NotificationType.PAYMENT_CLEARED: NotificationCategory.BILLING,
-    }
-)
+# The mapping above was also re-applied here with .update(), a copy of the
+# same twelve staff types minus the four a child can receive. Being second,
+# it won: editing the declaration had no effect on what the product did,
+# which is how a category fix can look applied and change nothing. The
+# declaration is a strict superset of what this block set, so it is the only
+# one left.

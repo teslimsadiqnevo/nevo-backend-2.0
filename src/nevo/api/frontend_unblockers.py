@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import secrets
 import statistics
@@ -117,6 +118,7 @@ from nevo.db.models.frontend_support import (
     PasswordResetToken,
 )
 from nevo.db.models.learner_profile import LearnerProfile
+from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.probe import ProbeItem
 from nevo.db.models.product import LessonModule, LessonProgress
 from nevo.db.models.signal_event import LessonSession, SignalEvent
@@ -135,7 +137,7 @@ from nevo.domain.intelligence.vocabulary import (
     LessonScope,
     LessonSourceType,
 )
-from nevo.domain.permissions.vocabulary import PermissionScope
+from nevo.domain.permissions.vocabulary import IMPLICIT_SCOPES_BY_ROLE, PermissionScope
 from nevo.domain.signal_events.vocabulary import (
     LearnerObservationPattern,
     LessonCompletionStatus,
@@ -147,6 +149,8 @@ from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailD
 from nevo.notifications.links import password_reset_url
 from nevo.permissions.entities import PermissionSnapshot
 from nevo.storage.media import LessonMediaService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 TeacherScope = Annotated[PermissionSnapshot, Depends(RequireScope(PermissionScope.TEACHER))]
@@ -1008,6 +1012,62 @@ async def class_students(
     ]
 
 
+async def _admins_who_handle_the_roster(
+    session: DatabaseSession,
+    *,
+    school_id: UUID,
+) -> list[User]:
+    """The administrators a learner-account request should reach.
+
+    It went to every administrator in the school, so a request about one
+    locked-out child arrived for the finance lead and the IT contact alike.
+    A deactivated account is roster work, so it goes to whoever holds that
+    scope - assigned, or implied by their role.
+
+    If nobody holds it, every active administrator is told rather than
+    nobody: a teacher waiting on a child's account is worse served by
+    silence than by one notice reaching the wrong desk, and a school that
+    has not divided its scopes up yet is the common case rather than a
+    misconfiguration.
+    """
+
+    admins = list(
+        await session.scalars(
+            select(User).where(
+                User.school_id == school_id,
+                User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+    )
+    if not admins:
+        return []
+    scoped_user_ids = set(
+        await session.scalars(
+            select(Admin.user_id)
+            .join(AdminScopeAssignment, AdminScopeAssignment.admin_id == Admin.id)
+            .where(
+                Admin.school_id == school_id,
+                AdminScopeAssignment.scope == PermissionScope.ROSTER,
+                AdminScopeAssignment.revoked_at.is_(None),
+            )
+        )
+    )
+    holders = [
+        admin
+        for admin in admins
+        if admin.id in scoped_user_ids
+        or PermissionScope.ROSTER in IMPLICIT_SCOPES_BY_ROLE.get(admin.role.value, frozenset())
+    ]
+    if holders:
+        return holders
+    logger.info(
+        "No roster-scope administrator at school %s; telling every administrator instead",
+        school_id,
+    )
+    return admins
+
+
 @router.post(
     "/api/v1/students/{student_id}/admin-support-request",
     response_model=AdminSupportRequestResponse,
@@ -1038,15 +1098,7 @@ async def request_admin_support_for_student(
     if assigned is None:
         raise HTTPException(status_code=404, detail="Deactivated student not found")
 
-    admins = list(
-        await session.scalars(
-            select(User).where(
-                User.school_id == actor.school_id,
-                User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
-                User.status == UserStatus.ACTIVE,
-            )
-        )
-    )
+    admins = await _admins_who_handle_the_roster(session, school_id=actor.school_id)
     if not admins:
         raise HTTPException(status_code=409, detail="No active school administrator is available")
     target = f"/admin/students/{student_id}"

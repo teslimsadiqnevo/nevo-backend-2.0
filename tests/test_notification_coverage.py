@@ -31,6 +31,10 @@ TRIGGERED: dict[NotificationType, str] = {
     NotificationType.DEACTIVATED_STUDENT_SUPPORT_REQUESTED: (
         "a teacher asks an administrator to review a deactivated learner"
     ),
+    NotificationType.CONCEPT_SUPPORT_NEEDED: (
+        "a teacher raises a concern and no learning support holder is named, "
+        "so it falls back to the school's admins"
+    ),
 }
 
 #: The four a child can receive, declared ahead of the code that raises them.

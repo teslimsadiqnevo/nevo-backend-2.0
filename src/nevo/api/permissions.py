@@ -8,6 +8,9 @@ from pydantic import BaseModel, EmailStr, Field
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.api.dependencies import DatabaseSession
+from nevo.api.product_common import _refuse_unconfirmed_write
+from nevo.db.models.account import User
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import (
     AdminAccessLevel,
@@ -190,6 +193,29 @@ PermissionServiceDependency = Annotated[
 ]
 
 
+async def _refuse_an_unconfirmed_admin(
+    session: DatabaseSession,
+    principal: PrincipalDependency,
+) -> None:
+    """Apply the unconfirmed-email write rule to scope-gated routes too.
+
+    _refuse_unconfirmed_write is described as covering every write in the
+    product, and it does for anything resolved through require_school_actor.
+    Scope-gated routes do not go through that: they resolve a
+    PermissionSnapshot straight from the permission service, so an
+    administrator who had never proved their address could still write
+    through any of them - billing contacts and payment methods among them,
+    which is where it was noticed.
+
+    The rule itself stays in one place. This only makes sure the other door
+    is covered by it.
+    """
+
+    user = await session.get(User, principal.user_id)
+    if user is not None:
+        _refuse_unconfirmed_write(user)
+
+
 class RequireScope:
     def __init__(self, scope: PermissionScope) -> None:
         self.scope = scope
@@ -198,7 +224,9 @@ class RequireScope:
         self,
         principal: PrincipalDependency,
         service: PermissionServiceDependency,
+        session: DatabaseSession,
     ) -> PermissionSnapshot:
+        await _refuse_an_unconfirmed_admin(session, principal)
         try:
             return await service.require(principal, self.scope)
         except PermissionError as error:
@@ -223,7 +251,9 @@ class RequireAnyScope:
         self,
         principal: PrincipalDependency,
         service: PermissionServiceDependency,
+        session: DatabaseSession,
     ) -> PermissionSnapshot:
+        await _refuse_an_unconfirmed_admin(session, principal)
         last: PermissionError | None = None
         for scope in self.scopes:
             try:

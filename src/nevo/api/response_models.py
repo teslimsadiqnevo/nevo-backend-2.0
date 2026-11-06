@@ -797,8 +797,10 @@ class LessonQuestionAttemptResponse(CamelResponse):
     segment_id: UUID | None = None
     source: Literal["checkpoint", "assessment", "calculation"]
     attempt_number: int
-    question: ComprehensionCheckpoint
+    question: dict[str, object] = Field(description="Presented question without held answer fields")
     answer: JsonValue
+    offline_marked: bool = False
+    verification_status: Literal["server_verified", "unverified"] = "server_verified"
     correct: bool | None
     support_status: Literal["supported", "independent"] = "independent"
     comprehension_gate: ComprehensionGate | None = None
@@ -1157,6 +1159,7 @@ class OfflinePackage(CamelResponse):
     )
     assessment: list[ComprehensionCheckpoint] = Field(default_factory=list)
     segments: list[OfflinePackageSegment] = Field(default_factory=list)
+    marking_key_versions: dict[str, str] = Field(default_factory=dict)
 
 
 class OfflineManifestResponse(CamelResponse):

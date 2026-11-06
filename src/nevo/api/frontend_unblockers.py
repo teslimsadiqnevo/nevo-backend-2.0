@@ -21,6 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 from sqlalchemy import false, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -47,6 +48,7 @@ from nevo.api.learning_support import (
 )
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
+    online_student_lesson,
     calculation_for_delivery,
     checkpoint_payloads,
     depth_payloads,
@@ -1461,7 +1463,7 @@ async def lesson_detail(
         await approved_level_ids(session, lesson.id) if actor.role == UserRole.STUDENT else set()
     )
     outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) if review else 0
-    return LessonDetailResponse(
+    response = LessonDetailResponse(
         **_lesson_summary(
             lesson,
             assignment_count=int(assignment_count or 0),
@@ -1583,6 +1585,11 @@ async def lesson_detail(
             for item in modules
         ],
     )
+    if actor.role == UserRole.STUDENT:
+        return JSONResponse(
+            online_student_lesson(response.model_dump(mode="json", by_alias=True))
+        )
+    return response
 
 
 @router.post(

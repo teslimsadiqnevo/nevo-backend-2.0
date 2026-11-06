@@ -1,8 +1,9 @@
 """Store only step marks from the no-camera paper-work route."""
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
+
+from alembic import op
 
 revision = "20261030_0135"
 down_revision = "20261030_0134"

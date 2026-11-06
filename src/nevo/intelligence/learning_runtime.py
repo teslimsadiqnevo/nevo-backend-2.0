@@ -13,8 +13,8 @@ from nevo.db.models.account import User
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import (
     ScaffoldProblemLog,
-    StudentConceptMastery,
     StudentConceptLevelMastery,
+    StudentConceptMastery,
     StudentConceptScaffoldState,
     StudentConceptScheduling,
 )

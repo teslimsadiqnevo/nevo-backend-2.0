@@ -60,14 +60,14 @@ from nevo.db.models.learner_profile import (
 from nevo.db.models.lesson_signoff import LessonReviewSignoff
 from nevo.db.models.mastery import (
     ScaffoldProblemLog,
-    StudentConceptMastery,
     StudentConceptLevelMastery,
+    StudentConceptMastery,
     StudentConceptScaffoldState,
     StudentConceptScheduling,
 )
+from nevo.db.models.media_usage import media_usage_events  # noqa: F401
 from nevo.db.models.out_of_school import OutOfSchoolLearning
 from nevo.db.models.paper_work import PaperWorkEvidence
-from nevo.db.models.media_usage import media_usage_events  # noqa: F401
 from nevo.db.models.partner_inquiry import PartnerInquiry
 from nevo.db.models.permission import Admin, AdminInvitation, AdminScopeAssignment
 from nevo.db.models.probe import ProbeItem, ProbeResponse
@@ -168,6 +168,8 @@ __all__ = [
     "NotificationEmailDelivery",
     "NotificationPreference",
     "OfflineDownload",
+    "OutOfSchoolLearning",
+    "PaperWorkEvidence",
     "ParentDataRequest",
     "ParentLink",
     "PartnerInquiry",
@@ -189,8 +191,8 @@ __all__ = [
     "SignalEvent",
     "StepUpSchedule",
     "StudentClassEnrollment",
-    "StudentConceptMastery",
     "StudentConceptLevelMastery",
+    "StudentConceptMastery",
     "StudentConceptScaffoldState",
     "StudentConceptScheduling",
     "StudentOnboardingGrant",

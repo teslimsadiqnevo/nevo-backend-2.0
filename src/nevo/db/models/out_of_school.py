@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Uuid, UniqueConstraint, func, text
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nevo.db.base import Base

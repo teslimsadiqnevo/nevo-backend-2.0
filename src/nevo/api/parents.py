@@ -11,10 +11,10 @@ from sqlalchemy import select
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.response_models import CamelResponse
+from nevo.consent.entities import ParentChildView
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import StudentConceptLevelMastery, StudentConceptScheduling
 from nevo.db.models.out_of_school import OutOfSchoolLearning
-from nevo.consent.entities import ParentChildView
 from nevo.domain.accounts.vocabulary import UserStatus
 from nevo.domain.parents.vocabulary import GrowthDimension, GrowthTrend
 from nevo.parents.entities import GrowthNarrative, GrowthStatement

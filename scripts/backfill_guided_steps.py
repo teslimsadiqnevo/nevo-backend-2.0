@@ -20,7 +20,6 @@ from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.session import create_engine, create_session_factory
 from nevo.domain.ai_gateway.vocabulary import AiService
 
-
 PROMPT_NAME = "content_guided_steps_backfill.default"
 
 

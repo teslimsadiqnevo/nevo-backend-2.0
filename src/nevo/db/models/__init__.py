@@ -202,4 +202,5 @@ __all__ = [
     "UploadSourceBlob",
     "User",
     "UserConnection",
+    "VisualSafetyRestamp",
 ]

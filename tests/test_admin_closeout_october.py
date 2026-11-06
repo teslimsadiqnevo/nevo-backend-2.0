@@ -132,7 +132,11 @@ async def test_last_active_senior_cannot_be_demoted():
     repository = SqlAlchemyPermissionRepository(factory)
     with pytest.raises(LastSeniorAdminError):
         await repository.set_admin_access_level(
-            school_id=uuid4(), target_user_id=uuid4(), access_level=AdminAccessLevel.STANDARD
+            school_id=uuid4(),
+            target_user_id=uuid4(),
+            access_level=AdminAccessLevel.STANDARD,
+            changed_by_user_id=uuid4(),
+            changed_at=datetime.now(UTC),
         )
     assert admin.access_level is AdminAccessLevel.SENIOR
     error = public_permission_error(LastSeniorAdminError())
@@ -172,7 +176,11 @@ async def test_demotion_preserves_scopes_and_reports_learning_support(monkeypatc
     scopes = frozenset({PermissionScope.BILLING})
     monkeypatch.setattr(repository, "_active_scopes_for_update", AsyncMock(return_value=scopes))
     result = await repository.set_admin_access_level(
-        school_id=school_id, target_user_id=user_id, access_level=AdminAccessLevel.STANDARD
+        school_id=school_id,
+        target_user_id=user_id,
+        access_level=AdminAccessLevel.STANDARD,
+        changed_by_user_id=uuid4(),
+        changed_at=datetime.now(UTC),
     )
     assert result.access_level is AdminAccessLevel.STANDARD
     assert result.scopes == scopes
@@ -192,7 +200,15 @@ def test_closeout_contracts_are_published():
 
 @pytest.mark.asyncio
 async def test_open_concern_count_is_not_capped_at_one_page(monkeypatch):
-    actor = SimpleNamespace(school_id=uuid4(), role=UserRole.OTHER_ADMIN)
+    # Concern reads are scoped to the actor now, so the fake has to be a
+    # plausible admin: the surface asks who they are and whether they are
+    # still active, not just which school they belong to.
+    actor = SimpleNamespace(
+        id=uuid4(),
+        school_id=uuid4(),
+        role=UserRole.OTHER_ADMIN,
+        status=UserStatus.ACTIVE,
+    )
     monkeypatch.setattr(frontend_unblockers, "require_school_actor", AsyncMock(return_value=actor))
     session = SimpleNamespace(
         scalar=AsyncMock(return_value=137),

@@ -162,6 +162,18 @@ def upgrade():
             op.execute(statement.strip())
     # Lock the identity row for child-data writes, serialising with the purge.
     bind = op.get_bind()
+    if op.get_context().as_sql:
+        # Which tables get a guard is read off the live schema: every foreign
+        # key into users that names a learner. Offline there is nothing to
+        # read - sa.inspect on a mock connection raises, which took the whole
+        # of `alembic upgrade head --sql` down with it and with it every test
+        # that renders the schema. The triggers are attached when this runs
+        # against a database; an offline script cannot list them.
+        op.execute(
+            "-- retention_guard_* triggers are attached by introspecting "
+            "foreign keys into users; run this migration online"
+        )
+        return
     inspector = sa.inspect(bind)
     owned = {
         "student_id",

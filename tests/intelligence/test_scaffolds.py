@@ -100,7 +100,18 @@ def test_struggle_after_fade_reengages_support_without_negative_message() -> Non
     assert "wrong" not in decision.student_message.casefold()
 
 
-def test_more_intense_hint_use_counts_as_struggle_even_when_answer_is_correct() -> None:
+def test_a_correct_answer_that_needed_hints_holds_the_support_level() -> None:
+    """Right with help is a supported pass: hold, do not fade, do not pile on.
+
+    This asserted STRUGGLED and a step up to PARTIAL_SUPPORT - more support
+    for a child who had just got the answer right. The engine now names this
+    case supported_pass and holds the level where it is, resetting the
+    streaks that would have faded support. The child answered, so treating it
+    as a failure overstated it; they needed hints to do it, so fading would
+    have understated it.
+    """
+
+
     engine = ProgressiveScaffoldFadingEngine()
     student_id = uuid4()
     concept_id = uuid4()
@@ -123,5 +134,10 @@ def test_more_intense_hint_use_counts_as_struggle_even_when_answer_is_correct() 
         ),
     )
 
-    assert decision.outcome is ScaffoldOutcome.STRUGGLED
-    assert decision.next_intensity is ScaffoldIntensity.PARTIAL_SUPPORT
+    assert decision.outcome is ScaffoldOutcome.CORRECT
+    assert decision.change_reason == "supported_pass"
+    assert decision.next_intensity is ScaffoldIntensity.HINTS_ONLY
+    assert decision.level_changed is False
+    # The fade streak restarts, so three hinted passes in a row do not
+    # quietly add up to readiness for less support.
+    assert decision.state.consecutive_correct == 0

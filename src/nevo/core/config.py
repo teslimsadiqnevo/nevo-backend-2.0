@@ -1,10 +1,9 @@
-from functools import lru_cache
 import os
+from functools import lru_cache
 from urllib.parse import unquote, urlsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 PRODUCTION_SUPABASE_PROJECT_REF = "ibavgeinubvmktxufvvr"
 

@@ -60,6 +60,11 @@ select = ["E", "F", "I", "UP", "B", "C4", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/versions/*.py" = ["E501"]
+# A multiplication sign is what a child is shown in a maths lesson. RUF001
+# reads it as a typo for the letter x, which is the one thing it must not be
+# rewritten to in a lesson that also uses x as a variable.
+"src/nevo/api/product_learning.py" = ["RUF001"]
+"src/nevo/content_parsing/service.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.12"

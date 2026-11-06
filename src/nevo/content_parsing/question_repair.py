@@ -40,7 +40,7 @@ async def repair_questions(payload, *, source, gateway, requester_user_id):
     if not broken:
         raise UnclassifiableQuestionError("Unclassifiable question outside supported repair")
     last_error = None
-    for attempt in range(3):
+    for _attempt in range(3):
         response = await gateway.generate(
             AiGenerationRequest(
                 requester_user_id=requester_user_id,

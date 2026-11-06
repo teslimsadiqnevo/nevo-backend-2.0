@@ -32,6 +32,7 @@ class FakeBillingService(BillingService):
     def __init__(self) -> None:
         self.payment_update = None
         self.contact_update = None
+        self.invoice_calls: list[dict] = []
 
     async def subscription(self, school_id):
         assert school_id == SCHOOL_ID
@@ -54,7 +55,11 @@ class FakeBillingService(BillingService):
 
     async def invoices(self, *, school_id, date_from, date_to, status):
         assert school_id == SCHOOL_ID
-        assert status is InvoiceStatus.PAID
+        # Two calls per request, and only the first carries the filters: the
+        # outstanding total and the overdue banner describe the school's
+        # position, so they are computed over every invoice. Asserting PAID
+        # unconditionally hid that the second call was being made wrongly.
+        self.invoice_calls.append({"date_from": date_from, "date_to": date_to, "status": status})
         return (
             InvoiceRecord(
                 id=uuid4(),
@@ -197,7 +202,7 @@ def test_plan_options_publish_prices_and_relationship_manager_switching() -> Non
 
 
 def test_invoice_history_endpoint_filters_by_status() -> None:
-    client, _ = client_for()
+    client, service = client_for()
 
     response = client.get(
         "/api/billing/invoices",
@@ -207,6 +212,13 @@ def test_invoice_history_endpoint_filters_by_status() -> None:
     assert response.status_code == 200
     assert response.json()[0]["invoiceNumber"] == "NEVO-2026-001"
     assert response.json()[0]["pdfUrl"].endswith(".pdf")
+    filtered, unfiltered = service.invoice_calls
+    assert filtered == {
+        "date_from": date(2026, 1, 1),
+        "date_to": None,
+        "status": InvoiceStatus.PAID,
+    }
+    assert unfiltered == {"date_from": None, "date_to": None, "status": None}
 
 
 def test_upcoming_charge_endpoint_returns_next_invoice() -> None:

@@ -1,10 +1,11 @@
 import hashlib
+import logging
 import secrets
 from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -41,6 +42,9 @@ from nevo.api.response_models import (
     TeacherDetailResponse,
     TeacherSummaryResponse,
 )
+from nevo.consent.entities import ConsentActor
+from nevo.consent.errors import ConsentError
+from nevo.consent.service import DEFAULT_REQUESTED_CONSENT
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.auth import AuthAuditEvent, AuthSession
 from nevo.db.models.billing import Invoice
@@ -81,6 +85,8 @@ from nevo.subjects.resolution import (
     subjects_for_class,
     subjects_for_classes,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["school administration"])
 SearchQuery = Annotated[str | None, Query(max_length=100)]
@@ -1219,6 +1225,7 @@ async def enroll_student(
     payload: StudentEnroll,
     principal: PrincipalDependency,
     session: DatabaseSession,
+    request: Request,
 ) -> dict[str, object]:
     actor = await require_school_actor(
         session, principal, roles={UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
@@ -1304,7 +1311,76 @@ async def enroll_student(
                 "message": "That email address already belongs to a Nevo account.",
             },
         ) from error
-    return {"id": str(student.id), "loginIdentifier": identifier}
+    consent_requested = await _ask_this_parent_now(
+        request,
+        actor=actor,
+        student_id=student.id,
+        parent_email=str(payload.parent_email) if payload.parent_email else None,
+    )
+    return {
+        "id": str(student.id),
+        "loginIdentifier": identifier,
+        "consentRequested": consent_requested,
+    }
+
+
+async def _ask_this_parent_now(
+    request: Request,
+    *,
+    actor: User,
+    student_id: UUID,
+    parent_email: str | None,
+) -> bool:
+    """Send the parent's consent request as part of adding the child.
+
+    A class upload has always asked every parent it was given an address
+    for. Adding one child did not: it recorded the address and left the
+    asking as a separate step somebody had to remember.
+
+    That is not only an inconsistency. Nothing starts the removal countdown
+    until a request exists - the sweep works off invitations that expire
+    unanswered - so a child nobody got round to asking about stayed on the
+    roster, was billed on it, and could never start a lesson. Lydia's
+    ruling of 6 November is that a school pays for children it can still
+    act on, with the countdown as the backstop; this is what arms it.
+
+    Enrolment has already committed by this point and is not undone if the
+    request fails. The child is on the roster either way, and the response
+    says whether the parent was asked so the screen can show the ones still
+    needing it.
+    """
+
+    if not parent_email or actor.school_id is None:
+        return False
+    service = getattr(request.app.state, "consent_service", None)
+    if service is None:
+        logger.warning(
+            "Parent consent not requested for student %s: consent service is not configured",
+            student_id,
+        )
+        return False
+    try:
+        await service.request_parent_consent(
+            ConsentActor(user_id=actor.id, school_id=actor.school_id),
+            student_id=student_id,
+            # The parent supplies their own name when they answer. Theirs is
+            # the version the consent record should hold, and asking a
+            # proprietor to find it first is what kept the field off the
+            # screen.
+            parent_name="",
+            parent_contact=parent_email,
+            contact_method=ParentContactMethod.EMAIL,
+            consent_types=DEFAULT_REQUESTED_CONSENT,
+        )
+    except ConsentError:
+        # A parent who has already refused for this child is not asked again,
+        # which is the refusal doing its job rather than a fault here.
+        logger.warning("Parent consent not requested for student %s", student_id, exc_info=True)
+        return False
+    except Exception:
+        logger.exception("Parent consent request failed for student %s", student_id)
+        return False
+    return True
 
 
 @router.get(

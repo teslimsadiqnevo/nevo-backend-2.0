@@ -11,9 +11,9 @@ from nevo.api.learning_support import require_learning_support_if_admin
 from nevo.api.product_common import (
     require_class_access,
     require_school_actor,
+    require_student_access,
     require_teacher_console_actor,
     require_teacher_console_class,
-    require_student_access,
 )
 from nevo.api.response_models import (
     AdaptationResponse,

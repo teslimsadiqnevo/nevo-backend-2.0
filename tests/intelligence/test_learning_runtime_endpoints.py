@@ -53,6 +53,14 @@ def run(coroutine):
 
 @pytest.fixture
 def runtime(monkeypatch):
+    # The gate lives here and not only in this module's pytestmark, because
+    # six other modules reuse this fixture by calling runtime.__wrapped__
+    # directly, which takes the fixture and leaves the mark behind. Without a
+    # disposable database those modules raised an unparseable-URL error apiece
+    # instead of skipping - every one of the suite's errors, and all of them
+    # saying nothing except that this variable is unset.
+    if not URL:
+        pytest.skip("Disposable database required")
     parsed = make_url(URL)
     assert parsed.host in {"127.0.0.1", "localhost"}
     assert parsed.database == "nevo_adaptation_tests"

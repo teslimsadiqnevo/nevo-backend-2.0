@@ -36,14 +36,32 @@ def _settings(**overrides: object) -> VisualGenerationSettings:
     return VisualGenerationSettings(**values)  # type: ignore[arg-type]
 
 
-def _review(approved: bool, issues: str = "") -> httpx.Response:
+def _review(
+    approved: bool,
+    issues: str = "",
+    *,
+    category: str = "educational_quality",
+    description: str = "A labelled diagram of the water cycle.",
+) -> httpx.Response:
+    """A reviewer reply that the reviewer could actually have sent.
+
+    This used to carry approved and issues alone. The reviewer's own schema
+    requires category and description too, and an approved image's
+    description becomes its alt text and caption, so the service refuses an
+    approval without one. Every test built on this helper was therefore
+    asserting against a reply that cannot occur, and the path that does occur
+    had no coverage at all.
+    """
+
+    payload = {
+        "approved": approved,
+        "issues": issues,
+        "category": category,
+        "description": description,
+    }
     return httpx.Response(
         200,
-        json={
-            "content": [
-                {"type": "text", "text": json.dumps({"approved": approved, "issues": issues})}
-            ]
-        },
+        json={"content": [{"type": "text", "text": json.dumps(payload)}]},
     )
 
 
@@ -195,7 +213,12 @@ async def test_persistently_rejected_image_is_never_uploaded(
 
 
 async def test_existing_object_skips_generation(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = _Fake([], object_exists=True)
+    # A cache hit skips drawing and uploading, and is still reviewed: this
+    # lesson's text is not the text the image was cached against, so an image
+    # that gives away this question's answer must not be served off the
+    # digest. Hence one review response, and reviewAttempts still 0 - that
+    # counts attempts at drawing, of which there were none.
+    fake = _Fake([_review(True)], object_exists=True)
     _install(monkeypatch, fake)
 
     result = await EducationalImageService(_settings()).generate(
@@ -207,6 +230,7 @@ async def test_existing_object_skips_generation(monkeypatch: pytest.MonkeyPatch)
     assert fake.image_prompts == []
     assert fake.uploads == []
     assert result["reviewAttempts"] == 0
+    assert len(fake.review_images) == 1
 
 
 @pytest.mark.parametrize("blocked_phase", ["image_prompt", "image_output", "image_cached"])

@@ -6,13 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import Class, User
 from nevo.db.models.permission import Admin, AdminScopeAssignment
-from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.db.models.product import SchoolInvitation
 from nevo.db.models.subject import ClassSubject, SchoolSubject, TeacherSubject
 from nevo.db.models.teacher_assignment import (
     TeacherClassAssignment as TeacherClassAssignmentModel,
 )
 from nevo.domain.accounts.vocabulary import AuthMethod, UserRole, UserStatus
+from nevo.domain.permissions.vocabulary import PermissionScope
 from nevo.domain.teacher_assignments.vocabulary import (
     TeacherAssignmentRole,
     TeacherAssignmentSource,
@@ -30,8 +30,8 @@ from nevo.teacher_assignments.errors import (
     SubjectNotOnClassError,
     SubjectNotOnTeacherError,
     SubjectRequiredError,
-    TeacherNotFoundError,
     TeacherNotActiveError,
+    TeacherNotFoundError,
 )
 
 

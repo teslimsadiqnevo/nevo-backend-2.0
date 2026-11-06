@@ -5,10 +5,12 @@ from sqlalchemy import or_, select
 
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import Concept, LessonAssignment
-from nevo.db.models.product import LessonProgress, LessonQuestionAttempt
 from nevo.db.models.mastery import (
-    StudentConceptLevelMastery, StudentConceptMastery, StudentConceptScheduling,
+    StudentConceptLevelMastery,
+    StudentConceptMastery,
+    StudentConceptScheduling,
 )
+from nevo.db.models.product import LessonProgress, LessonQuestionAttempt
 from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
 
 LEVEL_INDEPENDENT_PASSES = 2

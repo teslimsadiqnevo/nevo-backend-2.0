@@ -31,9 +31,9 @@ from nevo.teacher_assignments.errors import (
     SubjectNotOnTeacherError,
     SubjectRequiredError,
     TeacherAssignmentError,
+    TeacherNotActiveError,
     TeacherNotAssignedError,
     TeacherNotFoundError,
-    TeacherNotActiveError,
 )
 from nevo.teacher_assignments.service import TeacherAssignmentService
 

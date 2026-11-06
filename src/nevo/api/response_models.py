@@ -338,6 +338,14 @@ class StudentDetailResponse(CamelResponse):
 class StudentEnrollmentResponse(CamelResponse):
     id: UUID
     login_identifier: str
+    #: Whether the parent's consent request went out as part of adding the
+    #: child. False when no parent email was given, or when sending failed -
+    #: the child is still enrolled either way, so the screen has to be able
+    #: to say "this one still needs asking" rather than leaving an admin to
+    #: assume it was done. Nothing starts the removal countdown until the
+    #: request exists, so an unsent one is a child who is billed and can
+    #: never start.
+    consent_requested: bool = False
 
 
 class StudentMoveResponse(CamelResponse):

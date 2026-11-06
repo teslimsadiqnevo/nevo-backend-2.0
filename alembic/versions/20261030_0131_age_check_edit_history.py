@@ -1,7 +1,8 @@
 """Record each school DOB re-check as an append-only edit."""
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "20261030_0131"
 down_revision = "20261029_0130"

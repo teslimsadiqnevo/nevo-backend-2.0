@@ -23,8 +23,15 @@ def upgrade():
         sa.Column("withdrawn_by", sa.Uuid(), sa.ForeignKey("users.id", ondelete="SET NULL")),
     )
     op.add_column("deferred_lesson_media", sa.Column("withdrawn_by_name", sa.String(300)))
-    # The held review branch may already have provisioned this table.
-    if "lesson_review_signoffs" not in sa.inspect(op.get_bind()).get_table_names():
+    # The held review branch may already have provisioned this table. Offline
+    # there is no schema to ask - sa.inspect on a mock connection raises - and
+    # a rendered script is the whole schema from nothing, so the table is
+    # always wanted there.
+    already_provisioned = (
+        not op.get_context().as_sql
+        and "lesson_review_signoffs" in sa.inspect(op.get_bind()).get_table_names()
+    )
+    if not already_provisioned:
         op.create_table(
             "lesson_review_signoffs",
             sa.Column(

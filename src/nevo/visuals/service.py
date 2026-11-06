@@ -447,7 +447,7 @@ class EducationalImageService:
         return self._parse_review(response.json())
 
     @staticmethod
-    def _parse_review(body: Any) -> tuple[bool, str, str]:
+    def _parse_review(body: Any) -> tuple[bool, str, str, str]:
         try:
             text = next(
                 block["text"]

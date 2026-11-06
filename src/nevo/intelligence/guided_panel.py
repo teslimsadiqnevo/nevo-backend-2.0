@@ -5,8 +5,8 @@ from uuid import NAMESPACE_DNS, uuid5
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from nevo.content_parsing.answers import answer_matches
 from nevo.api.lesson_contracts import explanation_reveals_answer
+from nevo.content_parsing.answers import answer_matches
 from nevo.db.models.product import LessonQuestionAttempt
 
 

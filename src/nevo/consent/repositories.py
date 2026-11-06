@@ -32,6 +32,7 @@ from nevo.db.models.consent import (
     ConsentNotificationOutbox,
     ParentLink,
 )
+from nevo.db.models.consent_assurance import AgeCheck
 from nevo.db.models.product import ParentDataRequest
 from nevo.domain.accounts.vocabulary import (
     AuthMethod,
@@ -716,6 +717,16 @@ class SqlAlchemyConsentRepository:
                     )
                 )
             ).first()
+            # A parent arriving on a held child needs the recheck screen, not
+            # the consent form, and this read was the only thing they had to
+            # route on. None means no check has been raised.
+            age_check = (
+                await session.execute(
+                    select(AgeCheck.state, AgeCheck.hold_reasons).where(
+                        AgeCheck.student_id == invitation.student_id
+                    )
+                )
+            ).first()
 
         status = record[0] if record is not None else ConsentStatus.PENDING
         decided_at = record[1] if record is not None else None
@@ -746,6 +757,12 @@ class SqlAlchemyConsentRepository:
             consent_types=consent_types,
             expires_at=invitation.expires_at,
             decided_at=decided_at if status is not ConsentStatus.PENDING else None,
+            # account_created and parent_id move together under
+            # ck_parent_links_account_created_matches_parent, so either one
+            # answers this; the id is the one that lets them sign in.
+            parent_account_ready=bool(parent_link and parent_link.parent_id is not None),
+            age_check_state=age_check[0] if age_check is not None else None,
+            age_check_hold_reasons=tuple(age_check[1] or ()) if age_check is not None else (),
         )
 
     async def exercise_parent_right(

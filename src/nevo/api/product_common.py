@@ -33,7 +33,7 @@ async def actor_user(session: AsyncSession, principal: AuthPrincipal) -> User:
     return user
 
 
-def _refuse_unconfirmed_write(user: User) -> None:
+def refuse_unconfirmed_write(*, role: str, email_confirmed: bool, email: str | None) -> None:
     """An administrator who has not proved their address writes nothing.
 
     Here rather than on each handler because the rule covers every write in
@@ -41,9 +41,14 @@ def _refuse_unconfirmed_write(user: User) -> None:
     a rule enforced per handler is a rule the next handler forgets. The
     request's method reaches this function through a context variable, since
     this is a funnel for a principal and a session rather than a request.
+
+    Takes the three facts rather than a User, because the other door into the
+    product resolves a PermissionSnapshot and never loads the row. Passing
+    the facts keeps one statement of the rule - which roles it covers, which
+    paths are exempt, what the refusal says - instead of a copy per door.
     """
 
-    if user.email_confirmed_at is not None or user.role.value not in ADMIN_ROLES:
+    if email_confirmed or role not in ADMIN_ROLES:
         return
     request = current_request()
     if request is None or not request.writes:
@@ -56,12 +61,21 @@ def _refuse_unconfirmed_write(user: User) -> None:
             "code": "email_not_confirmed",
             "message": (
                 "Confirm your email address before making changes. We sent a "
-                "link to "
-                f"{user.email}; you can send it again from the banner at the "
-                "top of the console."
+                f"link to {email}; you can send it again from the banner at "
+                "the top of the console."
             ),
-            "email": user.email,
+            "email": email,
         },
+    )
+
+
+def _refuse_unconfirmed_write(user: User) -> None:
+    """The same rule, for the callers that already hold the user row."""
+
+    refuse_unconfirmed_write(
+        role=user.role.value,
+        email_confirmed=user.email_confirmed_at is not None,
+        email=user.email,
     )
 
 

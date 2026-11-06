@@ -26,25 +26,33 @@ def test_both_scope_dependencies_apply_the_rule() -> None:
 
 
 def test_the_rule_itself_is_not_copied() -> None:
-    # One statement of the rule. The gate here loads the user and defers to
-    # it rather than restating which roles or paths are exempt, so the
-    # allowlist and the role set cannot drift between the two doors.
+    # One statement of the rule. The gate hands over the three facts and
+    # defers to it rather than restating which roles it covers, which paths
+    # are exempt, or what the refusal says, so the two doors cannot drift.
     gate = inspect.getsource(permissions._refuse_an_unconfirmed_admin)
-    assert "_refuse_unconfirmed_write(user)" in gate
-    assert "ADMIN_ROLES" not in gate
-    assert "email_confirmed_at" not in gate
+    assert "refuse_unconfirmed_write(" in gate
+    for restated in ("ADMIN_ROLES", "UNCONFIRMED_WRITE_ALLOWLIST", "email_not_confirmed"):
+        assert restated not in gate
 
 
-def test_a_missing_user_is_not_treated_as_confirmed() -> None:
-    # A principal whose row has gone is refused by the permission service on
-    # the next line; this gate simply does not assert anything about them.
-    gate = inspect.getsource(permissions._refuse_an_unconfirmed_admin)
-    assert "if user is not None:" in gate
+def test_the_gate_needs_no_database_session_of_its_own() -> None:
+    # A route dependency resolves before the handler, so a second reason it
+    # can fail is a second way a 403 the client earned comes back as a 503.
+    # That has happened three times here. The snapshot already carries what
+    # the rule needs.
+    for dependency in (permissions.RequireScope, permissions.RequireAnyScope):
+        signature = inspect.signature(dependency.__call__)
+        assert "session" not in signature.parameters, dependency.__name__
+    # The body, not the docstring, which explains why there is no session.
+    body = inspect.getsource(permissions._refuse_an_unconfirmed_admin).split('"""')[-1]
+    assert "session" not in body
+    assert "await" not in body
 
 
-def test_the_gate_runs_before_the_scope_is_checked() -> None:
-    # An unconfirmed admin gets "confirm your email", not "you lack the
-    # billing scope", which is the more useful of the two and the one they
-    # can act on.
-    source = inspect.getsource(permissions.RequireScope.__call__)
-    assert source.index("_refuse_an_unconfirmed_admin") < source.index("service.require")
+def test_the_snapshot_defaults_to_confirmed() -> None:
+    # A snapshot built without the field - a fake in a test, an older caller -
+    # must not start refusing every write. The rule is applied to what the
+    # repository actually read, and nothing else.
+    from nevo.permissions.entities import PermissionSnapshot
+
+    assert PermissionSnapshot.__dataclass_fields__["email_confirmed"].default is True

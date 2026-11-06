@@ -350,6 +350,32 @@ class BillingContact(Base):
     )
 
 
+class BillingEmailDelivery(Base):
+    __tablename__ = "billing_email_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "invoice_id", "email", "kind", name="uq_billing_email_invoice_recipient_kind"
+        ),
+        Index("ix_billing_email_due", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class BillingPaymentMethod(Base):
     __tablename__ = "billing_payment_methods"
     __table_args__ = (

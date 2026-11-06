@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.billing.service import quote_per_student
 from nevo.db.models.account import School, User
-from nevo.db.models.billing import Contract, Invoice
+from nevo.db.models.billing import BillingContact, BillingEmailDelivery, Contract, Invoice
 from nevo.domain.accounts.vocabulary import NotificationType, UserRole, UserStatus
 from nevo.domain.billing.vocabulary import (
     ContractStatus,
@@ -115,8 +115,7 @@ class InvoiceIssuanceService:
                             rate_locked_until=school.price_lock_expiry,
                             currency=self._billed_currency,
                         )
-                        session.add(
-                            Invoice(
+                        invoice = Invoice(
                                 invoice_number=period.number,
                                 school_id=school.id,
                                 issued_at=issue_date,
@@ -133,7 +132,9 @@ class InvoiceIssuanceService:
                                 due_at=issue_date + timedelta(days=PAYMENT_TERM_DAYS),
                                 pdf_url=(f"/api/billing/invoices/{school.id}/{period.number}.pdf"),
                             )
-                        )
+                        session.add(invoice)
+                        await session.flush()
+                        await queue_billing_emails(session, invoice=invoice, kind="issued")
                         # An invoice nobody is told about is an invoice nobody
                         # pays. invoice_issued had a category and a preference
                         # switch and was never once raised.
@@ -294,3 +295,23 @@ async def _notify_billing_contacts(
         description=(f"{label}: {currency.value} {amount:,.2f}, due {due_on.isoformat()}."),
         navigates_to="/admin/billing",
     )
+
+
+async def queue_billing_emails(
+    session: AsyncSession, *, invoice: Invoice, kind: str
+) -> int:
+    """Queue each invoice message once per listed address and milestone."""
+    emails = set(await session.scalars(
+        select(BillingContact.email).where(BillingContact.school_id == invoice.school_id)
+    ))
+    existing = set(await session.scalars(
+        select(BillingEmailDelivery.email).where(
+            BillingEmailDelivery.invoice_id == invoice.id,
+            BillingEmailDelivery.kind == kind,
+        )
+    ))
+    for email in emails - existing:
+        session.add(BillingEmailDelivery(
+            invoice_id=invoice.id, email=email, kind=kind,
+        ))
+    return len(emails - existing)

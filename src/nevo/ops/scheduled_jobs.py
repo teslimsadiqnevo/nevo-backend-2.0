@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from nevo.billing.issuance import InvoiceIssuanceService
+from nevo.billing.issuance import InvoiceIssuanceService, queue_billing_emails
 from nevo.consent.expiry import ConsentExpiryService
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.billing import Invoice
@@ -41,6 +41,20 @@ def build_scheduled_jobs(
 
     async def issue_invoices() -> str:
         return (await issuance_service.issue_due_invoices()).summary()
+
+    async def invoice_reminders() -> str:
+        today = datetime.now(UTC).date()
+        queued = 0
+        async with sessions.begin() as session:
+            invoices = list(await session.scalars(select(Invoice).where(
+                Invoice.status == InvoiceStatus.PENDING,
+            )))
+            for invoice in invoices:
+                queued += await queue_billing_emails(session, invoice=invoice, kind="issued")
+                if invoice.due_at == today or invoice.due_at == today + timedelta(days=7):
+                    kind = "reminder_due" if invoice.due_at == today else "reminder_7d"
+                    queued += await queue_billing_emails(session, invoice=invoice, kind=kind)
+        return f"queued {queued} invoice reminder emails"
 
     async def attention_digests() -> str:
         return await send_attention_digests(sessions)
@@ -148,6 +162,7 @@ def build_scheduled_jobs(
         # Issuance runs before collection so a freshly raised invoice that is
         # already due is picked up on the same sweep.
         ScheduledJob(name="billing.issue_invoices", interval=DAILY, run=issue_invoices),
+        ScheduledJob(name="billing.invoice_reminders", interval=DAILY, run=invoice_reminders),
         ScheduledJob(
             name="billing.collect_due_invoices",
             interval=DAILY,

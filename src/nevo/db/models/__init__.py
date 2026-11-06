@@ -20,6 +20,7 @@ from nevo.db.models.attention_flag import (
 from nevo.db.models.auth import AuthAuditEvent, AuthLoginAttempt, AuthSession
 from nevo.db.models.billing import (
     BillingContact,
+    BillingEmailDelivery,
     BillingLedger,
     BillingPaymentMethod,
     BillingSubscriptionTier,
@@ -121,6 +122,7 @@ __all__ = [
     "AuthLoginAttempt",
     "AuthSession",
     "BillingContact",
+    "BillingEmailDelivery",
     "BillingLedger",
     "BillingPaymentMethod",
     "BillingSubscriptionTier",

@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import datetime
 import re
 from typing import Annotated, Literal
@@ -18,6 +20,16 @@ from nevo.content_parsing.chunks import reading_chunks as reading_chunks
 from nevo.domain.intelligence.vocabulary import LessonContentType, ManipulativeKind
 
 ScalarAnswer = str | int | float | bool
+
+
+def marking_key_version(question: dict[str, object]) -> str:
+    material = {
+        "id": str(question.get("id")),
+        "answerType": question.get("answerType"),
+        "answerKey": question.get("answerKey"),
+        "acceptedAnswers": question.get("acceptedAnswers") or [],
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class UnclassifiableQuestionError(ValueError):
@@ -1322,6 +1334,46 @@ def student_checkpoint_payloads(
         )
         if question["teacherReviewed"] and question.get("answerKey") is not None
     ]
+
+
+HELD_ANSWER_FIELDS = frozenset({"answerKey", "acceptedAnswers", "answer", "explanation"})
+
+
+def without_held_answers(value: object) -> object:
+    """Remove held marking data only at an online student response boundary."""
+    if isinstance(value, list):
+        return [without_held_answers(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: without_held_answers(item)
+            for key, item in value.items()
+            if key not in HELD_ANSWER_FIELDS
+        }
+    return value
+
+
+def online_student_lesson(value: dict[str, object]) -> dict[str, object]:
+    result = dict(value)
+    result["assessment"] = without_held_answers(result.get("assessment") or [])
+    segments = []
+    for raw in result.get("segments") or []:
+        segment = dict(raw)
+        segment["comprehensionCheckpoints"] = without_held_answers(
+            segment.get("comprehensionCheckpoints") or []
+        )
+        for field in ("calculationVariant", "interactiveVariant"):
+            if segment.get(field) is not None:
+                segment[field] = without_held_answers(segment[field])
+        segments.append(segment)
+    result["segments"] = segments
+    # Module segments are duplicated by the response model for the module view.
+    for module in result.get("modules") or []:
+        if isinstance(module, dict) and module.get("segments"):
+            module["segments"] = [
+                next((row for row in segments if row.get("id") == item.get("id")), item)
+                for item in module["segments"]
+            ]
+    return result
 
 
 def explanation_reveals_answer(step: dict[str, object]) -> bool:

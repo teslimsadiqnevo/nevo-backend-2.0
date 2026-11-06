@@ -11,6 +11,9 @@ from nevo.api.auth import PrincipalDependency
 from nevo.api.consent import StudentLearningConsent
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_school_actor, require_student_access
+from nevo.db.models.account import User
+from nevo.db.models.auth import AuthAuditEvent
+from nevo.db.models.mastery import StudentConceptScheduling
 from nevo.scheduler.entities import ConceptSchedule, ReviewResult
 from nevo.scheduler.service import FsrsSchedulerService
 
@@ -136,6 +139,58 @@ class RefreshSchedulesResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     refreshed_count: int = Field(alias="refreshedCount")
+
+
+class DueNowRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    reason: str = Field(min_length=8, max_length=240)
+
+
+@router.post(
+    "/test/students/{student_id}/concepts/{concept_id}/due-now",
+    response_model=ConceptScheduleResponse,
+)
+async def make_test_return_due_now(
+    student_id: UUID,
+    concept_id: UUID,
+    payload: DueNowRequest,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> ConceptScheduleResponse:
+    actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
+    student = await session.get(User, student_id)
+    if (
+        student is None or student.school_id != actor.school_id
+        or not (student.email or "").casefold().endswith("@e2e.example.com")
+    ):
+        raise HTTPException(404, detail={"code": "test_student_not_found"})
+    schedule = await session.scalar(
+        select(StudentConceptScheduling).where(
+            StudentConceptScheduling.student_id == student_id,
+            StudentConceptScheduling.concept_id == concept_id,
+        ).with_for_update()
+    )
+    if schedule is None:
+        raise HTTPException(404, detail={"code": "concept_schedule_not_found"})
+    previous_due = schedule.next_review_due
+    now = datetime.now(UTC)
+    schedule.next_review_due = now
+    session.add(AuthAuditEvent(
+        event_type="test_return_due_now",
+        user_id=actor.id,
+        details={
+            "studentId": str(student_id), "conceptId": str(concept_id),
+            "previousDue": previous_due.isoformat(), "reason": payload.reason,
+        },
+    ))
+    await session.commit()
+    return ConceptScheduleResponse(
+        student_id=student_id, concept_id=concept_id,
+        stability=schedule.stability, difficulty=schedule.difficulty,
+        retrievability=None, last_review=schedule.last_review,
+        review_count=schedule.review_count, next_review_due=now,
+    )
 
 
 def get_scheduler_service(request: Request) -> FsrsSchedulerService:

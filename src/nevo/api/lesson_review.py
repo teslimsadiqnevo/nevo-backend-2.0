@@ -124,6 +124,8 @@ class CheckReviewItem(CamelResponse):
     scope: Literal["checkpoint", "assessment"] = "checkpoint"
     segment_title: str | None
     question_id: str
+    concept_id: UUID | None = None
+    concept_name: str | None = None
     question_prompt: str
     question_answer_type: str
     question_options: list[dict[str, object]] = Field(default_factory=list)
@@ -316,6 +318,58 @@ async def write_calculation_support(
 class TransferGenerationRequest(BaseModel):
     model_config = CAMEL_CONFIG
     concept_id: UUID
+
+
+class CheckLevelWrite(BaseModel):
+    model_config = CAMEL_CONFIG
+    scope: Literal["checkpoint", "assessment"]
+    segment_id: UUID | None = None
+    mastery_level: Literal["knowledge", "application", "analysis"]
+
+
+@router.put("/lessons/{lesson_id}/checks/{question_id}/level", response_model=LessonReviewResponse)
+async def set_check_level(
+    lesson_id: UUID,
+    question_id: str,
+    payload: CheckLevelWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    """A teacher corrects an inferred level without changing the held answer."""
+    lesson, _actor = await _lesson_for_review(session, principal, lesson_id)
+    if payload.scope == "checkpoint":
+        if payload.segment_id is None:
+            raise HTTPException(422, detail={"code": "segment_id_required"})
+        owner = await session.scalar(select(LessonSegment).where(
+            LessonSegment.id == payload.segment_id,
+            LessonSegment.lesson_id == lesson.id,
+        ).with_for_update())
+        if owner is None:
+            raise HTTPException(404, detail={"code": "lesson_segment_not_found"})
+        questions = list(owner.comprehension_checkpoints or [])
+    else:
+        if payload.segment_id is not None:
+            raise HTTPException(422, detail={"code": "assessment_has_no_segment"})
+        owner = await session.get(Lesson, lesson.id, with_for_update=True)
+        questions = list(owner.assessment or [])
+    match = next((index for index, item in enumerate(questions)
+                  if str(item.get("id")) == question_id), None)
+    if match is None:
+        raise HTTPException(404, detail={"code": "lesson_question_not_found"})
+    question = dict(questions[match])
+    if question.get("answerKey") is None:
+        raise HTTPException(409, detail={"code": "unmarkable_question"})
+    checkpoint_payloads([question], segment_key="level-review", strict=True)
+    question["masteryLevel"] = payload.mastery_level
+    question["masteryLevelAuthoredBy"] = "person"
+    questions[match] = question
+    if payload.scope == "checkpoint":
+        owner.comprehension_checkpoints = questions
+    else:
+        owner.assessment = questions
+    await _invalidate_signoffs(session, lesson.id, "checks")
+    await session.commit()
+    return await _review_result(session, lesson)
 
 
 class TransferGenerationResponse(CamelResponse):
@@ -957,11 +1011,13 @@ async def _review_material(session, lesson):
     return rows, segments, key_material, rewrites
 
 
-def _checks_material(segments, lesson=None):
+def _checks_material(segments, lesson=None, concept_names=None):
     from nevo.api.lesson_contracts import checkpoint_payloads
 
     material = []
     views = []
+    segment_concepts = {str(segment.id): segment.concept_id for segment in segments}
+    concept_names = concept_names or {}
     # The end-of-lesson questions are owned by the lesson's own id, as on main, so
     # a checks sign-off given before levels existed still matches its hash. Level
     # and transfer details join an item only where the question carries them.
@@ -980,6 +1036,7 @@ def _checks_material(segments, lesson=None):
         )
         for question in questions:
             raw = raw_by_id.get(str(question["id"]), {})
+            concept_id = question.get("conceptId") or segment_concepts.get(str(segment_id))
             item = {
                 "segmentId": str(segment_id),
                 "questionId": str(question["id"]),
@@ -1005,6 +1062,8 @@ def _checks_material(segments, lesson=None):
                 material.append(item)
             views.append(CheckReviewItem(
                 segment_id=segment_id, segment_title=segment_title, scope=scope,
+                concept_id=concept_id,
+                concept_name=raw.get("conceptName") or concept_names.get(str(concept_id)),
                 question_id=item["questionId"], question_prompt=item["questionPrompt"],
                 question_answer_type=item["questionAnswerType"],
                 question_options=item["questionOptions"], question_answer_key=item["questionAnswerKey"],
@@ -1214,7 +1273,12 @@ async def _review_result(session, lesson):
     from nevo.api.deferred_media import media_summary, reviewable_media
     rows, segments, points, rewrites = await _review_material(session, lesson)
     guided_material, guided_views, pending_guided_count = _guided_steps_material(segments)
-    checks_material, check_views = _checks_material(segments, lesson)
+    concept_names = {
+        str(item.id): item.name for item in await session.scalars(
+            select(Concept).where(Concept.lesson_id == lesson.id)
+        )
+    }
+    checks_material, check_views = _checks_material(segments, lesson, concept_names)
     calculation_material, calculation_views = _calculation_parts_material(segments)
     result = _review(lesson, rows)
     hashes = {

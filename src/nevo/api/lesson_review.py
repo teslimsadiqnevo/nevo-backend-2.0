@@ -964,6 +964,28 @@ def _calculation_parts_material(segments):
     return material, views
 
 
+#: What the checks sign-off is a sign-off of. The mastery level is left out
+#: on purpose.
+#:
+#: SCRUM-308. The level is part of each check's material, and the sign-off is
+#: a hash of that material, so correcting a wrongly tagged level invalidated
+#: the checks approval - which pulled the questions back from children on a
+#: lesson that was already live, and since SCRUM-307 also made that lesson
+#: unassignable. A level change is an edit and nothing about it is a new
+#: approval, so the approval stays in place. The level has its own sign-off
+#: (reviewed_level_ids), which is where that decision belongs.
+CHECKS_SIGNOFF_IGNORES = ("masteryLevel", "masteryLevelAuthoredBy")
+
+
+def checks_signoff_material(material):
+    """The checks material with the separately-approved level removed."""
+
+    return [
+        {key: value for key, value in item.items() if key not in CHECKS_SIGNOFF_IGNORES}
+        for item in material
+    ]
+
+
 def _current_signoff(record, material):
     if record.invalidated_at is not None:
         return False
@@ -1281,7 +1303,7 @@ async def review_complete_map(session, lesson_ids):
             "key_points": key_material,
             "rewrites": rewrites,
             "guided_steps": guided,
-            "checks": checks,
+            "checks": checks_signoff_material(checks),
             "calculation_parts": calculation,
         }
         approvals = approvals_by_lesson[lesson_id]
@@ -1309,7 +1331,7 @@ async def _review_result(session, lesson):
         "key_points": _hash(points),
         "rewrites": _hash(rewrites),
         "guided_steps": _hash(guided_material),
-        "checks": _hash(checks_material),
+        "checks": _hash(checks_signoff_material(checks_material)),
         "calculation_parts": _hash(calculation_material),
     }
     approvals = {}
@@ -1340,7 +1362,8 @@ async def _review_result(session, lesson):
                 content_hash=record.content_hash,
                 current=_current_signoff(record, {
                     "key_points": points, "rewrites": rewrites,
-                    "guided_steps": guided_material, "checks": checks_material,
+                    "guided_steps": guided_material,
+                    "checks": checks_signoff_material(checks_material),
                     "calculation_parts": calculation_material,
                 }[record.kind]),
             ),
@@ -1587,7 +1610,10 @@ async def approve_all_checks(
         .order_by(LessonSegment.sequence_order, LessonSegment.id).with_for_update()
     ))
     material, _ = _checks_material(segments, lesson)
-    digest = _hash(material)
+    # Hashed and stored without the mastery level, so a later level
+    # correction is an edit rather than a change that revokes this.
+    signoff_material = checks_signoff_material(material)
+    digest = _hash(signoff_material)
     if digest != payload.expected_content_hash:
         raise HTTPException(409, detail={"code": "review_content_changed"})
     if not material:
@@ -1598,7 +1624,8 @@ async def approve_all_checks(
     session.add(LessonReviewSignoff(
         lesson_id=lesson.id, kind="checks", approved_by=actor.id,
         approved_by_name=reviewer_name or actor.email or str(actor.id),
-        approved_at=datetime.now(UTC), content_hash=digest, content_snapshot=material,
+        approved_at=datetime.now(UTC), content_hash=digest,
+        content_snapshot=signoff_material,
     ))
     await session.commit()
     return await _review_result(session, lesson)

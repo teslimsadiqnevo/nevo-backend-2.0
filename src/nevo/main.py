@@ -455,7 +455,7 @@ async def health(request: Request) -> dict[str, str]:
     schema = (
         await schema_state(engine)
         if engine is not None
-        else {"state": "unknown", "expected": None, "applied": None}
+        else {"state": "unknown", "expected": None, "applied": None, "error": None}
     )
     return {
         "status": "ok",
@@ -467,6 +467,12 @@ async def health(request: Request) -> dict[str, str]:
         "schema": str(schema["state"]),
         "schemaExpected": str(schema["expected"] or ""),
         "schemaApplied": str(schema["applied"] or ""),
+        #: Why the revision could not be read, when that is the answer. The
+        #: exception's class name, not its message, which can carry the
+        #: connection string. "unreachable" with this set means the database
+        #: is not answering - a blank applied revision on its own read as a
+        #: migration waiting to be run, and cost sixteen hours on 6 November.
+        "schemaError": str(schema.get("error") or ""),
         "ai": "configured" if getattr(ai_gateway, "configured", False) else "fallback_only",
         "payments": "configured" if getattr(payments, "configured", False) else "not_configured",
         # Whether this environment has been given the real receiving account,

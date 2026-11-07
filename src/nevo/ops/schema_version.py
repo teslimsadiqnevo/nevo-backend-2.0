@@ -78,37 +78,59 @@ def _quoted(line: str) -> str:
     return ""
 
 
-async def applied_revision(engine: AsyncEngine) -> str | None:
-    """What the database says it is at, or None if it cannot be asked."""
+async def applied_revision_or_error(engine: AsyncEngine) -> tuple[str | None, str | None]:
+    """The applied revision, or why it could not be read.
+
+    Two different answers used to collapse into None: a database nobody
+    could reach, and a database that answered and had no revision in it. On
+    6 November the first spent sixteen hours looking like the second -
+    /health said the schema was unknown and the applied revision was blank,
+    which reads as a migration that needs running rather than a database
+    that cannot be opened at all.
+    """
 
     try:
         async with engine.connect() as connection:
             result = await connection.execute(text("SELECT version_num FROM alembic_version"))
-            return result.scalar()
-    except Exception:
-        # A database that cannot be reached is a louder problem than this one,
-        # and it is already reported everywhere else.
-        logger.warning("Could not read the applied migration revision", exc_info=True)
-        return None
+            return result.scalar(), None
+    except Exception as error:
+        logger.error(
+            "Could not reach the database to read the applied migration revision",
+            exc_info=True,
+        )
+        return None, type(error).__name__
+
+
+async def applied_revision(engine: AsyncEngine) -> str | None:
+    """What the database says it is at, or None if it cannot be asked."""
+
+    revision, _ = await applied_revision_or_error(engine)
+    return revision
 
 
 async def schema_state(engine: AsyncEngine) -> dict[str, str | None]:
     """What /health says about it, and what a boot log line says.
 
-    Three answers rather than a boolean: up to date, behind, and unknown. A
-    check that cannot tell "behind" from "could not look" is a check nobody
-    should act on.
+    Four answers rather than a boolean: up to date, behind, unknown, and
+    unreachable. A check that cannot tell "behind" from "could not look" is
+    a check nobody should act on - and one that cannot tell "could not look"
+    from "the database is not answering" sends people to the migrations when
+    the connection is the problem.
     """
 
     expected = expected_revision()
-    applied = await applied_revision(engine)
-    if expected is None or applied is None:
+    applied, error = await applied_revision_or_error(engine)
+    if error is not None:
+        # Not "unknown". Nothing here is known, including whether the
+        # database is there, and that is the thing to act on.
+        state = "unreachable"
+    elif expected is None or applied is None:
         state = "unknown"
     elif expected == applied:
         state = "up_to_date"
     else:
         state = "behind"
-    return {"state": state, "expected": expected, "applied": applied}
+    return {"state": state, "expected": expected, "applied": applied, "error": error}
 
 
 async def warn_if_behind(engine: AsyncEngine) -> dict[str, str | None]:

@@ -29,26 +29,34 @@ def test_the_head_is_read_from_the_migration_files() -> None:
     assert head.startswith("2026")
 
 
-async def test_a_database_it_cannot_reach_is_unknown_not_up_to_date() -> None:
-    """The distinction that makes the check worth acting on."""
+async def test_a_database_it_cannot_reach_says_unreachable_not_up_to_date() -> None:
+    """The distinction that makes the check worth acting on.
+
+    This asserted "unknown", which is also the answer for a database that
+    answered and had no revision in it. On 6 November the backend spent
+    sixteen hours unreachable while /health said the schema was unknown and
+    the applied revision was blank, and it was read as a migration waiting
+    to be run. The two cases are now separate answers.
+    """
 
     state = await schema_state(Boom())  # type: ignore[arg-type]
 
-    assert state["state"] == "unknown"
+    assert state["state"] == "unreachable"
     assert state["state"] != "up_to_date"
+    assert state["error"] == "RuntimeError"
 
 
 @pytest.mark.parametrize(
     ("applied", "expected_state"),
     [("20260924_0079", "up_to_date"), ("20260921_0073", "behind"), (None, "unknown")],
 )
-async def test_the_three_answers(applied: str | None, expected_state: str, monkeypatch) -> None:
+async def test_the_answers_for_a_database_that_did_answer(applied: str | None, expected_state: str, monkeypatch) -> None:
     from nevo.ops import schema_version
 
-    async def fake_applied(engine: object) -> str | None:
-        return applied
+    async def fake_applied(engine: object) -> tuple[str | None, str | None]:
+        return applied, None
 
-    monkeypatch.setattr(schema_version, "applied_revision", fake_applied)
+    monkeypatch.setattr(schema_version, "applied_revision_or_error", fake_applied)
     monkeypatch.setattr(schema_version, "expected_revision", lambda: "20260924_0079")
 
     state = await schema_version.schema_state(object())  # type: ignore[arg-type]
@@ -59,10 +67,10 @@ async def test_the_three_answers(applied: str | None, expected_state: str, monke
 async def test_being_behind_is_logged_as_an_error_with_both_revisions(monkeypatch, caplog) -> None:
     from nevo.ops import schema_version
 
-    async def fake_applied(engine: object) -> str | None:
-        return "20260921_0073"
+    async def fake_applied(engine: object) -> tuple[str | None, str | None]:
+        return "20260921_0073", None
 
-    monkeypatch.setattr(schema_version, "applied_revision", fake_applied)
+    monkeypatch.setattr(schema_version, "applied_revision_or_error", fake_applied)
     monkeypatch.setattr(schema_version, "expected_revision", lambda: "20260924_0079")
 
     with caplog.at_level("ERROR"):

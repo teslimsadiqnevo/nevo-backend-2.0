@@ -353,6 +353,11 @@ class LessonQuestionAttempt(Base):
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     question_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     answer: Mapped[object] = mapped_column(JSONB, nullable=False)
+    offline_marked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    marking_key_version: Mapped[str | None] = mapped_column(String(64))
+    server_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hint_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

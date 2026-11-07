@@ -19,6 +19,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, model_validator
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
@@ -43,10 +44,13 @@ from nevo.api.lesson_contracts import (
     depth_payloads,
     depth_reviewer_names,
     mini_step_question_id,
+    marking_key_version,
     safety_reviewed_visual,
     student_activity,
     student_checkpoint_payloads,
     student_modalities,
+    online_student_lesson,
+    without_held_answers,
 )
 from nevo.api.product_common import (
     actor_user,
@@ -260,6 +264,14 @@ class LessonQuestionAttemptWrite(BaseModel):
         ),
     )
     hint_count: int = Field(default=0, alias="hintCount", ge=0, le=100)
+    offline_marked: bool = Field(default=False, alias="offlineMarked")
+    marking_key_version: str | None = Field(default=None, alias="markingKeyVersion", min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def offline_sync_has_provenance(self):
+        if self.offline_marked and (self.client_attempt_id is None or self.marking_key_version is None):
+            raise ValueError("Offline sync requires clientAttemptId and markingKeyVersion")
+        return self
 
 
 class ClassCodeConnectionRequest(BaseModel):
@@ -560,8 +572,10 @@ def _attempt_payload(item: LessonQuestionAttempt) -> dict[str, object]:
         "segmentId": str(item.segment_id) if item.segment_id else None,
         "source": item.source,
         "attemptNumber": item.attempt_number,
-        "question": item.question_snapshot,
+        "question": without_held_answers(item.question_snapshot),
         "answer": item.answer,
+        "offlineMarked": item.offline_marked,
+        "verificationStatus": "server_verified" if item.server_verified_at else "unverified",
         "correct": item.correct,
         "submittedAt": item.submitted_at,
     }
@@ -1028,7 +1042,7 @@ async def lesson_detail(
     from nevo.api.lesson_review import _review_result
     review_state = await _review_result(session, lesson) if for_teacher else None
     outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0)
-    return {
+    result = {
         **_lesson_summary(
             lesson,
             assignment_count=int(assignment_count or 0),
@@ -1149,6 +1163,11 @@ async def lesson_detail(
             for item in modules
         ],
     }
+
+    if not for_teacher:
+        validated = LessonDetailResponse.model_validate(result)
+        return JSONResponse(online_student_lesson(validated.model_dump(mode="json", by_alias=True)))
+    return result
 
 
 @router.put(
@@ -1806,6 +1825,8 @@ async def save_lesson_question_attempt(
                 or existing.session_id != payload.session_id
                 or existing.question_id != payload.question_id
                 or _normalise_answer(existing.answer) != _normalise_answer(payload.answer)
+                or existing.offline_marked != payload.offline_marked
+                or (payload.offline_marked and existing.marking_key_version != payload.marking_key_version)
             ):
                 raise HTTPException(
                     409,
@@ -1839,6 +1860,9 @@ async def save_lesson_question_attempt(
                 "message": "This question needs its teacher's review.",
             },
         )
+    current_key_version = marking_key_version(question)
+    if payload.offline_marked and payload.marking_key_version != current_key_version:
+        raise HTTPException(409, detail={"code": "offline_marking_key_changed"})
     if question.get("conceptId"):
         await ensure_prerequisites(session, actor.id, lesson.id, UUID(str(question["conceptId"])))
     attempt_number = int(
@@ -1864,6 +1888,9 @@ async def save_lesson_question_attempt(
         attempt_number=attempt_number,
         question_snapshot=question,
         answer=payload.answer,
+        offline_marked=payload.offline_marked,
+        marking_key_version=current_key_version,
+        server_verified_at=datetime.now(UTC),
         correct=answer_matches(payload.answer, question),
         response_time_ms=(
             active_response_ms(
@@ -3481,6 +3508,55 @@ async def _offline_package_payload(
             for item in segments
         ],
     }
+    versions: dict[str, str] = {}
+    for question in payload["assessment"]:
+        versions[f"assessment::{question['id']}"] = marking_key_version(question)
+    for segment in payload["segments"]:
+        segment_id = segment["id"]
+        for question in segment["comprehensionCheckpoints"]:
+            versions[f"checkpoint:{segment_id}:{question['id']}"] = marking_key_version(question)
+    for segment in segments:
+        variant = segment.calculation_variant or {}
+        segment_id = str(segment.id)
+        for step in variant.get("steps") or []:
+            answer = _tap_answer(step) if step.get("input") == "tap" else step.get("answer")
+            if answer is None:
+                continue
+            answer_type = (
+                "numeric" if step.get("input") == "tap" or isinstance(answer, int | float)
+                else "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷")
+                else "text"
+            )
+            question = {
+                "id": str(step.get("stepId")), "answerKey": answer,
+                "answerType": answer_type,
+                "acceptedAnswers": [] if step.get("input") == "tap" else
+                step.get("acceptedAnswers") or step.get("accepted") or [],
+            }
+            versions[f"calculation:{segment_id}:{question['id']}"] = marking_key_version(question)
+            if approved_calculation_support(step):
+                for mini in step.get("miniSteps") or []:
+                    if mini.get("answer") is None:
+                        continue
+                    answer = mini["answer"]
+                    mini_type = (
+                        "numeric" if mini.get("input") in {"tap", "number"}
+                        else "single_choice" if mini.get("input") == "choice"
+                        else "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷")
+                        else "text"
+                    )
+                    mini_id = mini_step_question_id(segment.id, step.get("stepId"), mini.get("id"))
+                    versions[f"calculation:{segment_id}:{mini_id}"] = marking_key_version({
+                        "id": mini_id, "answerKey": answer, "answerType": mini_type,
+                        "acceptedAnswers": mini.get("acceptedAnswers") or [],
+                    })
+        if variant.get("answer") is not None:
+            answer = variant["answer"]
+            versions[f"calculation:{segment_id}:{segment_id}"] = marking_key_version({
+                "id": segment_id, "answerKey": answer,
+                "answerType": "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷") else "text",
+            })
+    payload["markingKeyVersions"] = versions
     return OfflinePackage.model_validate(payload).model_dump(by_alias=True, mode="json")
 
 

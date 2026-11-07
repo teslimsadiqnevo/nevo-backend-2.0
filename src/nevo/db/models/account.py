@@ -538,6 +538,9 @@ class ConsentRecord(TimestampMixin, Base):
         nullable=False,
         index=True,
     )
+    consent_holder_parent_link_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("parent_links.id", ondelete="RESTRICT"), nullable=True
+    )
     consent_type: Mapped[ConsentType] = mapped_column(consent_type_enum, nullable=False)
     status: Mapped[ConsentStatus] = mapped_column(
         consent_status_enum,

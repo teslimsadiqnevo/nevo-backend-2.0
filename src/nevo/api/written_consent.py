@@ -37,6 +37,7 @@ from nevo.api.product_common import can_access_student, require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.consent.written import NOTICE_VERSION, render_consent_form
 from nevo.db.models.account import ConsentRecord, School, User
+from nevo.db.models.consent import ParentLink
 from nevo.domain.accounts.vocabulary import (
     ConsentMethod,
     ConsentStatus,
@@ -71,6 +72,7 @@ class WrittenConsentResponse(CamelResponse):
     #: True when the parent was told, which is how a withdrawal stays as easy
     #: as consenting for a parent who never touches the platform.
     parent_notified: bool
+    consent_holder_link_id: UUID | None = None
 
 
 @router.get("/consents/form", response_class=Response)
@@ -122,6 +124,7 @@ async def record_written_consent(
     ],
     signed_on: Annotated[date, Form(alias="signedOn")],
     consent_types: Annotated[list[ConsentType], Form(alias="consentTypes")],
+    consent_holder_link_id: Annotated[UUID | None, Form(alias="consentHolderLinkId")] = None,
     notice_version: Annotated[
         str,
         Form(alias="noticeVersion", max_length=40),
@@ -136,6 +139,19 @@ async def record_written_consent(
 
     actor = await require_school_actor(session, principal, roles=SCHOOL_ROLES)
     student = await _student(session, actor, student_id)
+    if consent_holder_link_id is not None:
+        holder = await session.scalar(
+            select(ParentLink).where(
+                ParentLink.id == consent_holder_link_id,
+                ParentLink.student_id == student_id,
+                ParentLink.school_id == actor.school_id,
+            )
+        )
+        if holder is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"code": "consent_holder_not_linked"},
+            )
     if signed_on > datetime.now(UTC).date():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -193,6 +209,7 @@ async def record_written_consent(
         record.last_channel = ConsentMethod.WRITTEN.value
         # The part that was missing: who actually consented.
         record.parent_name_on_form = parent_name.strip()
+        record.consent_holder_parent_link_id = consent_holder_link_id
         record.parent_relationship = parent_relationship.strip()
         record.signed_on = signed_on
         record.notice_version = notice_version
@@ -213,6 +230,7 @@ async def record_written_consent(
         uploaded_by=actor.id,
         uploaded_at=now,
         parent_notified=notified,
+        consent_holder_link_id=consent_holder_link_id,
     )
 
 

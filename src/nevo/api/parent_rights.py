@@ -144,6 +144,9 @@ async def _can_withdraw(
 ) -> bool:
     if record.confirmed_by_parent_id is not None:
         return record.confirmed_by_parent_id == parent_id
+    if record.consent_holder_parent_link_id is not None:
+        holder = await session.get(ParentLink, record.consent_holder_parent_link_id)
+        return holder is not None and holder.student_id == student_id and holder.parent_id == parent_id
     # A school-recorded written consent has no parent account as its actor.
     # SCRUM-306: the adult who can withdraw it is the adult whose name is on
     # the paper form. The roster does not capture which adult signed, so the

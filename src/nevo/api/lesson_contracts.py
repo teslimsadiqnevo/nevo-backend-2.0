@@ -304,7 +304,7 @@ class ComprehensionCheckpoint(BaseModel):
         alias="masteryLevelAuthoredBy",
         description="An inferred level requires teacher review before it contributes level-specific evidence.",
     )
-    transfer_kind: Literal["application_a", "application_b", "comparison", "diagnosis"] | None = Field(default=None, alias="transferKind")
+    transfer_kind: Literal["application_a", "application_b", "comparison", "judgement"] | None = Field(default=None, alias="transferKind")
     transfer_context: str | None = Field(default=None, alias="transferContext")
     source_segment_id: UUID | None = Field(default=None, alias="sourceSegmentId")
     concept_id: UUID | None = Field(default=None, alias="conceptId")
@@ -1324,19 +1324,20 @@ def student_checkpoint_payloads(
     question_offset: int = 0, concept_id: UUID | None = None,
     reviewed_level_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
-    """Never deliver a generated question before its current teacher sign-off.
+    """Never deliver a question before its current teacher sign-off.
 
-    Generated, not every question. Lydia's condition of 2 November is about
-    questions Nevo wrote: a question whose answer was found in the teacher's
-    own file is already a person's work and needs no sign-off to be asked.
+    Every question, whoever wrote it and whoever wrote the answer. Lydia's
+    ruling of 7 November: a lesson with any unreviewed question in it is not
+    assignable at all, and the server refuses the assignment rather than
+    delivering the lesson with gaps.
 
-    This held back everything without one, so a lesson's own questions
-    disappeared from delivery until a teacher signed off checks nobody had
-    told them needed signing. authoredBy is decided at parse time by whether
-    the answer appears in the source, and the mastery-level rule below
-    already reads it the same way - a level Nevo picked is still withheld
-    from a question the teacher wrote, which is the narrower thing the
-    ruling asks for.
+    This was narrowed for a day to questions Nevo wrote, on the reading that
+    the 2 November condition was about generated questions. It was not, and
+    the narrow version is the wrong half of the fix: holding the questions
+    back was right, and what was missing was the lesson refusing to be
+    assigned while any of them were outstanding. That gate is in
+    _review_result; this stays wide so that a lesson which somehow is
+    assigned cannot deliver a question nobody approved.
     """
     return [
         question for question in checkpoint_payloads(
@@ -1345,8 +1346,7 @@ def student_checkpoint_payloads(
             concept_id=concept_id,
             reviewed_level_ids=reviewed_level_ids if reviewed_level_ids is not None else set(),
         )
-        if question.get("answerKey") is not None
-        and (question.get("authoredBy") == "person" or question["teacherReviewed"])
+        if question["teacherReviewed"] and question.get("answerKey") is not None
     ]
 
 

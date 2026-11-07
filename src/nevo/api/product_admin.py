@@ -17,6 +17,7 @@ from nevo.api.dependencies import DatabaseSession
 from nevo.api.learning_support import refuse_last_holder_change
 from nevo.api.product_common import (
     actor_user,
+    covered_by_a_current_invoice,
     require_class_access,
     require_school_actor,
     require_student_access,
@@ -47,7 +48,6 @@ from nevo.consent.errors import ConsentError
 from nevo.consent.service import DEFAULT_REQUESTED_CONSENT
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.auth import AuthAuditEvent, AuthSession
-from nevo.db.models.billing import Invoice
 from nevo.db.models.consent import ParentLink
 from nevo.db.models.frontend_support import Notification
 from nevo.db.models.permission import Admin, LearningSupportGrant
@@ -1256,9 +1256,7 @@ async def enroll_student(
     # Kept as the internal handle. The child never reads or types it; their
     # admission number is what they sign in with.
     identifier = f"NV-{secrets.token_hex(3).upper()}"
-    existing_invoice = await session.scalar(
-        select(Invoice.id).where(Invoice.school_id == actor.school_id).limit(1)
-    )
+    may_start = await covered_by_a_current_invoice(session, actor.school_id)
     student = User(
         school_id=actor.school_id,
         role=UserRole.STUDENT,
@@ -1271,7 +1269,7 @@ async def enroll_student(
         # fact the school actually holds and it stays true as the child ages.
         age_band=(band_for_date_of_birth(payload.date_of_birth) or payload.age_band),
         date_of_birth=payload.date_of_birth,
-        status=UserStatus.INVITED if existing_invoice is not None else UserStatus.ACTIVE,
+        status=UserStatus.ACTIVE if may_start else UserStatus.INVITED,
     )
     session.add(student)
     await session.flush()

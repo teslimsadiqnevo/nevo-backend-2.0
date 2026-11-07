@@ -318,6 +318,12 @@ class User(TimestampMixin, Base):
     #: A stable presentation preference, separate from the open-ended settings
     #: bag so profile identity does not depend on an untyped key forever.
     avatar_tone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: The child's own avatar. SCRUM-314: these were held against a shared
+    #: device, so a child's identity in the product changed when they picked
+    #: up a different tablet and a teacher's view of them could not show it
+    #: at all. Null until a child has been given one.
+    avatar_shape: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    avatar_colourway: Mapped[str | None] = mapped_column(String(24), nullable=True)
     age_band: Mapped[str | None] = mapped_column(String(40), nullable=True)
     #: What the child asked to be called, from "What should we call you?".
     #:

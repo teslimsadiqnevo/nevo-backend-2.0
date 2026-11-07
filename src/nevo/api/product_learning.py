@@ -43,13 +43,13 @@ from nevo.api.lesson_contracts import (
     checkpoint_payloads,
     depth_payloads,
     depth_reviewer_names,
-    mini_step_question_id,
     marking_key_version,
+    mini_step_question_id,
+    online_student_lesson,
     safety_reviewed_visual,
     student_activity,
     student_checkpoint_payloads,
     student_modalities,
-    online_student_lesson,
     without_held_answers,
 )
 from nevo.api.product_common import (
@@ -943,8 +943,11 @@ async def lessons(
     outstanding = await _unapproved_counts(session, [item.id for item in rows])
     from nevo.api.lesson_review import review_complete_map
 
+    # One answer, not two. This asked a second time with checks excluded so
+    # that can_assign could be true while the questions were unreviewed,
+    # which is the half-delivered lesson Lydia ruled against on 7 November.
     review_complete = await review_complete_map(session, [item.id for item in rows])
-    assignable = await review_complete_map(session, [item.id for item in rows], require_checks=False)
+    assignable = review_complete
     return [
         _lesson_summary(
             item,

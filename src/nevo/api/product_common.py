@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -265,10 +266,12 @@ async def require_approved_lessons(
     from nevo.api.lesson_review import _review_result
 
     lessons = await session.scalars(select(Lesson).where(Lesson.id.in_(wanted)))
+    steps_left: dict[UUID, list[str]] = {}
     for lesson in lessons:
         review = await _review_result(session, lesson)
         if not review.ready_to_assign:
             section_counts[lesson.id] = max(1, section_counts.get(lesson.id, 0))
+            steps_left[lesson.id] = list(review.outstanding_review_steps)
         else:
             section_counts.pop(lesson.id, None)
     if unsettled:
@@ -293,6 +296,7 @@ async def require_approved_lessons(
                     str(titles.get(lesson_id) or "This lesson"),
                     segments=segments_left.get(lesson_id, 0),
                     key_points=unsettled.get(lesson_id, 0),
+                    steps=steps_left.get(lesson_id, []),
                 )
                 for lesson_id in outstanding
             ),
@@ -301,6 +305,10 @@ async def require_approved_lessons(
                     "lessonId": str(lesson_id),
                     "unapprovedSegmentCount": segments_left.get(lesson_id, 0),
                     "outstandingKeyPointCount": unsettled.get(lesson_id, 0),
+                    # Which step, not just that there is one. A teacher told
+                    # only that they cannot assign does not know whether it
+                    # is pictures, checks or rewrites.
+                    "outstandingReviewSteps": steps_left.get(lesson_id, []),
                 }
                 for lesson_id in outstanding
             ],
@@ -308,10 +316,68 @@ async def require_approved_lessons(
     )
 
 
-def _outstanding_phrase(title: str, *, segments: int, key_points: int) -> str:
+#: What a teacher calls each review step, since the stored names are not
+#: what the screen says. "pictures" rather than media, because that is the
+#: word in the ruling and on the tab.
+REVIEW_STEP_NAMES = {
+    "key_points": "key points",
+    "rewrites": "rewrites",
+    "guided_steps": "guided steps",
+    "checks": "checks",
+    "calculation_parts": "calculation parts",
+    "media": "pictures",
+}
+
+
+def _outstanding_phrase(
+    title: str, *, segments: int, key_points: int, steps: list[str] | None = None
+) -> str:
     parts = []
     if key_points:
         parts.append(f"{key_points} key point{'s' if key_points != 1 else ''} to check")
     if segments:
         parts.append(f"{segments} segment{'s' if segments != 1 else ''} to approve")
-    return f"{title}: {' and '.join(parts)}"
+    # Named, because "not ready" leaves a teacher with nowhere to go and no
+    # way to tell pictures from checks from rewrites.
+    named = [REVIEW_STEP_NAMES.get(step, step) for step in steps or []]
+    if named:
+        parts.append(f"{' and '.join(named)} still to sign off")
+    if not parts:
+        parts.append("review not complete")
+    return f"{title}: {', '.join(parts)}"
+
+async def covered_by_a_current_invoice(session: AsyncSession, school_id: UUID) -> bool:
+    """Whether a child joining this school now may start straight away.
+
+    SCRUM-309/SCRUM-312 era ruling, Lydia 7 November: a child activates when
+    they are covered by an invoice that is not overdue. One rule at the point
+    of activation rather than three rules on three routes, because a rule
+    that lives in one path gets bypassed by the other two - adding one child
+    checked an invoice, while a class upload and a child setting their own
+    PIN from an invite did not.
+
+    Deliberately not "paid". Paid before active punishes a child for the
+    bursar's timing and would stop a whole school starting on day one: at the
+    start of a term the invoice exists and is not yet due, so nothing is
+    blocked. What this prevents is children piling onto a roster a school has
+    stopped paying for.
+
+    A school with no invoice at all has not been billed yet, so there is
+    nothing for a child to be outside of and they start normally.
+    """
+
+    from nevo.db.models.billing import Invoice
+    from nevo.domain.billing.vocabulary import InvoiceStatus
+
+    invoices = (
+        await session.execute(
+            select(Invoice.status, Invoice.due_at).where(Invoice.school_id == school_id)
+        )
+    ).all()
+    if not invoices:
+        return True
+    today = datetime.now(UTC).date()
+    return not any(
+        status is not InvoiceStatus.PAID and due_at is not None and due_at < today
+        for status, due_at in invoices
+    )

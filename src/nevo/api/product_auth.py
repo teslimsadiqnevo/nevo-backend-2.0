@@ -30,7 +30,7 @@ from nevo.api.auth import (
 )
 from nevo.api.consent import ConsentServiceDependency
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.product_common import actor_user, require_school_actor
+from nevo.api.product_common import actor_user, covered_by_a_current_invoice, require_school_actor
 from nevo.api.response_models import (
     AuthSessionRecordResponse,
     BulkInvitationResponse,
@@ -372,18 +372,37 @@ async def provision_shared_device_profiles(
         )
     )
     retained = {item.student_id: item for item in existing if item.student_id in requested}
-    used = {(item.avatar_shape, item.avatar_colourway) for item in retained.values()}
-    available = iter(combo for combo in SHARED_DEVICE_AVATARS if combo not in used)
+    # SCRUM-314: the avatar belongs to the child. A child who already has one
+    # keeps it here, so their identity does not change when they pick up a
+    # different tablet, and the collision rule applies only where it is
+    # useful - choosing one for a child who has none yet, excluding what the
+    # other children on this tablet already hold.
+    students = {
+        student.id: student
+        for student in await session.scalars(
+            select(User).where(User.id.in_(requested))
+        )
+    }
+    taken = {
+        (student.avatar_shape, student.avatar_colourway)
+        for student in students.values()
+        if student.avatar_shape and student.avatar_colourway
+    }
+    unclaimed = iter(combo for combo in SHARED_DEVICE_AVATARS if combo not in taken)
     for student_id in payload.student_ids:
+        student = students.get(student_id)
+        if student is None:
+            continue
+        if not (student.avatar_shape and student.avatar_colourway):
+            student.avatar_shape, student.avatar_colourway = next(unclaimed)
         if student_id in retained:
             continue
-        shape, colourway = next(available)
         record = SharedDeviceProfile(
             device_id=device_id,
             school_id=actor.school_id,
             student_id=student_id,
-            avatar_shape=shape,
-            avatar_colourway=colourway,
+            avatar_shape=student.avatar_shape,
+            avatar_colourway=student.avatar_colourway,
             provisioned_by_user_id=actor.id,
         )
         session.add(record)
@@ -397,8 +416,10 @@ async def provision_shared_device_profiles(
                 "firstName": students_by_id[student_id].first_name,
                 "loginIdentifier": students_by_id[student_id].login_identifier,
                 "avatar": {
-                    "shape": retained[student_id].avatar_shape,
-                    "colourway": retained[student_id].avatar_colourway,
+                    # The child's, so a tile shows the same avatar on every
+                    # tablet rather than whatever this one was given.
+                    "shape": students[student_id].avatar_shape,
+                    "colourway": students[student_id].avatar_colourway,
                 },
             }
             for student_id in payload.student_ids
@@ -563,7 +584,15 @@ async def set_pin(
         # through to its default for every child ever created here. SCRUM-175.
         age_band=band_for_age(payload.age),
         pin_hash=credential_hasher().hash_pin(payload.pin),
-        status=UserStatus.ACTIVE,
+        # Same rule as the other two routes into a roster: active only when
+        # the school is covered by an invoice that is not overdue. This one
+        # activated unconditionally, so a child joining from an invite link
+        # bypassed the check the single add was making.
+        status=(
+            UserStatus.ACTIVE
+            if await covered_by_a_current_invoice(session, grant.school_id)
+            else UserStatus.INVITED
+        ),
     )
     session.add(user)
     await session.flush()

@@ -76,15 +76,19 @@ def test_a_school_with_no_term_dates_gets_no_term_rather_than_a_guess() -> None:
 def test_enrolling_a_student_has_no_billing_side_effect() -> None:
     """Stated as a test because a screen was about to promise otherwise.
 
-    Enrolment reads billing now and still does not write it. An invoice
-    already issued for the period means the child joins as INVITED rather
-    than ACTIVE, so they are counted on the next invoice instead of being
-    squeezed onto one already sent. That is a read taken to decide a status;
-    nothing is charged, raised or amended by adding a child.
+    Enrolment reads billing now and still does not write it. Lydia's rule of
+    7 November is that a child activates when their school is covered by an
+    invoice that is not overdue, so adding one asks that question and sets
+    ACTIVE or INVITED from the answer. That is a read taken to decide a
+    status; nothing is charged, raised or amended by adding a child.
 
     So the assertion is about writes, not about the word appearing: banning
     the word outright would have forbidden the gate that implements the
     rule it was written to protect.
+
+    The read itself now lives in covered_by_a_current_invoice, shared with
+    the roster import and the PIN-setup join, because a rule in one route is
+    a rule the other two bypass.
     """
 
     import inspect
@@ -93,7 +97,7 @@ def test_enrolling_a_student_has_no_billing_side_effect() -> None:
 
     source = inspect.getsource(enroll_student)
 
-    assert "select(Invoice.id)" in source
+    assert "covered_by_a_current_invoice(session, actor.school_id)" in source
     for written in (
         "session.add(Invoice",
         "session.add(BillingLedger",

@@ -318,6 +318,13 @@ class StudentSummaryResponse(CamelResponse):
     #: SCRUM-175, and ask B5.
     age_band: AgeBand | None
     consent: StudentConsentSummaryResponse
+    #: Drawn instead of initials on the roster and the teacher's lists.
+    #: SCRUM-314 moved the shape and colourway onto the child, so a teacher
+    #: sees the same avatar the child sees on any tablet.
+    avatar_tone: str | None = None
+    avatar_shape: str | None = None
+    avatar_colourway: str | None = None
+    profile_image_url: str | None = None
 
 
 class StudentDetailResponse(CamelResponse):

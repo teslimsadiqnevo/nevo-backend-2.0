@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nevo.billing.service import quote_per_student
 from nevo.db.models.account import School, User
 from nevo.db.models.billing import BillingContact, BillingEmailDelivery, Contract, Invoice
+from nevo.db.models.consent import ParentLink
 from nevo.domain.accounts.vocabulary import NotificationType, UserRole, UserStatus
 from nevo.domain.billing.vocabulary import (
     ContractStatus,
@@ -170,11 +171,34 @@ class InvoiceIssuanceService:
 
     @staticmethod
     async def _billable_students(session: AsyncSession, school_id):  # type: ignore[no-untyped-def]
+        """The children a school pays for this period, and which to activate.
+
+        The roster, whether or not consent has come back: the school is the
+        only party who can chase a parent, and a lower bill for an
+        outstanding consent would be a reason not to.
+
+        SCRUM-309 is the one exception. A child with no parent address has
+        nothing to send, so no consent request exists and no removal
+        countdown has started - they would sit on the roster being billed
+        with nothing counting down, which is the indefinite billing that
+        countdown exists to prevent, arriving by another door. They enter
+        the count on the day an address is added and the request goes out.
+        That is not the school being let off; it is a child nobody can act
+        on yet, and the screen listing them stays so somebody adds it.
+        """
+
         rows = (await session.execute(
-                select(User.id, User.status).where(
+                select(User.id, User.status)
+                .where(
                     User.school_id == school_id,
                     User.role == UserRole.STUDENT,
                     User.status.in_([UserStatus.ACTIVE, UserStatus.INVITED]),
+                    select(ParentLink.id)
+                    .where(
+                        ParentLink.student_id == User.id,
+                        ParentLink.parent_contact != "",
+                    )
+                    .exists(),
                 )
         )).all()
         return len(rows), [str(user_id) for user_id, state in rows if state == UserStatus.INVITED]

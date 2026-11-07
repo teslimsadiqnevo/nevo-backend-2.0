@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -344,3 +345,39 @@ def _outstanding_phrase(
     if not parts:
         parts.append("review not complete")
     return f"{title}: {', '.join(parts)}"
+
+async def covered_by_a_current_invoice(session: AsyncSession, school_id: UUID) -> bool:
+    """Whether a child joining this school now may start straight away.
+
+    SCRUM-309/SCRUM-312 era ruling, Lydia 7 November: a child activates when
+    they are covered by an invoice that is not overdue. One rule at the point
+    of activation rather than three rules on three routes, because a rule
+    that lives in one path gets bypassed by the other two - adding one child
+    checked an invoice, while a class upload and a child setting their own
+    PIN from an invite did not.
+
+    Deliberately not "paid". Paid before active punishes a child for the
+    bursar's timing and would stop a whole school starting on day one: at the
+    start of a term the invoice exists and is not yet due, so nothing is
+    blocked. What this prevents is children piling onto a roster a school has
+    stopped paying for.
+
+    A school with no invoice at all has not been billed yet, so there is
+    nothing for a child to be outside of and they start normally.
+    """
+
+    from nevo.db.models.billing import Invoice
+    from nevo.domain.billing.vocabulary import InvoiceStatus
+
+    invoices = (
+        await session.execute(
+            select(Invoice.status, Invoice.due_at).where(Invoice.school_id == school_id)
+        )
+    ).all()
+    if not invoices:
+        return True
+    today = datetime.now(UTC).date()
+    return not any(
+        status is not InvoiceStatus.PAID and due_at is not None and due_at < today
+        for status, due_at in invoices
+    )

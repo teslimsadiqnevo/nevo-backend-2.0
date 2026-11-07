@@ -30,7 +30,7 @@ from nevo.api.auth import (
 )
 from nevo.api.consent import ConsentServiceDependency
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.product_common import actor_user, require_school_actor
+from nevo.api.product_common import actor_user, covered_by_a_current_invoice, require_school_actor
 from nevo.api.response_models import (
     AuthSessionRecordResponse,
     BulkInvitationResponse,
@@ -563,7 +563,15 @@ async def set_pin(
         # through to its default for every child ever created here. SCRUM-175.
         age_band=band_for_age(payload.age),
         pin_hash=credential_hasher().hash_pin(payload.pin),
-        status=UserStatus.ACTIVE,
+        # Same rule as the other two routes into a roster: active only when
+        # the school is covered by an invoice that is not overdue. This one
+        # activated unconditionally, so a child joining from an invite link
+        # bypassed the check the single add was making.
+        status=(
+            UserStatus.ACTIVE
+            if await covered_by_a_current_invoice(session, grant.school_id)
+            else UserStatus.INVITED
+        ),
     )
     session.add(user)
     await session.flush()

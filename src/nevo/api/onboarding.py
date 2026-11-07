@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.dependencies import DatabaseSession
-from nevo.api.product_common import require_school_actor
+from nevo.api.product_common import covered_by_a_current_invoice, require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.billing.entities import PerStudentQuote
 from nevo.billing.issuance import TERM_DATES_KEY
@@ -1128,6 +1128,9 @@ async def activate(
     if getattr(request.app.state, "consent_service", None) is None:
         raise HTTPException(503, detail={"code": "consent_service_unavailable"})
     session_label = academic_session(datetime.now(UTC).date())
+    # Asked once for the whole import rather than per row: one invoice state
+    # covers every child in the upload.
+    may_start = await covered_by_a_current_invoice(session, school.id)
     classes = await _commit_classes(session, school, rows, session_label)
     teacher_invites: list[tuple[SchoolInvitation, str]] = []
     invited_teacher_ids: set[UUID] = set()
@@ -1135,7 +1138,7 @@ async def activate(
     for row in rows:
         if not row.countable:
             continue
-        person = await _create_person(session, school, row, classes)
+        person = await _create_person(session, school, row, classes, may_start=may_start)
         if person is None:
             continue
         if (
@@ -1313,11 +1316,16 @@ async def _create_person(
     school: School,
     row: OnboardingRow,
     classes: dict[str, Class],
+    *,
+    may_start: bool = True,
 ) -> User | None:
     """One roster row becomes one account.
 
-    Students arrive active: their parent still has to consent before they can
-    learn, and that gate is the consent record's, not this one's. Teachers
+    Students arrive active when the school is covered by an invoice that is
+    not overdue, and invited otherwise - the same rule adding one child uses,
+    passed in so this route cannot drift from it. Their parent still has to
+    consent before they can learn, and that gate is the consent record's,
+    not this one's. Teachers
     arrive invited, because an invitation is how a teacher sets a password.
     """
 
@@ -1357,7 +1365,14 @@ async def _create_person(
             last_name=last_name,
             email=(values.get("email") or "").casefold() or None,
             admission_number=admission_number if is_student else None,
-            status=UserStatus.ACTIVE if is_student else UserStatus.INVITED,
+            # Same rule as adding one child: active only when covered by an
+            # invoice that is not overdue. A rule on one route is a rule the
+            # other two bypass.
+            status=(
+                (UserStatus.ACTIVE if may_start else UserStatus.INVITED)
+                if is_student
+                else UserStatus.INVITED
+            ),
         )
         session.add(user)
     await session.flush()

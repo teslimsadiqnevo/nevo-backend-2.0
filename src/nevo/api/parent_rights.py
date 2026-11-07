@@ -145,15 +145,22 @@ async def _can_withdraw(
     if record.confirmed_by_parent_id is not None:
         return record.confirmed_by_parent_id == parent_id
     # A school-recorded written consent has no parent account as its actor.
-    # Preserve the original linked guardian's withdrawal route, but do not
-    # let a subsequently linked account reverse that earlier decision.
+    # SCRUM-306: the adult who can withdraw it is the adult whose name is on
+    # the paper form. The roster does not capture which adult signed, so the
+    # first guardian linked to the child stands in until it does.
+    #
+    # Ordered over every link, not only the ones with an account. Filtering
+    # to parent_id IS NOT NULL meant an adult linked first who never
+    # registered was skipped, so a second guardian who happened to register
+    # first became the first link and could withdraw a consent they were
+    # never asked for.
     first_link = await session.scalar(
         select(ParentLink.parent_id)
-        .where(ParentLink.student_id == student_id, ParentLink.parent_id.is_not(None))
+        .where(ParentLink.student_id == student_id)
         .order_by(ParentLink.created_at, ParentLink.id)
         .limit(1)
     )
-    return first_link == parent_id
+    return first_link is not None and first_link == parent_id
 
 
 @router.get("/consents", response_model=list[ChildConsents])

@@ -1324,7 +1324,20 @@ def student_checkpoint_payloads(
     question_offset: int = 0, concept_id: UUID | None = None,
     reviewed_level_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
-    """Never deliver a generated question before its current teacher sign-off."""
+    """Never deliver a generated question before its current teacher sign-off.
+
+    Generated, not every question. Lydia's condition of 2 November is about
+    questions Nevo wrote: a question whose answer was found in the teacher's
+    own file is already a person's work and needs no sign-off to be asked.
+
+    This held back everything without one, so a lesson's own questions
+    disappeared from delivery until a teacher signed off checks nobody had
+    told them needed signing. authoredBy is decided at parse time by whether
+    the answer appears in the source, and the mastery-level rule below
+    already reads it the same way - a level Nevo picked is still withheld
+    from a question the teacher wrote, which is the narrower thing the
+    ruling asks for.
+    """
     return [
         question for question in checkpoint_payloads(
             values, segment_key=segment_key, reviewed_question_ids=reviewed_question_ids,
@@ -1332,7 +1345,8 @@ def student_checkpoint_payloads(
             concept_id=concept_id,
             reviewed_level_ids=reviewed_level_ids if reviewed_level_ids is not None else set(),
         )
-        if question["teacherReviewed"] and question.get("answerKey") is not None
+        if question.get("answerKey") is not None
+        and (question.get("authoredBy") == "person" or question["teacherReviewed"])
     ]
 
 

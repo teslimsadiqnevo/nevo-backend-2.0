@@ -131,6 +131,13 @@ class CheckReviewItem(CamelResponse):
     question_options: list[dict[str, object]] = Field(default_factory=list)
     question_answer_key: object
     mastery_level: Literal["knowledge", "application", "analysis"] | None = None
+    #: Who wrote the answer. "person" means it was found in the teacher's own
+    #: file; "nevo" means the parser wrote it. With
+    #: masteryLevelAuthoredBy this separates the three cases the review has to
+    #: show differently: a check that is entirely the teacher's, one that is
+    #: theirs with a level Nevo picked, and one Nevo wrote outright. The
+    #: screen could not tell the second from the third.
+    authored_by: Literal["person", "nevo"] = "nevo"
     mastery_level_authored_by: Literal["person", "nevo"] | None = None
     transfer_kind: str | None = None
     transfer_context: str | None = None
@@ -1068,6 +1075,7 @@ def _checks_material(segments, lesson=None, concept_names=None):
                 question_answer_type=item["questionAnswerType"],
                 question_options=item["questionOptions"], question_answer_key=item["questionAnswerKey"],
                 mastery_level=item.get("masteryLevel"),
+                authored_by="person" if authored else "nevo",
                 mastery_level_authored_by=item.get("masteryLevelAuthoredBy"),
                 transfer_kind=item.get("transferKind"),
                 transfer_context=item.get("transferContext"),

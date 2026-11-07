@@ -304,7 +304,7 @@ class ComprehensionCheckpoint(BaseModel):
         alias="masteryLevelAuthoredBy",
         description="An inferred level requires teacher review before it contributes level-specific evidence.",
     )
-    transfer_kind: Literal["application_a", "application_b", "comparison", "diagnosis"] | None = Field(default=None, alias="transferKind")
+    transfer_kind: Literal["application_a", "application_b", "comparison", "judgement"] | None = Field(default=None, alias="transferKind")
     transfer_context: str | None = Field(default=None, alias="transferContext")
     source_segment_id: UUID | None = Field(default=None, alias="sourceSegmentId")
     concept_id: UUID | None = Field(default=None, alias="conceptId")

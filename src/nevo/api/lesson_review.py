@@ -521,7 +521,10 @@ async def generate_transfer_items(
         raise HTTPException(503, detail={"code": "transfer_generation_unavailable"})
     try:
         rows = _json_payload(result.text)["items"]
-        kinds = {"application_a", "application_b", "comparison", "diagnosis"}
+        # Judgement, not diagnosis: SCRUM-295. The old name suggested a
+        # separate diagnostic measurement when it is a fourth marked
+        # question like the other three.
+        kinds = {"application_a", "application_b", "comparison", "judgement"}
         if not isinstance(rows, list) or len(rows) != 4 or {
             row.get("kind") for row in rows if isinstance(row, dict)
         } != kinds:

@@ -14,6 +14,15 @@ class PermissionSnapshot:
     school_auth_method: str | None
     assigned_scopes: frozenset[PermissionScope]
     admin_access_level: AdminAccessLevel | None = None
+    #: Whether this administrator has proved their address. Carried here
+    #: rather than read again at the gate, because the gate runs as a route
+    #: dependency: giving it its own database session turned a 403 a client
+    #: had earned into a 503 whenever that session could not be had, which
+    #: is the third time a route-level dependency has done that here.
+    email_confirmed: bool = True
+    #: The address to name in the refusal, so a person knows where the link
+    #: went without a second request.
+    email: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -252,6 +252,31 @@ class ParentConsentInvitationResponse(BaseModel):
     consent_types: list[ConsentType] = Field(alias="consentTypes")
     expires_at: datetime = Field(alias="expiresAt")
     decided_at: datetime | None = Field(alias="decidedAt")
+    parent_account_ready: bool = Field(
+        alias="parentAccountReady",
+        description=(
+            "This guardian already has an account. Send a returning parent to "
+            "sign in rather than through setting a password they have."
+        ),
+    )
+    age_check: AgeCheckState | None = Field(
+        default=None,
+        alias="ageCheck",
+        description=(
+            "Where the child's date of birth stands between the school and "
+            "this parent, or null when no check has been raised. A parent "
+            "arriving on a held child needs the recheck screen, not this form."
+        ),
+    )
+    age_check_hold_reasons: list[str] = Field(
+        default_factory=list,
+        alias="ageCheckHoldReasons",
+        description=(
+            "Why it is held. enrolled_age_band_unavailable is a gap in the "
+            "school's roster, not a disagreement between the two adults, so "
+            "the two can be told apart."
+        ),
+    )
 
     @classmethod
     def from_invitation(
@@ -271,6 +296,9 @@ class ParentConsentInvitationResponse(BaseModel):
             consentTypes=sorted(invitation.consent_types, key=lambda item: item.value),
             expiresAt=invitation.expires_at,
             decidedAt=invitation.decided_at,
+            parentAccountReady=invitation.parent_account_ready,
+            ageCheck=invitation.age_check_state,
+            ageCheckHoldReasons=list(invitation.age_check_hold_reasons),
         )
 
 

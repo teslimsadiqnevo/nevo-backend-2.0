@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
+from nevo.api.product_common import refuse_unconfirmed_write
 from nevo.domain.accounts.vocabulary import UserRole, UserStatus
 from nevo.domain.permissions.vocabulary import (
     AdminAccessLevel,
@@ -190,6 +191,31 @@ PermissionServiceDependency = Annotated[
 ]
 
 
+def _refuse_an_unconfirmed_admin(snapshot: PermissionSnapshot) -> None:
+    """Apply the unconfirmed-email write rule to scope-gated routes too.
+
+    refuse_unconfirmed_write is described as covering every write in the
+    product, and it did for anything resolved through require_school_actor.
+    Scope-gated routes do not go that way: they resolve a PermissionSnapshot
+    straight from the permission service, so an administrator who had never
+    proved their address could still write through any of them - billing
+    contacts and payment methods among them, which is where it was noticed.
+
+    The snapshot carries the three facts the rule needs, so this hands them
+    over rather than reading the user again. Giving the gate its own database
+    session made it a second reason a route dependency could fail, and a
+    route dependency resolves before the handler: a 403 the client had
+    earned came back as a 503. That has happened three times here, so a
+    route gate decides from what is already in hand.
+    """
+
+    refuse_unconfirmed_write(
+        role=snapshot.role,
+        email_confirmed=snapshot.email_confirmed,
+        email=snapshot.email,
+    )
+
+
 class RequireScope:
     def __init__(self, scope: PermissionScope) -> None:
         self.scope = scope
@@ -200,9 +226,11 @@ class RequireScope:
         service: PermissionServiceDependency,
     ) -> PermissionSnapshot:
         try:
-            return await service.require(principal, self.scope)
+            snapshot = await service.require(principal, self.scope)
         except PermissionError as error:
             raise public_permission_error(error) from error
+        _refuse_an_unconfirmed_admin(snapshot)
+        return snapshot
 
 
 class RequireAnyScope:
@@ -227,9 +255,12 @@ class RequireAnyScope:
         last: PermissionError | None = None
         for scope in self.scopes:
             try:
-                return await service.require(principal, scope)
+                snapshot = await service.require(principal, scope)
             except PermissionError as error:
                 last = error
+                continue
+            _refuse_an_unconfirmed_admin(snapshot)
+            return snapshot
         assert last is not None
         raise public_permission_error(last) from last
 

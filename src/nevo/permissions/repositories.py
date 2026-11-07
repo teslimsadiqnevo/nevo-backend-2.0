@@ -58,6 +58,8 @@ class SqlAlchemyPermissionRepository:
             school_auth_method=school_auth_method.value if school_auth_method is not None else None,
             assigned_scopes=scopes,
             admin_access_level=admin_access_level,
+            email_confirmed=user.email_confirmed_at is not None,
+            email=user.email,
         )
 
     async def list_team(self, school_id: UUID) -> list[AdminTeamMember]:

@@ -3,8 +3,8 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
@@ -13,8 +13,8 @@ from nevo.api.product_common import (
     require_school_actor,
     require_student_access,
 )
-from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.mastery import StudentConceptLevelMastery
+from nevo.db.models.product import LessonQuestionAttempt
 from nevo.domain.mastery.vocabulary import FailureAttribution
 from nevo.mastery.entities import (
     ConceptMasteryAggregate,

@@ -35,7 +35,13 @@ def test_billing_contact_is_separate_from_admin_access() -> None:
         for constraint in table.constraints
         if isinstance(constraint, UniqueConstraint)
     }
-    assert ("school_id",) in unique_sets
+    # Several contacts per school, unique per address rather than one row a
+    # school. Lydia's reason for allowing more than one is that invoices were
+    # landing with a single person who could not act on them, so the old
+    # ("school_id",) constraint was the thing in the way. One primary is kept
+    # for checkout, which is a flag on the row and not a second table.
+    assert ("school_id", "email") in unique_sets
+    assert ("school_id",) not in unique_sets
 
 
 def test_payment_method_stores_only_masked_details_and_processor_reference() -> None:

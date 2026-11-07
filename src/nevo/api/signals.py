@@ -6,18 +6,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nevo.api.auth import PrincipalDependency
-from nevo.api.dependencies import DatabaseSession
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import public_consent_error
+from nevo.api.dependencies import DatabaseSession
 from nevo.api.privacy import validate_signal_privacy
 from nevo.auth.entities import AuthPrincipal
 from nevo.consent.errors import ConsentError
+from nevo.db.models.signal_event import LessonSession
 from nevo.domain.signal_events.catalogue import SIGNAL_CONTRACTS
 from nevo.domain.signal_events.vocabulary import (
     LessonCompletionStatus,
     SignalEventType,
 )
-from nevo.db.models.signal_event import LessonSession
 from nevo.intelligence.away_time import active_response_ms
 from nevo.learner_profiles.post_lesson_worker import PostLessonProcessingWorker
 from nevo.signal_events.entities import (

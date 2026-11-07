@@ -156,6 +156,20 @@ class ParentInvitationView:
     consent_types: frozenset[ConsentType]
     expires_at: datetime
     decided_at: datetime | None
+    #: Whether this guardian already has an account they can sign in to, so a
+    #: returning parent is sent to sign in rather than through setting a
+    #: password they already have. Without it the screen could only guess from
+    #: the consent status, which says nothing about the account.
+    parent_account_ready: bool = False
+    #: Where the child's date of birth stands between the school and this
+    #: parent, or None when no check has been raised. A parent arriving on a
+    #: held child needs the recheck screen, not the consent form, and the
+    #: token read was the only thing they had to route on.
+    age_check_state: AgeCheckState | None = None
+    #: Why it is held, when it is. enrolled_age_band_unavailable is a gap in
+    #: the school's roster rather than a disagreement between the two adults,
+    #: so a screen can say which of the two this is.
+    age_check_hold_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

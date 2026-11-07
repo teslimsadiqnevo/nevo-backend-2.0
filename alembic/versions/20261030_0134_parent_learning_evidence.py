@@ -1,6 +1,7 @@
 """Record evidence threshold crossings and explicitly reported outside work."""
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20261030_0134"

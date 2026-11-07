@@ -1,7 +1,8 @@
 """Hold reviewed mastery evidence separately for each curriculum level."""
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "20261030_0132"
 down_revision = "20261105_0133"

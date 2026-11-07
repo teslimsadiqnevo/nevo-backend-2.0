@@ -29,7 +29,6 @@ from nevo.access import accessible_lessons
 from nevo.api.auth import OptionalPrincipalDependency, PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.api.consent import StudentLearningConsent
-from nevo.core.config import get_settings
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.frontend_unblockers import (
     MAX_LESSON_UPLOAD_BYTES,
@@ -101,6 +100,7 @@ from nevo.content_parsing.upload_reuse import (
     reuse_response,
     source_key,
 )
+from nevo.core.config import get_settings
 from nevo.db.models.account import Class, School, StudentClassEnrollment, User
 from nevo.db.models.attention_flag import AttentionFlag, InterventionRecommendation
 from nevo.db.models.content import Lesson, LessonSegment

@@ -1,8 +1,9 @@
 """Allow several invoice contacts while retaining one primary checkout contact."""
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
+
+from alembic import op
 
 revision = "20261105_0133"
 down_revision = "20261105_0132"

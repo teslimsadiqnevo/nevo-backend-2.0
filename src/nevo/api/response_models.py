@@ -319,9 +319,11 @@ class StudentSummaryResponse(CamelResponse):
     age_band: AgeBand | None
     consent: StudentConsentSummaryResponse
     #: Drawn instead of initials on the roster and the teacher's lists.
-    #: Shape and colourway are not here yet: they exist only against a shared
-    #: device, not against the child.
+    #: SCRUM-314 moved the shape and colourway onto the child, so a teacher
+    #: sees the same avatar the child sees on any tablet.
     avatar_tone: str | None = None
+    avatar_shape: str | None = None
+    avatar_colourway: str | None = None
     profile_image_url: str | None = None
 
 

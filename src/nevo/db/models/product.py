@@ -466,12 +466,10 @@ class SharedDeviceProfile(Base):
         UniqueConstraint(
             "device_id", "student_id", name="uq_shared_device_profiles_device_student"
         ),
-        UniqueConstraint(
-            "device_id",
-            "avatar_shape",
-            "avatar_colourway",
-            name="uq_shared_device_profiles_device_avatar",
-        ),
+        # No unique constraint on the avatar. SCRUM-314 moved it onto the
+        # child, and a child who already owns one keeps it on a tablet where
+        # somebody else owns the same one - identity does not change per
+        # device. Collisions are avoided when an avatar is first chosen.
         Index("ix_shared_device_profiles_school_device", "school_id", "device_id"),
     )
 

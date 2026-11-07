@@ -116,7 +116,19 @@ def test_pin_delivery_responses_carry_the_length() -> None:
     assert "pin_change_required" in SessionResponse.model_fields
 
 
-def test_shared_device_identity_has_eighteen_unique_combinations_and_a_db_guard() -> None:
+def test_shared_device_identity_has_eighteen_unique_combinations() -> None:
+    """Eighteen to choose from, and the choice is the child's own.
+
+    The per-device unique constraint was the guard here, and SCRUM-314
+    removed it: the avatar belongs to the child, so a child who already owns
+    one keeps it on a tablet where another child owns the same one. Kept as
+    a constraint it would have refused to provision them at all, which is
+    the identity changing per device that the ruling removes.
+
+    Eighteen combinations against a maximum of six tiles a device, so
+    avoiding a collision at selection has room to work.
+    """
+
     assert len(SHARED_DEVICE_SHAPES) == 6
     assert len(SHARED_DEVICE_COLOURWAYS) == 3
     assert len(SHARED_DEVICE_AVATARS) == len(set(SHARED_DEVICE_AVATARS)) == 18
@@ -126,4 +138,6 @@ def test_shared_device_identity_has_eighteen_unique_combinations_and_a_db_guard(
         for constraint in table.constraints
         if constraint.__class__.__name__ == "UniqueConstraint"
     }
-    assert ("device_id", "avatar_shape", "avatar_colourway") in unique_columns
+    assert ("device_id", "avatar_shape", "avatar_colourway") not in unique_columns
+    # One tile per child per device still holds.
+    assert ("device_id", "student_id") in unique_columns

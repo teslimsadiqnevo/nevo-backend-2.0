@@ -245,9 +245,11 @@ class ClassStudentResponse(BaseModel):
     admin_support_requested_at: datetime | None = None
     #: What the teacher's screen draws instead of initials. Initials collide,
     #: and in a class of forty they will collide more than once, so a name is
-    #: not enough to pick a child out of a list. Shape and colourway are not
-    #: here yet: they exist only per shared device, not against the child.
+    #: not enough to pick a child out of a list. SCRUM-314 moved the shape
+    #: and colourway onto the child, so they can be shown here.
     avatar_tone: str | None = Field(default=None, alias="avatarTone")
+    avatar_shape: str | None = Field(default=None, alias="avatarShape")
+    avatar_colourway: str | None = Field(default=None, alias="avatarColourway")
     profile_image_url: str | None = Field(default=None, alias="profileImageUrl")
 
 
@@ -1016,6 +1018,8 @@ async def class_students(
             admin_support_request_open=f"/admin/students/{user.id}" in support_requested,
             admin_support_requested_at=support_requested.get(f"/admin/students/{user.id}"),
             avatarTone=user.avatar_tone,
+            avatarShape=user.avatar_shape,
+            avatarColourway=user.avatar_colourway,
             # In preferences, not a column: the profile patch writes it
             # there, so there is no user.profile_image_url to read.
             profileImageUrl=(user.preferences or {}).get("profileImageUrl"),

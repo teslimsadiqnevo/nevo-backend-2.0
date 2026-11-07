@@ -7,11 +7,13 @@ The checks review could not tell a check whose answer came out of the
 teacher's file - with a mastery level Nevo picked - from one Nevo wrote
 outright. Both arrived needing a decision and looked identical.
 
-And student delivery held back every check without a sign-off, not only the
-generated ones. Lydia's condition of 2 November is about questions Nevo
-wrote; a question whose answer was in the teacher's own file is already a
-person's work. So a lesson's own questions vanished from delivery until
-somebody signed off checks nobody had said needed signing.
+Delivery held back every check without a sign-off, which was read for a day
+as too wide and narrowed to generated questions only. Lydia's ruling of
+7 November settles it the other way: nothing reaches a child until the
+whole lesson is reviewed, whoever wrote the question and whoever wrote the
+answer. Holding the questions back was right; what was missing was the
+lesson refusing to be assigned while any were outstanding, which is pinned
+in test_a_lesson_is_not_assignable_with_unreviewed_questions.
 """
 
 from __future__ import annotations
@@ -42,33 +44,33 @@ def test_the_review_says_who_wrote_the_answer() -> None:
     assert "masteryLevelAuthoredBy" in properties
 
 
-def test_a_question_from_the_teachers_file_is_delivered_unsigned() -> None:
-    delivered = student_checkpoint_payloads(
-        [_question(authoredBy="person")],
-        segment_key="s1",
-        reviewed_question_ids=set(),
-    )
-    assert [item["id"] for item in delivered] == ["q1"]
+def test_no_question_is_delivered_before_sign_off() -> None:
+    # Whoever wrote it. The narrow version delivered a question whose answer
+    # came from the teacher's file without one, and the ruling of 7 November
+    # is that the lesson is not assignable at all in that state.
+    for author in ("person", "nevo"):
+        assert (
+            student_checkpoint_payloads(
+                [_question(authoredBy=author)],
+                segment_key="s1",
+                reviewed_question_ids=set(),
+            )
+            == []
+        ), author
 
 
-def test_a_question_nevo_wrote_still_waits_for_sign_off() -> None:
-    held = student_checkpoint_payloads(
-        [_question(authoredBy="nevo")],
-        segment_key="s1",
-        reviewed_question_ids=set(),
-    )
-    assert held == []
-
-    signed = student_checkpoint_payloads(
-        [_question(authoredBy="nevo")],
-        segment_key="s1",
-        reviewed_question_ids={"q1"},
-    )
-    assert [item["id"] for item in signed] == ["q1"]
+def test_a_signed_off_question_is_delivered() -> None:
+    for author in ("person", "nevo"):
+        delivered = student_checkpoint_payloads(
+            [_question(authoredBy=author)],
+            segment_key="s1",
+            reviewed_question_ids={"q1"},
+        )
+        assert [item["id"] for item in delivered] == ["q1"], author
 
 
 def test_an_unmarkable_question_is_never_delivered() -> None:
-    # No answer means nothing to mark against, whoever wrote it.
+    # No answer means nothing to mark against, sign-off or not.
     assert (
         student_checkpoint_payloads(
             [_question(authoredBy="person", answerKey=None)],
@@ -79,9 +81,9 @@ def test_an_unmarkable_question_is_never_delivered() -> None:
     )
 
 
-def test_a_level_nevo_picked_is_still_withheld_from_a_teachers_question() -> None:
-    # The narrower rule the ruling asks for: the question is asked, because a
-    # person wrote it, and the level is not shown, because Nevo chose it.
+def test_a_level_nevo_picked_is_withheld_from_a_signed_off_question() -> None:
+    # The question is asked, because a teacher signed it off. The level is
+    # not shown, because Nevo chose it and that choice has its own sign-off.
     delivered = student_checkpoint_payloads(
         [
             _question(
@@ -91,7 +93,7 @@ def test_a_level_nevo_picked_is_still_withheld_from_a_teachers_question() -> Non
             )
         ],
         segment_key="s1",
-        reviewed_question_ids=set(),
+        reviewed_question_ids={"q1"},
         reviewed_level_ids=set(),
     )
     assert [item["id"] for item in delivered] == ["q1"]

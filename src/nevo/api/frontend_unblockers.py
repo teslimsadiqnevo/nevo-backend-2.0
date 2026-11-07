@@ -49,10 +49,10 @@ from nevo.api.learning_support import (
 )
 from nevo.api.lesson_contracts import (
     ComprehensionCheckpoint,
-    online_student_lesson,
     calculation_for_delivery,
     checkpoint_payloads,
     depth_payloads,
+    online_student_lesson,
     safety_reviewed_visual,
     student_activity,
     student_checkpoint_payloads,
@@ -243,6 +243,12 @@ class ClassStudentResponse(BaseModel):
     consent: StudentConsentSummaryResponse
     admin_support_request_open: bool = False
     admin_support_requested_at: datetime | None = None
+    #: What the teacher's screen draws instead of initials. Initials collide,
+    #: and in a class of forty they will collide more than once, so a name is
+    #: not enough to pick a child out of a list. Shape and colourway are not
+    #: here yet: they exist only per shared device, not against the child.
+    avatar_tone: str | None = Field(default=None, alias="avatarTone")
+    profile_image_url: str | None = Field(default=None, alias="profileImageUrl")
 
 
 class UnfinishedClassCheckResponse(BaseModel):
@@ -1009,6 +1015,10 @@ async def class_students(
             consent=consent.get(user.id, empty_consent_summary()),
             admin_support_request_open=f"/admin/students/{user.id}" in support_requested,
             admin_support_requested_at=support_requested.get(f"/admin/students/{user.id}"),
+            avatarTone=user.avatar_tone,
+            # In preferences, not a column: the profile patch writes it
+            # there, so there is no user.profile_image_url to read.
+            profileImageUrl=(user.preferences or {}).get("profileImageUrl"),
         )
         for user, profile_id, latest_session_at in rows
     ]
@@ -1393,8 +1403,11 @@ async def list_lessons(
     from nevo.api.product_learning import _unapproved_counts
 
     ids = [lesson.id for lesson in lessons]
+    # Not asked twice with checks excluded any more: a lesson offered as
+    # assignable while its questions were unreviewed is the half-delivered
+    # lesson Lydia ruled against on 7 November.
     complete = await review_complete_map(session, ids)
-    assignable = await review_complete_map(session, ids, require_checks=False)
+    assignable = complete
     outstanding = await _unapproved_counts(session, ids)
     return [
         _lesson_summary(

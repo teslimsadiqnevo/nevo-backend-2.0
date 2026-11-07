@@ -152,6 +152,11 @@ class LessonReviewResponse(CamelResponse):
     outstanding_count: int
     key_point_count: int
     ready_to_assign: bool
+    #: Which review steps are still outstanding, in the order the review
+    #: screen presents them. A teacher told only that they cannot assign does
+    #: not know whether it is pictures, checks or rewrites. Lydia's ruling of
+    #: 7 November: the refusal has to say which.
+    outstanding_review_steps: list[str] = Field(default_factory=list)
     key_points: list[KeyPointResponse]
     key_points_content_hash: str = ""
     rewrites_content_hash: str = ""
@@ -1220,8 +1225,15 @@ def _guided_steps_material(segments):
     return material, views, pending_count
 
 
-async def review_complete_map(session, lesson_ids, *, require_checks=True):
-    """Calculate library readiness in three reads, without loading review media."""
+async def review_complete_map(session, lesson_ids):
+    """Calculate library readiness in three reads, without loading review media.
+
+    require_checks used to be a parameter, and the library's can_assign flag
+    passed it False - so a lesson whose questions nobody had approved was
+    offered as assignable, and the child met fewer questions than the
+    teacher had set. Lydia's ruling of 7 November leaves no case where
+    checks are excluded, so there is no longer a way to ask for that.
+    """
     if not lesson_ids:
         return {}
     lessons_by_id = {lesson.id: lesson for lesson in await session.scalars(
@@ -1264,10 +1276,14 @@ async def review_complete_map(session, lesson_ids, *, require_checks=True):
         ]
         guided, _, _ = _guided_steps_material(segments)
         checks, _ = _checks_material(segments, lessons_by_id.get(lesson_id))
-        materials = {"key_points": key_material, "rewrites": rewrites,
-                     "guided_steps": guided}
-        if require_checks:
-            materials["checks"] = checks
+        calculation, _ = _calculation_parts_material(segments)
+        materials = {
+            "key_points": key_material,
+            "rewrites": rewrites,
+            "guided_steps": guided,
+            "checks": checks,
+            "calculation_parts": calculation,
+        }
         approvals = approvals_by_lesson[lesson_id]
         result[lesson_id] = bool(segments) and all(
             not material or (kind in approvals and _current_signoff(approvals[kind], material))
@@ -1329,12 +1345,41 @@ async def _review_result(session, lesson):
                 }[record.kind]),
             ),
         )
+    def _settled(kind: str, *, required: bool) -> bool:
+        """Whether this step is settled: nothing to review, or approved now."""
+
+        if not required:
+            return True
+        approval = approvals.get(kind)
+        return bool(approval and approval.current)
+
+    # Checks and calculation parts were missing from this, so a lesson with
+    # unreviewed questions in it was still assignable. The questions were
+    # held back from delivery, which was right, and the result was a lesson
+    # delivered with gaps rather than one that refused to be assigned.
+    # Lydia's ruling of 7 November: a lesson with any unreviewed question is
+    # not assignable at all, whoever wrote the question or the answer.
+    #
+    # Key points are always required. The other four are required only when
+    # there is something of that kind in the lesson, because a lesson with
+    # no calculations cannot have its calculation parts approved.
+    required_by_step = {
+        "key_points": True,
+        "rewrites": bool(rewrites),
+        "guided_steps": bool(guided_material),
+        "checks": bool(checks_material),
+        "calculation_parts": bool(calculation_material),
+    }
+    outstanding_steps = [
+        step for step, required in required_by_step.items() if not _settled(step, required=required)
+    ]
+    if result.outstanding_count and "key_points" not in outstanding_steps:
+        # Key points approved, but some segment still has none written.
+        outstanding_steps.insert(0, "key_points")
     return result.model_copy(
         update={
-            "ready_to_assign": result.outstanding_count == 0
-            and bool(approvals.get("key_points") and approvals["key_points"].current)
-            and (not rewrites or bool(approvals.get("rewrites") and approvals["rewrites"].current))
-            and (not guided_material or bool(approvals.get("guided_steps") and approvals["guided_steps"].current)),
+            "ready_to_assign": not outstanding_steps,
+            "outstanding_review_steps": outstanding_steps,
             "key_points_content_hash": hashes["key_points"],
             "rewrites_content_hash": hashes["rewrites"],
             "key_point_approval": approvals.get("key_points"),

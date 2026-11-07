@@ -265,10 +265,12 @@ async def require_approved_lessons(
     from nevo.api.lesson_review import _review_result
 
     lessons = await session.scalars(select(Lesson).where(Lesson.id.in_(wanted)))
+    steps_left: dict[UUID, list[str]] = {}
     for lesson in lessons:
         review = await _review_result(session, lesson)
         if not review.ready_to_assign:
             section_counts[lesson.id] = max(1, section_counts.get(lesson.id, 0))
+            steps_left[lesson.id] = list(review.outstanding_review_steps)
         else:
             section_counts.pop(lesson.id, None)
     if unsettled:
@@ -293,6 +295,7 @@ async def require_approved_lessons(
                     str(titles.get(lesson_id) or "This lesson"),
                     segments=segments_left.get(lesson_id, 0),
                     key_points=unsettled.get(lesson_id, 0),
+                    steps=steps_left.get(lesson_id, []),
                 )
                 for lesson_id in outstanding
             ),
@@ -301,6 +304,10 @@ async def require_approved_lessons(
                     "lessonId": str(lesson_id),
                     "unapprovedSegmentCount": segments_left.get(lesson_id, 0),
                     "outstandingKeyPointCount": unsettled.get(lesson_id, 0),
+                    # Which step, not just that there is one. A teacher told
+                    # only that they cannot assign does not know whether it
+                    # is pictures, checks or rewrites.
+                    "outstandingReviewSteps": steps_left.get(lesson_id, []),
                 }
                 for lesson_id in outstanding
             ],
@@ -308,10 +315,32 @@ async def require_approved_lessons(
     )
 
 
-def _outstanding_phrase(title: str, *, segments: int, key_points: int) -> str:
+#: What a teacher calls each review step, since the stored names are not
+#: what the screen says. "pictures" rather than media, because that is the
+#: word in the ruling and on the tab.
+REVIEW_STEP_NAMES = {
+    "key_points": "key points",
+    "rewrites": "rewrites",
+    "guided_steps": "guided steps",
+    "checks": "checks",
+    "calculation_parts": "calculation parts",
+    "media": "pictures",
+}
+
+
+def _outstanding_phrase(
+    title: str, *, segments: int, key_points: int, steps: list[str] | None = None
+) -> str:
     parts = []
     if key_points:
         parts.append(f"{key_points} key point{'s' if key_points != 1 else ''} to check")
     if segments:
         parts.append(f"{segments} segment{'s' if segments != 1 else ''} to approve")
-    return f"{title}: {' and '.join(parts)}"
+    # Named, because "not ready" leaves a teacher with nowhere to go and no
+    # way to tell pictures from checks from rewrites.
+    named = [REVIEW_STEP_NAMES.get(step, step) for step in steps or []]
+    if named:
+        parts.append(f"{' and '.join(named)} still to sign off")
+    if not parts:
+        parts.append("review not complete")
+    return f"{title}: {', '.join(parts)}"

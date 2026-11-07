@@ -318,6 +318,11 @@ class StudentSummaryResponse(CamelResponse):
     #: SCRUM-175, and ask B5.
     age_band: AgeBand | None
     consent: StudentConsentSummaryResponse
+    #: Drawn instead of initials on the roster and the teacher's lists.
+    #: Shape and colourway are not here yet: they exist only against a shared
+    #: device, not against the child.
+    avatar_tone: str | None = None
+    profile_image_url: str | None = None
 
 
 class StudentDetailResponse(CamelResponse):

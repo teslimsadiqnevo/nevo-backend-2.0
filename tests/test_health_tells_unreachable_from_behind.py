@@ -19,23 +19,23 @@ from nevo.ops.schema_version import schema_state
 class _Unreachable:
     """An engine whose connect() fails, as it does when the pooler is full."""
 
-    def connect(self):  # noqa: ANN201 - matches AsyncEngine's shape closely enough
+    def connect(self):
         raise OSError("connection refused")
 
 
 class _Empty:
     """An engine that answers and has no revision in it."""
 
-    def connect(self):  # noqa: ANN201
+    def connect(self):
         return self
 
-    async def __aenter__(self):  # noqa: ANN204
+    async def __aenter__(self):
         return self
 
     async def __aexit__(self, *exc: object) -> bool:
         return False
 
-    async def execute(self, _statement: object):  # noqa: ANN202
+    async def execute(self, _statement: object):
         class Result:
             @staticmethod
             def scalar() -> None:

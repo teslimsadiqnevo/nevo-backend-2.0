@@ -50,10 +50,14 @@ async def test_a_database_it_cannot_reach_says_unreachable_not_up_to_date() -> N
     ("applied", "expected_state"),
     [("20260924_0079", "up_to_date"), ("20260921_0073", "behind"), (None, "unknown")],
 )
-async def test_the_answers_for_a_database_that_did_answer(applied: str | None, expected_state: str, monkeypatch) -> None:
+async def test_the_answers_for_a_database_that_did_answer(
+    applied: str | None, expected_state: str, monkeypatch
+) -> None:
     from nevo.ops import schema_version
 
-    async def fake_applied(engine: object) -> tuple[str | None, str | None]:
+    async def fake_applied(
+        engine: object,
+    ) -> tuple[str | None, str | None]:
         return applied, None
 
     monkeypatch.setattr(schema_version, "applied_revision_or_error", fake_applied)

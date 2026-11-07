@@ -315,7 +315,7 @@ class EducationalImageService:
             "to understand on a tablet. Prefer a clear diagram, process illustration, number "
             "representation, or labelled instructional scene over decorative art. Preserve every "
             "mathematical quantity and scientific relationship exactly. Do not invent facts. Avoid "
-            "logos, watermarks, diagnostic language, student names, tiny text, long paragraphs. "
+            "logos, watermarks, labels about pupils, student names, tiny text, long paragraphs. "
             f"Lesson title: {title or 'Untitled'}. Lesson content: {text}. "
             f"Teacher visual direction: {requested or 'Choose the clearest instructional visual.'}"
         )

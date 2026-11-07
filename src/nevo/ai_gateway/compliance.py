@@ -54,8 +54,16 @@ class ZeroTagCompliancePolicy:
         return sanitized
 
 
+#: Appended to the prompt on a retry, so every word in it is a word the model
+#: has just been shown and may well mirror back. It used to say "assign a
+#: learning style to a person", and "learning style" is itself on the list
+#: this policy rejects - so the instruction for fixing a violation invited
+#: the next one. The same shape as the transfer prompt asking the model to
+#: return "diagnosis", and the reason to state the rule without using the
+#: words it forbids.
 ZERO_TAG_REWRITE_INSTRUCTION = (
     "\n\nYour previous response violated Nevo's Zero-Tag policy. Rewrite it "
     "using only observable classroom activity and functional support. "
-    "Do not mention or infer labels or assign a learning style to a person."
+    "Do not mention or infer labels, and do not describe how a person learns "
+    "as a fixed trait."
 )

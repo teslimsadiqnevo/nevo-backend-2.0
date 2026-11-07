@@ -323,7 +323,7 @@ class ContentParsingService:
                                 "For each checkpoint and after-lesson assessment item, propose masteryLevel "
                                 "as knowledge, application, or analysis. Knowledge tests recall "
                                 "or explanation; application uses the idea in a taught kind of "
-                                "situation; analysis compares, judges, or diagnoses in an "
+                                "situation; analysis compares, judges, or identifies a fault in an "
                                 "unfamiliar situation. Omit the field if the level is unclear. "
                                 "The proposed level requires teacher review.\n\n"
                                 + "For every checkpoint and after-lesson assessment question, "

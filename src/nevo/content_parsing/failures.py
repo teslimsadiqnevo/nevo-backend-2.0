@@ -88,6 +88,17 @@ GENERIC_FAILURE = (
 #: naming something a teacher can actually do next.
 FAILURE_REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
     (
+        ("content safety blocked", "safetyblocked", "content_safety_blocked"),
+        "Our safety check held this file back, so the lesson has not been "
+        "prepared. If the material is ordinary classroom content, tell us the "
+        "reference below and we will look at the check rather than your file.",
+    ),
+    (
+        ("safetyunavailable", "safety_check_unavailable"),
+        "Our safety check could not run, so the lesson has not been prepared. "
+        "Nothing is wrong with your file - please try again shortly.",
+    ),
+    (
         (
             "unclassifiablequestionerror",
             "unclassifiable question",

@@ -46,6 +46,11 @@ safety, block only when the supplied material contains clear evidence of a liste
 risk; do not infer a risk from an isolated word, an ordinary name, a number, or a
 generic classroom scenario. Allow requires an empty categories array. Block/safeguard
 requires at least one category. Image review includes any text inside the image.
+Named people in a lesson are characters, not personal data. "Ngozi says X, Efe
+says Y, who is right?" is a worked example and must be allowed. Never return
+privacy_abuse for first names, full names, or dialogue between named learners in
+a question, whatever the origin of the names. A lesson about predators, eating,
+hunting or death in nature is ordinary biology and must be allowed.
 The privacy_abuse category is specifically for revealing, collecting, soliciting,
 or misusing real, identifiable personal or sensitive information without a
 legitimate educational/safety purpose. A first name alone, a fictional/example
@@ -73,6 +78,20 @@ class SafetyBlocked(AiGatewayError):
     public_message = (
         "Nevo can\u2019t help with this one. Please talk to a trusted adult or your teacher."
     )
+
+    def __init__(
+        self,
+        categories: tuple[str, ...] = (),
+        phase: str | None = None,
+    ) -> None:
+        # Raised bare, this had an empty str(), so a blocked upload stored an
+        # incident reference and nothing else and the teacher was told
+        # "nothing you did caused it". Food Chains.pdf failed seven times on
+        # 8 November and neither the console nor the logs could say why.
+        self.categories = tuple(categories)
+        self.phase = phase
+        detail = ", ".join(self.categories) or "unspecified"
+        super().__init__(f"content safety blocked {phase or 'content'}: {detail}")
 
 
 class SafetyDecision(BaseModel):
@@ -183,7 +202,7 @@ class ContentSafetyGuard:
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
                 raise SafetyUnavailable() from error
             if decision.action != "allow":
-                raise SafetyBlocked()
+                raise SafetyBlocked(tuple(decision.categories), phase)
 
     def _headers(self):
         return {

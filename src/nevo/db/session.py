@@ -14,6 +14,13 @@ TRANSACTION_POOLER_PORT = 6543
 """Supabase serves transaction-mode pooling here and session mode on 5432."""
 SESSION_POOLER_PORT = 5432
 
+#: How long to wait for a connection to be established.
+CONNECT_TIMEOUT_SECONDS = 10
+
+#: How long to wait for a statement, and for a pooler that accepts a
+#: connection and then stalls before giving it a backend.
+COMMAND_TIMEOUT_SECONDS = 30
+
 
 def statement_cache_size(database_url: str) -> int:
     """How many prepared statements asyncpg may cache on a connection.
@@ -52,7 +59,33 @@ def create_engine(database_url: str) -> AsyncEngine:
     """
     settings = get_settings()
     session_pooler = _is_supabase_session_pooler(database_url)
-    connect_args = {"statement_cache_size": statement_cache_size(database_url)}
+    connect_args = {
+        "statement_cache_size": statement_cache_size(database_url),
+        # Two different waits, and only the second one bounds the failure
+        # seen on 8 November.
+        #
+        # The pooler answered ECHECKOUTTIMEOUT after its own 60-second wait
+        # for a backend, so every database request hung for 61 seconds
+        # before failing, held a worker for a full minute to learn nothing,
+        # and enough piled up that routes touching no database went slow
+        # too. A connect timeout does not help: Supavisor accepts the
+        # connection and authenticates it, then stalls waiting for a
+        # backend, so the driver considers itself connected. Measured - a
+        # 20-second connect timeout still took 62 seconds to fail, while an
+        # 8-second command timeout failed in 12.
+        #
+        # So the connect timeout is here for an unreachable host, and the
+        # command timeout is what bounds a pooler that accepts and stalls.
+        # Thirty seconds rather than ten because the background sweeps share
+        # this engine and a retention or billing pass over a large table is
+        # legitimately slow; it halves the worst case without inventing a
+        # deadline for honest work.
+        #
+        # Neither makes a struggling pooler work. They are the difference
+        # between requests that fail and a service that stops answering.
+        "timeout": CONNECT_TIMEOUT_SECONDS,
+        "command_timeout": COMMAND_TIMEOUT_SECONDS,
+    }
     if _is_transaction_pooler(database_url):
         # Reuse client connections without reusing another transaction's prepared statements.
         connect_args.update(

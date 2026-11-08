@@ -98,14 +98,15 @@ def test_what_approval_writes_is_what_the_reads_compare() -> None:
     that takes one has to take it over the same projection.
     """
 
-    source = inspect.getsource(lesson_review)
-    for name in ("approve_all_checks", "approved_check_ids", "approved_level_ids"):
+    # Approval hashes the projection; the reads accept either convention
+    # through checks_signoff_hashes, which is built from it. Asserted as
+    # "both sides agree" rather than "both call the same function", because
+    # pinning the mechanism is what let the reads drift the first time.
+    assert "checks_signoff_material" in inspect.getsource(lesson_review.approve_all_checks)
+    for name in ("approved_check_ids", "approved_level_ids"):
         body = inspect.getsource(getattr(lesson_review, name))
-        assert "checks_signoff_material" in body, name
-    # No raw-material hash left anywhere near the checks sign-off.
-    assert "_hash(material)" not in inspect.getsource(lesson_review.approved_check_ids)
-    assert "_hash(material)" not in inspect.getsource(lesson_review.approved_level_ids)
-    assert source.count("checks_signoff_material(") >= 6
+        assert "checks_signoff_hashes" in body, name
+    assert "checks_signoff_material" in inspect.getsource(lesson_review.checks_signoff_hashes)
 
 
 def test_a_check_with_a_level_matches_its_own_approval() -> None:
@@ -124,3 +125,59 @@ def test_a_check_with_a_level_matches_its_own_approval() -> None:
     stored_by_approval = _hash(checks_signoff_material([item]))
     assert _hash(checks_signoff_material([item])) == stored_by_approval
     assert _hash([item]) != stored_by_approval
+
+
+def test_an_approval_from_before_the_change_still_counts() -> None:
+    """Fixing the new lessons must not break the old ones.
+
+    85542c2 pointed every comparison at the level-free projection, which is
+    what approvals written since SCRUM-308 store. Approvals written before
+    it store the raw material. Neither branch matched those any more, so
+    every lesson approved before 8 November stopped delivering its checks -
+    the same outage as the bug it fixed, arriving from the other side.
+
+    The two hashes describe the same approved questions. Only the
+    convention changed, so both count.
+    """
+    from nevo.api.lesson_review import _hash, checks_signoff_hashes
+
+    item = {
+        "segmentId": "s1",
+        "questionId": "q1",
+        "questionPrompt": "Why does metal feel colder?",
+        "questionAnswerType": "single_choice",
+        "questionAnswerKey": "a",
+        "masteryLevel": "knowledge",
+        "masteryLevelAuthoredBy": "nevo",
+    }
+    accepted = checks_signoff_hashes([item])
+    assert _hash([item]) in accepted, "an approval from before the change"
+    assert _hash(checks_signoff_material([item])) in accepted, "and from after it"
+
+
+def test_a_real_edit_still_invalidates_the_approval() -> None:
+    # The tolerance is between two ways of hashing the same questions, not
+    # between different questions.
+    from nevo.api.lesson_review import _hash, checks_signoff_hashes
+
+    item = {
+        "segmentId": "s1",
+        "questionId": "q1",
+        "questionPrompt": "Why does metal feel colder?",
+        "questionAnswerType": "single_choice",
+        "questionAnswerKey": "a",
+    }
+    edited = {**item, "questionAnswerKey": "b"}
+    assert _hash([edited]) not in checks_signoff_hashes([item])
+
+    reworded = {**item, "questionPrompt": "Why is metal cold?"}
+    assert _hash([reworded]) not in checks_signoff_hashes([item])
+
+
+def test_every_checks_comparison_uses_the_tolerant_one() -> None:
+    source = inspect.getsource(lesson_review)
+    for name in ("approved_check_ids", "approved_level_ids"):
+        body = inspect.getsource(getattr(lesson_review, name))
+        assert "checks_signoff_hashes" in body, name
+    assert "record.kind == \"checks\"" in inspect.getsource(lesson_review._current_signoff)
+    assert source.count("checks_signoff_hashes(") >= 4

@@ -989,10 +989,29 @@ def checks_signoff_material(material):
     ]
 
 
+def checks_signoff_hashes(material) -> tuple[str, ...]:
+    """Every hash that means "this material is signed off".
+
+    SCRUM-308 moved the checks sign-off onto a projection with the mastery
+    level removed, so a level correction would not revoke it. Approvals
+    written before that stored the raw material. They approved the same
+    questions - only the convention changed - so an approval is current if
+    it matches either.
+
+    Accepting only the new one silently stopped every lesson approved
+    before 8 November from delivering its checks, which is the same outage
+    as the one that change caused, arriving from the other side.
+    """
+
+    return (_hash(checks_signoff_material(material)), _hash(material))
+
+
 def _current_signoff(record, material):
     if record.invalidated_at is not None:
         return False
     if record.content_hash == _hash(material):
+        return True
+    if record.kind == "checks" and record.content_hash in checks_signoff_hashes(material):
         return True
     if record.kind == "key_points" and isinstance(record.content_snapshot, list):
         return [item for item in record.content_snapshot if "mediaId" not in item] == material
@@ -1156,13 +1175,13 @@ async def approved_check_ids(session, lesson_id):
     # the hashes never matched, approved came back empty and every check
     # Nevo wrote was withheld from children after the teacher had signed it
     # off. Heat Transfer delivered no questions at all.
-    if approval.content_hash == _hash(checks_signoff_material(material)):
+    if approval.content_hash in checks_signoff_hashes(material):
         approved = material
     else:
         legacy_material, _ = _checks_material(segments)
         approved = (
             legacy_material
-            if approval.content_hash == _hash(checks_signoff_material(legacy_material))
+            if approval.content_hash in checks_signoff_hashes(legacy_material)
             else []
         )
     return authored | {(item["segmentId"], item["questionId"]) for item in approved}
@@ -1203,7 +1222,7 @@ async def approved_level_ids(session, lesson_id):
         ).order_by(LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc()).limit(1)
     )
     # The same projection again, for the same reason.
-    if approval is None or approval.content_hash != _hash(checks_signoff_material(material)):
+    if approval is None or approval.content_hash not in checks_signoff_hashes(material):
         return authored_levels
     return authored_levels | {
         (item["segmentId"], item["questionId"])
@@ -1318,7 +1337,7 @@ async def review_complete_map(session, lesson_ids):
             "key_points": key_material,
             "rewrites": rewrites,
             "guided_steps": guided,
-            "checks": checks_signoff_material(checks),
+            "checks": checks,
             "calculation_parts": calculation,
         }
         approvals = approvals_by_lesson[lesson_id]
@@ -1378,7 +1397,7 @@ async def _review_result(session, lesson):
                 current=_current_signoff(record, {
                     "key_points": points, "rewrites": rewrites,
                     "guided_steps": guided_material,
-                    "checks": checks_signoff_material(checks_material),
+                    "checks": checks_material,
                     "calculation_parts": calculation_material,
                 }[record.kind]),
             ),

@@ -82,3 +82,45 @@ def test_the_stored_snapshot_is_the_projection_too() -> None:
     source = inspect.getsource(lesson_review.approve_all_checks)
     assert "content_snapshot=signoff_material" in source
     assert "digest = _hash(signoff_material)" in source
+
+
+def test_what_approval_writes_is_what_the_reads_compare() -> None:
+    """The half-done version of SCRUM-308 withheld every check from children.
+
+    approve_all_checks hashed the material with the level stripped, and
+    approved_check_ids and approved_level_ids went on hashing the raw
+    material. On any lesson whose checks carry a level - every new upload -
+    the two never matched, so the approval read as stale, approved came back
+    empty, and a teacher who had signed off all 22 checks on Heat Transfer
+    sent a child a lesson with no questions in it at all.
+
+    A hash is only a hash of the same thing on both sides, so every place
+    that takes one has to take it over the same projection.
+    """
+
+    source = inspect.getsource(lesson_review)
+    for name in ("approve_all_checks", "approved_check_ids", "approved_level_ids"):
+        body = inspect.getsource(getattr(lesson_review, name))
+        assert "checks_signoff_material" in body, name
+    # No raw-material hash left anywhere near the checks sign-off.
+    assert "_hash(material)" not in inspect.getsource(lesson_review.approved_check_ids)
+    assert "_hash(material)" not in inspect.getsource(lesson_review.approved_level_ids)
+    assert source.count("checks_signoff_material(") >= 6
+
+
+def test_a_check_with_a_level_matches_its_own_approval() -> None:
+    # The exact shape that failed: a check carrying a level Nevo picked.
+    from nevo.api.lesson_review import _hash
+
+    item = {
+        "segmentId": "s1",
+        "questionId": "q1",
+        "questionPrompt": "Why does metal feel colder?",
+        "questionAnswerType": "single_choice",
+        "questionAnswerKey": "a",
+        "masteryLevel": "knowledge",
+        "masteryLevelAuthoredBy": "nevo",
+    }
+    stored_by_approval = _hash(checks_signoff_material([item]))
+    assert _hash(checks_signoff_material([item])) == stored_by_approval
+    assert _hash([item]) != stored_by_approval

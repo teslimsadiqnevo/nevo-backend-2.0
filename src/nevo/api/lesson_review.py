@@ -1149,11 +1149,22 @@ async def approved_check_ids(session, lesson_id):
     )
     if approval is None:
         return authored
-    if approval.content_hash == _hash(material):
+    # Against the same projection approve_all_checks hashed. SCRUM-308 took
+    # the mastery level out of the sign-off so correcting a level would not
+    # revoke it, and this comparison was left hashing the raw material - so
+    # on any lesson whose checks carry a level, which is every new upload,
+    # the hashes never matched, approved came back empty and every check
+    # Nevo wrote was withheld from children after the teacher had signed it
+    # off. Heat Transfer delivered no questions at all.
+    if approval.content_hash == _hash(checks_signoff_material(material)):
         approved = material
     else:
         legacy_material, _ = _checks_material(segments)
-        approved = legacy_material if approval.content_hash == _hash(legacy_material) else []
+        approved = (
+            legacy_material
+            if approval.content_hash == _hash(checks_signoff_material(legacy_material))
+            else []
+        )
     return authored | {(item["segmentId"], item["questionId"]) for item in approved}
 
 
@@ -1191,7 +1202,8 @@ async def approved_level_ids(session, lesson_id):
             LessonReviewSignoff.invalidated_at.is_(None),
         ).order_by(LessonReviewSignoff.approved_at.desc(), LessonReviewSignoff.id.desc()).limit(1)
     )
-    if approval is None or approval.content_hash != _hash(material):
+    # The same projection again, for the same reason.
+    if approval is None or approval.content_hash != _hash(checks_signoff_material(material)):
         return authored_levels
     return authored_levels | {
         (item["segmentId"], item["questionId"])

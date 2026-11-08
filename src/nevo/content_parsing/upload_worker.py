@@ -170,7 +170,14 @@ class UploadParsingWorker:
                 job = await session.get(UploadJob, upload_id)
                 if job is not None and job.parse_lease_token == token:
                     job.status = "failed"
-                    job.error_message = str(error)[:1000]
+                    # The class name as well as the message. An exception
+                    # raised without arguments has an empty str(), so this
+                    # stored nothing at all and failure_reason - which does
+                    # compose both - fell through to the generic sentence.
+                    # Food Chains.pdf failed four times on 8 November and
+                    # left an incident reference with no information behind
+                    # it, which is a failure nobody can act on.
+                    job.error_message = f"{type(error).__name__}: {error}".strip()[:1000]
                     job.incident_id = incident
                     job.failure_reason = failure_reason(error)
                     job.parse_lease_token = None

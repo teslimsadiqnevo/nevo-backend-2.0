@@ -30,21 +30,46 @@ def test_transaction_pooling_still_disables_the_statement_cache() -> None:
     assert statement_cache_size(TRANSACTION_URL) == 0
 
 
-def test_no_pre_ping_round_trip_before_every_request() -> None:
-    """A pre-ping is a full round trip before the first real query. Cheap
-    locally, expensive remotely; connections are recycled instead."""
+def test_every_checkout_is_pre_pinged() -> None:
+    """A dead connection must not reach a request.
+
+    This pinned pre_ping off, on the reasoning that recycling under the
+    pooler's idle timeout kept connections fresh for less cost than a round
+    trip per checkout. True of the session pooler, where a checkout is a
+    stable session and age is a fair proxy for liveness.
+
+    It stopped being true when the service moved to the transaction pooler,
+    which may drop a client connection between transactions whatever its
+    age. The port moved and this assumption did not, so a connection the
+    pooler had already closed was handed to a request and failed on first
+    use - DBAPIError, intermittently, on a service that was up.
+
+    Recycling is kept as well. Pre-ping replaces a dead connection;
+    recycling stops one being held long enough to be dropped. They were
+    read as alternatives and they are not.
+    """
     engine = create_engine(SESSION_URL)
 
-    assert engine.pool._pre_ping is False  # type: ignore[attr-defined]
+    assert engine.pool._pre_ping is True  # type: ignore[attr-defined]
     assert engine.pool._recycle == 280  # type: ignore[attr-defined]
 
 
 def test_connections_are_held_open_because_the_handshake_is_costly() -> None:
     """The connect handshake measured far longer than a query, so reopening
-    per request would dominate."""
-    engine = create_engine(SESSION_URL)
+    per request would dominate.
 
-    assert engine.pool.size() == 10
+    How many to hold depends on which pooler. The session pooler has a
+    fifteen-client project limit shared across services, so one process is
+    capped at two plus one overflow rather than taking most of it. The
+    transaction pooler multiplexes and has no such ceiling, so the
+    configured size stands.
+
+    This asserted ten against the session URL, which the cap had already
+    made two - stale since the cap landed, and worth keeping because the
+    difference between the two poolers is exactly what caught us out.
+    """
+    assert create_engine(SESSION_URL).pool.size() == 2
+    assert create_engine(TRANSACTION_URL).pool.size() == 10
 
 
 def test_transaction_pooler_disables_both_caches_and_uses_unique_statement_names(monkeypatch):

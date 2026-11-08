@@ -62,10 +62,22 @@ def create_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(
         database_url,
         # A pre-ping is a full round trip before the request's first real
-        # query. That is cheap against a local database and expensive against
-        # a remote one. Recycling below the pooler's idle timeout keeps
-        # connections fresh instead, without paying per checkout.
-        pool_pre_ping=False,
+        # query, and this used to be off: recycling under the pooler's idle
+        # timeout was treated as keeping connections fresh for less cost.
+        #
+        # That held for the session pooler, where a checkout is a stable
+        # session and an age limit is a fair proxy for liveness. It does not
+        # hold for the transaction pooler, which may drop a client
+        # connection between transactions whatever its age - so a dead
+        # connection was handed to a request and failed on first use, as a
+        # DBAPIError, intermittently, on a service that was up. Observed in
+        # production on 7 November at 18:41, 18:55, 19:34, 20:27 and 20:30.
+        #
+        # The assumption moved with the port and the setting did not. One
+        # round trip per checkout is a few milliseconds against a database
+        # this far away, and it is the difference between a stale connection
+        # being replaced and a request failing.
+        pool_pre_ping=True,
         pool_recycle=280,
         # Connections are expensive to establish here - the handshake costs
         # far more than a query - so hold a few open rather than reopening.

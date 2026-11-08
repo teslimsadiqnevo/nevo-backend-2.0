@@ -250,6 +250,11 @@ class ContentParsingService:
         review_notes: list[dict[str, object]] = (
             [{"code": "page_text_missing", "pageNumbers": missing_pages}] if missing_pages else []
         )
+        #: Questions no renderer could take, after repair had already tried
+        #: three times. Collected across passes and reported as a note, so a
+        #: teacher is told what was left out instead of quietly receiving a
+        #: shorter lesson.
+        dropped: list[str] = []
         if navigation_pages:
             review_notes.append(
                 {
@@ -291,9 +296,31 @@ class ContentParsingService:
                             requester_user_id=requested_by_user_id,
                         )
                         _mark_source_authorship(candidate, chunks[index - 1])
-                        _segments_from_payload_list(candidate, sequence_offset=0)
-                        if index == len(chunks):
-                            _assessment_questions(candidate)
+                        try:
+                            _segments_from_payload_list(candidate, sequence_offset=0)
+                            if index == len(chunks):
+                                _assessment_questions(candidate)
+                        except UnclassifiableQuestionError:
+                            # Repair has had its three goes. Drop the
+                            # questions that still cannot be rendered and
+                            # keep the lesson, rather than losing a whole
+                            # upload to one open-ended question a teacher
+                            # wrote - "Why does an egg float in very salty
+                            # water?" sank a parse on 8 November and the
+                            # retry produced a text-only fallback with no
+                            # checks, no key points and nothing to review.
+                            #
+                            # This raised because an unrenderable question
+                            # must not reach a child. Since SCRUM-307 it
+                            # cannot: a question without a current sign-off
+                            # is withheld from delivery, and a lesson with
+                            # any unreviewed check is not assignable at all.
+                            # So failing the parse now buys no safety and
+                            # costs the teacher their lesson.
+                            dropped.extend(_drop_unusable_questions(candidate))
+                            _segments_from_payload_list(candidate, sequence_offset=0)
+                            if index == len(chunks):
+                                _assessment_questions(candidate)
                         generated = replace(generated, text=json.dumps(candidate))
                     return generated, calls
                 except json.JSONDecodeError:
@@ -487,6 +514,24 @@ class ContentParsingService:
             _normalize_segment(core_only(segment)) for segment in prepared_segments
         ]
 
+        if dropped:
+            review_notes.append(
+                {
+                    "code": "question_unusable",
+                    "textRetained": True,
+                    "questionCount": len(dropped),
+                    "questions": dropped,
+                    "message": (
+                        "Nevo could not turn "
+                        f"{'these questions' if len(dropped) > 1 else 'this question'} "
+                        "into something a child can answer and have marked, so "
+                        f"{'they were' if len(dropped) > 1 else 'it was'} left out "
+                        "of the lesson. The rest of the lesson is unaffected. An "
+                        "open question with no single right answer is the usual "
+                        "reason; add it back as a discussion point if you want it."
+                    ),
+                }
+            )
         review_notes.extend(_in_segment_order(media_notes, segments))
         parsed = ParsedLesson(
             title=title or request.title,
@@ -1027,6 +1072,50 @@ def _mark_source_authorship(payload: dict[str, object], source: str) -> None:
             else:
                 question.pop("masteryLevel", None)
                 question.pop("masteryLevelAuthoredBy", None)
+
+
+def _drop_unusable_questions(payload: dict) -> list[str]:
+    """Remove questions no renderer can take, and say which they were.
+
+    Returns the prompt of each one dropped, so the teacher is told what was
+    left out rather than quietly getting a shorter lesson. An upload losing
+    a question silently is the failure the ai_parse_fallback note exists to
+    prevent, and this is the same hazard by a different route.
+
+    A question is dropped only after targeted repair has already failed on
+    it three times. The commonest case is an open question a teacher wrote
+    for discussion - there is no answer to mark against, so nothing can ask
+    it of a child and score it.
+    """
+
+    dropped: list[str] = []
+
+    def _usable(question: object) -> bool:
+        if not isinstance(question, dict):
+            dropped.append("a question that was not structured")
+            return False
+        try:
+            checkpoint_payloads([question], segment_key="probe", strict=True)
+        except (UnclassifiableQuestionError, TypeError, ValueError):
+            label = " ".join(str(question.get("prompt") or "").split())[:160]
+            dropped.append(label or str(question.get("id") or "an unnamed question"))
+            return False
+        return True
+
+    # Both spellings, as _mark_source_authorship reads them: the model
+    # returns one or the other and filtering only one would leave the
+    # unusable question in place and the parse still failing.
+    for segment in payload.get("segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        for key in ("comprehension_checkpoints", "comprehensionCheckpoints"):
+            questions = segment.get(key)
+            if isinstance(questions, list):
+                segment[key] = [q for q in questions if _usable(q)]
+    assessment = payload.get("assessment")
+    if isinstance(assessment, list):
+        payload["assessment"] = [q for q in assessment if _usable(q)]
+    return dropped
 
 
 def _question_list(value):

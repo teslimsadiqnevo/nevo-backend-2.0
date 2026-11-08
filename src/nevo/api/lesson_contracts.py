@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 from datetime import datetime
 from typing import Annotated, Literal
@@ -1366,7 +1367,28 @@ def without_held_answers(value: object) -> object:
     return value
 
 
+#: Whether an online student read has its marking data removed.
+#:
+#: Off, deliberately and temporarily, from 8 November. The strip is right -
+#: a child's device has no business holding the answers - but the live
+#: student app drops any check that has no answer key, so stripping them
+#: meant no child saw any question at all. An empty lesson is a worse
+#: failure than an answer key on the device, and the app fix is in flight.
+#:
+#: Turn it back on with STRIP_STUDENT_ANSWERS=true the day that ships. It
+#: is an environment variable rather than a code change so the two can be
+#: sequenced without waiting on a release, and it must not stay off: with
+#: it off, answerKey, acceptedAnswers and explanation all reach the device.
+STRIP_STUDENT_ANSWERS = os.environ.get("STRIP_STUDENT_ANSWERS", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+
 def online_student_lesson(value: dict[str, object]) -> dict[str, object]:
+    if not STRIP_STUDENT_ANSWERS:
+        return dict(value)
     result = dict(value)
     result["assessment"] = without_held_answers(result.get("assessment") or [])
     segments = []

@@ -289,12 +289,25 @@ class ContentParsingService:
                         from nevo.content_parsing.question_repair import repair_questions
 
                         calls += 1
-                        candidate = await repair_questions(
-                            candidate,
-                            source=_pass_source(chunks, index),
-                            gateway=self._ai_gateway,
-                            requester_user_id=requested_by_user_id,
-                        )
+                        try:
+                            candidate = await repair_questions(
+                                candidate,
+                                source=_pass_source(chunks, index),
+                                gateway=self._ai_gateway,
+                                requester_user_id=requested_by_user_id,
+                            )
+                        except UnclassifiableQuestionError:
+                            # Repair gave up rather than returning something
+                            # still unusable. 859fb02 only handled the second
+                            # of those, because this call sits inside the
+                            # except block it was catching from - so the
+                            # raise went straight past it and Pressure.pdf
+                            # still lost three uploads on 8 November.
+                            #
+                            # candidate keeps its pre-repair value, since the
+                            # assignment never happened, and that is what the
+                            # drop below works on.
+                            pass
                         _mark_source_authorship(candidate, chunks[index - 1])
                         try:
                             _segments_from_payload_list(candidate, sequence_offset=0)

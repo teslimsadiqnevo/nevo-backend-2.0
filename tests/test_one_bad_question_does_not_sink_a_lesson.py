@@ -21,6 +21,7 @@ from __future__ import annotations
 import inspect
 
 from nevo.api.lesson_contracts import UnclassifiableQuestionError, checkpoint_payloads
+from nevo.content_parsing import service
 from nevo.content_parsing.service import _drop_unusable_questions
 
 OPEN = {"id": "q1", "prompt": "Why does an egg float in very salty water?"}
@@ -87,4 +88,31 @@ def test_the_parse_no_longer_dies_on_one_of_them() -> None:
 
     source = inspect.getsource(service)
     # Dropped after repair has had its three goes, not instead of repair.
+    assert "_drop_unusable_questions(candidate)" in source
+
+
+def test_repair_giving_up_is_caught_as_well_as_repair_failing() -> None:
+    """Two ways repair ends badly, and 859fb02 only handled one.
+
+    repair_questions either returns a payload that still will not render, or
+    raises "Unclassifiable question after three targeted corrections" and
+    gives up. The first was handled. The second was not, because the call
+    sits inside the except block it would have been caught by, so the raise
+    went straight past.
+
+    Pressure.pdf lost three uploads to it on 8 November, after the fix that
+    was supposed to stop exactly that.
+    """
+
+    source = inspect.getsource(service.ContentParsingService.parse)
+    repair = source[source.index("repair_questions("):]
+    # The call itself is guarded, not only what comes after it.
+    assert "except UnclassifiableQuestionError:" in repair[: repair.index("_mark_source_authorship")]
+
+
+def test_the_unrepaired_payload_is_what_gets_dropped_from() -> None:
+    # When repair raises, the assignment never happens, so candidate still
+    # holds the pre-repair payload - which is the one with the questions to
+    # drop in it.
+    source = inspect.getsource(service.ContentParsingService.parse)
     assert "_drop_unusable_questions(candidate)" in source

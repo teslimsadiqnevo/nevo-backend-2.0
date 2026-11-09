@@ -70,7 +70,7 @@ class AuthService:
         await self._rate_limiter.check(identity_digest, ip_digest)
 
         user = await self._users.find_by_email(normalized_email)
-        verified = self._credential_hasher.verify_password(
+        verified = await self._credential_hasher.verify_password_async(
             user.password_hash if user else None,
             password,
         )
@@ -123,7 +123,7 @@ class AuthService:
             # one would sign them into the wrong child's records.
             raise SchoolCodeRequiredError
         user = candidates[0] if candidates else None
-        verified = self._credential_hasher.verify_password(
+        verified = await self._credential_hasher.verify_password_async(
             user.password_hash if user else None,
             password,
         )
@@ -159,7 +159,7 @@ class AuthService:
             normalized_school_code,
             normalized_identifier,
         )
-        verified = self._credential_hasher.verify_pin(
+        verified = await self._credential_hasher.verify_pin_async(
             user.pin_hash if user else None,
             pin,
         )

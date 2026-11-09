@@ -259,7 +259,7 @@ async def set_pin_and_start(
         import secrets
 
         student.login_identifier = f"NV-{secrets.token_hex(3).upper()}"
-    student.pin_hash = credential_hasher().hash_pin(payload.pin)
+    student.pin_hash = await credential_hasher().hash_pin_async(payload.pin)
     student.pin_cleared_at = None
     student.auth_method = AuthMethod.PIN
     student.status = UserStatus.ACTIVE
@@ -498,7 +498,7 @@ async def set_own_pin(
         )
     from nevo.api.product_auth import credential_hasher
 
-    student.pin_hash = credential_hasher().hash_pin(payload.pin)
+    student.pin_hash = await credential_hasher().hash_pin_async(payload.pin)
     student.pin_cleared_at = None
     student.auth_method = AuthMethod.PIN
     student.status = UserStatus.ACTIVE

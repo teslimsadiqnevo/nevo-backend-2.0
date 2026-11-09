@@ -516,7 +516,7 @@ async def set_pin(
         failures, oldest = await _pin_change_pause(session, identity_digest, ip_digest)
         if failures >= PIN_CHANGE_MAX_ATTEMPTS and oldest is not None:
             raise _pin_change_throttled(oldest + PIN_CHANGE_WINDOW)
-        if user.pin_hash is not None and not hasher.verify_pin(
+        if user.pin_hash is not None and not await hasher.verify_pin_async(
             user.pin_hash, payload.current_pin or ""
         ):
             now = datetime.now(UTC)
@@ -542,7 +542,7 @@ async def set_pin(
                     ),
                 },
             )
-        user.pin_hash = hasher.hash_pin(payload.pin)
+        user.pin_hash = await hasher.hash_pin_async(payload.pin)
         user.auth_method = AuthMethod.PIN
         await session.execute(
             delete(AuthLoginAttempt).where(
@@ -583,7 +583,7 @@ async def set_pin(
         # no consumer could match, so the mastery engine's reading seed fell
         # through to its default for every child ever created here. SCRUM-175.
         age_band=band_for_age(payload.age),
-        pin_hash=credential_hasher().hash_pin(payload.pin),
+        pin_hash=await credential_hasher().hash_pin_async(payload.pin),
         # Same rule as the other two routes into a roster: active only when
         # the school is covered by an invoice that is not overdue. This one
         # activated unconditionally, so a child joining from an invite link
@@ -713,7 +713,7 @@ async def complete_password_reset(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Reset link is invalid or expired",
         )
-    user.password_hash = credential_hasher().hash_password(payload.password)
+    user.password_hash = await credential_hasher().hash_password_async(payload.password)
     user.auth_method = AuthMethod.EMAIL_PASSWORD
     record.used_at = now
     await session.execute(
@@ -794,7 +794,7 @@ async def change_password(
 ) -> dict[str, str]:
     user = await actor_user(session, principal)
     hasher = credential_hasher()
-    if not hasher.verify_password(user.password_hash, payload.current_password):
+    if not await hasher.verify_password_async(user.password_hash, payload.current_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
@@ -802,7 +802,7 @@ async def change_password(
                 "message": "The current password did not match.",
             },
         )
-    user.password_hash = hasher.hash_password(payload.new_password)
+    user.password_hash = await hasher.hash_password_async(payload.new_password)
     if payload.end_other_sessions:
         await session.execute(
             update(AuthSession)
@@ -866,7 +866,7 @@ async def register_school(
         first_name=names[0],
         last_name=names[1] if len(names) > 1 else None,
         email=str(payload.email).casefold(),
-        password_hash=credential_hasher().hash_password(payload.password),
+        password_hash=await credential_hasher().hash_password_async(payload.password),
         status=UserStatus.ACTIVE,
     )
     # These models intentionally use raw UUID foreign keys rather than ORM
@@ -1473,9 +1473,11 @@ async def accept_join(
         email=record.email,
         login_identifier=identifier if record.role == "student" else None,
         password_hash=(
-            credential_hasher().hash_password(payload.password) if payload.password else None
+            await credential_hasher().hash_password_async(payload.password)
+            if payload.password
+            else None
         ),
-        pin_hash=credential_hasher().hash_pin(payload.pin) if payload.pin else None,
+        pin_hash=await credential_hasher().hash_pin_async(payload.pin) if payload.pin else None,
         # An invite-link child had no age on their account at all: the age was
         # used once to pick a baseline band and thrown away, so anything that
         # bands by age could not see them. A date of birth would be better and
@@ -1486,7 +1488,7 @@ async def accept_join(
     if not new_user:
         user.first_name = payload.first_name or record.first_name
         user.last_name = payload.last_name or record.last_name
-        user.password_hash = credential_hasher().hash_password(payload.password)
+        user.password_hash = await credential_hasher().hash_password_async(payload.password)
         user.status = UserStatus.ACTIVE
     else:
         session.add(user)

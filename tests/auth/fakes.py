@@ -195,6 +195,23 @@ class FakeCredentialHasher:
     def verify_pin(pin_hash: str | None, pin: str) -> bool:
         return pin_hash == f"pin:{pin}"
 
+    # The real hasher does Argon2 off the event loop, because a verify on the
+    # loop stops every other request in the process while it runs. Nothing
+    # here is expensive, so these just await the same answer - what matters is
+    # that a handler written against the async form works against this fake.
+
+    async def verify_password_async(self, password_hash: str | None, password: str) -> bool:
+        return self.verify_password(password_hash, password)
+
+    async def verify_pin_async(self, pin_hash: str | None, pin: str) -> bool:
+        return self.verify_pin(pin_hash, pin)
+
+    async def hash_password_async(self, password: str) -> str:
+        return self.hash_password(password)
+
+    async def hash_pin_async(self, pin: str) -> str:
+        return self.hash_pin(pin)
+
 
 class DeterministicTokenService:
     def __init__(self) -> None:

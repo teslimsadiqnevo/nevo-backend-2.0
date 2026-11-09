@@ -99,7 +99,12 @@ from nevo.notifications.email import EmailSettings, ResendEmailDelivery
 from nevo.notifications.worker import NotificationEmailWorker
 from nevo.ops.config import OpsSettings
 from nevo.ops.jobs import ScheduledJobRunner
-from nevo.ops.provider_health import LESSON_AUDIO, LESSON_IMAGES, PROVIDERS
+from nevo.ops.provider_health import (
+    LESSON_AUDIO,
+    LESSON_IMAGES,
+    PROVIDERS,
+    needs_a_human_with_a_card,
+)
 from nevo.ops.scheduled_jobs import build_scheduled_jobs
 from nevo.ops.schema_version import schema_state, warn_if_behind
 from nevo.ops.wiring import build_heartbeat_loop, build_self_ping_loop
@@ -512,6 +517,15 @@ async def health(request: Request) -> dict[str, str]:
         "lessonAudioLastCall": PROVIDERS.state(LESSON_AUDIO),
         "lessonImagesLastFailure": PROVIDERS.last_failure(LESSON_IMAGES) or "",
         "lessonAudioLastFailure": PROVIDERS.last_failure(LESSON_AUDIO) or "",
+        # Told apart because the remedy is different. A failing provider may
+        # be back in ten minutes; one out of credit needs somebody to pay,
+        # and until they do every lesson uploaded loses that feature.
+        "lessonImagesNeedsTopUp": needs_a_human_with_a_card(
+            PROVIDERS.last_failure(LESSON_IMAGES)
+        ),
+        "lessonAudioNeedsTopUp": needs_a_human_with_a_card(
+            PROVIDERS.last_failure(LESSON_AUDIO)
+        ),
     }
 
 

@@ -15,13 +15,35 @@ moment nobody was uploading. What a parse already learns is enough.
 
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 
+logger = logging.getLogger(__name__)
+
 #: Long enough that a quiet night does not read as an outage, short enough that
 #: yesterday's success does not vouch for today.
 STALE_AFTER_HOURS = 24
+
+#: Failures that no retry will clear, because somebody has to pay.
+#:
+#: Worth telling apart from an outage: a 401 or a 500 may well be gone in ten
+#: minutes, while "credit_balance_exhausted" will still be there tomorrow and
+#: every lesson uploaded in between is missing its audio. The audio provider
+#: ran out of credit before the 8 November demo and the first anyone knew was
+#: a child opening a lesson with no narration.
+BILLING = re.compile(
+    r"credit|balance|quota|billing|payment|insufficient.funds|subscription|"
+    r"exceeded.your.current|402",
+    re.IGNORECASE,
+)
+
+
+def needs_a_human_with_a_card(detail: str | None) -> bool:
+    """Whether this failure is about money rather than about the service."""
+    return bool(detail and BILLING.search(detail))
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,9 +71,30 @@ class ProviderHealth:
 
     def record(self, provider: str, *, ok: bool, detail: str | None = None) -> None:
         with self._lock:
+            previous = self._outcomes.get(provider)
             self._outcomes[provider] = Outcome(
                 ok=ok, at=datetime.now(UTC), detail=(detail or None) and detail[:200]
             )
+        # Said on the change, not on every call. Recording the outcome was
+        # enough to make /health honest, but nobody watches /health, so the
+        # audio provider sat out of credit until a child opened a lesson with
+        # no narration. A line on the way down and a line on the way back up
+        # is something a log alert can be pointed at; a line per call is noise
+        # that an alert would have to be taught to ignore.
+        was_working = previous is None or previous.ok
+        if ok and not was_working:
+            logger.warning("Provider recovered provider=%s", provider)
+        elif not ok and was_working:
+            if needs_a_human_with_a_card(detail):
+                logger.error(
+                    "PROVIDER OUT OF CREDIT provider=%s detail=%s - no retry will "
+                    "clear this and every lesson uploaded until it is topped up "
+                    "loses this feature",
+                    provider,
+                    detail,
+                )
+            else:
+                logger.error("Provider failing provider=%s detail=%s", provider, detail)
 
     def state(self, provider: str) -> str:
         """``working``, ``failing``, or ``unknown``.

@@ -1102,16 +1102,25 @@ async def _teacher_recent_activity(
     class_ids: list[UUID],
     student_ids: set[UUID],
 ) -> list[dict[str, object]]:
-    session_rows = (
+    # From lesson_progress, not from ended sittings. A sitting ends whenever
+    # a child stops, and "Leave for now" ends one, so every ended sitting was
+    # being announced to a teacher as a completed lesson: Tunde left Speed
+    # partway twice and Home told his teacher he had completed it twice. In
+    # production this read 88 ended sittings against 14 completed lessons.
+    #
+    # lesson_progress carries completed_at and is unique on (student, lesson),
+    # so this is both "actually finished" and "once per lesson" without any
+    # de-duplicating here.
+    completed_rows = (
         await session.execute(
-            select(LessonSession, User, Lesson)
-            .join(User, User.id == LessonSession.student_id)
-            .outerjoin(Lesson, Lesson.id == LessonSession.lesson_id)
+            select(LessonProgress, User, Lesson)
+            .join(User, User.id == LessonProgress.student_id)
+            .outerjoin(Lesson, Lesson.id == LessonProgress.lesson_id)
             .where(
-                LessonSession.student_id.in_(student_ids),
-                LessonSession.ended_at.is_not(None),
+                LessonProgress.student_id.in_(student_ids),
+                LessonProgress.completed_at.is_not(None),
             )
-            .order_by(LessonSession.ended_at.desc())
+            .order_by(LessonProgress.completed_at.desc())
             .limit(12)
         )
     ).all()
@@ -1137,13 +1146,15 @@ async def _teacher_recent_activity(
         )
     ).all()
     activity: list[dict[str, object]] = []
-    for lesson_session, student, lesson in session_rows:
+    for progress, student, lesson in completed_rows:
         student_name = student.first_name or "A student"
         activity.append(
             {
-                "id": f"session:{lesson_session.id}",
+                # Keyed on the lesson rather than the sitting, so a child who
+                # finished over two sittings appears once.
+                "id": f"lesson-completed:{progress.id}",
                 "activityType": "lesson_completed",
-                "occurredAt": lesson_session.ended_at,
+                "occurredAt": progress.completed_at,
                 "title": f"{student_name} completed a lesson",
                 "detail": lesson.title if lesson else "Lesson activity",
                 "studentId": str(student.id),

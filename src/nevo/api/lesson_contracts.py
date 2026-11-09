@@ -41,6 +41,54 @@ class UnclassifiableQuestionError(ValueError):
         super().__init__(message + (f' Question: "{question_label}".' if question_label else ""))
 
 
+#: The question types the student app can actually put in front of a child.
+#:
+#: Narrower than what this module will render, and that gap is a real bug
+#: rather than a nicety. Heat Transfer had four checks a teacher read and
+#: approved; the class saw one. The other three were valid here, passed
+#: review, and were then dropped by the app at delivery with nothing said to
+#: anybody - the teacher believed she had approved four questions that no
+#: child was ever asked.
+#:
+#: So "valid" and "deliverable" are now two different tests. This is the
+#: second one, and it is deliberately one place: when the app learns to
+#: render another type, widening this set is the whole change.
+#:
+#: Lydia's ruling, 9 November: single choice with two or more options.
+APP_DELIVERABLE_ANSWER_TYPES = frozenset({"single_choice"})
+
+#: A choice with one option is not a choice.
+MIN_CHOICE_OPTIONS = 2
+
+
+def app_can_deliver(question: object) -> bool:
+    """Whether the student app can ask this question as it stands.
+
+    Takes an already-rendered question, so answerType and options are in the
+    shape the app receives rather than whatever the model wrote.
+    """
+    if not isinstance(question, dict):
+        return False
+    if question.get("answerType") not in APP_DELIVERABLE_ANSWER_TYPES:
+        return False
+    options = question.get("options")
+    if not isinstance(options, list) or len(options) < MIN_CHOICE_OPTIONS:
+        return False
+    # An option a child cannot be shown or cannot be marked against is not an
+    # option, so a malformed list does not count towards the two.
+    usable = [
+        option
+        for option in options
+        if isinstance(option, dict) and option.get("value") is not None and option.get("label")
+    ]
+    if len(usable) < MIN_CHOICE_OPTIONS:
+        return False
+    key = question.get("answerKey")
+    keys = key if isinstance(key, list) else [key]
+    values = {option["value"] for option in usable}
+    return bool(keys) and all(item in values for item in keys)
+
+
 def safety_reviewed_visual(value):
     return (
         value

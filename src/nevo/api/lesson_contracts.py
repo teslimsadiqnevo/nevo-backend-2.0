@@ -89,6 +89,50 @@ def app_can_deliver(question: object) -> bool:
     return bool(keys) and all(item in values for item in keys)
 
 
+#: Fields a model uses when it writes a label as an object instead of a
+#: string, in the order we would rather read them.
+_LABEL_TEXT_FIELDS = ("text", "label", "caption", "value", "name", "title")
+
+
+def label_text(item: object) -> str:
+    """The words on a scaffold label, whatever shape the model wrote it in.
+
+    A label is supposed to be a string. When the model returns an object -
+    {"id": "label_total", "position": "top", "text": "Total: 120 units ..."} -
+    calling str() on it rendered the whole Python dict, and in Speed segment 4
+    a child read:
+
+        {'id': 'label_total', 'position': 'top', 'text': 'Total: 120 units
+        divided into 2 groups of 60'}
+
+    Applied at the read as well as the write, so the lessons already carrying
+    a dict repr show the words rather than the code.
+    """
+    if isinstance(item, dict):
+        for field in _LABEL_TEXT_FIELDS:
+            found = item.get(field)
+            if isinstance(found, str) and found.strip():
+                return " ".join(found.split())
+        # An object with nothing readable in it is not a label. Dropped rather
+        # than rendered, because a child reading "{}" is worse than a picture
+        # with one fewer label on it.
+        return ""
+    if item is None or isinstance(item, (list, tuple, set, bool)):
+        return ""
+    text = str(item).strip()
+    # A string that is itself a dict repr, which is what got stored while the
+    # write side was stringifying objects.
+    if text.startswith("{") and text.endswith("}"):
+        import ast
+
+        try:
+            parsed = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return ""
+        return label_text(parsed) if isinstance(parsed, dict) else ""
+    return " ".join(text.split())
+
+
 def safety_reviewed_visual(value):
     return (
         value
@@ -1151,7 +1195,12 @@ class CalculationScaffold(BaseModel):
             return value
         item = dict(value)
         marks = item.get("marks") if isinstance(item.get("marks"), list) else []
-        labels = item.get("labels") if isinstance(item.get("labels"), list) else []
+        raw_labels = item.get("labels") if isinstance(item.get("labels"), list) else []
+        # Stored lessons hold labels that were stringified from objects, so
+        # the words are recovered here rather than after a backfill.
+        labels = [written for written in (label_text(one) for one in raw_labels) if written]
+        if labels != raw_labels:
+            item["labels"] = labels
         if "markIds" not in item and "mark_ids" not in item:
             item["markIds"] = [f"mark-{index}" for index in range(1, len(marks) + 1)]
         if "labelIds" not in item and "label_ids" not in item:

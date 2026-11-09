@@ -12,6 +12,8 @@ these in them and a child should stop seeing them today.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from nevo.content_parsing.concept_names import readable_concept_name
@@ -32,9 +34,7 @@ def test_nothing_chidi_read_survives_the_read(key: str) -> None:
     assert out != key
     assert "_" not in out
     # No capital in the middle of a word, which is what made them look like code.
-    assert not any(
-        left.islower() and right.isupper() for left, right in zip(out, out[1:], strict=False)
-    )
+    assert not any(left.islower() and right.isupper() for left, right in itertools.pairwise(out))
 
 
 def test_the_five_read_as_a_sentence_a_child_can_follow() -> None:

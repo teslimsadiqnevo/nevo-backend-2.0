@@ -1674,7 +1674,7 @@ def _manipulative(value: object) -> dict[str, object] | None:
         "kind": kind,
         "parts": parts,
         "rows": rows,
-        "labels": [str(item).strip() for item in _string_list(value.get("labels"))][:100],
+        "labels": _labels(value.get("labels")),
         "pieceIds": piece_ids[: parts * rows]
         or [f"piece-{index}" for index in range(1, parts * rows + 1)],
     }
@@ -1706,7 +1706,7 @@ def _calculation_scaffold(value: object) -> dict[str, object] | None:
         if isinstance(raw_marks, list)
         else []
     )
-    labels = [str(item).strip() for item in _string_list(value.get("labels"))][:100]
+    labels = _labels(value.get("labels"))
     mark_ids = [
         str(item).strip()
         for item in (value.get("markIds") if isinstance(value.get("markIds"), list) else [])
@@ -2278,6 +2278,20 @@ def _review_reasons(value: object) -> list[str]:
             reason if reason in known else SegmentReviewReason.MODEL_FLAGGED_FOR_REVIEW.value
         )
     return list(dict.fromkeys(reasons))
+
+
+def _labels(value: object) -> list[str]:
+    """Scaffold labels as words, dropping anything with no words in it.
+
+    The model writes a label as a string or as an object carrying its text
+    and position. Stringifying the object put a Python dict in front of a
+    child in Speed segment 4, so the text is taken out of it here.
+    """
+    from nevo.api.lesson_contracts import label_text
+
+    if not isinstance(value, list):
+        return []
+    return [written for written in (label_text(item) for item in value) if written][:100]
 
 
 def _string_list(value: object) -> Iterable[str]:

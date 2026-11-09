@@ -21,8 +21,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from nevo.ai_gateway.entities import AiGenerationRequest, AiRequestContext
 from nevo.ai_gateway.errors import AiGatewayError
@@ -1028,6 +1029,7 @@ async def _invalidate_signoffs(session, lesson_id, kind):
         )
         .values(invalidated_at=datetime.now(UTC))
     )
+    forget_approvals(session, lesson_id)
 
 
 async def _review_material(session, lesson):
@@ -1135,7 +1137,61 @@ def _checks_material(segments, lesson=None, concept_names=None):
     return material, views
 
 
+#: Per-request memo for the two approval lookups below.
+#:
+#: Both load every segment of the lesson and re-render every question in it
+#: to work out which ones a person stands behind. Answering one check calls
+#: them three times for the same lesson - once to build the question, once
+#: inside the comprehension gate, once in the mastery engine - and a nine
+#: section lesson pays for all of it while the child waits to see a tick.
+#:
+#: The session is request-scoped, so this cache cannot outlive one call and
+#: cannot be read by another child.
+#:
+#: Invalidation is a flush hook rather than a call at each write, because the
+#: answer depends on the lesson's content as well as its sign-offs, and the
+#: guided-steps review writes the sign-off and then edits the segments. Any
+#: call placed by hand would be correct at the sign-off and stale eight lines
+#: later. The hook fires whenever something that feeds the answer is about to
+#: be written, whoever wrote it, so a review and a read in the same request
+#: cannot disagree.
+_APPROVALS_MEMO = "nevo_approvals_memo"
+
+#: Anything approved_check_ids or approved_level_ids reads.
+_APPROVAL_INPUTS = (Lesson, LessonSegment, LessonReviewSignoff)
+
+
+def forget_approvals(session, lesson_id=None) -> None:
+    """Drop memoised approvals after a sign-off or lesson content changes."""
+    memo = session.info.get(_APPROVALS_MEMO)
+    if not memo:
+        return
+    if lesson_id is None:
+        memo.clear()
+        return
+    for kind in ("checks", "levels"):
+        memo.pop((kind, str(lesson_id)), None)
+
+
+@event.listens_for(Session, "before_flush")
+def _forget_approvals_on_write(session, flush_context, instances) -> None:
+    if not session.info.get(_APPROVALS_MEMO):
+        return
+    for item in (*session.new, *session.dirty, *session.deleted):
+        if isinstance(item, _APPROVAL_INPUTS):
+            forget_approvals(session)
+            return
+
+
 async def approved_check_ids(session, lesson_id):
+    memo = session.info.setdefault(_APPROVALS_MEMO, {})
+    key = ("checks", str(lesson_id))
+    if key not in memo:
+        memo[key] = await _approved_check_ids(session, lesson_id)
+    return memo[key]
+
+
+async def _approved_check_ids(session, lesson_id):
     from nevo.api.lesson_contracts import checkpoint_payloads
     segments = list(await session.scalars(
         select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
@@ -1193,6 +1249,14 @@ async def approved_level_ids(session, lesson_id):
     Keys match approved_check_ids: (owner id, question id), where the owner of an
     end-of-lesson question is the lesson itself.
     """
+    memo = session.info.setdefault(_APPROVALS_MEMO, {})
+    key = ("levels", str(lesson_id))
+    if key not in memo:
+        memo[key] = await _approved_level_ids(session, lesson_id)
+    return memo[key]
+
+
+async def _approved_level_ids(session, lesson_id):
     lesson = await session.get(Lesson, lesson_id)
     if lesson is None:
         return set()

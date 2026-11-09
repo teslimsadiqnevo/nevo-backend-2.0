@@ -4,6 +4,7 @@ import logging
 import secrets
 from datetime import UTC, datetime, time, timedelta
 from io import BytesIO
+from time import perf_counter
 from typing import Annotated, Literal
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -1804,6 +1805,18 @@ async def save_lesson_question_attempt(
     correct.
     """
     del consent
+    # Stage timings for SCRUM-315. The whole-request timer in main.py says
+    # this route is slow; it cannot say which part. Deciding whether the
+    # mastery engine belongs off the response path is a restructure of the
+    # hottest write in the product, and it should rest on a measurement
+    # rather than on a reading of the code. Logged only when the request is
+    # already slow, so a normal answer writes nothing.
+    stages: dict[str, float] = {}
+    started = perf_counter()
+
+    def stage(name: str) -> None:
+        stages[name] = (perf_counter() - started) * 1000
+
     actor, lesson = await _lesson_for_actor(lesson_id, principal, session)
     if actor.role is not UserRole.STUDENT:
         raise HTTPException(status_code=403, detail="Student account required")
@@ -1913,12 +1926,32 @@ async def save_lesson_question_attempt(
     )
     session.add(record)
     await session.flush()
+    stage("marked")
     if segment and not question.get("isMiniStep"):
         await note_attempt(session, lesson_session, segment, record)
+    stage("noted")
     await apply_marked_attempt(session, actor, record)
+    stage("mastery")
     await session.commit()
     await session.refresh(record)
-    return await _attempt_payload_with_outcome(session, record)
+    stage("committed")
+    payload_out = await _attempt_payload_with_outcome(session, record)
+    stage("payload")
+    if stages["payload"] >= 1000:
+        logger.warning(
+            "Slow answer lesson=%s question=%s total_ms=%.0f "
+            "to_marked_ms=%.0f note_ms=%.0f mastery_ms=%.0f "
+            "commit_ms=%.0f payload_ms=%.0f",
+            lesson.id,
+            payload.question_id,
+            stages["payload"],
+            stages["marked"],
+            stages["noted"] - stages["marked"],
+            stages["mastery"] - stages["noted"],
+            stages["committed"] - stages["mastery"],
+            stages["payload"] - stages["committed"],
+        )
+    return payload_out
 
 
 @router.get(

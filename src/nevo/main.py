@@ -38,6 +38,7 @@ from nevo.api.intelligence import router as intelligence_router
 from nevo.api.learning_readiness import router as learning_readiness_router
 from nevo.api.learning_support import router as learning_support_router
 from nevo.api.learning_support_records import router as learning_support_records_router
+from nevo.api.lesson_contracts import STRIP_STUDENT_ANSWERS
 from nevo.api.lesson_review import router as lesson_review_router
 from nevo.api.licences import router as licences_router
 from nevo.api.mastery import router as mastery_router
@@ -129,6 +130,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # code fails at the first write and nowhere earlier, which is how a
     # deployment ran for two days writing a column the database did not have.
     app.state.schema_state = await warn_if_behind(engine)
+    # Said at every boot while it is off, because it is meant to be
+    # temporary and the only thing that makes it visible is this line.
+    # Off means answerKey, acceptedAnswers and explanation reach a
+    # child's device; nothing else in the logs or the API shows that.
+    if not STRIP_STUDENT_ANSWERS:
+        logger.warning(
+            "STRIP_STUDENT_ANSWERS is off: online student lessons ship answer "
+            "keys, accepted answers and explanations to the child's device. "
+            "This is a temporary measure from 8 November pending the student "
+            "app release that renders a check with no key. Set "
+            "STRIP_STUDENT_ANSWERS=true once that is live."
+        )
     auth_settings = AuthSettings()  # type: ignore[call-arg]
     credential_hasher = build_credential_hasher(auth_settings)
     app.state.auth_service = build_auth_service(

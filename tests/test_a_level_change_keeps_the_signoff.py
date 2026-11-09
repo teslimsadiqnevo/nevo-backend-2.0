@@ -84,6 +84,22 @@ def test_the_stored_snapshot_is_the_projection_too() -> None:
     assert "digest = _hash(signoff_material)" in source
 
 
+def _comparison_source(name: str) -> str:
+    """The source that actually takes the hash for one of the approval reads.
+
+    The public name may be a thin memo wrapper around a private
+    implementation, so this follows that one step rather than asserting on
+    whichever function happens to carry the public name today. Pinning the
+    name is the same mistake as pinning the mechanism: the question is
+    whether the comparison uses the tolerant hash, not where it lives.
+    """
+    body = inspect.getsource(getattr(lesson_review, name))
+    implementation = getattr(lesson_review, f"_{name}", None)
+    if implementation is not None:
+        body += inspect.getsource(implementation)
+    return body
+
+
 def test_what_approval_writes_is_what_the_reads_compare() -> None:
     """The half-done version of SCRUM-308 withheld every check from children.
 
@@ -104,8 +120,7 @@ def test_what_approval_writes_is_what_the_reads_compare() -> None:
     # pinning the mechanism is what let the reads drift the first time.
     assert "checks_signoff_material" in inspect.getsource(lesson_review.approve_all_checks)
     for name in ("approved_check_ids", "approved_level_ids"):
-        body = inspect.getsource(getattr(lesson_review, name))
-        assert "checks_signoff_hashes" in body, name
+        assert "checks_signoff_hashes" in _comparison_source(name), name
     assert "checks_signoff_material" in inspect.getsource(lesson_review.checks_signoff_hashes)
 
 
@@ -177,7 +192,6 @@ def test_a_real_edit_still_invalidates_the_approval() -> None:
 def test_every_checks_comparison_uses_the_tolerant_one() -> None:
     source = inspect.getsource(lesson_review)
     for name in ("approved_check_ids", "approved_level_ids"):
-        body = inspect.getsource(getattr(lesson_review, name))
-        assert "checks_signoff_hashes" in body, name
+        assert "checks_signoff_hashes" in _comparison_source(name), name
     assert "record.kind == \"checks\"" in inspect.getsource(lesson_review._current_signoff)
     assert source.count("checks_signoff_hashes(") >= 4

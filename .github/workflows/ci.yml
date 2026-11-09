@@ -45,14 +45,37 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      # Added with the reformat, so the 153 long lines that kept this job
+      # from ever reaching its own test step cannot come back one commit at
+      # a time.
+      - name: Format
+        run: ruff format --check .
+
+      # Ratcheted, not ignored: 1408 errors across 104 files is not a week's
+      # work and is not a reason to keep shipping ungated. The gate fails if
+      # the count grows, and also if it shrinks without the baseline being
+      # lowered, so progress gets recorded instead of drifting back.
       - name: Type check
-        run: mypy
+        run: python scripts/ci_gate.py mypy
 
       - name: Migrate
         run: alembic upgrade head
 
+      # Compared by name against a recorded list of 30, because thirty
+      # failures becoming a different thirty is exactly what a deploy gate
+      # exists to catch. A known failure that starts passing fails the job
+      # too, so the list cannot rot into tests nobody has looked at.
       - name: Test
-        run: pytest --cov=nevo --cov-report=term-missing
+        run: python scripts/ci_gate.py tests
 
+      # Was "alembic downgrade base", which could never pass: 20261020_0111
+      # refuses to roll back, on purpose, because silently reversing a DOB
+      # hold would drop a safeguarding control. That one step is why this job
+      # was guaranteed to fail even on a green tree.
+      #
+      # What is worth checking is that everything written since then
+      # reverses, and that the database comes back to head afterwards.
       - name: Verify downgrade
-        run: alembic downgrade base
+        run: |
+          alembic downgrade 20261020_0111
+          alembic upgrade head

@@ -32,4 +32,3 @@ class SignalIngestionService:
             session_id=batch.session.id,
             accepted_events=len(batch.events),
         )
-

@@ -16,11 +16,19 @@ depends_on = None
 
 def upgrade():
     op.add_column("admins", sa.Column("senior_promoted_by", sa.Uuid(), nullable=True))
-    op.add_column("admins", sa.Column("senior_promoted_by_name", sa.String(length=250), nullable=True))
-    op.add_column("admins", sa.Column("senior_promoted_at", sa.DateTime(timezone=True), nullable=True))
+    op.add_column(
+        "admins", sa.Column("senior_promoted_by_name", sa.String(length=250), nullable=True)
+    )
+    op.add_column(
+        "admins", sa.Column("senior_promoted_at", sa.DateTime(timezone=True), nullable=True)
+    )
     op.create_foreign_key(
-        "fk_admins_senior_promoted_by_users", "admins", "users",
-        ["senior_promoted_by"], ["id"], ondelete="SET NULL",
+        "fk_admins_senior_promoted_by_users",
+        "admins",
+        "users",
+        ["senior_promoted_by"],
+        ["id"],
+        ondelete="SET NULL",
     )
 
 

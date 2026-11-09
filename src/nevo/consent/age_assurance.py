@@ -113,31 +113,35 @@ async def notify_school(session, check, now):
 
 async def notify_linked_parents(session, check, now):
     """The existing notification worker also emails each linked parent account."""
-    parents = list(await session.scalars(
-        select(User)
-        .join(ParentLink, ParentLink.parent_id == User.id)
-        .where(
-            ParentLink.student_id == check.student_id,
-            ParentLink.school_id == check.school_id,
-            User.role == UserRole.PARENT_GUARDIAN,
-            User.status == UserStatus.ACTIVE,
+    parents = list(
+        await session.scalars(
+            select(User)
+            .join(ParentLink, ParentLink.parent_id == User.id)
+            .where(
+                ParentLink.student_id == check.student_id,
+                ParentLink.school_id == check.school_id,
+                User.role == UserRole.PARENT_GUARDIAN,
+                User.status == UserStatus.ACTIVE,
+            )
+            .distinct()
         )
-        .distinct()
-    ))
+    )
     for parent in parents:
-        session.add(Notification(
-            recipient_id=parent.id,
-            recipient_role=parent.role.value,
-            type="consent_action_required",
-            category="consent",
-            title="Please confirm your child's date of birth again",
-            description=(
-                "The school has rechecked its admissions record. Please sign in to Nevo "
-                "and confirm your child's date of birth again. No identity document is needed."
-            ),
-            navigates_to="/parent-portal",
-            created_at=now,
-        ))
+        session.add(
+            Notification(
+                recipient_id=parent.id,
+                recipient_role=parent.role.value,
+                type="consent_action_required",
+                category="consent",
+                title="Please confirm your child's date of birth again",
+                description=(
+                    "The school has rechecked its admissions record. Please sign in to Nevo "
+                    "and confirm your child's date of birth again. No identity document is needed."
+                ),
+                navigates_to="/parent-portal",
+                created_at=now,
+            )
+        )
     if parents:
         check.parent_notified_at = now
     return bool(parents)
@@ -145,64 +149,84 @@ async def notify_linked_parents(session, check, now):
 
 async def notify_unresolved_recheck(session, check, now):
     """Tell both adults that their fresh dates still disagree; keep the hold open."""
-    recipients = list(await session.scalars(
-        select(User).where(
-            User.school_id == check.school_id,
-            User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
-            User.status == UserStatus.ACTIVE,
+    recipients = list(
+        await session.scalars(
+            select(User).where(
+                User.school_id == check.school_id,
+                User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
+                User.status == UserStatus.ACTIVE,
+            )
         )
-    ))
-    parents = list(await session.scalars(
-        select(User).join(ParentLink, ParentLink.parent_id == User.id).where(
-            ParentLink.student_id == check.student_id,
-            ParentLink.school_id == check.school_id,
-            User.role == UserRole.PARENT_GUARDIAN,
-            User.status == UserStatus.ACTIVE,
-        ).distinct()
-    ))
+    )
+    parents = list(
+        await session.scalars(
+            select(User)
+            .join(ParentLink, ParentLink.parent_id == User.id)
+            .where(
+                ParentLink.student_id == check.student_id,
+                ParentLink.school_id == check.school_id,
+                User.role == UserRole.PARENT_GUARDIAN,
+                User.status == UserStatus.ACTIVE,
+            )
+            .distinct()
+        )
+    )
     for recipient in [*recipients, *parents]:
         is_parent = recipient.role == UserRole.PARENT_GUARDIAN
-        session.add(Notification(
-            recipient_id=recipient.id,
-            recipient_role=recipient.role.value,
-            type="consent_action_required",
-            category="consent",
-            title="Date of birth re-check still needs resolution",
-            description=(
-                "The dates still differ after both re-checks. Your child's account remains on hold; "
-                "the school will contact you about the next step. No identity document is needed."
-                if is_parent else
-                "The school and parent rechecked the date of birth, but their dates still differ. "
-                "The pupil's account remains on hold. Please review the admissions record."
-            ),
-            navigates_to="/parent-portal" if is_parent else f"/admin/students/{check.student_id}",
-            created_at=now,
-        ))
+        session.add(
+            Notification(
+                recipient_id=recipient.id,
+                recipient_role=recipient.role.value,
+                type="consent_action_required",
+                category="consent",
+                title="Date of birth re-check still needs resolution",
+                description=(
+                    "The dates still differ after both re-checks. Your child's "
+                    "account remains on hold; "
+                    "the school will contact you about the next step. No "
+                    "identity document is needed."
+                    if is_parent
+                    else "The school and parent rechecked the date of birth, "
+                    "but their dates still differ. "
+                    "The pupil's account remains on hold. Please review the admissions record."
+                ),
+                navigates_to="/parent-portal"
+                if is_parent
+                else f"/admin/students/{check.student_id}",
+                created_at=now,
+            )
+        )
 
 
 async def notify_school_operative_date(session, check, now):
     if check.school_date_of_birth == check.parent_date_of_birth:
         return
-    recipients = list(await session.scalars(select(User).where(
-        User.school_id == check.school_id,
-        User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
-        User.status == UserStatus.ACTIVE,
-    )))
+    recipients = list(
+        await session.scalars(
+            select(User).where(
+                User.school_id == check.school_id,
+                User.role.in_([UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN]),
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+    )
     for recipient in recipients:
-        session.add(Notification(
-            recipient_id=recipient.id,
-            recipient_role=recipient.role.value,
-            type="consent_action_required",
-            category="consent",
-            title="Update the pupil's roster date of birth",
-            description=(
-                f"The parent's confirmed date, {check.parent_date_of_birth.isoformat()}, "
-                "is now operative in Nevo and differs from the school's admissions date. "
-                "Please reconcile the roster record."
-            ),
-            navigates_to=f"/admin/students/{check.student_id}",
-            created_at=now,
-        ))
+        session.add(
+            Notification(
+                recipient_id=recipient.id,
+                recipient_role=recipient.role.value,
+                type="consent_action_required",
+                category="consent",
+                title="Update the pupil's roster date of birth",
+                description=(
+                    f"The parent's confirmed date, {check.parent_date_of_birth.isoformat()}, "
+                    "is now operative in Nevo and differs from the school's admissions date. "
+                    "Please reconcile the roster record."
+                ),
+                navigates_to=f"/admin/students/{check.student_id}",
+                created_at=now,
+            )
+        )
 
 
 async def apply_check(session, check, student, now, *, parent_actor=None):
@@ -251,7 +275,11 @@ async def apply_check(session, check, student, now, *, parent_actor=None):
         else:
             check.state = AgeCheckState.MATCHED
         student.date_of_birth = check.parent_date_of_birth
-        if reconfirmed and not was_resolved and check.school_date_of_birth != check.parent_date_of_birth:
+        if (
+            reconfirmed
+            and not was_resolved
+            and check.school_date_of_birth != check.parent_date_of_birth
+        ):
             await notify_school_operative_date(session, check, now)
     else:
         check.state = AgeCheckState.MISMATCH

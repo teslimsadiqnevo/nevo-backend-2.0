@@ -38,15 +38,14 @@ MAX_SYNC_HISTORY_WINDOW_DAYS = 365
 class SsoDisconnectedError(Exception):
     """Raised when an action needs a connection the school switched off."""
 
+
 # What actually crosses the boundary from the identity provider, written for a
 # school administrator rather than an engineer. Kept beside the roster sync so
 # the notice cannot drift from the code that reads the directory.
 SSO_DATA_FLOW: tuple[SsoDataFlowCategory, ...] = (
     SsoDataFlowCategory(
         key="student_directory",
-        description=(
-            "Student names, school email addresses, and class membership."
-        ),
+        description=("Student names, school email addresses, and class membership."),
         purpose=(
             "So students can sign in with their school account and appear in "
             "the right class without anyone typing them in."
@@ -56,19 +55,13 @@ SSO_DATA_FLOW: tuple[SsoDataFlowCategory, ...] = (
         key="teacher_directory",
         description="Teacher names, school email addresses, and classes.",
         purpose=(
-            "So teachers can sign in with their school account and see the "
-            "classes they teach."
+            "So teachers can sign in with their school account and see the classes they teach."
         ),
     ),
     SsoDataFlowCategory(
         key="sign_in_confirmation",
-        description=(
-            "Confirmation from your provider that a sign-in was genuine."
-        ),
-        purpose=(
-            "So Nevo never has to store or check a password for your staff "
-            "or students."
-        ),
+        description=("Confirmation from your provider that a sign-in was genuine."),
+        purpose=("So Nevo never has to store or check a password for your staff or students."),
     ),
 )
 
@@ -397,9 +390,7 @@ class SsoService:
             config = await self._require_school_config(school_id, provider=provider)
         except LookupError:
             return False
-        return self._provider(provider).cloud_files_ready(
-            config=self._provider_config(config)
-        )
+        return self._provider(provider).cloud_files_ready(config=self._provider_config(config))
 
     async def sync_history(
         self,
@@ -409,8 +400,7 @@ class SsoService:
     ) -> RosterSyncHistory:
         if window_days < 1 or window_days > MAX_SYNC_HISTORY_WINDOW_DAYS:
             raise ValueError(
-                "Sync history window must be between 1 and "
-                f"{MAX_SYNC_HISTORY_WINDOW_DAYS} days"
+                f"Sync history window must be between 1 and {MAX_SYNC_HISTORY_WINDOW_DAYS} days"
             )
         return await self._repository.sync_history(
             school_id=school_id,
@@ -504,9 +494,7 @@ class SsoService:
         # Disconnecting was deliberate. Pulling the directory anyway would
         # quietly contradict it; reauthorise is the way back.
         health = await self._repository.connection_health(school_id)
-        if health is not None and (
-            health.status is SsoConnectionStatus.DISCONNECTED
-        ):
+        if health is not None and (health.status is SsoConnectionStatus.DISCONNECTED):
             raise SsoDisconnectedError(
                 "Single sign-on is disconnected for this school. Reconnect "
                 "it before syncing your roster."

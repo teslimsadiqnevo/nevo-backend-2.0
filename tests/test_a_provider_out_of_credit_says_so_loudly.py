@@ -60,9 +60,7 @@ def test_an_ordinary_outage_is_not_mistaken_for_one(detail) -> None:
     assert not needs_a_human_with_a_card(detail)
 
 
-def test_running_out_of_credit_is_logged_as_an_error_naming_the_remedy(
-    providers, caplog
-) -> None:
+def test_running_out_of_credit_is_logged_as_an_error_naming_the_remedy(providers, caplog) -> None:
     with caplog.at_level(logging.INFO):
         providers.record(LESSON_AUDIO, ok=False, detail="credit_balance_exhausted")
 
@@ -76,9 +74,7 @@ def test_running_out_of_credit_is_logged_as_an_error_naming_the_remedy(
     assert "no retry will clear this" in message
 
 
-def test_an_ordinary_failure_is_logged_without_claiming_it_is_a_bill(
-    providers, caplog
-) -> None:
+def test_an_ordinary_failure_is_logged_without_claiming_it_is_a_bill(providers, caplog) -> None:
     with caplog.at_level(logging.INFO):
         providers.record(LESSON_AUDIO, ok=False, detail="401 Unauthorized")
 
@@ -139,5 +135,5 @@ def test_health_tells_an_administrator_which_kind_of_broken_it_is() -> None:
     from nevo import main
 
     source = main.__loader__.get_source(main.__name__)
-    assert '"lessonAudioNeedsTopUp"' in source
-    assert '"lessonImagesNeedsTopUp"' in source
+    assert '"lessonAudioFailureKind"' in source
+    assert '"lessonImagesFailureKind"' in source

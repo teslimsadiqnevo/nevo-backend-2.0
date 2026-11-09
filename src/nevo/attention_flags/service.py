@@ -214,9 +214,7 @@ class AttentionFlagDetectionService:
                         {
                             "flag_type": flag.flag_type.value,
                             "description": flag.description,
-                            "session_ids": [
-                                str(session_id) for session_id in draft.session_ids
-                            ],
+                            "session_ids": [str(session_id) for session_id in draft.session_ids],
                             "baseline_score": draft.baseline_score,
                             "current_score": draft.current_score,
                         },
@@ -280,9 +278,7 @@ class SqlAlchemyAttentionFlagRepository:
                     .limit(8)
                 )
             ).all()
-            ordered_sessions = tuple(
-                sorted(lesson_sessions, key=lambda item: item.started_at)
-            )
+            ordered_sessions = tuple(sorted(lesson_sessions, key=lambda item: item.started_at))
             session_ids = [item.id for item in ordered_sessions]
             events_by_session: dict[UUID, list[SignalEvent]] = {
                 session_id: [] for session_id in session_ids
@@ -323,13 +319,21 @@ class SqlAlchemyAttentionFlagRepository:
     ) -> tuple[AttentionFlagRecord | None, bool]:
         async with self._sessions.begin() as session:
             await session.scalar(select(User.id).where(User.id == student_id).with_for_update())
-            active = list(await session.scalars(
-                select(AttentionFlag)
-                .where(AttentionFlag.student_id == student_id, AttentionFlag.resolved_at.is_(None))
-                .order_by(AttentionFlag.generated_at.desc())
-            ))
+            active = list(
+                await session.scalars(
+                    select(AttentionFlag)
+                    .where(
+                        AttentionFlag.student_id == student_id, AttentionFlag.resolved_at.is_(None)
+                    )
+                    .order_by(AttentionFlag.generated_at.desc())
+                )
+            )
             matching = next(
-                (item for item in active if draft is not None and item.flag_type == draft.flag_type),
+                (
+                    item
+                    for item in active
+                    if draft is not None and item.flag_type == draft.flag_type
+                ),
                 None,
             )
             now = datetime.now(UTC)
@@ -451,10 +455,7 @@ def _detect_engagement_decline(
     if not baseline_sessions:
         return None
     baseline = _average_score(baseline_sessions)
-    if all(
-        session.engagement_score <= baseline - STANDARD_DECLINE_THRESHOLD
-        for session in recent
-    ):
+    if all(session.engagement_score <= baseline - STANDARD_DECLINE_THRESHOLD for session in recent):
         current_score = _average_score(recent)
         return AttentionFlagDraft(
             student_id=student_id,

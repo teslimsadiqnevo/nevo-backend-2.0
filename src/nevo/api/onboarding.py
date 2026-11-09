@@ -1167,14 +1167,20 @@ async def activate(
             values = row.values or {}
             contact = str(values.get("guardian_email") or "").strip()
             if contact:
-                parent_requests.append((
-                    person.id,
-                    " ".join(part for part in (
-                        str(values.get("guardian_first_name") or "").strip(),
-                        str(values.get("guardian_last_name") or "").strip(),
-                    ) if part),
-                    contact,
-                ))
+                parent_requests.append(
+                    (
+                        person.id,
+                        " ".join(
+                            part
+                            for part in (
+                                str(values.get("guardian_first_name") or "").strip(),
+                                str(values.get("guardian_last_name") or "").strip(),
+                            )
+                            if part
+                        ),
+                        contact,
+                    )
+                )
     await session.flush()
     # Subjects after the accounts exist, because a teacher's subject list hangs
     # off their user row. Merged on email across every row that carried it, so
@@ -1190,6 +1196,7 @@ async def activate(
     from nevo.consent.entities import ConsentActor
     from nevo.consent.service import DEFAULT_REQUESTED_CONSENT
     from nevo.domain.consent.vocabulary import ParentContactMethod
+
     for invitation, token in teacher_invites:
         try:
             await _send_invitation(mailer, invitation, token)
@@ -1210,7 +1217,9 @@ async def activate(
                 )
             except Exception:
                 logger.exception("Could not queue parent consent for student %s", student_id)
-                state.delivery_warnings.append(f"Parent consent for student {student_id} needs resending")
+                state.delivery_warnings.append(
+                    f"Parent consent for student {student_id} needs resending"
+                )
     return state
 
 
@@ -1348,11 +1357,13 @@ async def _create_person(
         )
     if not is_student:
         email = (values.get("email") or "").strip().casefold()
-        user = await session.scalar(select(User).where(
-            User.school_id == school.id,
-            User.role == UserRole.TEACHER,
-            func.lower(User.email) == email,
-        ))
+        user = await session.scalar(
+            select(User).where(
+                User.school_id == school.id,
+                User.role == UserRole.TEACHER,
+                func.lower(User.email) == email,
+            )
+        )
     if user is not None:
         return user if not is_student else None
     else:

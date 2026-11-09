@@ -95,10 +95,6 @@ class PseudonymDirectory:
         return result
 
 
-
-
-
-
 def _display_name(user: User) -> str:
     return " ".join(part for part in (user.first_name, user.last_name) if part) or "This learner"
 

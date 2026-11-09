@@ -161,35 +161,46 @@ async def make_test_return_due_now(
     actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
     student = await session.get(User, student_id)
     if (
-        student is None or student.school_id != actor.school_id
+        student is None
+        or student.school_id != actor.school_id
         or not (student.email or "").casefold().endswith("@e2e.example.com")
     ):
         raise HTTPException(404, detail={"code": "test_student_not_found"})
     schedule = await session.scalar(
-        select(StudentConceptScheduling).where(
+        select(StudentConceptScheduling)
+        .where(
             StudentConceptScheduling.student_id == student_id,
             StudentConceptScheduling.concept_id == concept_id,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     if schedule is None:
         raise HTTPException(404, detail={"code": "concept_schedule_not_found"})
     previous_due = schedule.next_review_due
     now = datetime.now(UTC)
     schedule.next_review_due = now
-    session.add(AuthAuditEvent(
-        event_type="test_return_due_now",
-        user_id=actor.id,
-        details={
-            "studentId": str(student_id), "conceptId": str(concept_id),
-            "previousDue": previous_due.isoformat(), "reason": payload.reason,
-        },
-    ))
+    session.add(
+        AuthAuditEvent(
+            event_type="test_return_due_now",
+            user_id=actor.id,
+            details={
+                "studentId": str(student_id),
+                "conceptId": str(concept_id),
+                "previousDue": previous_due.isoformat(),
+                "reason": payload.reason,
+            },
+        )
+    )
     await session.commit()
     return ConceptScheduleResponse(
-        student_id=student_id, concept_id=concept_id,
-        stability=schedule.stability, difficulty=schedule.difficulty,
-        retrievability=None, last_review=schedule.last_review,
-        review_count=schedule.review_count, next_review_due=now,
+        student_id=student_id,
+        concept_id=concept_id,
+        stability=schedule.stability,
+        difficulty=schedule.difficulty,
+        retrievability=None,
+        last_review=schedule.last_review,
+        review_count=schedule.review_count,
+        next_review_due=now,
     )
 
 

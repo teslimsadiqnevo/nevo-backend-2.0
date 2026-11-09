@@ -9,6 +9,7 @@ number cannot leak one.
 The comparison is against the previous window of the same length, so
 "more than before" always means the same thing.
 """
+
 from nevo.domain.parents.vocabulary import GrowthDimension, GrowthTrend
 from nevo.parents.entities import GrowthSignals, GrowthStatement
 
@@ -20,23 +21,20 @@ RELATIVE_CHANGE = 0.15
 
 _STATEMENTS: dict[tuple[GrowthDimension, GrowthTrend], str] = {
     (GrowthDimension.STAYING_WITH_HARD_PROBLEMS, GrowthTrend.GROWING): (
-        "{name} is working through tricky questions alone for longer before "
-        "asking for help."
+        "{name} is working through tricky questions alone for longer before asking for help."
     ),
     (GrowthDimension.STAYING_WITH_HARD_PROBLEMS, GrowthTrend.STEADY): (
         "{name} keeps going when a question gets harder, much as before."
     ),
     (GrowthDimension.STAYING_WITH_HARD_PROBLEMS, GrowthTrend.EMERGING): (
-        "{name} is starting to stay with harder questions, though it is early "
-        "to call it a habit."
+        "{name} is starting to stay with harder questions, though it is early to call it a habit."
     ),
     (GrowthDimension.KNOWING_WHAT_SHE_KNOWS, GrowthTrend.GROWING): (
         "{name} has a clearer sense of what has been understood, and asks for "
         "things to be explained differently at the right moments."
     ),
     (GrowthDimension.KNOWING_WHAT_SHE_KNOWS, GrowthTrend.STEADY): (
-        "{name} is generally aware of what has been understood and what still "
-        "needs another look."
+        "{name} is generally aware of what has been understood and what still needs another look."
     ),
     (GrowthDimension.KNOWING_WHAT_SHE_KNOWS, GrowthTrend.EMERGING): (
         "{name} is beginning to notice when something has not quite landed."
@@ -63,8 +61,7 @@ _STATEMENTS: dict[tuple[GrowthDimension, GrowthTrend], str] = {
 
 _NOT_ENOUGH: dict[GrowthDimension, str] = {
     GrowthDimension.STAYING_WITH_HARD_PROBLEMS: (
-        "There have not been enough lessons yet to say how {name} handles "
-        "harder questions."
+        "There have not been enough lessons yet to say how {name} handles harder questions."
     ),
     GrowthDimension.KNOWING_WHAT_SHE_KNOWS: (
         "There have not been enough lessons yet to say how well {name} can "
@@ -97,9 +94,7 @@ def headline_and_summary(
     name: str,
     statements: tuple[GrowthStatement, ...],
 ) -> tuple[str, str]:
-    described = [
-        item for item in statements if item.trend is not GrowthTrend.NOT_ENOUGH_YET
-    ]
+    described = [item for item in statements if item.trend is not GrowthTrend.NOT_ENOUGH_YET]
     if not described:
         return (
             f"How {name} is getting on",

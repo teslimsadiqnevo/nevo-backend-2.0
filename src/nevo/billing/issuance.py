@@ -117,22 +117,22 @@ class InvoiceIssuanceService:
                             currency=self._billed_currency,
                         )
                         invoice = Invoice(
-                                invoice_number=period.number,
-                                school_id=school.id,
-                                issued_at=issue_date,
-                                amount=quote.total_with_vat,
-                                currency=quote.currency,
-                                student_count=quote.student_count,
-                                activation_student_ids=activation_ids,
-                                per_student_rate=quote.per_student_rate,
-                                total_before_vat=quote.total_before_vat,
-                                vat_amount=quote.vat_amount,
-                                vat_rate=quote.vat_rate,
-                                period_label=period.label,
-                                status=InvoiceStatus.PENDING,
-                                due_at=issue_date + timedelta(days=PAYMENT_TERM_DAYS),
-                                pdf_url=(f"/api/billing/invoices/{school.id}/{period.number}.pdf"),
-                            )
+                            invoice_number=period.number,
+                            school_id=school.id,
+                            issued_at=issue_date,
+                            amount=quote.total_with_vat,
+                            currency=quote.currency,
+                            student_count=quote.student_count,
+                            activation_student_ids=activation_ids,
+                            per_student_rate=quote.per_student_rate,
+                            total_before_vat=quote.total_before_vat,
+                            vat_amount=quote.vat_amount,
+                            vat_rate=quote.vat_rate,
+                            period_label=period.label,
+                            status=InvoiceStatus.PENDING,
+                            due_at=issue_date + timedelta(days=PAYMENT_TERM_DAYS),
+                            pdf_url=(f"/api/billing/invoices/{school.id}/{period.number}.pdf"),
+                        )
                         session.add(invoice)
                         await session.flush()
                         await queue_billing_emails(session, invoice=invoice, kind="issued")
@@ -187,9 +187,9 @@ class InvoiceIssuanceService:
         on yet, and the screen listing them stays so somebody adds it.
         """
 
-        rows = (await session.execute(
-                select(User.id, User.status)
-                .where(
+        rows = (
+            await session.execute(
+                select(User.id, User.status).where(
                     User.school_id == school_id,
                     User.role == UserRole.STUDENT,
                     User.status.in_([UserStatus.ACTIVE, UserStatus.INVITED]),
@@ -200,7 +200,8 @@ class InvoiceIssuanceService:
                     )
                     .exists(),
                 )
-        )).all()
+            )
+        ).all()
         return len(rows), [str(user_id) for user_id, state in rows if state == UserStatus.INVITED]
 
     @classmethod
@@ -321,9 +322,7 @@ async def _notify_billing_contacts(
     )
 
 
-async def queue_billing_emails(
-    session: AsyncSession, *, invoice: Invoice, kind: str
-) -> int:
+async def queue_billing_emails(session: AsyncSession, *, invoice: Invoice, kind: str) -> int:
     """Queue each invoice message once per listed address and milestone.
 
     Every contact the school has listed, not only the primary one. The
@@ -332,9 +331,11 @@ async def queue_billing_emails(
     screen.
     """
 
-    emails = set(await session.scalars(
-        select(BillingContact.email).where(BillingContact.school_id == invoice.school_id)
-    ))
+    emails = set(
+        await session.scalars(
+            select(BillingContact.email).where(BillingContact.school_id == invoice.school_id)
+        )
+    )
     if not emails:
         # A school that has never filled the contacts screen in. Nothing is
         # queued, so the invoice reaches nobody by email - the in-app notice
@@ -347,14 +348,20 @@ async def queue_billing_emails(
             invoice.school_id,
         )
         return 0
-    existing = set(await session.scalars(
-        select(BillingEmailDelivery.email).where(
-            BillingEmailDelivery.invoice_id == invoice.id,
-            BillingEmailDelivery.kind == kind,
+    existing = set(
+        await session.scalars(
+            select(BillingEmailDelivery.email).where(
+                BillingEmailDelivery.invoice_id == invoice.id,
+                BillingEmailDelivery.kind == kind,
+            )
         )
-    ))
+    )
     for email in emails - existing:
-        session.add(BillingEmailDelivery(
-            invoice_id=invoice.id, email=email, kind=kind,
-        ))
+        session.add(
+            BillingEmailDelivery(
+                invoice_id=invoice.id,
+                email=email,
+                kind=kind,
+            )
+        )
     return len(emails - existing)

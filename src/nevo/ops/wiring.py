@@ -7,11 +7,7 @@ from nevo.ops.repositories import SqlAlchemyHeartbeatRepository
 
 
 def build_self_ping_loop(settings: OpsSettings) -> SelfPingLoop:
-    health_url = (
-        f"{settings.self_ping_url.rstrip('/')}/health"
-        if settings.self_ping_url
-        else None
-    )
+    health_url = f"{settings.self_ping_url.rstrip('/')}/health" if settings.self_ping_url else None
     return SelfPingLoop(
         health_url=health_url,
         interval_seconds=settings.self_ping_interval_seconds,

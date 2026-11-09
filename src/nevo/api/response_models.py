@@ -443,7 +443,9 @@ class InvitationResponse(CamelResponse):
     role: str | None = None
     email: str | None = None
     name: str | None = None
-    status: Literal["pending", "joined", "accepted", "revoked", "expired", "conflicted"] | None = None
+    status: Literal["pending", "joined", "accepted", "revoked", "expired", "conflicted"] | None = (
+        None
+    )
     class_id: UUID | None = None
     created_at: datetime | None = None
     expires_at: datetime
@@ -618,7 +620,6 @@ class LessonSegmentResponse(CamelResponse):
             result.pop("activity_availability", None)
         return result
 
-
     _keep_renderable = field_validator("review_reasons", mode="before")(renderable_review_reasons)
 
     @field_validator("visual_variant", mode="before")
@@ -792,7 +793,9 @@ class LessonProgressResponse(CamelResponse):
 class SocraticHandoffPrompt(CamelResponse):
     id: str
     prompt: str
-    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean", "text"] = "single_choice"
+    answer_type: Literal["single_choice", "multiple_choice", "numeric", "boolean", "text"] = (
+        "single_choice"
+    )
     options: list[CheckpointOption] = Field(default_factory=list)
 
 

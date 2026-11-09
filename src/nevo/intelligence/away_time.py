@@ -7,7 +7,9 @@ def attention_state(sitting) -> dict:
     return dict((sitting.delivery_state or {}).get("attention") or {})
 
 
-def active_response_ms(sitting, reported_ms: int | None, *, at: datetime, segment_id: str | None) -> int | None:
+def active_response_ms(
+    sitting, reported_ms: int | None, *, at: datetime, segment_id: str | None
+) -> int | None:
     if reported_ms is None:
         return None
     attention = attention_state(sitting)
@@ -43,8 +45,12 @@ def active_response_ms(sitting, reported_ms: int | None, *, at: datetime, segmen
 
 
 def transition(
-    sitting, *, action: str, segment_id: str,
-    client_event_id: str | None = None, at: datetime | None = None,
+    sitting,
+    *,
+    action: str,
+    segment_id: str,
+    client_event_id: str | None = None,
+    at: datetime | None = None,
     client_away_duration_ms: int | None = None,
 ) -> dict:
     now = at or datetime.now(UTC)

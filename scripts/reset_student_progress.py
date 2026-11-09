@@ -166,9 +166,7 @@ async def _resolve(session, who: str) -> User:
         found = await session.get(User, UUID(who))
     except ValueError:
         found = await session.scalar(
-            select(User).where(
-                func.lower(User.login_identifier) == who.casefold()
-            )
+            select(User).where(func.lower(User.login_identifier) == who.casefold())
         )
         if found is None:
             found = await session.scalar(
@@ -223,9 +221,7 @@ async def main() -> None:
                     "--i-know-this-is-a-real-child if that is genuinely what you want."
                 )
 
-            tables = (
-                (*PROGRESS, *SUPPORT) if args.also_clear_support_flags else PROGRESS
-            )
+            tables = (*PROGRESS, *SUPPORT) if args.also_clear_support_flags else PROGRESS
             if args.also_clear_support_flags and student.school_id != TEST_SCHOOL_ID:
                 raise SystemExit(
                     "--also-clear-support-flags is for test children only. An escalation "

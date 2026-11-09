@@ -266,7 +266,8 @@ class AskNevoService:
                     "I may have misunderstood your role. You're signed in as a teacher. "
                     "Please ask again; I won't use the incorrect answer."
                     if request.role is AskNevoRole.TEACHER
-                    else "I may have misunderstood your role. You're signed in as an administrator. Please ask again."
+                    else "I may have misunderstood your role. You're signed in "
+                    "as an administrator. Please ask again."
                 )
         if not self._compliance.inspect(answer).allowed:
             retry = await self._gateway.generate(
@@ -301,10 +302,10 @@ class AskNevoService:
             answer = self._compliance.sanitize(answer)
         if _wrong_role(answer, request.role):
             answer = (
-                "I couldn't prepare a reliable answer for your teacher account. "
-                "Please try again."
+                "I couldn't prepare a reliable answer for your teacher account. Please try again."
                 if request.role is AskNevoRole.TEACHER
-                else "I couldn't prepare a reliable answer for your admin account. Please try again."
+                else "I couldn't prepare a reliable answer for your admin "
+                "account. Please try again."
             )
         can_help, cannot_help_reason, answer = interpret_help_state(answer, role=request.role)
         # Names go back only here, on the way to the user. The model saw

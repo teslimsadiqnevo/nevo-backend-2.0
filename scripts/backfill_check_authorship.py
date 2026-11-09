@@ -18,12 +18,14 @@ async def run(apply: bool):
     changed_checks = changed_assessments = lessons_seen = 0
     try:
         async with create_session_factory(engine)() as session:
-            rows = (await session.execute(
-                select(UploadJob, UploadSourceBlob)
-                .join(UploadSourceBlob, UploadSourceBlob.upload_id == UploadJob.id)
-                .where(UploadJob.structure.has_key("lessonId"))
-                .order_by(UploadJob.created_at.desc())
-            )).all()
+            rows = (
+                await session.execute(
+                    select(UploadJob, UploadSourceBlob)
+                    .join(UploadSourceBlob, UploadSourceBlob.upload_id == UploadJob.id)
+                    .where(UploadJob.structure.has_key("lessonId"))
+                    .order_by(UploadJob.created_at.desc())
+                )
+            ).all()
             seen = set()
             for job, blob in rows:
                 lesson_id = (job.structure or {}).get("lessonId")
@@ -39,14 +41,18 @@ async def run(apply: bool):
                     if (blob.parse_metadata or {}).get("contentIsExtractedText")
                     else _extract_text(blob.filename, blob.content)
                 )
-                segments = list(await session.scalars(
-                    select(LessonSegment).where(LessonSegment.lesson_id == lesson.id)
-                ))
+                segments = list(
+                    await session.scalars(
+                        select(LessonSegment).where(LessonSegment.lesson_id == lesson.id)
+                    )
+                )
                 for segment in segments:
                     questions = list(segment.comprehension_checkpoints or [])
                     touched = False
                     for question in questions:
-                        if question.get("authoredBy") != "person" and _source_has_answer(source, question):
+                        if question.get("authoredBy") != "person" and _source_has_answer(
+                            source, question
+                        ):
                             question["authoredBy"] = "person"
                             changed_checks += 1
                             touched = True
@@ -55,7 +61,9 @@ async def run(apply: bool):
                 assessment = list(lesson.assessment or [])
                 touched = False
                 for question in assessment:
-                    if question.get("authoredBy") != "person" and _source_has_answer(source, question):
+                    if question.get("authoredBy") != "person" and _source_has_answer(
+                        source, question
+                    ):
                         question["authoredBy"] = "person"
                         changed_assessments += 1
                         touched = True
@@ -65,8 +73,14 @@ async def run(apply: bool):
                 await session.commit()
     finally:
         await engine.dispose()
-    print({"lessonsWithRetainedSource": lessons_seen, "checksRestored": changed_checks,
-           "assessmentItemsRestored": changed_assessments, "applied": apply})
+    print(
+        {
+            "lessonsWithRetainedSource": lessons_seen,
+            "checksRestored": changed_checks,
+            "assessmentItemsRestored": changed_assessments,
+            "applied": apply,
+        }
+    )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ the code is single-use, it expires quickly, a code dies after a handful of
 wrong guesses, and asking for a new one kills the old. Without the attempt
 cap in particular, four digits would be guessable in an afternoon.
 """
+
 import hashlib
 import hmac
 import secrets

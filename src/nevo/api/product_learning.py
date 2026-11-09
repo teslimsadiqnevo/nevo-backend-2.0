@@ -266,11 +266,15 @@ class LessonQuestionAttemptWrite(BaseModel):
     )
     hint_count: int = Field(default=0, alias="hintCount", ge=0, le=100)
     offline_marked: bool = Field(default=False, alias="offlineMarked")
-    marking_key_version: str | None = Field(default=None, alias="markingKeyVersion", min_length=64, max_length=64)
+    marking_key_version: str | None = Field(
+        default=None, alias="markingKeyVersion", min_length=64, max_length=64
+    )
 
     @model_validator(mode="after")
     def offline_sync_has_provenance(self):
-        if self.offline_marked and (self.client_attempt_id is None or self.marking_key_version is None):
+        if self.offline_marked and (
+            self.client_attempt_id is None or self.marking_key_version is None
+        ):
             raise ValueError("Offline sync requires clientAttemptId and markingKeyVersion")
         return self
 
@@ -601,7 +605,8 @@ async def _attempt_payload_with_outcome(
         segment = await session.get(LessonSegment, item.segment_id) if item.segment_id else None
         reteaching = (
             (sitting.delivery_state or {}).get("reteaching", {}).get(str(item.segment_id), {})
-            if item.segment_id else {}
+            if item.segment_id
+            else {}
         )
         payload["reteaching"] = (
             reteaching.get("response")
@@ -738,14 +743,19 @@ async def _question_for_attempt(
                 {
                     "id": str(step.get("stepId")),
                     "prompt": str(step.get("prompt") or ""),
-                    "answerKey": _tap_answer(step) if step.get("input") == "tap" else step.get("answer"),
-                    "acceptedAnswers": [] if step.get("input") == "tap" else step.get("acceptedAnswers") or step.get("accepted") or [],
+                    "answerKey": _tap_answer(step)
+                    if step.get("input") == "tap"
+                    else step.get("answer"),
+                    "acceptedAnswers": []
+                    if step.get("input") == "tap"
+                    else step.get("acceptedAnswers") or step.get("accepted") or [],
                     "options": step.get("options") or [],
                     "hint": step.get("hint"),
                     "conceptId": str(concept_id) if concept_id else None,
                     "answerType": "numeric"
                     if step.get("input") == "tap" or isinstance(step.get("answer"), int | float)
-                    else "expression" if any(symbol in str(step.get("answer") or "") for symbol in "+-*/=×÷")
+                    else "expression"
+                    if any(symbol in str(step.get("answer") or "") for symbol in "+-*/=×÷")
                     else "text",
                     "textDensity": 0.1,
                     "calculationComplete": False,
@@ -759,24 +769,31 @@ async def _question_for_attempt(
                     if not isinstance(mini, dict) or mini.get("answer") is None:
                         continue
                     answer = mini.get("answer")
-                    questions.append({
-                        "id": mini_step_question_id(segment.id, step.get("stepId"), mini.get("id")),
-                        "prompt": mini.get("prompt"),
-                        "answerKey": answer,
-                        "acceptedAnswers": mini.get("acceptedAnswers") or [],
-                        "options": mini.get("options") or [],
-                        "hint": None,
-                        "conceptId": None,
-                        "answerType": "numeric" if mini.get("input") in {"tap", "number"}
-                        else "single_choice" if mini.get("input") == "choice"
-                        else "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷")
-                        else "text",
-                        "textDensity": 0.1,
-                        "calculationComplete": False,
-                        "isMiniStep": True,
-                        "supported": True,
-                        "supportStatus": "supported",
-                    })
+                    questions.append(
+                        {
+                            "id": mini_step_question_id(
+                                segment.id, step.get("stepId"), mini.get("id")
+                            ),
+                            "prompt": mini.get("prompt"),
+                            "answerKey": answer,
+                            "acceptedAnswers": mini.get("acceptedAnswers") or [],
+                            "options": mini.get("options") or [],
+                            "hint": None,
+                            "conceptId": None,
+                            "answerType": "numeric"
+                            if mini.get("input") in {"tap", "number"}
+                            else "single_choice"
+                            if mini.get("input") == "choice"
+                            else "expression"
+                            if any(symbol in str(answer) for symbol in "+-*/=×÷")
+                            else "text",
+                            "textDensity": 0.1,
+                            "calculationComplete": False,
+                            "isMiniStep": True,
+                            "supported": True,
+                            "supportStatus": "supported",
+                        }
+                    )
             questions.append(
                 {
                     "id": str(segment.id),
@@ -785,7 +802,9 @@ async def _question_for_attempt(
                     or "Complete the calculation.",
                     "answerKey": variant.get("answer"),
                     "conceptId": str(concept_id) if concept_id else None,
-                    "answerType": "expression" if any(symbol in str(variant.get("answer") or "") for symbol in "+-*/=×÷") else "text",
+                    "answerType": "expression"
+                    if any(symbol in str(variant.get("answer") or "") for symbol in "+-*/=×÷")
+                    else "text",
                     "textDensity": 0.1,
                     "calculationComplete": True,
                 }
@@ -800,7 +819,8 @@ async def _question_for_attempt(
                 concept_id=segment.concept_id,
                 presentation_seed=presentation_seed,
                 reviewed_question_ids={
-                    question_id for approved_segment_id, question_id in approved
+                    question_id
+                    for approved_segment_id, question_id in approved
                     if approved_segment_id == str(segment.id)
                 },
             )
@@ -1044,6 +1064,7 @@ async def lesson_detail(
     reviewed_checks = await approved_check_ids(session, lesson.id)
     reviewed_levels = await approved_level_ids(session, lesson.id) if not for_teacher else set()
     from nevo.api.lesson_review import _review_result
+
     review_state = await _review_result(session, lesson) if for_teacher else None
     outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0)
     result = {
@@ -1058,10 +1079,19 @@ async def lesson_detail(
         "confirmationSummary": lesson.confirmation_summary,
         "recap": lesson.recap,
         "assessment": (
-            checkpoint_payloads(lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id))
-            if for_teacher else student_checkpoint_payloads(
-                lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
-                reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
+            checkpoint_payloads(
+                lesson.assessment or [],
+                segment_key="lesson-assessment",
+                presentation_seed=str(actor.id),
+            )
+            if for_teacher
+            else student_checkpoint_payloads(
+                lesson.assessment or [],
+                segment_key="lesson-assessment",
+                presentation_seed=str(actor.id),
+                reviewed_question_ids={
+                    qid for sid, qid in reviewed_checks if sid == str(lesson.id)
+                },
                 reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(lesson.id)},
             )
         ),
@@ -1089,15 +1119,27 @@ async def lesson_detail(
                 else None,
                 "comprehensionCheckpoints": (
                     checkpoint_payloads(
-                        item.comprehension_checkpoints, segment_key=item.segment_key,
-                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        item.comprehension_checkpoints,
+                        segment_key=item.segment_key,
+                        presentation_seed=str(actor.id),
+                        question_offset=item.sequence_order - 1,
                         include_pending_guidance=True,
-                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
-                    ) if for_teacher else student_checkpoint_payloads(
-                        item.comprehension_checkpoints, segment_key=item.segment_key,
-                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
-                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
-                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
+                        reviewed_question_ids={
+                            qid for sid, qid in reviewed_checks if sid == str(item.id)
+                        },
+                    )
+                    if for_teacher
+                    else student_checkpoint_payloads(
+                        item.comprehension_checkpoints,
+                        segment_key=item.segment_key,
+                        presentation_seed=str(actor.id),
+                        question_offset=item.sequence_order - 1,
+                        reviewed_question_ids={
+                            qid for sid, qid in reviewed_checks if sid == str(item.id)
+                        },
+                        reviewed_level_ids={
+                            qid for sid, qid in reviewed_levels if sid == str(item.id)
+                        },
                     )
                 ),
                 "textVariant": item.text_variant,
@@ -1112,13 +1154,18 @@ async def lesson_detail(
                 "interactiveVariant": activity_for_delivery(item.interactive_variant, item.body)
                 if for_teacher
                 else student_activity(item),
-                **({"classPractical": (item.interactive_variant or {}).get("classPractical")}
-                   if for_teacher else {}),
                 **(
-                    {"activityAvailability": {
-                        "reachableByStudents": False,
-                        "reason": "safety_instruction_not_rendered",
-                    }}
+                    {"classPractical": (item.interactive_variant or {}).get("classPractical")}
+                    if for_teacher
+                    else {}
+                ),
+                **(
+                    {
+                        "activityAvailability": {
+                            "reachableByStudents": False,
+                            "reason": "safety_instruction_not_rendered",
+                        }
+                    }
                     if for_teacher
                     and isinstance(item.interactive_variant, dict)
                     and item.interactive_variant.get("steps")
@@ -1193,14 +1240,22 @@ async def edit_committed_lesson_structure(
         raise HTTPException(404, detail={"code": "lesson_not_found"})
     if not payload.title.strip() or any(not item.title.strip() for item in payload.modules):
         raise HTTPException(422, detail={"code": "structure_title_required"})
-    segments = list(await session.scalars(
-        select(LessonSegment).where(LessonSegment.lesson_id == lesson_id)
-        .order_by(LessonSegment.sequence_order).with_for_update()
-    ))
-    modules = list(await session.scalars(
-        select(LessonModule).where(LessonModule.lesson_id == lesson_id)
-        .order_by(LessonModule.sequence_order).with_for_update()
-    ))
+    segments = list(
+        await session.scalars(
+            select(LessonSegment)
+            .where(LessonSegment.lesson_id == lesson_id)
+            .order_by(LessonSegment.sequence_order)
+            .with_for_update()
+        )
+    )
+    modules = list(
+        await session.scalars(
+            select(LessonModule)
+            .where(LessonModule.lesson_id == lesson_id)
+            .order_by(LessonModule.sequence_order)
+            .with_for_update()
+        )
+    )
     by_segment = {item.id: item for item in segments}
     requested = [item.id for item in payload.segments]
     if len(requested) != len(by_segment) or set(requested) != set(by_segment):
@@ -1225,10 +1280,12 @@ async def edit_committed_lesson_structure(
         or [item.id for item in modules] != module_ids
     )
     if structural_change and await session.scalar(
-        select(LessonAssignment.id).where(
+        select(LessonAssignment.id)
+        .where(
             LessonAssignment.lesson_id == lesson_id,
             LessonAssignment.status != "cancelled",
-        ).limit(1)
+        )
+        .limit(1)
     ):
         raise HTTPException(409, detail={"code": "lesson_structure_in_use"})
     lesson.title = payload.title.strip()
@@ -1250,7 +1307,9 @@ async def edit_committed_lesson_structure(
         for index, item in enumerate(payload.modules, 1):
             module = known_modules.get(item.id)
             if module is None:
-                module = LessonModule(id=uuid4(), lesson_id=lesson_id, title=item.title, sequence_order=index)
+                module = LessonModule(
+                    id=uuid4(), lesson_id=lesson_id, title=item.title, sequence_order=index
+                )
                 session.add(module)
             module.sequence_order = index
             module.title = item.title.strip()
@@ -1268,18 +1327,29 @@ async def edit_committed_lesson_structure(
             module.recap = item.recap
             module.preview = item.preview
     await session.commit()
-    saved_modules = list(await session.scalars(
-        select(LessonModule).where(LessonModule.lesson_id == lesson_id)
-        .order_by(LessonModule.sequence_order)
-    ))
+    saved_modules = list(
+        await session.scalars(
+            select(LessonModule)
+            .where(LessonModule.lesson_id == lesson_id)
+            .order_by(LessonModule.sequence_order)
+        )
+    )
     return CommittedLessonStructureResponse(
         lessonId=lesson_id,
         title=lesson.title,
         segments=[CommittedSegmentEdit(id=sid, title=by_segment[sid].title) for sid in ordered],
-        modules=[CommittedModuleEdit(
-            id=module.id, title=module.title, recap=module.recap, preview=module.preview,
-            segmentRecordIds=[by_segment[sid].id for sid in ordered if by_segment[sid].module_id == module.id],
-        ) for module in saved_modules],
+        modules=[
+            CommittedModuleEdit(
+                id=module.id,
+                title=module.title,
+                recap=module.recap,
+                preview=module.preview,
+                segmentRecordIds=[
+                    by_segment[sid].id for sid in ordered if by_segment[sid].module_id == module.id
+                ],
+            )
+            for module in saved_modules
+        ],
     )
 
 
@@ -1842,7 +1912,10 @@ async def save_lesson_question_attempt(
                 or existing.question_id != payload.question_id
                 or _normalise_answer(existing.answer) != _normalise_answer(payload.answer)
                 or existing.offline_marked != payload.offline_marked
-                or (payload.offline_marked and existing.marking_key_version != payload.marking_key_version)
+                or (
+                    payload.offline_marked
+                    and existing.marking_key_version != payload.marking_key_version
+                )
             ):
                 raise HTTPException(
                     409,
@@ -1914,7 +1987,9 @@ async def save_lesson_question_attempt(
                 payload.response_time_ms,
                 at=datetime.now(UTC),
                 segment_id=str(segment_id) if segment_id else None,
-            ) if get_settings().focus_timing_verified else payload.response_time_ms
+            )
+            if get_settings().focus_timing_verified
+            else payload.response_time_ms
         ),
         hint_count=max(
             payload.hint_count,
@@ -2595,9 +2670,10 @@ async def teacher_dashboard(
     actor = await require_teacher_console_actor(session, principal)
     class_query = select(Class).where(Class.school_id == actor.school_id)
     from nevo.db.models.teacher_assignment import TeacherClassAssignment
+
     class_query = class_query.join(TeacherClassAssignment).where(
-            TeacherClassAssignment.teacher_id == actor.id,
-            TeacherClassAssignment.removed_at.is_(None),
+        TeacherClassAssignment.teacher_id == actor.id,
+        TeacherClassAssignment.removed_at.is_(None),
     )
     classes = (await session.scalars(class_query.distinct().order_by(Class.name))).all()
     return {
@@ -3524,7 +3600,9 @@ async def _offline_package_payload(
                     ),
                     "audio": item.audio_variant,
                     "interactive": student_activity(item),
-                    "calculation": calculation_for_delivery(item.calculation_variant, segment_id=item.id),
+                    "calculation": calculation_for_delivery(
+                        item.calculation_variant, segment_id=item.id
+                    ),
                 },
                 # Offline too: the point of the offline package is a lesson
                 # that still adapts where there is no network, and an
@@ -3537,7 +3615,9 @@ async def _offline_package_payload(
                     segment_key=item.segment_key,
                     presentation_seed=str(actor.id),
                     question_offset=item.sequence_order - 1,
-                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                    reviewed_question_ids={
+                        qid for sid, qid in reviewed_checks if sid == str(item.id)
+                    },
                     reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
                 ),
             }
@@ -3559,15 +3639,19 @@ async def _offline_package_payload(
             if answer is None:
                 continue
             answer_type = (
-                "numeric" if step.get("input") == "tap" or isinstance(answer, int | float)
-                else "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷")
+                "numeric"
+                if step.get("input") == "tap" or isinstance(answer, int | float)
+                else "expression"
+                if any(symbol in str(answer) for symbol in "+-*/=×÷")
                 else "text"
             )
             question = {
-                "id": str(step.get("stepId")), "answerKey": answer,
+                "id": str(step.get("stepId")),
+                "answerKey": answer,
                 "answerType": answer_type,
-                "acceptedAnswers": [] if step.get("input") == "tap" else
-                step.get("acceptedAnswers") or step.get("accepted") or [],
+                "acceptedAnswers": []
+                if step.get("input") == "tap"
+                else step.get("acceptedAnswers") or step.get("accepted") or [],
             }
             versions[f"calculation:{segment_id}:{question['id']}"] = marking_key_version(question)
             if approved_calculation_support(step):
@@ -3576,22 +3660,34 @@ async def _offline_package_payload(
                         continue
                     answer = mini["answer"]
                     mini_type = (
-                        "numeric" if mini.get("input") in {"tap", "number"}
-                        else "single_choice" if mini.get("input") == "choice"
-                        else "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷")
+                        "numeric"
+                        if mini.get("input") in {"tap", "number"}
+                        else "single_choice"
+                        if mini.get("input") == "choice"
+                        else "expression"
+                        if any(symbol in str(answer) for symbol in "+-*/=×÷")
                         else "text"
                     )
                     mini_id = mini_step_question_id(segment.id, step.get("stepId"), mini.get("id"))
-                    versions[f"calculation:{segment_id}:{mini_id}"] = marking_key_version({
-                        "id": mini_id, "answerKey": answer, "answerType": mini_type,
-                        "acceptedAnswers": mini.get("acceptedAnswers") or [],
-                    })
+                    versions[f"calculation:{segment_id}:{mini_id}"] = marking_key_version(
+                        {
+                            "id": mini_id,
+                            "answerKey": answer,
+                            "answerType": mini_type,
+                            "acceptedAnswers": mini.get("acceptedAnswers") or [],
+                        }
+                    )
         if variant.get("answer") is not None:
             answer = variant["answer"]
-            versions[f"calculation:{segment_id}:{segment_id}"] = marking_key_version({
-                "id": segment_id, "answerKey": answer,
-                "answerType": "expression" if any(symbol in str(answer) for symbol in "+-*/=×÷") else "text",
-            })
+            versions[f"calculation:{segment_id}:{segment_id}"] = marking_key_version(
+                {
+                    "id": segment_id,
+                    "answerKey": answer,
+                    "answerType": "expression"
+                    if any(symbol in str(answer) for symbol in "+-*/=×÷")
+                    else "text",
+                }
+            )
     payload["markingKeyVersions"] = versions
     return OfflinePackage.model_validate(payload).model_dump(by_alias=True, mode="json")
 

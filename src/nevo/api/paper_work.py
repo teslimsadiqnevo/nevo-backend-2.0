@@ -68,7 +68,11 @@ def _response(row: PaperWorkEvidence) -> TypedPaperWorkResponse:
     )
 
 
-@router.post("/students/me/lessons/{lesson_id}/paper-work/typed", response_model=TypedPaperWorkResponse, status_code=201)
+@router.post(
+    "/students/me/lessons/{lesson_id}/paper-work/typed",
+    response_model=TypedPaperWorkResponse,
+    status_code=201,
+)
 async def submit_typed_paper_work(
     lesson_id: UUID,
     payload: TypedPaperWorkWrite,
@@ -83,27 +87,40 @@ async def submit_typed_paper_work(
     sitting = await session.get(LessonSession, payload.session_id)
     segment = await session.get(LessonSegment, payload.segment_id)
     if (
-        sitting is None or sitting.student_id != student.id or sitting.lesson_id != lesson_id
+        sitting is None
+        or sitting.student_id != student.id
+        or sitting.lesson_id != lesson_id
         or sitting.ended_at is not None
-        or segment is None or segment.lesson_id != lesson_id
+        or segment is None
+        or segment.lesson_id != lesson_id
     ):
         raise HTTPException(404, detail={"code": "lesson_work_not_found"})
     if payload.client_submission_id:
-        existing = await session.scalar(select(PaperWorkEvidence).where(
-            PaperWorkEvidence.client_submission_id == payload.client_submission_id,
-        ))
+        existing = await session.scalar(
+            select(PaperWorkEvidence).where(
+                PaperWorkEvidence.client_submission_id == payload.client_submission_id,
+            )
+        )
         if existing is not None:
             if (
-                existing.student_id != student.id or existing.session_id != sitting.id
-                or existing.segment_id != segment.id or existing.question_id != payload.question_id
+                existing.student_id != student.id
+                or existing.session_id != sitting.id
+                or existing.segment_id != segment.id
+                or existing.question_id != payload.question_id
             ):
                 raise HTTPException(409, detail={"code": "paper_work_submission_conflict"})
             return _response(existing)
     approved = await approved_check_ids(session, lesson_id)
     if (str(segment.id), payload.question_id) not in approved:
         raise HTTPException(409, detail={"code": "paper_work_steps_not_approved"})
-    question = next((item for item in segment.comprehension_checkpoints or []
-                     if str(item.get("id")) == payload.question_id), None)
+    question = next(
+        (
+            item
+            for item in segment.comprehension_checkpoints or []
+            if str(item.get("id")) == payload.question_id
+        ),
+        None,
+    )
     expected = question.get("guidedSteps") if question else None
     if not expected or question.get("guidedStepsReviewStatus") != "approved":
         raise HTTPException(409, detail={"code": "paper_work_steps_not_approved"})

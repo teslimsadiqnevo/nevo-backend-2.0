@@ -55,8 +55,8 @@ class BillingEmailWorker:
                     BillingEmailDelivery.next_attempt_at <= now,
                     or_(
                         BillingEmailDelivery.status == "pending",
-                        (BillingEmailDelivery.status == "sending") &
-                        (BillingEmailDelivery.next_attempt_at <= now - timedelta(minutes=5)),
+                        (BillingEmailDelivery.status == "sending")
+                        & (BillingEmailDelivery.next_attempt_at <= now - timedelta(minutes=5)),
                     ),
                 )
                 .order_by(BillingEmailDelivery.next_attempt_at, BillingEmailDelivery.id)
@@ -84,20 +84,24 @@ class BillingEmailWorker:
             f"{school.name}: invoice {invoice.invoice_number} for {invoice.period_label}, "
             f"{invoice.currency.value} {invoice.amount:,.2f}, due {invoice.due_at.isoformat()}."
         )
-        pdf = render_simple_pdf([
-            "NEVO LEARNING INVOICE",
-            f"Invoice: {invoice.invoice_number}",
-            f"School: {school.name}",
-            f"Issued: {invoice.issued_at.isoformat()}",
-            f"Due: {invoice.due_at.isoformat()}",
-            *_invoice_working(invoice),
-            f"Total: {invoice.currency.value} {invoice.amount}",
-            f"Status: {invoice.status.value}",
-            "This document was generated from the school's billing record.",
-        ])
+        pdf = render_simple_pdf(
+            [
+                "NEVO LEARNING INVOICE",
+                f"Invoice: {invoice.invoice_number}",
+                f"School: {school.name}",
+                f"Issued: {invoice.issued_at.isoformat()}",
+                f"Due: {invoice.due_at.isoformat()}",
+                *_invoice_working(invoice),
+                f"Total: {invoice.currency.value} {invoice.amount}",
+                f"Status: {invoice.status.value}",
+                "This document was generated from the school's billing record.",
+            ]
+        )
         try:
             await self._delivery.send(
-                to=recipient, subject=subject, text=summary,
+                to=recipient,
+                subject=subject,
+                text=summary,
                 html=render_email(heading=subject, preheader=summary, paragraphs=[summary]),
                 attachment=(f"{invoice.invoice_number}.pdf", pdf),
             )
@@ -117,7 +121,7 @@ class BillingEmailWorker:
                 row.status = "failed" if row.attempt_count >= 6 else "pending"
                 row.last_error = error[:1000]
                 row.next_attempt_at = datetime.now(UTC) + timedelta(
-                    minutes=min(60, 2 ** row.attempt_count)
+                    minutes=min(60, 2**row.attempt_count)
                 )
             else:
                 row.status = "sent"

@@ -511,7 +511,9 @@ class BaselineTrial(BaseModel):
     #: means the activity could not be presented or a motor target was left
     #: untapped. Choosing "not sure" is a response, not a skip.
     skipped: bool = False
-    practice: bool = Field(default=False, description="Practice feedback only; excluded from baseline scoring.")
+    practice: bool = Field(
+        default=False, description="Practice feedback only; excluded from baseline scoring."
+    )
     reading_word_count: int | None = Field(
         default=None,
         alias="readingWordCount",
@@ -557,7 +559,9 @@ class BaselineTrialsRequest(BaseModel):
 
     @model_validator(mode="after")
     def word_conflict_sequence(self):
-        rows = [row for row in self.trials if row.dimension in {"inhibition", "interference_control"}]
+        rows = [
+            row for row in self.trials if row.dimension in {"inhibition", "interference_control"}
+        ]
         if not rows:
             return self
         practice = [row for row in rows if row.practice]
@@ -573,7 +577,9 @@ class BaselineTrialsRequest(BaseModel):
         for condition in ("congruent", "incongruent"):
             for target in ("LEFT", "RIGHT"):
                 if sum(row.condition == condition and row.target == target for row in scored) != 8:
-                    raise ValueError("Word Conflict requires eight scored trials per condition and target")
+                    raise ValueError(
+                        "Word Conflict requires eight scored trials per condition and target"
+                    )
         run = 0
         previous = None
         for row in scored:
@@ -632,7 +638,8 @@ class BaselinePromptResponse(BaseModel):
     done_today: bool = Field(default=False, alias="doneToday")
     answered_at: datetime | None = Field(default=None, alias="answeredAt")
     motor_task: dict[str, int] | None = Field(
-        default=None, alias="motorTask",
+        default=None,
+        alias="motorTask",
         description="Present only on motor-speed days: sampleCount 8, practiceCount 2.",
     )
 
@@ -656,7 +663,10 @@ class BaselinePromptAnswer(BaseModel):
     trials: list[BaselineTrial] = Field(default_factory=list, max_length=100)
     form_factor: BaselineFormFactor | None = Field(default=None, alias="formFactor")
     motor_samples_ms: list[Annotated[int, Field(ge=0, strict=True)]] | None = Field(
-        default=None, alias="motorSamplesMs", min_length=8, max_length=8,
+        default=None,
+        alias="motorSamplesMs",
+        min_length=8,
+        max_length=8,
         description="Eight reach-and-tap timings; first two are practice, six are scored.",
     )
     motor_miss_count: int = Field(default=0, alias="motorMissCount", ge=0, le=8)
@@ -879,7 +889,9 @@ async def upload_profile_photo(
     tags=["learning product"],
 )
 async def class_unfinished_checks(
-    class_id: UUID, actor: TeacherScope, session: DatabaseSession,
+    class_id: UUID,
+    actor: TeacherScope,
+    session: DatabaseSession,
 ) -> list[UnfinishedClassCheckResponse]:
     school_class = await session.get(Class, class_id)
     if school_class is None or school_class.school_id != actor.school_id:
@@ -889,27 +901,32 @@ async def class_unfinished_checks(
         raise HTTPException(404, detail={"code": "class_not_found"})
     await require_teacher_console_class(session, teacher, class_id)
     now = datetime.now(UTC)
-    rows = (await session.execute(
-        select(LessonProgress, User, Lesson)
-        .join(User, User.id == LessonProgress.student_id)
-        .join(Lesson, Lesson.id == LessonProgress.lesson_id)
-        .join(StudentClassEnrollment, StudentClassEnrollment.student_id == User.id)
-        .where(
-            StudentClassEnrollment.class_id == class_id,
-            LessonProgress.status != "completed",
-            LessonProgress.check_position.is_not(None),
-            LessonProgress.check_resumable_until > now,
+    rows = (
+        await session.execute(
+            select(LessonProgress, User, Lesson)
+            .join(User, User.id == LessonProgress.student_id)
+            .join(Lesson, Lesson.id == LessonProgress.lesson_id)
+            .join(StudentClassEnrollment, StudentClassEnrollment.student_id == User.id)
+            .where(
+                StudentClassEnrollment.class_id == class_id,
+                LessonProgress.status != "completed",
+                LessonProgress.check_position.is_not(None),
+                LessonProgress.check_resumable_until > now,
+            )
+            .order_by(User.first_name, User.last_name, Lesson.title)
         )
-        .order_by(User.first_name, User.last_name, Lesson.title)
-    )).all()
-    return [UnfinishedClassCheckResponse(
-        student_id=student.id,
-        student_name=_display_name(student),
-        lesson_id=lesson.id,
-        lesson_title=lesson.title,
-        check_position=progress.check_position,
-        resumable_until=progress.check_resumable_until,
-    ) for progress, student, lesson in rows]
+    ).all()
+    return [
+        UnfinishedClassCheckResponse(
+            student_id=student.id,
+            student_name=_display_name(student),
+            lesson_id=lesson.id,
+            lesson_title=lesson.title,
+            check_position=progress.check_position,
+            resumable_until=progress.check_resumable_until,
+        )
+        for progress, student, lesson in rows
+    ]
 
 
 @router.get(
@@ -1106,10 +1123,15 @@ async def request_admin_support_for_student(
         raise HTTPException(status_code=404, detail="Deactivated student not found")
     assigned = await session.scalar(
         select(TeacherClassAssignment.id)
-        .join(StudentClassEnrollment, StudentClassEnrollment.class_id == TeacherClassAssignment.class_id)
-        .where(TeacherClassAssignment.teacher_id == actor.user_id,
-               TeacherClassAssignment.removed_at.is_(None),
-               StudentClassEnrollment.student_id == student_id)
+        .join(
+            StudentClassEnrollment,
+            StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
+        )
+        .where(
+            TeacherClassAssignment.teacher_id == actor.user_id,
+            TeacherClassAssignment.removed_at.is_(None),
+            StudentClassEnrollment.student_id == student_id,
+        )
     )
     if assigned is None:
         raise HTTPException(status_code=404, detail="Deactivated student not found")
@@ -1531,27 +1553,37 @@ async def lesson_detail(
     reviewed_levels = (
         await approved_level_ids(session, lesson.id) if actor.role == UserRole.STUDENT else set()
     )
-    outstanding = (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) if review else 0
+    outstanding = (
+        (await _unapproved_counts(session, [lesson.id])).get(lesson.id, 0) if review else 0
+    )
     response = LessonDetailResponse(
         **_lesson_summary(
             lesson,
             assignment_count=int(assignment_count or 0),
             review_complete=review.review_complete if review else False,
             can_assign=bool(review and review.ready_to_assign and outstanding == 0),
-        ).model_dump(
-            by_alias=True
-        ),
+        ).model_dump(by_alias=True),
         confirmationSummary=lesson.confirmation_summary,
         recap=lesson.recap,
         assessment=[
             ComprehensionCheckpoint.model_validate(item)
             for item in (
                 student_checkpoint_payloads(
-                    lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
-                    reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(lesson.id)},
-                    reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(lesson.id)},
-                ) if actor.role == UserRole.STUDENT else checkpoint_payloads(
-                    lesson.assessment or [], segment_key="lesson-assessment", presentation_seed=str(actor.id),
+                    lesson.assessment or [],
+                    segment_key="lesson-assessment",
+                    presentation_seed=str(actor.id),
+                    reviewed_question_ids={
+                        qid for sid, qid in reviewed_checks if sid == str(lesson.id)
+                    },
+                    reviewed_level_ids={
+                        qid for sid, qid in reviewed_levels if sid == str(lesson.id)
+                    },
+                )
+                if actor.role == UserRole.STUDENT
+                else checkpoint_payloads(
+                    lesson.assessment or [],
+                    segment_key="lesson-assessment",
+                    presentation_seed=str(actor.id),
                 )
             )
             if actor.role != UserRole.STUDENT or item["teacherReviewed"]
@@ -1582,15 +1614,27 @@ async def lesson_detail(
                 else None,
                 comprehensionCheckpoints=(
                     student_checkpoint_payloads(
-                        item.comprehension_checkpoints, segment_key=item.segment_key,
-                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
-                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
-                        reviewed_level_ids={qid for sid, qid in reviewed_levels if sid == str(item.id)},
-                    ) if actor.role == UserRole.STUDENT else checkpoint_payloads(
-                        item.comprehension_checkpoints, segment_key=item.segment_key,
-                        presentation_seed=str(actor.id), question_offset=item.sequence_order - 1,
+                        item.comprehension_checkpoints,
+                        segment_key=item.segment_key,
+                        presentation_seed=str(actor.id),
+                        question_offset=item.sequence_order - 1,
+                        reviewed_question_ids={
+                            qid for sid, qid in reviewed_checks if sid == str(item.id)
+                        },
+                        reviewed_level_ids={
+                            qid for sid, qid in reviewed_levels if sid == str(item.id)
+                        },
+                    )
+                    if actor.role == UserRole.STUDENT
+                    else checkpoint_payloads(
+                        item.comprehension_checkpoints,
+                        segment_key=item.segment_key,
+                        presentation_seed=str(actor.id),
+                        question_offset=item.sequence_order - 1,
                         include_pending_guidance=True,
-                        reviewed_question_ids={qid for sid, qid in reviewed_checks if sid == str(item.id)},
+                        reviewed_question_ids={
+                            qid for sid, qid in reviewed_checks if sid == str(item.id)
+                        },
                     )
                 ),
                 textVariant=item.text_variant,
@@ -1604,7 +1648,8 @@ async def lesson_detail(
                 if actor.role == UserRole.STUDENT
                 else activity_for_delivery(item.interactive_variant, item.body),
                 classPractical=(item.interactive_variant or {}).get("classPractical")
-                if actor.role != UserRole.STUDENT else None,
+                if actor.role != UserRole.STUDENT
+                else None,
                 activityAvailability=(
                     ActivityAvailability(
                         reachableByStudents=False,
@@ -1655,9 +1700,7 @@ async def lesson_detail(
         ],
     )
     if actor.role == UserRole.STUDENT:
-        return JSONResponse(
-            online_student_lesson(response.model_dump(mode="json", by_alias=True))
-        )
+        return JSONResponse(online_student_lesson(response.model_dump(mode="json", by_alias=True)))
     return response
 
 
@@ -1833,11 +1876,17 @@ async def _escalation_class(session: DatabaseSession, student: User | None) -> C
 
 
 async def _escalation_response(
-    session: DatabaseSession, record: Escalation, student: User, *, notified_count: int | None = None
+    session: DatabaseSession,
+    record: Escalation,
+    student: User,
+    *,
+    notified_count: int | None = None,
 ) -> EscalationResponse:
     teacher = await session.get(User, record.teacher_id)
     viewer = await session.get(User, record.acknowledged_by) if record.acknowledged_by else None
-    recipient = await session.get(User, record.recipient_user_id) if record.recipient_user_id else None
+    recipient = (
+        await session.get(User, record.recipient_user_id) if record.recipient_user_id else None
+    )
     school_class = await _escalation_class(session, student)
     recipient_name = _display_name(recipient) if recipient else None
     return EscalationResponse(
@@ -1860,8 +1909,11 @@ async def _escalation_response(
         recipientId=record.recipient_user_id,
         recipientName=recipient_name,
         receivedAt=record.received_at,
-        receiptLine=(f"Sent to {recipient_name} on {record.received_at:%d %B %Y at %H:%M UTC}"
-                     if recipient_name and record.received_at else None),
+        receiptLine=(
+            f"Sent to {recipient_name} on {record.received_at:%d %B %Y at %H:%M UTC}"
+            if recipient_name and record.received_at
+            else None
+        ),
         notifiedCount=notified_count,
     )
 
@@ -1903,26 +1955,37 @@ async def create_escalation(
     session.add(record)
     await session.flush()
     if fallback:
-        session.add(Notification(
-            recipient_id=fallback.id, recipient_role=fallback.role.value,
-            type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
-            title="A teacher raised a concern", description=f"A concern about {_display_name(student)} needs your attention.",
-            navigates_to="/admin/notifications", category=NotificationCategory.ATTENTION.value,
-        ))
+        session.add(
+            Notification(
+                recipient_id=fallback.id,
+                recipient_role=fallback.role.value,
+                type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
+                title="A teacher raised a concern",
+                description=f"A concern about {_display_name(student)} needs your attention.",
+                navigates_to="/admin/notifications",
+                category=NotificationCategory.ATTENTION.value,
+            )
+        )
     else:
         for grant in holders:
             holder = await session.get(User, grant.holder_user_id)
             if holder is None:
                 continue
-            session.add(Notification(
-                recipient_id=holder.id, recipient_role=holder.role.value,
-                type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
-                title="A teacher raised a concern",
-                description=f"A concern about {_display_name(student)} needs your attention.",
-                navigates_to=(f"/teacher/students/{student.id}"
-                              if holder.role == UserRole.TEACHER else "/admin/notifications"),
-                category=NotificationCategory.ATTENTION.value,
-            ))
+            session.add(
+                Notification(
+                    recipient_id=holder.id,
+                    recipient_role=holder.role.value,
+                    type=NotificationType.CONCEPT_SUPPORT_NEEDED.value,
+                    title="A teacher raised a concern",
+                    description=f"A concern about {_display_name(student)} needs your attention.",
+                    navigates_to=(
+                        f"/teacher/students/{student.id}"
+                        if holder.role == UserRole.TEACHER
+                        else "/admin/notifications"
+                    ),
+                    category=NotificationCategory.ATTENTION.value,
+                )
+            )
     result = await _escalation_response(
         session, record, student, notified_count=1 if fallback else len(holders)
     )
@@ -1967,20 +2030,26 @@ async def list_escalations(
     )
     is_holder = await holds_learning_support(session, actor)
     own_class = Escalation.student_id.in_(
-                select(StudentClassEnrollment.student_id)
-                .join(
-                    TeacherClassAssignment,
-                    TeacherClassAssignment.class_id == StudentClassEnrollment.class_id,
-                )
-                .where(
-                    TeacherClassAssignment.teacher_id == actor.id,
-                    TeacherClassAssignment.removed_at.is_(None),
-                )
-            )
+        select(StudentClassEnrollment.student_id)
+        .join(
+            TeacherClassAssignment,
+            TeacherClassAssignment.class_id == StudentClassEnrollment.class_id,
+        )
+        .where(
+            TeacherClassAssignment.teacher_id == actor.id,
+            TeacherClassAssignment.removed_at.is_(None),
+        )
+    )
     if not await can_be_class_teacher(session, actor):
         own_class = false()
     if is_holder:
-        query = query.where(or_(Escalation.routed_to == "learning_support", Escalation.recipient_user_id == actor.id, own_class))
+        query = query.where(
+            or_(
+                Escalation.routed_to == "learning_support",
+                Escalation.recipient_user_id == actor.id,
+                own_class,
+            )
+        )
     else:
         query = query.where(or_(Escalation.recipient_user_id == actor.id, own_class))
     if open_only:
@@ -1988,11 +2057,13 @@ async def list_escalations(
     if student_id is not None:
         query = query.where(Escalation.student_id == student_id)
     if class_id is not None:
-        query = query.where(Escalation.student_id.in_(
-            select(StudentClassEnrollment.student_id).where(
-                StudentClassEnrollment.class_id == class_id
+        query = query.where(
+            Escalation.student_id.in_(
+                select(StudentClassEnrollment.student_id).where(
+                    StudentClassEnrollment.class_id == class_id
+                )
             )
-        ))
+        )
     total = int(
         await session.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     )
@@ -2266,11 +2337,13 @@ async def message_threads(
             )
             await session.commit()
     query = select(MessageThread).where(MessageThread.school_id == user.school_id)
-    query = query.where(_thread_access_clause(
-        user,
-        teacher_scope=await can_be_class_teacher(session, user)
-        and not await holds_learning_support(session, user),
-    ))
+    query = query.where(
+        _thread_access_clause(
+            user,
+            teacher_scope=await can_be_class_teacher(session, user)
+            and not await holds_learning_support(session, user),
+        )
+    )
     records = (await session.scalars(query.order_by(MessageThread.last_message_at.desc()))).all()
     threads = [await _thread_response(session, item, user.id) for item in records]
     return MessageThreadListResponse(threads=threads, total=len(threads))
@@ -2447,7 +2520,11 @@ async def submit_baseline_trials(
     user = await session.get(User, principal.user_id, with_for_update=True)
     if user is None:
         raise HTTPException(404, detail="Student not found")
-    item_ids = [trial.probe_item_id for trial in payload.trials if trial.probe_item_id and not trial.practice]
+    item_ids = [
+        trial.probe_item_id
+        for trial in payload.trials
+        if trial.probe_item_id and not trial.practice
+    ]
     answers: dict[UUID, str] = {}
     if item_ids:
         rows = await session.execute(
@@ -2469,7 +2546,8 @@ async def submit_baseline_trials(
             continue
         correct = (
             (trial.response or "").strip().upper() == trial.target
-            if trial.dimension in {"inhibition", "interference_control"} and trial.target is not None
+            if trial.dimension in {"inhibition", "interference_control"}
+            and trial.target is not None
             else trial.correct
         )
         expected = answers.get(trial.probe_item_id) if trial.probe_item_id else None
@@ -2531,13 +2609,15 @@ async def submit_baseline_trials(
     if interference_trials:
         from nevo.intelligence.interference import reduce_interference
 
-        features = [row for row in features if row.get("dimension") not in {"inhibition", "interference_control"}]
+        features = [
+            row
+            for row in features
+            if row.get("dimension") not in {"inhibition", "interference_control"}
+        ]
         features.append(
             {
                 "dimension": "inhibition",
-                "measurement": reduce_interference(
-                    interference_trials
-                ),
+                "measurement": reduce_interference(interference_trials),
             }
         )
     baseline_profile, engine_config = build_baseline_profile(
@@ -2744,13 +2824,43 @@ async def record_recalibrate_answer(
     if not done:
         if dimension == "motor_speed":
             if payload.trials:
-                raise HTTPException(422, detail={"code": "motor_samples_required", "message": "Send motorSamplesMs, not scored trials, for a motor-speed warm-up."})
-            if not payload.motor_step_skipped and (payload.motor_samples_ms is None or payload.form_factor is None):
-                raise HTTPException(422, detail={"code": "motor_samples_required", "message": "Send eight motorSamplesMs and formFactor, or mark the task skipped."})
+                raise HTTPException(
+                    422,
+                    detail={
+                        "code": "motor_samples_required",
+                        "message": (
+                            "Send motorSamplesMs, not scored trials, for a motor-speed warm-up."
+                        ),
+                    },
+                )
+            if not payload.motor_step_skipped and (
+                payload.motor_samples_ms is None or payload.form_factor is None
+            ):
+                raise HTTPException(
+                    422,
+                    detail={
+                        "code": "motor_samples_required",
+                        "message": (
+                            "Send eight motorSamplesMs and formFactor, or mark the task skipped."
+                        ),
+                    },
+                )
             if payload.motor_step_skipped and payload.motor_samples_ms is not None:
-                raise HTTPException(422, detail={"code": "motor_samples_conflict", "message": "A skipped task cannot carry motor samples."})
+                raise HTTPException(
+                    422,
+                    detail={
+                        "code": "motor_samples_conflict",
+                        "message": "A skipped task cannot carry motor samples.",
+                    },
+                )
         elif payload.motor_samples_ms is not None or payload.motor_step_skipped:
-            raise HTTPException(422, detail={"code": "motor_task_not_due", "message": "Motor samples are accepted only on a motor-speed day."})
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "motor_task_not_due",
+                    "message": "Motor samples are accepted only on a motor-speed day.",
+                },
+            )
     # A device task carries no answer to mark. It is still a completed
     # warm-up, and the point of recording it is that the next tablet knows.
     correct = (
@@ -2777,7 +2887,9 @@ async def record_recalibrate_answer(
             )
         features = []
         if dimension == "motor_speed" and payload.motor_samples_ms is not None:
-            form_factor = "phone_touch" if payload.form_factor == "mobile_touch" else payload.form_factor
+            form_factor = (
+                "phone_touch" if payload.form_factor == "mobile_touch" else payload.form_factor
+            )
             baselines = dict((user.baseline_profile or {}).get("motor_baselines") or {})
             measurement = {
                 "motorBaselineMs": statistics.median(payload.motor_samples_ms[2:]),
@@ -3099,7 +3211,9 @@ async def flags_alias(
     query = select(AttentionFlag).order_by(AttentionFlag.generated_at.desc())
     if open_only:
         query = query.where(AttentionFlag.resolved_at.is_(None))
-    if await can_be_class_teacher(session, actor) and not await holds_learning_support(session, actor):
+    if await can_be_class_teacher(session, actor) and not await holds_learning_support(
+        session, actor
+    ):
         query = query.where(
             AttentionFlag.student_id.in_(
                 select(StudentClassEnrollment.student_id)

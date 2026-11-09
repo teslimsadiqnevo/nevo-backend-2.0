@@ -46,9 +46,13 @@ def build_scheduled_jobs(
         today = datetime.now(UTC).date()
         queued = 0
         async with sessions.begin() as session:
-            invoices = list(await session.scalars(select(Invoice).where(
-                Invoice.status == InvoiceStatus.PENDING,
-            )))
+            invoices = list(
+                await session.scalars(
+                    select(Invoice).where(
+                        Invoice.status == InvoiceStatus.PENDING,
+                    )
+                )
+            )
             for invoice in invoices:
                 queued += await queue_billing_emails(session, invoice=invoice, kind="issued")
                 if invoice.due_at == today or invoice.due_at == today + timedelta(days=7):

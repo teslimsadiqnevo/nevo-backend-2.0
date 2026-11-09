@@ -32,7 +32,5 @@ def build_auth_service(
         rate_limiter=SqlAlchemyLoginRateLimiter(sessions),
         audit_log=SqlAlchemyAuthAuditLog(sessions),
         credential_hasher=hasher,
-        token_service=HmacTokenService(
-            settings.auth_session_pepper.get_secret_value()
-        ),
+        token_service=HmacTokenService(settings.auth_session_pepper.get_secret_value()),
     )

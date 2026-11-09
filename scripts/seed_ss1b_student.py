@@ -110,9 +110,7 @@ async def main() -> None:
                 )
             )
             if enrolled is None:
-                session.add(
-                    StudentClassEnrollment(student_id=STUDENT_ID, class_id=CLASS_ID)
-                )
+                session.add(StudentClassEnrollment(student_id=STUDENT_ID, class_id=CLASS_ID))
 
             # The gate a lesson actually checks. Recorded as the school
             # confirming it, which is what the other two in this class have,
@@ -152,7 +150,10 @@ async def main() -> None:
             print(f"pin          {PIN}")
             print(f"status       {check.status}")
             print(f"consent      {status}")
-            print(f"onboarding   {len(modules & set(ONBOARDING_MODULES))}/{len(ONBOARDING_MODULES)} modules")
+            print(
+                f"onboarding   {len(modules & set(ONBOARDING_MODULES))}"
+                f"/{len(ONBOARDING_MODULES)} modules"
+            )
             ok = (
                 check.status is UserStatus.ACTIVE
                 and status is ConsentStatus.CONFIRMED

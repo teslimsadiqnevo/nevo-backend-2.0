@@ -80,17 +80,17 @@ def render(markdown: str) -> str:
             index += 1
             continue
 
-        if line.startswith("|") and index + 1 < len(lines) and re.match(
-            r"^\|[\s:|-]+\|$", lines[index + 1].strip()
+        if (
+            line.startswith("|")
+            and index + 1 < len(lines)
+            and re.match(r"^\|[\s:|-]+\|$", lines[index + 1].strip())
         ):
             close_list()
             header = [cell.strip() for cell in line.strip().strip("|").split("|")]
             index += 2
             rows: list[list[str]] = []
             while index < len(lines) and lines[index].startswith("|"):
-                rows.append(
-                    [cell.strip() for cell in lines[index].strip().strip("|").split("|")]
-                )
+                rows.append([cell.strip() for cell in lines[index].strip().strip("|").split("|")])
                 index += 1
             head = "".join(f"<th>{inline(cell)}</th>" for cell in header)
             out = [f"<table><thead><tr>{head}</tr></thead><tbody>"]

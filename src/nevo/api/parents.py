@@ -162,7 +162,9 @@ class ParentLearningEvidence(CamelResponse):
     out_of_school_learning: list[ReportedOutsideWork]
 
 
-@router.get("/parents/me/children/{student_id}/learning-evidence", response_model=ParentLearningEvidence)
+@router.get(
+    "/parents/me/children/{student_id}/learning-evidence", response_model=ParentLearningEvidence
+)
 async def parent_learning_evidence(
     student_id: UUID,
     parent_id: ParentDependency,
@@ -170,42 +172,66 @@ async def parent_learning_evidence(
     service: ParentInsightDependency,
 ) -> ParentLearningEvidence:
     await service.require_linked_child(parent_id=parent_id, student_id=student_id)
-    strengthened = (await session.execute(
-        select(StudentConceptLevelMastery, Concept)
-        .join(Concept, Concept.id == StudentConceptLevelMastery.concept_id)
-        .where(StudentConceptLevelMastery.student_id == student_id,
-               StudentConceptLevelMastery.strengthened_at.is_not(None))
-        .order_by(StudentConceptLevelMastery.strengthened_at.desc()).limit(100)
-    )).all()
-    due = (await session.execute(
-        select(StudentConceptScheduling, Concept)
-        .join(Concept, Concept.id == StudentConceptScheduling.concept_id)
-        .where(StudentConceptScheduling.student_id == student_id)
-        .order_by(StudentConceptScheduling.next_review_due).limit(100)
-    )).all()
-    outside = (await session.execute(
-        select(OutOfSchoolLearning, Concept)
-        .join(Concept, Concept.id == OutOfSchoolLearning.concept_id)
-        .where(OutOfSchoolLearning.student_id == student_id)
-        .order_by(OutOfSchoolLearning.created_at.desc()).limit(100)
-    )).all()
+    strengthened = (
+        await session.execute(
+            select(StudentConceptLevelMastery, Concept)
+            .join(Concept, Concept.id == StudentConceptLevelMastery.concept_id)
+            .where(
+                StudentConceptLevelMastery.student_id == student_id,
+                StudentConceptLevelMastery.strengthened_at.is_not(None),
+            )
+            .order_by(StudentConceptLevelMastery.strengthened_at.desc())
+            .limit(100)
+        )
+    ).all()
+    due = (
+        await session.execute(
+            select(StudentConceptScheduling, Concept)
+            .join(Concept, Concept.id == StudentConceptScheduling.concept_id)
+            .where(StudentConceptScheduling.student_id == student_id)
+            .order_by(StudentConceptScheduling.next_review_due)
+            .limit(100)
+        )
+    ).all()
+    outside = (
+        await session.execute(
+            select(OutOfSchoolLearning, Concept)
+            .join(Concept, Concept.id == OutOfSchoolLearning.concept_id)
+            .where(OutOfSchoolLearning.student_id == student_id)
+            .order_by(OutOfSchoolLearning.created_at.desc())
+            .limit(100)
+        )
+    ).all()
     by_concept = {}
     for row, concept in strengthened:
-        by_concept.setdefault(concept.id, StrengthenedConcept(
-            concept_id=concept.id, concept_name=concept.name,
-            recorded_at=row.strengthened_at,
-        ))
+        by_concept.setdefault(
+            concept.id,
+            StrengthenedConcept(
+                concept_id=concept.id,
+                concept_name=concept.name,
+                recorded_at=row.strengthened_at,
+            ),
+        )
     return ParentLearningEvidence(
         student_id=student_id,
         strengthened_concepts=list(by_concept.values()),
-        scheduled_returns=[ScheduledConceptReturn(
-            concept_id=concept.id, concept_name=concept.name,
-            due_at=row.next_review_due,
-        ) for row, concept in due],
-        out_of_school_learning=[ReportedOutsideWork(
-            concept_id=concept.id, concept_name=concept.name,
-            activity_kind=row.activity_kind, recorded_at=row.created_at,
-        ) for row, concept in outside],
+        scheduled_returns=[
+            ScheduledConceptReturn(
+                concept_id=concept.id,
+                concept_name=concept.name,
+                due_at=row.next_review_due,
+            )
+            for row, concept in due
+        ],
+        out_of_school_learning=[
+            ReportedOutsideWork(
+                concept_id=concept.id,
+                concept_name=concept.name,
+                activity_kind=row.activity_kind,
+                recorded_at=row.created_at,
+            )
+            for row, concept in outside
+        ],
     )
 
 

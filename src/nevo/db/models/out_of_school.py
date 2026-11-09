@@ -16,9 +16,17 @@ class OutOfSchoolLearning(Base):
         UniqueConstraint("client_event_id", name="uq_out_of_school_client_event"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
-    student_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    concept_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    concept_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False
+    )
     activity_kind: Mapped[str] = mapped_column(String(24), nullable=False)
     client_event_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

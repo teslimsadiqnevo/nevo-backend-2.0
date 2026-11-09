@@ -166,9 +166,11 @@ async def gate_for_position(session, sitting, position=None, *, complete=False):
         if not complete and position is not None and index >= position:
             break
         questions = [
-            question for question in segment_questions(row)
+            question
+            for question in segment_questions(row)
             if (str(row.id), str(question["id"])) in reviewed
-            or str(question["id"]) in {
+            or str(question["id"])
+            in {
                 str(step.get("stepId")) for step in (row.calculation_variant or {}).get("steps", [])
             }
         ]
@@ -227,25 +229,37 @@ async def require_next_question(session, sitting, segment, question_id):
         )
     )
     expected = next(
-        (str(item["id"]) for item in segment_questions(segment)
-         if str(item["id"]) not in passed
-         and ((str(segment.id), str(item["id"])) in reviewed
-              or str(item["id"]) in {
-                  str(step.get("stepId")) for step in (segment.calculation_variant or {}).get("steps", [])
-              })),
+        (
+            str(item["id"])
+            for item in segment_questions(segment)
+            if str(item["id"]) not in passed
+            and (
+                (str(segment.id), str(item["id"])) in reviewed
+                or str(item["id"])
+                in {
+                    str(step.get("stepId"))
+                    for step in (segment.calculation_variant or {}).get("steps", [])
+                }
+            )
+        ),
         None,
     )
     if expected is not None and str(question_id) != expected:
         from nevo.api.lesson_contracts import approved_calculation_support, mini_step_question_id
 
         current_step = next(
-            (step for step in (segment.calculation_variant or {}).get("steps", [])
-             if str(step.get("stepId")) == expected), None
+            (
+                step
+                for step in (segment.calculation_variant or {}).get("steps", [])
+                if str(step.get("stepId")) == expected
+            ),
+            None,
         )
         if current_step and approved_calculation_support(current_step):
             supported_ids = {
                 mini_step_question_id(segment.id, expected, mini.get("id"))
-                for mini in current_step.get("miniSteps", []) if isinstance(mini, dict)
+                for mini in current_step.get("miniSteps", [])
+                if isinstance(mini, dict)
             }
             if str(question_id) in supported_ids:
                 return
@@ -285,18 +299,26 @@ def teaching_routes(segment, current_format="text", current_depth="original", qu
             ),
         ]
         step_id = str((question or {}).get("id") or "")
-        step = next((item for item in (segment.calculation_variant or {}).get("steps", [])
-                     if str(item.get("stepId")) == step_id), None)
+        step = next(
+            (
+                item
+                for item in (segment.calculation_variant or {}).get("steps", [])
+                if str(item.get("stepId")) == step_id
+            ),
+            None,
+        )
         from nevo.api.lesson_contracts import approved_calculation_support
 
         if step and approved_calculation_support(step) and step.get("miniSteps"):
-            routes.append(TeachingRoute(
-                action="calculation_mini_steps", label="Try smaller answerable steps"
-            ))
+            routes.append(
+                TeachingRoute(action="calculation_mini_steps", label="Try smaller answerable steps")
+            )
         if step and approved_calculation_support(step) and step.get("conceptExplanation"):
-            routes.append(TeachingRoute(
-                action="calculation_explanation", label="Revisit the idea behind this step"
-            ))
+            routes.append(
+                TeachingRoute(
+                    action="calculation_explanation", label="Revisit the idea behind this step"
+                )
+            )
         routes.append(TeachingRoute(action="slower", label="Take it more slowly"))
         return routes
     formats = student_modalities(segment)
@@ -322,10 +344,7 @@ def teaching_routes(segment, current_format="text", current_depth="original", qu
         ]
     )
     question = question or {}
-    if (
-        question.get("guidedStepsReviewStatus") == "approved"
-        and question.get("guidedSteps")
-    ):
+    if question.get("guidedStepsReviewStatus") == "approved" and question.get("guidedSteps"):
         routes.append(TeachingRoute(action="panel", label="Work through it together"))
     return routes
 
@@ -426,19 +445,26 @@ async def note_attempt(session, sitting, segment, attempt):
             presentation["scaffoldLevel"] = ScaffoldingLevel.STRONG.value
             step = next(
                 (
-                    row for row in (segment.calculation_variant or {}).get("steps", [])
+                    row
+                    for row in (segment.calculation_variant or {}).get("steps", [])
                     if str(row.get("stepId")) == attempt.question_id
                 ),
                 None,
             )
-            calculation_steps = ([{
-                "stepId": step["stepId"],
-                "prompt": step["prompt"],
-                "input": step.get("input"),
-                "expectedInput": step.get("expectedInput"),
-                "options": step.get("options") or [],
-                "unit": step.get("unit"),
-            }] if step else [])
+            calculation_steps = (
+                [
+                    {
+                        "stepId": step["stepId"],
+                        "prompt": step["prompt"],
+                        "input": step.get("input"),
+                        "expectedInput": step.get("expectedInput"),
+                        "options": step.get("options") or [],
+                        "unit": step.get("unit"),
+                    }
+                ]
+                if step
+                else []
+            )
             screens = []
         else:
             calculation_steps = []

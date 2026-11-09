@@ -18,9 +18,13 @@ def build_baseline_profile(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Reduce device-produced baseline aggregates into bounded engine settings."""
     rows = list(features)
-    interference_rows = [row for row in rows if row.get("dimension") in {"inhibition", "interference_control"}]
+    interference_rows = [
+        row for row in rows if row.get("dimension") in {"inhibition", "interference_control"}
+    ]
     # This measure must not leak into generic accuracy/processing-speed averages.
-    rows = [row for row in rows if row.get("dimension") not in {"inhibition", "interference_control"}]
+    rows = [
+        row for row in rows if row.get("dimension") not in {"inhibition", "interference_control"}
+    ]
     values: dict[str, list[float]] = defaultdict(list)
     for row in rows:
         for key, value in row.items():
@@ -277,7 +281,9 @@ def reduce_trials(
     from collections import defaultdict
 
     trials = [trial for trial in trials if not trial.get("practice")]
-    interference_trials = [row for row in trials if row.get("dimension") in {"inhibition", "interference_control"}]
+    interference_trials = [
+        row for row in trials if row.get("dimension") in {"inhibition", "interference_control"}
+    ]
     buckets: dict[tuple[str, str | None], list[Mapping[str, object]]] = defaultdict(list)
     for trial in trials:
         if trial.get("dimension") in {"inhibition", "interference_control"}:

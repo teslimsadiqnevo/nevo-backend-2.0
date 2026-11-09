@@ -90,7 +90,8 @@ async def main():
         raise SystemExit(f"{args.provider} key is not configured locally")
     incidents = json.loads(INCIDENTS.read_text())
     if {case.get("id") for case in incidents} != {
-        "incident-zobo-precaution", "incident-password-collection"
+        "incident-zobo-precaution",
+        "incident-password-collection",
     } or any(not case.get("text") for case in incidents):
         raise SystemExit("Zobo and password regression cases are required")
     cases = [*json.loads(CASES.read_text()), *incidents]
@@ -111,24 +112,39 @@ async def main():
                     await asyncio.sleep(attempt + 1)
             raw_action = detail.get("action") if isinstance(detail, dict) else None
             raw_outcome = (
-                "allow" if raw_action == "allow"
-                else "withhold" if raw_action in {"block", "safeguard"}
+                (
+                    "allow"
+                    if raw_action == "allow"
+                    else "withhold"
+                    if raw_action in {"block", "safeguard"}
+                    else None
+                )
+                if args.provider == "current"
                 else None
-            ) if args.provider == "current" else None
-            rows.append({
-                "id": case["id"], "label": case["label"], "actual": actual,
-                "matched": actual == case["label"], "detail": detail,
-                "modelVerdictBeforeOverride": raw_outcome,
-                "overrideChangedVerdict": raw_outcome is not None and raw_outcome != actual,
-            })
+            )
+            rows.append(
+                {
+                    "id": case["id"],
+                    "label": case["label"],
+                    "actual": actual,
+                    "matched": actual == case["label"],
+                    "detail": detail,
+                    "modelVerdictBeforeOverride": raw_outcome,
+                    "overrideChangedVerdict": raw_outcome is not None and raw_outcome != actual,
+                }
+            )
             print(f"{case['id']}: {actual}", flush=True)
     summary = {
         "provider": args.provider,
         "datasets": [str(path.relative_to(ROOT)) for path in (CASES, INCIDENTS)],
-        "labelStatus": "18 original labels approved; revised passages and near-miss pairs await Lydia review",
+        "labelStatus": (
+            "18 original labels approved; revised passages and near-miss pairs await Lydia review"
+        ),
         "cases": len(rows),
         "falseBlocks": sum(row["label"] == "allow" and row["actual"] == "withhold" for row in rows),
-        "unsafeMisses": sum(row["label"] == "withhold" and row["actual"] == "allow" for row in rows),
+        "unsafeMisses": sum(
+            row["label"] == "withhold" and row["actual"] == "allow" for row in rows
+        ),
         "modelFalseBlocksBeforeOverride": sum(
             row["label"] == "allow" and row["modelVerdictBeforeOverride"] == "withhold"
             for row in rows

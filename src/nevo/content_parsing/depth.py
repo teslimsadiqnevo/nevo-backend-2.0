@@ -236,8 +236,12 @@ class DepthVariantService:
                 raise DepthVariantError("Source exceeds the bounded depth-rewrite budget")
             results = [
                 await self.generate(
-                    title=title, body=part, requested_by_user_id=requested_by_user_id,
-                    key_terms=[term for term in (key_terms or []) if term.casefold() in part.casefold()],
+                    title=title,
+                    body=part,
+                    requested_by_user_id=requested_by_user_id,
+                    key_terms=[
+                        term for term in (key_terms or []) if term.casefold() in part.casefold()
+                    ],
                 )
                 for part in parts
             ]
@@ -295,8 +299,12 @@ class DepthVariantService:
                                 )
                                 + "\n\nSOURCE SEGMENT:\n"
                                 + body
-                                + ("\n\nREQUIRED KEY TERMS (preserve verbatim): "
-                                   + json.dumps(key_terms) if key_terms else "")
+                                + (
+                                    "\n\nREQUIRED KEY TERMS (preserve verbatim): "
+                                    + json.dumps(key_terms)
+                                    if key_terms
+                                    else ""
+                                )
                             ),
                         },
                         max_output_tokens=token_budget,

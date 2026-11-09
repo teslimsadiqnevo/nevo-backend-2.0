@@ -17,12 +17,24 @@ class PaperWorkEvidence(Base):
         UniqueConstraint("client_submission_id", name="uq_paper_work_client_submission"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
-    student_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    session_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("lesson_sessions.id", ondelete="CASCADE"), nullable=False)
-    lesson_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
-    segment_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("lesson_segments.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("lesson_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    lesson_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False
+    )
+    segment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("lesson_segments.id", ondelete="CASCADE"), nullable=False
+    )
     question_id: Mapped[str] = mapped_column(String(160), nullable=False)
     client_submission_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     marks: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

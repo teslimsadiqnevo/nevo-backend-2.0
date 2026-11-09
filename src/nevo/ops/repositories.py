@@ -17,9 +17,7 @@ class SqlAlchemyHeartbeatRepository:
             statement = (
                 insert(SystemHeartbeat)
                 .values(id=uuid4(), beat_date=beat_date)
-                .on_conflict_do_nothing(
-                    index_elements=[SystemHeartbeat.beat_date]
-                )
+                .on_conflict_do_nothing(index_elements=[SystemHeartbeat.beat_date])
                 .returning(SystemHeartbeat)
             )
             row = (await session.execute(statement)).scalar_one_or_none()

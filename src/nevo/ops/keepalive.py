@@ -24,9 +24,7 @@ class SelfPingLoop:
     ) -> None:
         self._health_url = health_url
         self._interval_seconds = interval_seconds
-        self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0)
-        )
+        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:

@@ -15,7 +15,8 @@ depends_on = None
 def upgrade():
     op.drop_constraint("kind_valid", "lesson_review_signoffs", type_="check")
     op.create_check_constraint(
-        "kind_valid", "lesson_review_signoffs",
+        "kind_valid",
+        "lesson_review_signoffs",
         "kind IN ('key_points', 'rewrites', 'guided_steps', 'checks')",
     )
 
@@ -24,6 +25,7 @@ def downgrade():
     op.execute("DELETE FROM lesson_review_signoffs WHERE kind = 'checks'")
     op.drop_constraint("kind_valid", "lesson_review_signoffs", type_="check")
     op.create_check_constraint(
-        "kind_valid", "lesson_review_signoffs",
+        "kind_valid",
+        "lesson_review_signoffs",
         "kind IN ('key_points', 'rewrites', 'guided_steps')",
     )

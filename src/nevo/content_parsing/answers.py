@@ -31,7 +31,13 @@ def _number(value):
 def _expression(value):
     if not isinstance(value, str) or len(value) > 200:
         return None
-    value = value.strip().casefold().replace("\u2212", "-").replace("\u00d7", "*").replace("\u00f7", "/")
+    value = (
+        value.strip()
+        .casefold()
+        .replace("\u2212", "-")
+        .replace("\u00d7", "*")
+        .replace("\u00f7", "/")
+    )
     if not re.fullmatch(r"[a-z0-9+*/=().\s-]+", value):
         return None
     return re.sub(r"\s*([+*/=()-])\s*", r"\1", value)
@@ -77,9 +83,11 @@ def answer_matches(answer, question):
             continue
         if normalise(answer) == normalise(candidate):
             return True
-        if question.get("answerType") == "expression" and (
-            expected_expression := _expression(candidate)
-        ) is not None and _expression(answer) == expected_expression:
+        if (
+            question.get("answerType") == "expression"
+            and (expected_expression := _expression(candidate)) is not None
+            and _expression(answer) == expected_expression
+        ):
             return True
         if (
             allow_number

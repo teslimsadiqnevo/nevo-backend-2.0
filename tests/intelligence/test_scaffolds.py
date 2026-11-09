@@ -111,7 +111,6 @@ def test_a_correct_answer_that_needed_hints_holds_the_support_level() -> None:
     have understated it.
     """
 
-
     engine = ProgressiveScaffoldFadingEngine()
     student_id = uuid4()
     concept_id = uuid4()

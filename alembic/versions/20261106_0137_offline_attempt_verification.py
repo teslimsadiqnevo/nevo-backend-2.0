@@ -10,11 +10,14 @@ branch_labels = depends_on = None
 
 
 def upgrade():
-    op.add_column("lesson_question_attempts", sa.Column(
-        "offline_marked", sa.Boolean(), nullable=False, server_default=sa.text("false")
-    ))
+    op.add_column(
+        "lesson_question_attempts",
+        sa.Column("offline_marked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+    )
     op.add_column("lesson_question_attempts", sa.Column("marking_key_version", sa.String(64)))
-    op.add_column("lesson_question_attempts", sa.Column("server_verified_at", sa.DateTime(timezone=True)))
+    op.add_column(
+        "lesson_question_attempts", sa.Column("server_verified_at", sa.DateTime(timezone=True))
+    )
     op.execute("UPDATE lesson_question_attempts SET server_verified_at = submitted_at")
 
 

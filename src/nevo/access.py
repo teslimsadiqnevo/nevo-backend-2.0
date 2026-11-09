@@ -162,9 +162,7 @@ async def accessible_lessons_page(
     query = accessible_lessons_query(actor, scope=scope)
     if query is None:
         return [], 0
-    total = await session.scalar(
-        select(func.count()).select_from(query.order_by(None).subquery())
-    )
+    total = await session.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
     lessons = list((await session.scalars(query.limit(limit).offset(offset))).all())
     return lessons, int(total or 0)
 

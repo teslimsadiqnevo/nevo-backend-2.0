@@ -120,9 +120,7 @@ def test_the_parser_reports_that_stage_before_it_makes_the_media() -> None:
     source = inspect.getsource(ContentParsingService.parse)
 
     assert "UploadStage.PREPARING_ADAPTATIONS" in source
-    assert source.index("UploadStage.PREPARING_ADAPTATIONS") < source.index(
-        "_generate_media"
-    )
+    assert source.index("UploadStage.PREPARING_ADAPTATIONS") < source.index("_generate_media")
 
 
 def test_a_progress_report_that_fails_does_not_cost_the_lesson() -> None:

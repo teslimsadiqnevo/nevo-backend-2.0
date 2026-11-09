@@ -36,7 +36,9 @@ class OutsideWorkResponse(CamelResponse):
     source: Literal["learner_report"] = "learner_report"
 
 
-@router.post("/students/me/out-of-school-learning", response_model=OutsideWorkResponse, status_code=201)
+@router.post(
+    "/students/me/out-of-school-learning", response_model=OutsideWorkResponse, status_code=201
+)
 async def report_outside_work(
     payload: OutsideWorkWrite,
     principal: PrincipalDependency,
@@ -51,15 +53,23 @@ async def report_outside_work(
     if concept is None or concept.school_id != student.school_id:
         raise HTTPException(404, detail={"code": "concept_not_found"})
     if payload.client_event_id:
-        existing = await session.scalar(select(OutOfSchoolLearning).where(
-            OutOfSchoolLearning.client_event_id == payload.client_event_id,
-        ))
+        existing = await session.scalar(
+            select(OutOfSchoolLearning).where(
+                OutOfSchoolLearning.client_event_id == payload.client_event_id,
+            )
+        )
         if existing is not None:
-            if existing.student_id != student.id or existing.concept_id != concept.id or existing.activity_kind != payload.activity_kind:
+            if (
+                existing.student_id != student.id
+                or existing.concept_id != concept.id
+                or existing.activity_kind != payload.activity_kind
+            ):
                 raise HTTPException(409, detail={"code": "outside_work_event_conflict"})
             return OutsideWorkResponse(
-                id=existing.id, concept_id=existing.concept_id,
-                activity_kind=existing.activity_kind, recorded_at=existing.created_at,
+                id=existing.id,
+                concept_id=existing.concept_id,
+                activity_kind=existing.activity_kind,
+                recorded_at=existing.created_at,
             )
     row = OutOfSchoolLearning(
         student_id=student.id,
@@ -71,6 +81,8 @@ async def report_outside_work(
     await session.commit()
     await session.refresh(row)
     return OutsideWorkResponse(
-        id=row.id, concept_id=concept.id, activity_kind=payload.activity_kind,
+        id=row.id,
+        concept_id=concept.id,
+        activity_kind=payload.activity_kind,
         recorded_at=row.created_at,
     )

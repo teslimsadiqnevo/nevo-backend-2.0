@@ -512,28 +512,34 @@ async def ingest_signal_batch(
         if not get_settings().focus_timing_verified:
             return data
         duration_key = (
-            "durationMs" if event.event_type in {
+            "durationMs"
+            if event.event_type
+            in {
                 SignalEventType.TIME_ON_SEGMENT,
                 SignalEventType.READING_CHUNK_VIEWED,
-            } else "timeOnSegment" if event.event_type is SignalEventType.MODALITY_SWITCH_OUTCOME
+            }
+            else "timeOnSegment"
+            if event.event_type is SignalEventType.MODALITY_SWITCH_OUTCOME
             else None
         )
-        if duration_key is None or not isinstance(data.get(duration_key), int | float) or isinstance(data.get(duration_key), bool):
+        if (
+            duration_key is None
+            or not isinstance(data.get(duration_key), int | float)
+            or isinstance(data.get(duration_key), bool)
+        ):
             return data
         if sitting is None:
             data[duration_key] = 0
             data["awayTimingUnestablished"] = True
             return data
         event_at = datetime.now(UTC)
-        if (
-            event.timestamp.tzinfo is None
-            or abs((event_at - event.timestamp).total_seconds()) > 30
-        ):
+        if event.timestamp.tzinfo is None or abs((event_at - event.timestamp).total_seconds()) > 30:
             data["awayTimingUnestablished"] = True
             data[duration_key] = 0
             return data
         effective = active_response_ms(
-            sitting, int(data[duration_key]),
+            sitting,
+            int(data[duration_key]),
             at=event_at,
             segment_id=str(data.get("segmentId")) if data.get("segmentId") else None,
         )
@@ -544,6 +550,7 @@ async def ingest_signal_batch(
             data[duration_key] = effective
             data["awayTimeExcluded"] = True
         return data
+
     try:
         receipt = await service.ingest(
             SignalIngestionBatch(

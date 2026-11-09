@@ -365,9 +365,7 @@ def public_auth_error(error: AuthError) -> HTTPException:
         "message": error.public_message,
     }
     headers = (
-        {"WWW-Authenticate": "Bearer"}
-        if status_code == status.HTTP_401_UNAUTHORIZED
-        else None
+        {"WWW-Authenticate": "Bearer"} if status_code == status.HTTP_401_UNAUTHORIZED else None
     )
     if isinstance(error, RateLimitExceededError):
         now = datetime.now(UTC)

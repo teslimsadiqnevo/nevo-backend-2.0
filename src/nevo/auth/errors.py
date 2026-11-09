@@ -9,6 +9,7 @@ class AuthError(Exception):
 class InvalidCredentialsError(AuthError):
     pass
 
+
 class RateLimitExceededError(AuthError):
     code = "too_many_attempts"
     public_message = "Too many attempts. Please wait before trying again."
@@ -43,23 +44,17 @@ class AccountClosedError(InvalidSessionError):
     """
 
     code = "account_closed"
-    public_message = (
-        "This account has been closed. Your school can tell you more."
-    )
+    public_message = "This account has been closed. Your school can tell you more."
 
 
 class AccountPausedError(InvalidSessionError):
     code = "account_paused"
-    public_message = (
-        "This account is on pause. Your school can turn it back on."
-    )
+    public_message = "This account is on pause. Your school can turn it back on."
 
 
 class SessionReplacedError(InvalidSessionError):
     code = "session_replaced"
-    public_message = (
-        "You logged in on another device, your progress has been saved."
-    )
+    public_message = "You logged in on another device, your progress has been saved."
 
 
 class SchoolCodeRequiredError(AuthError):

@@ -70,7 +70,9 @@ class Admin(TimestampMixin, Base):
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     senior_promoted_by_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
-    senior_promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    senior_promoted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class AdminScopeAssignment(Base):

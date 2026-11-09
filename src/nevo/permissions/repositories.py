@@ -450,9 +450,14 @@ class SqlAlchemyPermissionRepository:
                 granter = await session.get(User, changed_by_user_id)
                 admin.senior_promoted_by = changed_by_user_id
                 admin.senior_promoted_by_name = (
-                    " ".join(part for part in (granter.first_name, granter.last_name) if part)
-                    or granter.email or str(changed_by_user_id)
-                ) if granter else str(changed_by_user_id)
+                    (
+                        " ".join(part for part in (granter.first_name, granter.last_name) if part)
+                        or granter.email
+                        or str(changed_by_user_id)
+                    )
+                    if granter
+                    else str(changed_by_user_id)
+                )
                 admin.senior_promoted_at = changed_at
             admin.access_level = access_level
             scopes = await self._active_scopes_for_update(session, admin.id)

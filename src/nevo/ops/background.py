@@ -5,6 +5,7 @@ synthesis. Done inside the request, every proxy between here and the browser
 hangs up first - and a hang-up on work that is still running looks exactly
 like a backend that never answers.
 """
+
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable

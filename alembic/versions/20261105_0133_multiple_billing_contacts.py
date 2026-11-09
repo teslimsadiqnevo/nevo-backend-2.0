@@ -16,9 +16,10 @@ def upgrade():
     op.create_unique_constraint(
         "uq_billing_contacts_school_email", "billing_contacts", ["school_id", "email"]
     )
-    op.add_column("invoices", sa.Column(
-        "activation_student_ids", JSONB(), nullable=False, server_default="[]"
-    ))
+    op.add_column(
+        "invoices",
+        sa.Column("activation_student_ids", JSONB(), nullable=False, server_default="[]"),
+    )
 
 
 def downgrade():

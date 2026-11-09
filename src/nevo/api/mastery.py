@@ -48,20 +48,27 @@ async def student_level_mastery(
     if principal.role not in {"teacher", "senco_admin", "other_admin"}:
         raise HTTPException(403, detail={"code": "staff_role_required"})
     await require_student_access(session, principal, student_id)
-    rows = list(await session.scalars(
-        select(StudentConceptLevelMastery)
-        .where(StudentConceptLevelMastery.student_id == student_id)
-        .order_by(StudentConceptLevelMastery.concept_id, StudentConceptLevelMastery.mastery_level)
-    ))
-    return [ConceptLevelMasteryResponse(
-        concept_id=row.concept_id,
-        level=row.mastery_level,
-        probability=row.mastery_probability,
-        practice_count=row.practice_count,
-        independent_pass_count=row.independent_pass_count,
-        supported_pass_count=row.supported_pass_count,
-        last_updated=row.last_updated,
-    ) for row in rows]
+    rows = list(
+        await session.scalars(
+            select(StudentConceptLevelMastery)
+            .where(StudentConceptLevelMastery.student_id == student_id)
+            .order_by(
+                StudentConceptLevelMastery.concept_id, StudentConceptLevelMastery.mastery_level
+            )
+        )
+    )
+    return [
+        ConceptLevelMasteryResponse(
+            concept_id=row.concept_id,
+            level=row.mastery_level,
+            probability=row.mastery_probability,
+            practice_count=row.practice_count,
+            independent_pass_count=row.independent_pass_count,
+            supported_pass_count=row.supported_pass_count,
+            last_updated=row.last_updated,
+        )
+        for row in rows
+    ]
 
 
 class MasteryUpdateRequest(BaseModel):

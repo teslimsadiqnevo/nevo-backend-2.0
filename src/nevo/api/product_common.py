@@ -109,7 +109,8 @@ async def require_teacher_console_actor(session: AsyncSession, principal: AuthPr
             Admin.school_id == actor.school_id,
             AdminScopeAssignment.scope == PermissionScope.TEACHER,
             AdminScopeAssignment.revoked_at.is_(None),
-        ).limit(1)
+        )
+        .limit(1)
     )
     if assigned is None:
         raise HTTPException(403, detail={"code": "teacher_scope_required"})
@@ -121,23 +122,32 @@ async def can_be_class_teacher(session: AsyncSession, user: User) -> bool:
         return True
     if user.role.value not in ADMIN_ROLES or user.status.value != "active":
         return False
-    return bool(await session.scalar(
-        select(AdminScopeAssignment.id)
-        .join(Admin, Admin.id == AdminScopeAssignment.admin_id)
-        .where(Admin.user_id == user.id,
-               Admin.school_id == user.school_id,
-               AdminScopeAssignment.scope == PermissionScope.TEACHER,
-               AdminScopeAssignment.revoked_at.is_(None)).limit(1)
-    ))
+    return bool(
+        await session.scalar(
+            select(AdminScopeAssignment.id)
+            .join(Admin, Admin.id == AdminScopeAssignment.admin_id)
+            .where(
+                Admin.user_id == user.id,
+                Admin.school_id == user.school_id,
+                AdminScopeAssignment.scope == PermissionScope.TEACHER,
+                AdminScopeAssignment.revoked_at.is_(None),
+            )
+            .limit(1)
+        )
+    )
 
 
 async def require_teacher_console_class(session: AsyncSession, actor: User, class_id: UUID) -> None:
-    assigned = await session.scalar(select(TeacherClassAssignment.id).where(
-        TeacherClassAssignment.class_id == class_id,
-        TeacherClassAssignment.teacher_id == actor.id,
-        TeacherClassAssignment.school_id == actor.school_id,
-        TeacherClassAssignment.removed_at.is_(None),
-    ).limit(1))
+    assigned = await session.scalar(
+        select(TeacherClassAssignment.id)
+        .where(
+            TeacherClassAssignment.class_id == class_id,
+            TeacherClassAssignment.teacher_id == actor.id,
+            TeacherClassAssignment.school_id == actor.school_id,
+            TeacherClassAssignment.removed_at.is_(None),
+        )
+        .limit(1)
+    )
     if assigned is None:
         raise HTTPException(404, detail={"code": "class_not_assigned"})
 
@@ -345,6 +355,7 @@ def _outstanding_phrase(
     if not parts:
         parts.append("review not complete")
     return f"{title}: {', '.join(parts)}"
+
 
 async def covered_by_a_current_invoice(session: AsyncSession, school_id: UUID) -> bool:
     """Whether a child joining this school now may start straight away.

@@ -65,9 +65,7 @@ class AttentionFlag(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    resolved_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AttentionFlagRead(Base):

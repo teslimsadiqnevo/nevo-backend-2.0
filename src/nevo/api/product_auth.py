@@ -379,9 +379,7 @@ async def provision_shared_device_profiles(
     # other children on this tablet already hold.
     students = {
         student.id: student
-        for student in await session.scalars(
-            select(User).where(User.id.in_(requested))
-        )
+        for student in await session.scalars(select(User).where(User.id.in_(requested)))
     }
     taken = {
         (student.avatar_shape, student.avatar_colourway)
@@ -1001,31 +999,45 @@ async def _create_invitation(
 ) -> dict[str, object]:
     if payload.role == "teacher" and payload.email:
         existing = await session.scalar(
-            select(SchoolInvitation).where(
+            select(SchoolInvitation)
+            .where(
                 SchoolInvitation.school_id == actor.school_id,
                 SchoolInvitation.role == "teacher",
                 SchoolInvitation.email == str(payload.email).casefold(),
                 SchoolInvitation.status == "pending",
-            ).order_by(SchoolInvitation.created_at.desc()).limit(1)
+            )
+            .order_by(SchoolInvitation.created_at.desc())
+            .limit(1)
         )
         if existing is not None:
             reserved = await session.get(User, existing.id)
             conflict = reserved is not None and not _reserved_teacher_matches(existing, reserved)
-            raise HTTPException(409, detail={
-                "code": "invited_teacher_conflict" if conflict else "invitation_already_pending",
-                "message": (
-                    "The reserved teacher account needs an administrator's review before another link is sent."
-                    if conflict else "This teacher already has an invitation. Resend that invitation instead."
-                ),
-                "invitationId": str(existing.id),
-            })
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "invited_teacher_conflict"
+                    if conflict
+                    else "invitation_already_pending",
+                    "message": (
+                        "The reserved teacher account needs an administrator's "
+                        "review before another link is sent."
+                        if conflict
+                        else "This teacher already has an invitation. Resend "
+                        "that invitation instead."
+                    ),
+                    "invitationId": str(existing.id),
+                },
+            )
         revoked = await session.scalar(
-            select(SchoolInvitation).where(
+            select(SchoolInvitation)
+            .where(
                 SchoolInvitation.school_id == actor.school_id,
                 SchoolInvitation.role == "teacher",
                 SchoolInvitation.email == str(payload.email).casefold(),
                 SchoolInvitation.status == "revoked",
-            ).order_by(SchoolInvitation.created_at.desc()).limit(1)
+            )
+            .order_by(SchoolInvitation.created_at.desc())
+            .limit(1)
         )
         revoked_user = await session.get(User, revoked.id) if revoked is not None else None
         if (
@@ -1033,11 +1045,17 @@ async def _create_invitation(
             and revoked_user.status == UserStatus.DEACTIVATED
             and revoked_user.deactivated_at == revoked.revoked_at
         ):
-            raise HTTPException(409, detail={
-                "code": "invitation_reissue_available",
-                "message": "Reissue the original teacher invitation to keep its reserved class assignments.",
-                "invitationId": str(revoked.id),
-            })
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "invitation_reissue_available",
+                    "message": (
+                        "Reissue the original teacher invitation to keep its "
+                        "reserved class assignments."
+                    ),
+                    "invitationId": str(revoked.id),
+                },
+            )
     if payload.class_id:
         school_class = await session.get(Class, payload.class_id)
         if school_class is None or school_class.school_id != actor.school_id:
@@ -1137,7 +1155,8 @@ async def create_bulk_invites(
                     "row": index + 1,
                     "reason": (
                         detail.get("message") or detail.get("code") or "Invitation refused"
-                        if isinstance(detail, dict) else str(detail)
+                        if isinstance(detail, dict)
+                        else str(detail)
                     ),
                     "code": detail.get("code") if isinstance(detail, dict) else None,
                     "value": str(payload.email or payload.class_id or payload.role),
@@ -1156,12 +1175,14 @@ async def list_invites(
     query = select(SchoolInvitation).where(SchoolInvitation.school_id == actor.school_id)
     if status_filter:
         query = query.where(
-            SchoolInvitation.status == ("pending" if status_filter == "conflicted" else status_filter)
+            SchoolInvitation.status
+            == ("pending" if status_filter == "conflicted" else status_filter)
         )
     rows = (await session.scalars(query.order_by(SchoolInvitation.created_at.desc()))).all()
     reserved = {
         row.id: await session.get(User, row.id)
-        for row in rows if row.role == "teacher" and row.status == "pending"
+        for row in rows
+        if row.role == "teacher" and row.status == "pending"
     }
     items = [
         {
@@ -1170,8 +1191,11 @@ async def list_invites(
             "email": item.email,
             "name": " ".join(filter(None, (item.first_name, item.last_name))),
             "status": (
-                "conflicted" if item.id in reserved and reserved[item.id] is not None
-                and not _reserved_teacher_matches(item, reserved[item.id]) else item.status
+                "conflicted"
+                if item.id in reserved
+                and reserved[item.id] is not None
+                and not _reserved_teacher_matches(item, reserved[item.id])
+                else item.status
             ),
             "classId": item.class_id,
             "createdAt": item.created_at,
@@ -1180,7 +1204,11 @@ async def list_invites(
         }
         for item in rows
     ]
-    return [item for item in items if item["status"] == "conflicted"] if status_filter == "conflicted" else items
+    return (
+        [item for item in items if item["status"] == "conflicted"]
+        if status_filter == "conflicted"
+        else items
+    )
 
 
 def _reserved_teacher_matches(record: SchoolInvitation, user: User) -> bool:
@@ -1209,10 +1237,17 @@ async def resend_invite(
     if record.role == "teacher":
         reserved = await session.get(User, record.id)
         if reserved is not None and not _reserved_teacher_matches(record, reserved):
-            raise HTTPException(409, detail={
-                "code": "invited_teacher_conflict",
-                "message": "This invitation cannot be accepted. Ask a school administrator to review the reserved teacher account before sending another link.",
-            })
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "invited_teacher_conflict",
+                    "message": (
+                        "This invitation cannot be accepted. Ask a school "
+                        "administrator to review the reserved teacher account "
+                        "before sending another link."
+                    ),
+                },
+            )
     token = secrets.token_urlsafe(32)
     record.token_digest = _digest(token)
     record.expires_at = datetime.now(UTC) + timedelta(days=14)
@@ -1249,33 +1284,56 @@ async def reissue_teacher_invite(
     if record.status != "revoked" or record.revoked_at is None or not record.email:
         raise HTTPException(409, detail={"code": "invitation_not_reissuable"})
     user = await session.get(User, record.id, with_for_update=True)
-    if user is None or user.school_id != actor.school_id or user.role != UserRole.TEACHER or user.status != UserStatus.DEACTIVATED or user.deactivated_at != record.revoked_at:
+    if (
+        user is None
+        or user.school_id != actor.school_id
+        or user.role != UserRole.TEACHER
+        or user.status != UserStatus.DEACTIVATED
+        or user.deactivated_at != record.revoked_at
+    ):
         raise HTTPException(409, detail={"code": "reserved_teacher_state_changed"})
-    other = await session.scalar(select(User.id).where(
-        User.school_id == actor.school_id, User.email == record.email, User.id != user.id,
-        User.status.in_([UserStatus.ACTIVE, UserStatus.INVITED]),
-    ).limit(1))
+    other = await session.scalar(
+        select(User.id)
+        .where(
+            User.school_id == actor.school_id,
+            User.email == record.email,
+            User.id != user.id,
+            User.status.in_([UserStatus.ACTIVE, UserStatus.INVITED]),
+        )
+        .limit(1)
+    )
     if other is not None:
         raise HTTPException(409, detail={"code": "teacher_email_in_use"})
-    assignments = list(await session.scalars(select(TeacherClassAssignment).where(
-        TeacherClassAssignment.teacher_id == user.id,
-        TeacherClassAssignment.removed_at == record.revoked_at,
-    ).with_for_update()))
+    assignments = list(
+        await session.scalars(
+            select(TeacherClassAssignment)
+            .where(
+                TeacherClassAssignment.teacher_id == user.id,
+                TeacherClassAssignment.removed_at == record.revoked_at,
+            )
+            .with_for_update()
+        )
+    )
     for assignment in assignments:
-        conflict = await session.scalar(select(TeacherClassAssignment.id).where(
-            TeacherClassAssignment.class_id == assignment.class_id,
-            TeacherClassAssignment.removed_at.is_(None),
-            or_(
-                and_(
-                    TeacherClassAssignment.teacher_id == user.id,
-                    TeacherClassAssignment.school_subject_id.is_not_distinct_from(
-                        assignment.school_subject_id
+        conflict = await session.scalar(
+            select(TeacherClassAssignment.id)
+            .where(
+                TeacherClassAssignment.class_id == assignment.class_id,
+                TeacherClassAssignment.removed_at.is_(None),
+                or_(
+                    and_(
+                        TeacherClassAssignment.teacher_id == user.id,
+                        TeacherClassAssignment.school_subject_id.is_not_distinct_from(
+                            assignment.school_subject_id
+                        ),
                     ),
+                    TeacherClassAssignment.role == assignment.role
+                    if assignment.role.value == "primary"
+                    else False,
                 ),
-                TeacherClassAssignment.role == assignment.role
-                if assignment.role.value == "primary" else False,
-            ),
-        ).limit(1))
+            )
+            .limit(1)
+        )
         if conflict is not None:
             raise HTTPException(409, detail={"code": "teacher_assignment_conflict"})
     now = datetime.now(UTC)
@@ -1297,9 +1355,14 @@ async def reissue_teacher_invite(
     except EmailDeliveryUnavailableError:
         delivery_status = "email_not_configured"
     return {
-        "id": record.id, "token": token, "role": record.role, "email": record.email,
-        "status": record.status, "classId": record.class_id,
-        "createdAt": record.created_at, "expiresAt": record.expires_at,
+        "id": record.id,
+        "token": token,
+        "role": record.role,
+        "email": record.email,
+        "status": record.status,
+        "classId": record.class_id,
+        "createdAt": record.created_at,
+        "expiresAt": record.expires_at,
         "deliveryStatus": delivery_status,
     }
 
@@ -1402,11 +1465,17 @@ async def inspect_join(token: str, session: DatabaseSession) -> dict[str, object
     if record.role == "teacher":
         reserved = await session.get(User, record.id)
         if reserved is not None and not _reserved_teacher_matches(record, reserved):
-            raise HTTPException(409, detail={
-                "code": "invited_teacher_conflict",
-                "message": "This teacher invitation needs a school administrator's review before it can be accepted.",
-                "invitationId": str(record.id),
-            })
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "invited_teacher_conflict",
+                    "message": (
+                        "This teacher invitation needs a school administrator's "
+                        "review before it can be accepted."
+                    ),
+                    "invitationId": str(record.id),
+                },
+            )
     school = await session.get(School, record.school_id)
     return {
         "status": "valid",
@@ -1457,10 +1526,16 @@ async def accept_join(
         else None
     )
     if user is not None and not _reserved_teacher_matches(record, user):
-        raise HTTPException(status_code=409, detail={
-            "code": "invited_teacher_conflict",
-            "message": "This invitation cannot be accepted. Ask a school administrator to review the reserved teacher account.",
-        })
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "invited_teacher_conflict",
+                "message": (
+                    "This invitation cannot be accepted. Ask a school administrator "
+                    "to review the reserved teacher account."
+                ),
+            },
+        )
     new_user = user is None
     user = user or User(
         school_id=record.school_id,

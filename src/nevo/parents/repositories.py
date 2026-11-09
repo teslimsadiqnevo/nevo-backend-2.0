@@ -41,8 +41,7 @@ class SqlAlchemyParentInsightRepository:
                     select(
                         func.count(LessonSession.id),
                         func.count(LessonSession.id).filter(
-                            LessonSession.completion_status
-                            == LessonCompletionStatus.COMPLETED
+                            LessonSession.completion_status == LessonCompletionStatus.COMPLETED
                         ),
                         func.count(LessonSession.id).filter(
                             LessonSession.completion_status == LessonCompletionStatus.EXITED
@@ -92,12 +91,10 @@ class SqlAlchemyParentInsightRepository:
                     select(
                         func.count(StudentConceptMastery.id),
                         func.count(StudentConceptMastery.id).filter(
-                            StudentConceptMastery.mastery_probability_concept
-                            >= CONFIDENT_MASTERY
+                            StudentConceptMastery.mastery_probability_concept >= CONFIDENT_MASTERY
                         ),
                         func.sum(StudentConceptMastery.practice_count).filter(
-                            StudentConceptMastery.mastery_probability_concept
-                            >= CONFIDENT_MASTERY
+                            StudentConceptMastery.mastery_probability_concept >= CONFIDENT_MASTERY
                         ),
                     ).where(
                         StudentConceptMastery.student_id == student_id,
@@ -119,9 +116,7 @@ class SqlAlchemyParentInsightRepository:
             concepts_practised=int(practised or 0),
             concepts_confident=int(confident or 0),
             practice_per_confident_concept=(
-                float(practice_total) / int(confident)
-                if confident and practice_total
-                else None
+                float(practice_total) / int(confident) if confident and practice_total else None
             ),
         )
 

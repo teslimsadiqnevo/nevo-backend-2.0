@@ -68,8 +68,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "query": {
                     "type": "string",
                     "description": (
-                        "A learner code to match, or leave empty to list everyone "
-                        "in scope."
+                        "A learner code to match, or leave empty to list everyone in scope."
                     ),
                 }
             },
@@ -120,9 +119,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         ),
         "input_schema": {
             "type": "object",
-            "properties": {
-                "learner": {"type": "string", "description": "Optional learner code."}
-            },
+            "properties": {"learner": {"type": "string", "description": "Optional learner code."}},
             "required": [],
         },
     },
@@ -375,9 +372,7 @@ async def _get_learner_overview(ctx: ToolContext, arguments: dict[str, Any]) -> 
     # the model can only narrate what it is handed, and a teacher told about a
     # "profile version" learns nothing and starts doubting the data.
     finished = sum(
-        1
-        for item in sessions
-        if item.completion_status is LessonCompletionStatus.COMPLETED
+        1 for item in sessions if item.completion_status is LessonCompletionStatus.COMPLETED
     )
     return {
         "learner": entry.pseudonym,
@@ -565,9 +560,7 @@ async def _get_my_progress(ctx: ToolContext, arguments: dict[str, Any]) -> dict[
     )
     started = int(
         await ctx.session.scalar(
-            select(func.count(LessonSession.id)).where(
-                LessonSession.student_id == ctx.actor.id
-            )
+            select(func.count(LessonSession.id)).where(LessonSession.student_id == ctx.actor.id)
         )
         or 0
     )
@@ -611,8 +604,7 @@ async def _get_my_revision(ctx: ToolContext, arguments: dict[str, Any]) -> dict[
     ).all()
     return {
         "to_revise": [
-            {"idea": name, "due": due.date().isoformat() if due else None}
-            for name, due in rows
+            {"idea": name, "due": due.date().isoformat() if due else None} for name, due in rows
         ]
     }
 
@@ -679,11 +671,7 @@ async def _get_assignment_status(ctx: ToolContext, arguments: dict[str, Any]) ->
     class_id = _uuid(arguments.get("class_id"))
     if class_id is not None:
         query = query.where(LessonAssignment.class_id == class_id)
-    rows = [
-        item
-        for item in await ctx.session.scalars(query)
-        if item.student_id in reachable
-    ]
+    rows = [item for item in await ctx.session.scalars(query) if item.student_id in reachable]
     done: list[str] = []
     not_started: list[str] = []
     for item in rows:
@@ -820,9 +808,7 @@ async def _get_school_overview(ctx: ToolContext, arguments: dict[str, Any]) -> d
         ),
         "lessons": int(
             await ctx.session.scalar(
-                select(func.count(Lesson.id)).where(
-                    Lesson.school_id == ctx.actor.school_id
-                )
+                select(func.count(Lesson.id)).where(Lesson.school_id == ctx.actor.school_id)
             )
             or 0
         ),

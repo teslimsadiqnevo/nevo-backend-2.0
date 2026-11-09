@@ -48,9 +48,7 @@ def initial_schedule(
     reviewed_at: datetime,
 ) -> ConceptSchedule:
     stability = (
-        INITIAL_SUCCESS_STABILITY_DAYS
-        if recall_successful
-        else INITIAL_FAILURE_STABILITY_DAYS
+        INITIAL_SUCCESS_STABILITY_DAYS if recall_successful else INITIAL_FAILURE_STABILITY_DAYS
     )
     difficulty = INITIAL_DIFFICULTY - 0.5 if recall_successful else INITIAL_DIFFICULTY + 1
     return _schedule(

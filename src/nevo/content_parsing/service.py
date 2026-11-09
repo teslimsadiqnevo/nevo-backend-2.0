@@ -374,7 +374,8 @@ class ContentParsingService:
                                 "text, numeric or boolean, never selection. Choice questions "
                                 "require two or more value-label options and matching answerKey "
                                 "values. Use camelCase answerType and answerKey.\n\n"
-                                "For each checkpoint and after-lesson assessment item, propose masteryLevel "
+                                "For each checkpoint and after-lesson assessment "
+                                "item, propose masteryLevel "
                                 "as knowledge, application, or analysis. Knowledge tests recall "
                                 "or explanation; application uses the idea in a taught kind of "
                                 "situation; analysis compares, judges, or identifies a fault in an "
@@ -853,7 +854,8 @@ class ContentParsingService:
                 if segment.comprehension_checkpoints:
                     kwargs["review_context"] = (
                         f"{segment.body}\n\nAssessment checks and expected answers "
-                        f"(review only): {json.dumps(segment.comprehension_checkpoints, default=str)}"
+                        "(review only): "
+                        f"{json.dumps(segment.comprehension_checkpoints, default=str)}"
                     )
 
             if isinstance(generator, EducationalImageService) and requested_by_user_id is not None:
@@ -1118,15 +1120,18 @@ def _source_has_answer(source: str, question: dict[str, object]) -> bool:
     start = normalized.find(prompt)
     if start < 0:
         return False
-    following = normalized[start + len(prompt):start + len(prompt) + 700]
+    following = normalized[start + len(prompt) : start + len(prompt) + 700]
     answer = re.escape(str(key).strip().casefold())
     return bool(re.search(rf"\b(?:correct\s+)?answer\s*[:=-]\s*{answer}(?!\w)", following))
 
 
 def _mark_source_authorship(payload: dict[str, object], source: str) -> None:
     normalized = " ".join(source.split()).casefold()
-    groups = [item.get("comprehension_checkpoints") or item.get("comprehensionCheckpoints")
-              for item in payload.get("segments", []) if isinstance(item, dict)]
+    groups = [
+        item.get("comprehension_checkpoints") or item.get("comprehensionCheckpoints")
+        for item in payload.get("segments", [])
+        if isinstance(item, dict)
+    ]
     for group in [*groups, payload.get("assessment")]:
         if not isinstance(group, list):
             continue
@@ -1135,13 +1140,12 @@ def _mark_source_authorship(payload: dict[str, object], source: str) -> None:
                 continue
             prompt = " ".join(str(question.get("prompt") or "").split()).casefold()
             authored = (
-                _source_has_answer(source, question) if question.get("answerKey") is not None
+                _source_has_answer(source, question)
+                if question.get("answerKey") is not None
                 else len(prompt) >= 12 and prompt in normalized
             )
             question["authoredBy"] = "person" if authored else "nevo"
-            if question.get("masteryLevel") in {
-                "knowledge", "application", "analysis"
-            }:
+            if question.get("masteryLevel") in {"knowledge", "application", "analysis"}:
                 # The parser's classification is generated even when the underlying
                 # question and answer are present verbatim in the teacher's source.
                 question["masteryLevelAuthoredBy"] = "nevo"
@@ -1872,9 +1876,13 @@ def _validated_calculation_variant(
                 "prompt": prompt,
                 "expectedInput": expected_input,
                 "hint": hint,
-                "pendingParts": [str(part).strip() for part in step.get("parts", [])
-                                 if isinstance(part, str) and part.strip()][:8]
-                if isinstance(step.get("parts"), list) else [],
+                "pendingParts": [
+                    str(part).strip()
+                    for part in step.get("parts", [])
+                    if isinstance(part, str) and part.strip()
+                ][:8]
+                if isinstance(step.get("parts"), list)
+                else [],
                 "partsReviewStatus": "pending_review" if step.get("parts") else None,
                 "answer": step_answer,
                 "options": options,

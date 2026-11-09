@@ -114,7 +114,11 @@ async def backfill(lesson_id: UUID, *, apply: bool, confirm_production_write: bo
         for row in rows:
             repair_id = row.get("repairId") if isinstance(row, dict) else None
             raw_steps = row.get("guidedSteps") if isinstance(row, dict) else None
-            if repair_id not in locations or repair_id in generated or not isinstance(raw_steps, list):
+            if (
+                repair_id not in locations
+                or repair_id in generated
+                or not isinstance(raw_steps, list)
+            ):
                 raise SystemExit("Model response has a missing, duplicate, or unknown check id")
             if len(raw_steps) != 2:
                 raise SystemExit(f"Expected two markable steps for {repair_id}")

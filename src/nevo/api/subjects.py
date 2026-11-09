@@ -376,7 +376,11 @@ async def set_teacher_subjects(
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
     school_id = _school_of(actor)
     teacher = await session.get(User, teacher_id)
-    if teacher is None or teacher.school_id != school_id or not await can_be_class_teacher(session, teacher):
+    if (
+        teacher is None
+        or teacher.school_id != school_id
+        or not await can_be_class_teacher(session, teacher)
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
 
     wanted: set[UUID] = set()

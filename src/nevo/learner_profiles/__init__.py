@@ -1,2 +1,1 @@
 """Learner profile inference feature."""
-

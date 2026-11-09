@@ -126,7 +126,9 @@ class DeferredMediaWorker:
                 for kind, count in (("image", 2), ("audio", 4))
                 for i in range(count)
             ]
-            self.tasks.append(asyncio.create_task(self._run_restamps(), name="lesson-media-restamp"))
+            self.tasks.append(
+                asyncio.create_task(self._run_restamps(), name="lesson-media-restamp")
+            )
 
     async def stop(self):
         for task in self.tasks:
@@ -157,7 +159,10 @@ class DeferredMediaWorker:
                 await asyncio.sleep(10)
 
     async def process_restamp_next(self):
-        if not self.parser._visual_generation or not self.parser._visual_generation.recheck_configured:
+        if (
+            not self.parser._visual_generation
+            or not self.parser._visual_generation.recheck_configured
+        ):
             return False
         now = datetime.now(UTC)
         async with self.sessions.begin() as session:
@@ -179,36 +184,50 @@ class DeferredMediaWorker:
                     LessonSegment.visual_variant.is_not(None),
                     path.is_not(None),
                     or_(
-                        stamp.is_(None), stamp != POLICY_VERSION,
-                        caption.is_(None), caption == "Lesson visual",
+                        stamp.is_(None),
+                        stamp != POLICY_VERSION,
+                        caption.is_(None),
+                        caption == "Lesson visual",
                         caption == LessonSegment.title,
                     ),
-                    ~select(VisualSafetyRestamp.id).where(
+                    ~select(VisualSafetyRestamp.id)
+                    .where(
                         VisualSafetyRestamp.segment_id == LessonSegment.id,
                         VisualSafetyRestamp.policy_version == POLICY_VERSION,
                         VisualSafetyRestamp.storage_path == path,
-                    ).exists(),
+                    )
+                    .exists(),
                 )
                 .order_by(LessonSegment.created_at)
                 .limit(1)
                 .with_for_update(skip_locked=True)
             )
             if record is not None:
-                existing = await session.scalar(select(VisualSafetyRestamp).where(
-                    VisualSafetyRestamp.segment_id == record.id,
-                    VisualSafetyRestamp.policy_version == POLICY_VERSION,
-                ).with_for_update())
+                existing = await session.scalar(
+                    select(VisualSafetyRestamp)
+                    .where(
+                        VisualSafetyRestamp.segment_id == record.id,
+                        VisualSafetyRestamp.policy_version == POLICY_VERSION,
+                    )
+                    .with_for_update()
+                )
                 if existing is None:
-                    session.add(VisualSafetyRestamp(
-                        segment_id=record.id, policy_version=POLICY_VERSION,
-                        storage_path=record.visual_variant["storagePath"],
-                        status="queued", attempts=0,
-                    ))
+                    session.add(
+                        VisualSafetyRestamp(
+                            segment_id=record.id,
+                            policy_version=POLICY_VERSION,
+                            storage_path=record.visual_variant["storagePath"],
+                            status="queued",
+                            attempts=0,
+                        )
+                    )
                 else:
                     existing.storage_path = record.visual_variant["storagePath"]
                     existing.status, existing.attempts = "queued", 0
                     existing.failure_code = existing.completed_at = existing.lease_until = None
-                    existing.caption_candidate = existing.caption_approved_at = existing.caption_approved_by = None
+                    existing.caption_candidate = existing.caption_approved_at = (
+                        existing.caption_approved_by
+                    ) = None
                     existing.caption_approved_by_name = None
                 return True
             task = await session.scalar(
@@ -265,20 +284,34 @@ class DeferredMediaWorker:
             task.failure_code = failure
             task.caption_candidate = description if not failure else None
             task.completed_at = now
-            task.lease_until = None if failure != "review_unavailable" or task.attempts >= 3 else now + timedelta(minutes=5)
-            task.status = "failed" if failure == "review_unavailable" else "blocked" if failure else "passed"
+            task.lease_until = (
+                None
+                if failure != "review_unavailable" or task.attempts >= 3
+                else now + timedelta(minutes=5)
+            )
+            task.status = (
+                "failed" if failure == "review_unavailable" else "blocked" if failure else "passed"
+            )
             if failure:
                 if task.status == "blocked":
                     segment.visual_variant = {
-                        key: value for key, value in segment.visual_variant.items()
+                        key: value
+                        for key, value in segment.visual_variant.items()
                         if key != "safetyPolicyVersion"
                     }
                 return
-            segment.visual_variant = {**segment.visual_variant, "safetyPolicyVersion": POLICY_VERSION}
-            job = await session.scalar(select(DeferredLessonMedia).where(
-                DeferredLessonMedia.segment_id == segment.id,
-                DeferredLessonMedia.kind == "image",
-            ).with_for_update())
+            segment.visual_variant = {
+                **segment.visual_variant,
+                "safetyPolicyVersion": POLICY_VERSION,
+            }
+            job = await session.scalar(
+                select(DeferredLessonMedia)
+                .where(
+                    DeferredLessonMedia.segment_id == segment.id,
+                    DeferredLessonMedia.kind == "image",
+                )
+                .with_for_update()
+            )
             if job and (job.result or {}).get("image", {}).get("storagePath") == storage_path:
                 job.result = {
                     **job.result,

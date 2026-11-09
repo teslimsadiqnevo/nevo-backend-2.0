@@ -109,8 +109,10 @@ class EducationalImageService:
 
     @property
     def recheck_configured(self) -> bool:
-        return self._storage.configured and self._safety.configured and bool(
-            self._settings.anthropic_api_key
+        return (
+            self._storage.configured
+            and self._safety.configured
+            and bool(self._settings.anthropic_api_key)
         )
 
     async def recheck_existing(self, *, storage_path: str, lesson_text: str) -> str:
@@ -261,9 +263,7 @@ class EducationalImageService:
             sent_prompt = active_prompt + (correction if issues else "")
             try:
                 if not active_prompt_checked:
-                    await self._safety.check(
-                        active_prompt, phase="image_prompt", context=context
-                    )
+                    await self._safety.check(active_prompt, phase="image_prompt", context=context)
                     active_prompt_checked = True
                 image = await asyncio.wait_for(
                     self._generate_image(
@@ -343,9 +343,11 @@ class EducationalImageService:
         async with self._image_client() as client:
             for attempt in range(RATE_LIMIT_RETRIES + 1):
                 response = await provider_request(
-                    client, "POST",
+                    client,
+                    "POST",
                     f"{str(self._settings.openai_base_url).rstrip('/')}/images/generations",
-                    provider="openai", model=self._settings.image_model,
+                    provider="openai",
+                    model=self._settings.image_model,
                     operation="image_generation",
                     headers={"Authorization": f"Bearer {self._openai_key()}"},
                     json=payload,
@@ -379,9 +381,11 @@ class EducationalImageService:
             )
         async with httpx.AsyncClient(timeout=120) as client:
             response = await provider_request(
-                client, "POST",
+                client,
+                "POST",
                 f"{str(self._settings.anthropic_base_url).rstrip('/')}/messages",
-                provider="anthropic", model=self._settings.validator_model,
+                provider="anthropic",
+                model=self._settings.validator_model,
                 operation="image_review",
                 headers={
                     "x-api-key": self._anthropic_key(),

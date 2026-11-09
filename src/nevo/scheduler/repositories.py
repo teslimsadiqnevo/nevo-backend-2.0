@@ -49,8 +49,7 @@ class SqlAlchemySchedulerRepository:
                 )
             ).all()
         return tuple(
-            _schedule_from_record(row, now=now, lesson_id=lesson_id)
-            for row, lesson_id in rows
+            _schedule_from_record(row, now=now, lesson_id=lesson_id) for row, lesson_id in rows
         )
 
     async def save(self, schedule: ConceptSchedule) -> ConceptSchedule:

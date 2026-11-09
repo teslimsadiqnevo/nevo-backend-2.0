@@ -16,4 +16,3 @@ class SignalBatchTooLargeError(SignalIngestionError):
 class SessionMismatchError(SignalIngestionError):
     code = "session_mismatch"
     public_message = "All signal events must belong to the submitted lesson session."
-

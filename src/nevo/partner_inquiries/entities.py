@@ -42,4 +42,3 @@ class PartnerInquiryView:
     student_count: int | None = None
     intent: PartnerInquiryIntent | None = None
     source: PartnerInquirySource = PartnerInquirySource.WEBSITE
-

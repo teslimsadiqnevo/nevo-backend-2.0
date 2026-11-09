@@ -29,9 +29,7 @@ def upgrade() -> None:
         ),
     )
     # Existing founding admins are the accounts created with their schools.
-    op.execute(
-        "UPDATE admins SET access_level = 'senior' WHERE created_by_user_id IS NULL"
-    )
+    op.execute("UPDATE admins SET access_level = 'senior' WHERE created_by_user_id IS NULL")
 
 
 def downgrade() -> None:

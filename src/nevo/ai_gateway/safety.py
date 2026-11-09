@@ -68,6 +68,7 @@ hazardous substances unsafely remain dangerous_instructions even if a warning is
 also present.
 """
 
+
 class SafetyUnavailable(AiGatewayError):
     code = "safety_check_unavailable"
     public_message = "Nevo cannot complete its safety check right now. Please try again later."

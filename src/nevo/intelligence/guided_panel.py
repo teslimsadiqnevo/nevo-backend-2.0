@@ -93,7 +93,9 @@ async def answer_step(session, sitting, payload):
         "canAdvance": False,
         "retryCheck": next_step is None,
         "questionId": source.question_id,
-        "prompt": public_prompt(next_step, retry=not correct and next_step is current) if next_step else None,
+        "prompt": public_prompt(next_step, retry=not correct and next_step is current)
+        if next_step
+        else None,
         "feedback": (
             current.get("explanation")
             if not correct and not explanation_reveals_answer(current)

@@ -20,22 +20,30 @@ AUDIT_PUPIL = "1a988c48-eec9-4a7e-8332-71772b8a84c6"
 OSMOSIS = UUID("3367de9d-be40-4704-8a95-7a197b9824dc")
 
 
-def inspect(values, *, source, context, totals, issues, demo=None, question_offset=0, issue_context=None):
+def inspect(
+    values, *, source, context, totals, issues, demo=None, question_offset=0, issue_context=None
+):
     for index, raw in enumerate(values):
         totals["items"] += 1
         try:
             row = checkpoint_payloads(
-                [raw], segment_key=context, strict=True,
-                presentation_seed=AUDIT_PUPIL, question_offset=question_offset + index,
+                [raw],
+                segment_key=context,
+                strict=True,
+                presentation_seed=AUDIT_PUPIL,
+                question_offset=question_offset + index,
             )[0]
         except (ValueError, TypeError, KeyError) as error:
             totals["invalid"] += 1
-            issues.append({
-                "source": source, "context": issue_context or context,
-                "error": type(error).__name__,
-                "question": str(raw.get("prompt") or raw.get("id") or "")[:160],
-                "detail": str(error)[:240],
-            })
+            issues.append(
+                {
+                    "source": source,
+                    "context": issue_context or context,
+                    "error": type(error).__name__,
+                    "question": str(raw.get("prompt") or raw.get("id") or "")[:160],
+                    "detail": str(error)[:240],
+                }
+            )
             continue
         if row["answerType"] not in {"single_choice", "multiple_choice"}:
             totals["nonChoice"] += 1

@@ -25,10 +25,7 @@ def upgrade() -> None:
         "lesson_assignments",
         sa.Column("recall_withdrawn", sa.Boolean(), server_default=sa.false(), nullable=False),
     )
-    statement = (
-        "ALTER TYPE signal_event_type ADD VALUE IF NOT EXISTS "
-        "'reading_chunk_viewed'"
-    )
+    statement = "ALTER TYPE signal_event_type ADD VALUE IF NOT EXISTS 'reading_chunk_viewed'"
     if op.get_context().as_sql:
         op.execute(statement)
         return

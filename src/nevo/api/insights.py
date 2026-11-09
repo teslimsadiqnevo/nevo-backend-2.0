@@ -120,8 +120,8 @@ async def teacher_home(
         Class.archived_at.is_(None),
     )
     class_query = class_query.join(TeacherClassAssignment).where(
-            TeacherClassAssignment.teacher_id == actor.id,
-            TeacherClassAssignment.removed_at.is_(None),
+        TeacherClassAssignment.teacher_id == actor.id,
+        TeacherClassAssignment.removed_at.is_(None),
     )
     classes = (await session.scalars(class_query.distinct().order_by(Class.name))).all()
     class_ids = [item.id for item in classes]

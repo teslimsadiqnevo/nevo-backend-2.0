@@ -97,8 +97,11 @@ async def fallback_school_admin(session: AsyncSession, school_id: UUID) -> User 
     return await session.scalar(
         select(User)
         .join(Admin, Admin.user_id == User.id)
-        .where(Admin.school_id == school_id, User.school_id == school_id,
-               User.status == UserStatus.ACTIVE)
+        .where(
+            Admin.school_id == school_id,
+            User.school_id == school_id,
+            User.status == UserStatus.ACTIVE,
+        )
         .order_by((Admin.access_level == AdminAccessLevel.SENIOR).desc(), Admin.created_at, User.id)
         .limit(1)
     )
@@ -198,33 +201,45 @@ async def learning_support_history(
     session: DatabaseSession,
 ) -> list[LearningSupportHistoryItem]:
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
-    grants = list(await session.scalars(
-        select(LearningSupportGrant)
-        .where(LearningSupportGrant.school_id == actor.school_id)
-        .order_by(LearningSupportGrant.granted_at.desc())
-    ))
+    grants = list(
+        await session.scalars(
+            select(LearningSupportGrant)
+            .where(LearningSupportGrant.school_id == actor.school_id)
+            .order_by(LearningSupportGrant.granted_at.desc())
+        )
+    )
     user_ids = {
-        user_id for grant in grants
+        user_id
+        for grant in grants
         for user_id in (grant.holder_user_id, grant.granted_by_user_id, grant.revoked_by_user_id)
         if user_id is not None
     }
-    users = {user.id: user for user in await session.scalars(select(User).where(User.id.in_(user_ids)))}
+    users = {
+        user.id: user for user in await session.scalars(select(User).where(User.id.in_(user_ids)))
+    }
 
     def name(user_id):
         user = users.get(user_id)
-        return " ".join(filter(None, (user.first_name, user.last_name))) if user else "Account unavailable"
+        return (
+            " ".join(filter(None, (user.first_name, user.last_name)))
+            if user
+            else "Account unavailable"
+        )
 
-    return [LearningSupportHistoryItem(
-        holder_user_id=grant.holder_user_id,
-        holder_name=name(grant.holder_user_id),
-        granted_at=grant.granted_at,
-        granted_by_user_id=grant.granted_by_user_id,
-        granted_by_name=name(grant.granted_by_user_id),
-        revoked_at=grant.revoked_at,
-        revoked_by_user_id=grant.revoked_by_user_id,
-        revoked_by_name=name(grant.revoked_by_user_id) if grant.revoked_by_user_id else None,
-        handed_over=grant.handed_over,
-    ) for grant in grants]
+    return [
+        LearningSupportHistoryItem(
+            holder_user_id=grant.holder_user_id,
+            holder_name=name(grant.holder_user_id),
+            granted_at=grant.granted_at,
+            granted_by_user_id=grant.granted_by_user_id,
+            granted_by_name=name(grant.granted_by_user_id),
+            revoked_at=grant.revoked_at,
+            revoked_by_user_id=grant.revoked_by_user_id,
+            revoked_by_name=name(grant.revoked_by_user_id) if grant.revoked_by_user_id else None,
+            handed_over=grant.handed_over,
+        )
+        for grant in grants
+    ]
 
 
 @router.post(
@@ -272,11 +287,13 @@ async def grant_learning_support(
             # Handed over, not taken away. Different facts, and a school
             # reading its own history should be able to tell them apart.
             grant.handed_over = True
-            session.add(AuthAuditEvent(
-                event_type="learning_support_handed_over",
-                user_id=grant.holder_user_id,
-                details={"actorId": str(actor.id), "schoolId": str(actor.school_id)},
-            ))
+            session.add(
+                AuthAuditEvent(
+                    event_type="learning_support_handed_over",
+                    user_id=grant.holder_user_id,
+                    details={"actorId": str(actor.id), "schoolId": str(actor.school_id)},
+                )
+            )
             await _drop_scope(session, grant.holder_user_id)
     if not any(grant.holder_user_id == payload.user_id for grant in existing):
         session.add(
@@ -288,10 +305,13 @@ async def grant_learning_support(
             )
         )
         await _add_scope(session, payload.user_id, granted_by=actor.id)
-        session.add(AuthAuditEvent(
-            event_type="learning_support_granted", user_id=payload.user_id,
-            details={"actorId": str(actor.id), "schoolId": str(actor.school_id)},
-        ))
+        session.add(
+            AuthAuditEvent(
+                event_type="learning_support_granted",
+                user_id=payload.user_id,
+                details={"actorId": str(actor.id), "schoolId": str(actor.school_id)},
+            )
+        )
     await session.flush()
     grants = await _holders(session, actor.school_id)
     holders = LearningSupportHolders(
@@ -335,10 +355,13 @@ async def revoke_learning_support(
             continue
         grant.revoked_at = now
         grant.revoked_by_user_id = actor.id
-        session.add(AuthAuditEvent(
-            event_type="learning_support_revoked", user_id=user_id,
-            details={"actorId": str(actor.id), "schoolId": str(actor.school_id)},
-        ))
+        session.add(
+            AuthAuditEvent(
+                event_type="learning_support_revoked",
+                user_id=user_id,
+                details={"actorId": str(actor.id), "schoolId": str(actor.school_id)},
+            )
+        )
         await _drop_scope(session, user_id)
     await session.flush()
     grants = await _holders(session, actor.school_id)

@@ -1002,9 +1002,7 @@ async def adapt_lesson(
                 segment_id=str(current_row.id),
                 suggested_modality=route.format,
                 scaffold_level=(
-                    ScaffoldingLevel.STRONG
-                    if route.action == "calculation_scaffold"
-                    else None
+                    ScaffoldingLevel.STRONG if route.action == "calculation_scaffold" else None
                 ),
                 requires_choice=route.action in {"format", "simplify"},
                 guided_questions=[],
@@ -1033,9 +1031,13 @@ async def adapt_lesson(
         previous_offer = delivery.get("breakOffer")
         declined_seconds = context.signals.break_declined_seconds_ago
         offered_at = delivery.get("breakOfferAt")
-        if previous_offer and declined_seconds is not None and (
-            not offered_at
-            or now - timedelta(seconds=declined_seconds) >= datetime.fromisoformat(offered_at)
+        if (
+            previous_offer
+            and declined_seconds is not None
+            and (
+                not offered_at
+                or now - timedelta(seconds=declined_seconds) >= datetime.fromisoformat(offered_at)
+            )
         ):
             previous_offer = None
             delivery.pop("breakOffer", None)

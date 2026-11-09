@@ -219,9 +219,7 @@ def test_engine_emits_engagement_decline_from_sustained_stored_evidence(runtime)
     assert "engagement_decline" in response.json()["breakSuggestion"]["triggeredThresholds"]
 
 
-@pytest.mark.parametrize(
-    "band", ["early_primary", "junior_secondary", "senior_secondary", None]
-)
+@pytest.mark.parametrize("band", ["early_primary", "junior_secondary", "senior_secondary", None])
 def test_a_marked_miss_opens_guidance_immediately_whatever_the_age_band(band):
     """SCRUM-281: a miss that has been marked opens guidance there and then.
 

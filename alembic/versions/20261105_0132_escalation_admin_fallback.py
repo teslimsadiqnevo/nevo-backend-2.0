@@ -11,13 +11,19 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("escalations", sa.Column(
-        "routed_to", sa.String(32), nullable=False,
-        server_default="learning_support",
-    ))
-    op.add_column("escalations", sa.Column(
-        "recipient_user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="SET NULL")
-    ))
+    op.add_column(
+        "escalations",
+        sa.Column(
+            "routed_to",
+            sa.String(32),
+            nullable=False,
+            server_default="learning_support",
+        ),
+    )
+    op.add_column(
+        "escalations",
+        sa.Column("recipient_user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="SET NULL")),
+    )
     op.add_column("escalations", sa.Column("received_at", sa.DateTime(timezone=True)))
     op.create_index("ix_escalations_recipient", "escalations", ["recipient_user_id"])
     op.execute("""

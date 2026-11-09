@@ -25,7 +25,8 @@ class SegmentChoiceWrite(BaseModel):
         description="Sitting-wide pacing choice; false explicitly switches Slower off.",
     )
     more_support: bool | None = Field(
-        default=None, alias="moreSupport",
+        default=None,
+        alias="moreSupport",
         description="Sitting-wide support choice; false explicitly switches it off.",
     )
 
@@ -101,7 +102,11 @@ def segment_choice(sitting, segment):
         from nevo.api.lesson_contracts import depth_approved, depth_retains_key_terms
 
         variant = (segment.depth_variants or {}).get(choice["depth"])
-        if not variant or not depth_approved(variant) or not depth_retains_key_terms(variant, segment.text_variant):
+        if (
+            not variant
+            or not depth_approved(variant)
+            or not depth_retains_key_terms(variant, segment.text_variant)
+        ):
             choice["depth"] = "original"
     return choice
 
@@ -110,7 +115,9 @@ def save_choice(sitting, segment, payload):
     delivery = dict(sitting.delivery_state or {})
     choices = dict(delivery.get("segmentChoices") or {})
     lesson = lesson_choices(sitting)
-    updates = payload.model_dump(exclude_unset=True, exclude={"updated_at"}, by_alias=True, mode="json")
+    updates = payload.model_dump(
+        exclude_unset=True, exclude={"updated_at"}, by_alias=True, mode="json"
+    )
     now = datetime.now(UTC).isoformat()
     for field in ("depth", "slower", "moreSupport"):
         if field in updates:

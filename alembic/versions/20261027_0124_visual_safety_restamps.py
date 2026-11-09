@@ -18,7 +18,12 @@ def upgrade():
     op.create_table(
         "visual_safety_restamps",
         sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("segment_id", sa.Uuid(), sa.ForeignKey("lesson_segments.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "segment_id",
+            sa.Uuid(),
+            sa.ForeignKey("lesson_segments.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("policy_version", sa.String(80), nullable=False),
         sa.Column("storage_path", sa.String(500), nullable=False),
         sa.Column("status", sa.String(20), nullable=False),
@@ -31,7 +36,9 @@ def upgrade():
             "status IN ('queued','processing','passed','blocked','failed','stale')",
             name="ck_visual_restamp_status",
         ),
-        sa.UniqueConstraint("segment_id", "policy_version", name="uq_visual_restamp_segment_policy"),
+        sa.UniqueConstraint(
+            "segment_id", "policy_version", name="uq_visual_restamp_segment_policy"
+        ),
     )
     op.create_index("ix_visual_restamp_claim", "visual_safety_restamps", ["status", "lease_until"])
 

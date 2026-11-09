@@ -115,9 +115,12 @@ def calculation_for_delivery(value, *, for_teacher=False, segment_id=None):
                 step.pop("miniSteps", None)
             elif segment_id is not None:
                 step["miniSteps"] = [
-                    {**mini, "questionId": mini_step_question_id(
-                        segment_id, step.get("stepId"), mini.get("id")
-                    )}
+                    {
+                        **mini,
+                        "questionId": mini_step_question_id(
+                            segment_id, step.get("stepId"), mini.get("id")
+                        ),
+                    }
                     for mini in step.get("miniSteps", [])
                 ]
         steps.append(step)
@@ -273,13 +276,18 @@ class ComprehensionCheckpoint(BaseModel):
                 value["answerType"] = kind
                 if kind == "single_choice" and isinstance(key, list) and len(key) == 1:
                     value["answerKey"] = key[0]
-        elif kind not in {
-            "single_choice",
-            "multiple_choice",
-            "text",
-            "numeric",
-            "boolean",
-        } and value.get("options") and key is not None:
+        elif (
+            kind
+            not in {
+                "single_choice",
+                "multiple_choice",
+                "text",
+                "numeric",
+                "boolean",
+            }
+            and value.get("options")
+            and key is not None
+        ):
             # The held answer shape is authoritative when model output invents
             # a renderer label such as "pick_several".
             value["answerType"] = (
@@ -303,9 +311,14 @@ class ComprehensionCheckpoint(BaseModel):
     mastery_level_authored_by: Literal["person", "nevo"] | None = Field(
         default=None,
         alias="masteryLevelAuthoredBy",
-        description="An inferred level requires teacher review before it contributes level-specific evidence.",
+        description=(
+            "An inferred level requires teacher review before it contributes "
+            "level-specific evidence."
+        ),
     )
-    transfer_kind: Literal["application_a", "application_b", "comparison", "judgement"] | None = Field(default=None, alias="transferKind")
+    transfer_kind: Literal["application_a", "application_b", "comparison", "judgement"] | None = (
+        Field(default=None, alias="transferKind")
+    )
     transfer_context: str | None = Field(default=None, alias="transferContext")
     source_segment_id: UUID | None = Field(default=None, alias="sourceSegmentId")
     concept_id: UUID | None = Field(default=None, alias="conceptId")
@@ -445,7 +458,9 @@ def depth_payloads(values, text_variant, *, for_student=False, reviewer_names=No
         item = values.get(key)
         if not isinstance(item, dict) or not item.get("body"):
             continue
-        if for_student and (not depth_approved(item) or not depth_retains_key_terms(item, text_variant)):
+        if for_student and (
+            not depth_approved(item) or not depth_retains_key_terms(item, text_variant)
+        ):
             continue
         result[key] = {
             **item,
@@ -769,8 +784,7 @@ class CalculationMiniStep(BaseModel):
         if isinstance(self.answer, str) and not self.answer.strip():
             raise ValueError("A mini-step needs an answer")
         if self.input == "choice" and (
-            len(self.options) < 2
-            or self.answer not in [option.value for option in self.options]
+            len(self.options) < 2 or self.answer not in [option.value for option in self.options]
         ):
             raise ValueError("A choice mini-step needs options containing its answer")
         if self.input == "choice":
@@ -778,15 +792,14 @@ class CalculationMiniStep(BaseModel):
 
             wrong = {
                 normalise(value)
-                for option in self.options if option.value != self.answer
+                for option in self.options
+                if option.value != self.answer
                 for value in (option.value, option.label)
             }
             if any(normalise(answer) in wrong for answer in self.accepted_answers):
                 raise ValueError("Accepted answers cannot include a distractor")
         if self.input == "tap" and (
-            isinstance(self.answer, bool)
-            or not str(self.answer).isdigit()
-            or int(self.answer) < 1
+            isinstance(self.answer, bool) or not str(self.answer).isdigit() or int(self.answer) < 1
         ):
             raise ValueError("A tap mini-step needs a positive whole-number answer")
         return self
@@ -801,14 +814,19 @@ class CalculationStep(BaseModel):
     expected_input: Literal["selection", "numeric", "text", "drag"] = Field(alias="expectedInput")
     hint: str
     concept_explanation: str | None = Field(default=None, alias="conceptExplanation")
-    mini_steps: list[CalculationMiniStep] = Field(default_factory=list, alias="miniSteps", max_length=8)
+    mini_steps: list[CalculationMiniStep] = Field(
+        default_factory=list, alias="miniSteps", max_length=8
+    )
     support_review_status: Literal["pending_review", "approved"] | None = Field(
         default=None, alias="supportReviewStatus"
     )
     parts: list[str] = Field(
         default_factory=list,
         max_length=8,
-        description="Ordered, teacher-approved pieces revealed while this step is asked. Empty means pace the whole step.",
+        description=(
+            "Ordered, teacher-approved pieces revealed while this step is asked. "
+            "Empty means pace the whole step."
+        ),
     )
     #: What this one step is answered with, in the units the step asks for.
     #: The variant's own answer is the whole problem's total; a step inside a
@@ -1320,9 +1338,13 @@ def checkpoint_payloads(
 
 
 def student_checkpoint_payloads(
-    values: list[dict[str, object]], *, segment_key: str,
-    reviewed_question_ids: set[str], presentation_seed: str = "lesson",
-    question_offset: int = 0, concept_id: UUID | None = None,
+    values: list[dict[str, object]],
+    *,
+    segment_key: str,
+    reviewed_question_ids: set[str],
+    presentation_seed: str = "lesson",
+    question_offset: int = 0,
+    concept_id: UUID | None = None,
     reviewed_level_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """Never deliver a question before its current teacher sign-off.
@@ -1341,9 +1363,13 @@ def student_checkpoint_payloads(
     assigned cannot deliver a question nobody approved.
     """
     return [
-        question for question in checkpoint_payloads(
-            values, segment_key=segment_key, reviewed_question_ids=reviewed_question_ids,
-            presentation_seed=presentation_seed, question_offset=question_offset,
+        question
+        for question in checkpoint_payloads(
+            values,
+            segment_key=segment_key,
+            reviewed_question_ids=reviewed_question_ids,
+            presentation_seed=presentation_seed,
+            question_offset=question_offset,
             concept_id=concept_id,
             reviewed_level_ids=reviewed_level_ids if reviewed_level_ids is not None else set(),
         )
@@ -1424,7 +1450,8 @@ def explanation_reveals_answer(step: dict[str, object]) -> bool:
         option.get("label")
         for option in step.get("options", [])
         if isinstance(option, dict)
-        and option.get("value") in (
+        and option.get("value")
+        in (
             step.get("answerKey")
             if isinstance(step.get("answerKey"), list)
             else [step.get("answerKey")]

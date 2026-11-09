@@ -45,9 +45,7 @@ class Argon2idCredentialHasher:
             salt_len=16,
             type=Type.ID,
         )
-        self._dummy_password_hash = self.hash_password(
-            "constant-work-placeholder-password"
-        )
+        self._dummy_password_hash = self.hash_password("constant-work-placeholder-password")
         self._dummy_pin_hash = self.hash_pin("000000")
         #: Keyed by event loop; see the _gate property.
         self._gates: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
@@ -60,19 +58,25 @@ class Argon2idCredentialHasher:
         return self._hasher.hash(self._peppered(password, self._password_pepper))
 
     def verify_password(self, password_hash: str | None, password: str) -> bool:
-        return self._verify(
-            password_hash or self._dummy_password_hash,
-            self._peppered(password, self._password_pepper),
-        ) and password_hash is not None
+        return (
+            self._verify(
+                password_hash or self._dummy_password_hash,
+                self._peppered(password, self._password_pepper),
+            )
+            and password_hash is not None
+        )
 
     def hash_pin(self, pin: str) -> str:
         return self._hasher.hash(self._peppered(pin, self._pin_pepper))
 
     def verify_pin(self, pin_hash: str | None, pin: str) -> bool:
-        return self._verify(
-            pin_hash or self._dummy_pin_hash,
-            self._peppered(pin, self._pin_pepper),
-        ) and pin_hash is not None
+        return (
+            self._verify(
+                pin_hash or self._dummy_pin_hash,
+                self._peppered(pin, self._pin_pepper),
+            )
+            and pin_hash is not None
+        )
 
     def _verify(self, secret_hash: str, prepared_secret: str) -> bool:
         try:

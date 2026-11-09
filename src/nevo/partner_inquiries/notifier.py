@@ -82,11 +82,21 @@ class LeadEmailNotifier:
         if view.student_count is not None:
             rows.append(("Students", f"{view.student_count:,}"))
         if view.phone:
-            rows.append(("Phone", f'<a href="tel:{view.phone}" style="color:#4338CA;'
-                                  f'text-decoration:none">{view.phone}</a>'))
+            rows.append(
+                (
+                    "Phone",
+                    f'<a href="tel:{view.phone}" style="color:#4338CA;'
+                    f'text-decoration:none">{view.phone}</a>',
+                )
+            )
         if view.email:
-            rows.append(("Email", f'<a href="mailto:{view.email}" style="color:#4338CA;'
-                                  f'text-decoration:none">{view.email}</a>'))
+            rows.append(
+                (
+                    "Email",
+                    f'<a href="mailto:{view.email}" style="color:#4338CA;'
+                    f'text-decoration:none">{view.email}</a>',
+                )
+            )
         cells = "".join(
             f'<tr><td style="padding:6px 16px 6px 0;color:#6B7280;font-size:14px;'
             f'white-space:nowrap;vertical-align:top">{label}</td>'
@@ -103,9 +113,7 @@ class LeadEmailNotifier:
             if view.message
             else ""
         )
-        font = (
-            "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
-        )
+        font = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
         card = (
             "max-width:520px;margin:0 auto;background:#FFFDF8;border-radius:14px;"
             "padding:24px;border:1px solid #E7E2D6"
@@ -133,7 +141,7 @@ class LeadEmailNotifier:
             f'<table role="presentation" cellpadding="0" cellspacing="0"'
             f' style="margin-top:18px;width:100%">{cells}{message}</table>'
             f'<div style="{footer}">'
-            f'{view.source.value.replace("_", " ")} &middot; {received} UTC'
+            f"{view.source.value.replace('_', ' ')} &middot; {received} UTC"
             f"</div></div></div>"
         )
 

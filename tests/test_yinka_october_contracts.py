@@ -16,9 +16,7 @@ from nevo.main import app
 
 def test_attempt_response_owns_result_and_socratic_handoff() -> None:
     fields = LessonQuestionAttemptResponse.model_fields
-    assert {"result_state", "handoff_to", "guided_prompts", "advance_after_handoff"} <= set(
-        fields
-    )
+    assert {"result_state", "handoff_to", "guided_prompts", "advance_after_handoff"} <= set(fields)
 
 
 def test_message_thread_names_the_routing_teacher() -> None:

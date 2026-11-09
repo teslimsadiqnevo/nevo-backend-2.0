@@ -166,9 +166,7 @@ def test_unknown_team_member_returns_404() -> None:
 
 
 def test_admin_can_deactivate_and_restore_another_team_member() -> None:
-    client, actor, repository = client_for_actor(
-        scopes=frozenset({PermissionScope.OVERSIGHT})
-    )
+    client, actor, repository = client_for_actor(scopes=frozenset({PermissionScope.OVERSIGHT}))
     assert actor.school_id is not None
     member = AdminTeamMember(
         user_id=uuid4(),

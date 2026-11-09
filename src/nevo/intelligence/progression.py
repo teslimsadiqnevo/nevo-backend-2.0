@@ -97,24 +97,32 @@ async def next_work(session, student, subject=None, lesson_id=None):
     from nevo.core.config import get_settings
 
     level_returns_enabled = (
-        get_settings().collect_level_mastery
-        and get_settings().level_aware_return_enabled
+        get_settings().collect_level_mastery and get_settings().level_aware_return_enabled
     )
-    levels = {
-        (row.concept_id, row.mastery_level): row
-        for row in await session.scalars(
-            select(StudentConceptLevelMastery).where(
-                StudentConceptLevelMastery.student_id == student.id,
-                StudentConceptLevelMastery.concept_id.in_(due_ids),
+    levels = (
+        {
+            (row.concept_id, row.mastery_level): row
+            for row in await session.scalars(
+                select(StudentConceptLevelMastery).where(
+                    StudentConceptLevelMastery.student_id == student.id,
+                    StudentConceptLevelMastery.concept_id.in_(due_ids),
+                )
             )
-        )
-    } if level_returns_enabled else {}
+        }
+        if level_returns_enabled
+        else {}
+    )
     review = None
     review_item = None
     lesson_cache = {}
     if not level_returns_enabled:
         review = next(
-            (concept for schedule in due for concept in eligible if concept.id == schedule.concept_id),
+            (
+                concept
+                for schedule in due
+                for concept in eligible
+                if concept.id == schedule.concept_id
+            ),
             None,
         )
     for schedule in due:
@@ -198,22 +206,28 @@ async def _due_item(session, student_id, concept_id, segments, levels):
     from nevo.api.lesson_review import approved_check_ids, approved_level_ids
 
     order = ("knowledge", "application", "analysis")
-    target_level = next((
-        level for level in order
-        if not (
-            (state := levels.get((concept_id, level)))
-            and state.mastery_probability >= MASTERY_THRESHOLD
-            and state.independent_pass_count >= LEVEL_INDEPENDENT_PASSES
-        )
-    ), None)
+    target_level = next(
+        (
+            level
+            for level in order
+            if not (
+                (state := levels.get((concept_id, level)))
+                and state.mastery_probability >= MASTERY_THRESHOLD
+                and state.independent_pass_count >= LEVEL_INDEPENDENT_PASSES
+            )
+        ),
+        None,
+    )
     if target_level is None:
         return None
-    seen = set(await session.scalars(
-        select(LessonQuestionAttempt.question_id).where(
-            LessonQuestionAttempt.student_id == student_id,
-            LessonQuestionAttempt.question_snapshot["conceptId"].astext == str(concept_id),
+    seen = set(
+        await session.scalars(
+            select(LessonQuestionAttempt.question_id).where(
+                LessonQuestionAttempt.student_id == student_id,
+                LessonQuestionAttempt.question_snapshot["conceptId"].astext == str(concept_id),
+            )
         )
-    ))
+    )
     approvals = {}
     level_approvals = {}
     lessons = {}
@@ -230,11 +244,13 @@ async def _due_item(session, student_id, concept_id, segments, levels):
                 continue
             if segment.lesson_id not in approvals:
                 approvals[segment.lesson_id] = await approved_check_ids(session, segment.lesson_id)
-                level_approvals[segment.lesson_id] = await approved_level_ids(session, segment.lesson_id)
-            if (
-                (str(segment.id), question_id) in approvals[segment.lesson_id]
-                and (str(segment.id), question_id) in level_approvals[segment.lesson_id]
-            ):
+                level_approvals[segment.lesson_id] = await approved_level_ids(
+                    session, segment.lesson_id
+                )
+            if (str(segment.id), question_id) in approvals[segment.lesson_id] and (
+                str(segment.id),
+                question_id,
+            ) in level_approvals[segment.lesson_id]:
                 return segment, question
     for segment in segments:
         if segment.lesson_id not in lessons:
@@ -254,7 +270,12 @@ async def _due_item(session, student_id, concept_id, segments, levels):
                 continue
             if segment.lesson_id not in approvals:
                 approvals[segment.lesson_id] = await approved_check_ids(session, segment.lesson_id)
-                level_approvals[segment.lesson_id] = await approved_level_ids(session, segment.lesson_id)
-            if ("assessment", question_id) in approvals[segment.lesson_id] and ("assessment", question_id) in level_approvals[segment.lesson_id]:
+                level_approvals[segment.lesson_id] = await approved_level_ids(
+                    session, segment.lesson_id
+                )
+            if ("assessment", question_id) in approvals[segment.lesson_id] and (
+                "assessment",
+                question_id,
+            ) in level_approvals[segment.lesson_id]:
                 return by_id[str(question["sourceSegmentId"])], question
     return None

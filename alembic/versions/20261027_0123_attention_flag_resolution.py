@@ -20,7 +20,9 @@ def upgrade():
     )
     op.drop_index("ix_attention_flags_open_student", table_name="attention_flags")
     op.create_index(
-        "ix_attention_flags_open_student", "attention_flags", ["student_id"],
+        "ix_attention_flags_open_student",
+        "attention_flags",
+        ["student_id"],
         postgresql_where=sa.text("resolved_at IS NULL"),
     )
 
@@ -28,7 +30,9 @@ def upgrade():
 def downgrade():
     op.drop_index("ix_attention_flags_open_student", table_name="attention_flags")
     op.create_index(
-        "ix_attention_flags_open_student", "attention_flags", ["student_id"],
+        "ix_attention_flags_open_student",
+        "attention_flags",
+        ["student_id"],
         postgresql_where=sa.text("acknowledged_at IS NULL"),
     )
     op.drop_column("attention_flags", "resolved_at")

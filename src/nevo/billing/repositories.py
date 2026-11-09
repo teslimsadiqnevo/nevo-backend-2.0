@@ -40,11 +40,13 @@ class SqlAlchemyBillingRepository:
             if school is None:
                 raise BillingNotFoundError
             contact = await _billing_contact(session, school.billing_contact_id)
-            contacts = (await session.scalars(
-                select(BillingContact)
-                .where(BillingContact.school_id == school_id)
-                .order_by(BillingContact.created_at, BillingContact.id)
-            )).all()
+            contacts = (
+                await session.scalars(
+                    select(BillingContact)
+                    .where(BillingContact.school_id == school_id)
+                    .order_by(BillingContact.created_at, BillingContact.id)
+                )
+            ).all()
             payment_method = await session.scalar(
                 select(BillingPaymentMethod).where(BillingPaymentMethod.school_id == school_id)
             )

@@ -76,8 +76,10 @@ async def test_the_same_holds_for_passwords(hasher) -> None:
 
     async def ten_teachers() -> None:
         await asyncio.gather(
-            *(hasher.verify_password_async(password_hash, "a-long-enough-password")
-              for _ in range(10))
+            *(
+                hasher.verify_password_async(password_hash, "a-long-enough-password")
+                for _ in range(10)
+            )
         )
 
     turns, _ = await _turns_served_during(ten_teachers)

@@ -47,7 +47,9 @@ def _is_transaction_pooler(database_url: str) -> bool:
 
 def _is_supabase_session_pooler(database_url: str) -> bool:
     url = make_url(database_url)
-    return bool(url.host and url.host.endswith(".pooler.supabase.com") and url.port == SESSION_POOLER_PORT)
+    return bool(
+        url.host and url.host.endswith(".pooler.supabase.com") and url.port == SESSION_POOLER_PORT
+    )
 
 
 def create_engine(database_url: str) -> AsyncEngine:
@@ -116,8 +118,12 @@ def create_engine(database_url: str) -> AsyncEngine:
         # far more than a query - so hold a few open rather than reopening.
         # The Supabase session pooler has a 15-client project limit. Multiple
         # services share it, so never let one process reserve most of it.
-        pool_size=min(settings.database_pool_size, 2) if session_pooler else settings.database_pool_size,
-        max_overflow=min(settings.database_max_overflow, 1) if session_pooler else settings.database_max_overflow,
+        pool_size=min(settings.database_pool_size, 2)
+        if session_pooler
+        else settings.database_pool_size,
+        max_overflow=min(settings.database_max_overflow, 1)
+        if session_pooler
+        else settings.database_max_overflow,
         pool_timeout=10,
         connect_args=connect_args,
     )

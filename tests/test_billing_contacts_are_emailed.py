@@ -46,9 +46,7 @@ def test_each_address_is_queued_once_per_milestone() -> None:
     # Read-then-write would still double-send under two concurrent sweeps,
     # so the table carries the guarantee as well.
     assert "emails - existing" in source
-    names = {
-        constraint.name for constraint in BillingEmailDelivery.__table__.constraints
-    }
+    names = {constraint.name for constraint in BillingEmailDelivery.__table__.constraints}
     assert "uq_billing_email_invoice_recipient_kind" in names
 
 

@@ -20,9 +20,7 @@ def build_sso_service(
         repository=SqlAlchemySsoRepository(sessions),
         sessions=SqlAlchemySessionRepository(sessions),
         audit_log=SqlAlchemyAuthAuditLog(sessions),
-        token_service=HmacTokenService(
-            auth_settings.auth_session_pepper.get_secret_value()
-        ),
+        token_service=HmacTokenService(auth_settings.auth_session_pepper.get_secret_value()),
         provider_clients={
             SsoProvider.MICROSOFT: MicrosoftSsoProviderClient(
                 client_secret=(

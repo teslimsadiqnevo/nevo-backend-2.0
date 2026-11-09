@@ -174,16 +174,19 @@ async def school_recheck(
         raise HTTPException(404, detail={"code": "age_check_not_found"})
     now = datetime.now(UTC)
     _open_check(check, now)
-    session.add(AgeCheckEdit(
-        age_check_id=check.id,
-        student_id=check.student_id,
-        actor_user_id=actor.id,
-        actor_name=" ".join(part for part in (actor.first_name, actor.last_name) if part)
-        or actor.email or str(actor.id),
-        previous_school_date_of_birth=check.school_date_of_birth,
-        new_school_date_of_birth=payload.date_of_birth,
-        changed_at=now,
-    ))
+    session.add(
+        AgeCheckEdit(
+            age_check_id=check.id,
+            student_id=check.student_id,
+            actor_user_id=actor.id,
+            actor_name=" ".join(part for part in (actor.first_name, actor.last_name) if part)
+            or actor.email
+            or str(actor.id),
+            previous_school_date_of_birth=check.school_date_of_birth,
+            new_school_date_of_birth=payload.date_of_birth,
+            changed_at=now,
+        )
+    )
     check.school_date_of_birth = payload.date_of_birth
     check.school_rechecked_at, check.school_rechecked_by = now, actor.id
     check.parent_reconfirmed_at = check.parent_reconfirmed_by = None
@@ -198,28 +201,43 @@ async def school_recheck(
 
 @router.get("/{age_check_id}/history", response_model=list[AgeCheckEditResponse])
 async def school_recheck_history(
-    age_check_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+    age_check_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
 ):
     actor = await require_school_actor(session, principal, roles=SCHOOL_ROLES)
     check = await session.get(AgeCheck, age_check_id)
     if check is None or check.school_id != actor.school_id:
         raise HTTPException(404, detail={"code": "age_check_not_found"})
-    rows = await session.scalars(select(AgeCheckEdit).where(
-        AgeCheckEdit.age_check_id == age_check_id,
-    ).order_by(AgeCheckEdit.changed_at, AgeCheckEdit.id))
+    rows = await session.scalars(
+        select(AgeCheckEdit)
+        .where(
+            AgeCheckEdit.age_check_id == age_check_id,
+        )
+        .order_by(AgeCheckEdit.changed_at, AgeCheckEdit.id)
+    )
     history = [AgeCheckEditResponse.model_validate(row, from_attributes=True) for row in rows]
     if check.resolved_at and check.agreed_date_of_birth:
-        parent = await session.get(User, check.resolved_by_user_id) if check.resolved_by_user_id else None
-        history.append(AgeCheckEditResponse(
-            previous_school_date_of_birth=check.school_date_of_birth,
-            new_school_date_of_birth=None,
-            actor_user_id=check.resolved_by_user_id,
-            actor_name=(" ".join(part for part in (parent.first_name, parent.last_name) if part)
-                        if parent else "Parent"),
-            changed_at=check.resolved_at,
-            date_in_force=check.agreed_date_of_birth,
-            source="parent_confirmation",
-        ))
+        parent = (
+            await session.get(User, check.resolved_by_user_id)
+            if check.resolved_by_user_id
+            else None
+        )
+        history.append(
+            AgeCheckEditResponse(
+                previous_school_date_of_birth=check.school_date_of_birth,
+                new_school_date_of_birth=None,
+                actor_user_id=check.resolved_by_user_id,
+                actor_name=(
+                    " ".join(part for part in (parent.first_name, parent.last_name) if part)
+                    if parent
+                    else "Parent"
+                ),
+                changed_at=check.resolved_at,
+                date_in_force=check.agreed_date_of_birth,
+                source="parent_confirmation",
+            )
+        )
     return sorted(history, key=lambda item: item.changed_at)
 
 
@@ -229,7 +247,9 @@ async def school_recheck_history(
     responses={409: {"description": "school_recheck_required or parent_account_unavailable"}},
 )
 async def resend_parent_age_check_notice(
-    age_check_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+    age_check_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
 ):
     actor = await require_school_actor(session, principal, roles=SCHOOL_ROLES)
     check, student = await _check(session, age_check_id)

@@ -220,12 +220,20 @@ class AudioGenerationService:
     ) -> httpx.Response:
         for attempt in range(YARNGPT_ATTEMPTS):
             try:
-                operation = "synthesis" if method == "POST" else (
-                    "voice_catalogue" if url.rstrip("/").endswith("voices") else "job_read"
+                operation = (
+                    "synthesis"
+                    if method == "POST"
+                    else ("voice_catalogue" if url.rstrip("/").endswith("voices") else "job_read")
                 )
                 response = await provider_request(
-                    client, method, url, provider="yarngpt", model="tts",
-                    operation=operation, retry_number=attempt + 1, **kwargs,
+                    client,
+                    method,
+                    url,
+                    provider="yarngpt",
+                    model="tts",
+                    operation=operation,
+                    retry_number=attempt + 1,
+                    **kwargs,
                 )
             except httpx.TransportError:
                 if attempt == YARNGPT_ATTEMPTS - 1:

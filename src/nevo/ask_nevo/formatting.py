@@ -167,9 +167,7 @@ def structure_answer(answer: str, *, preserve_inline: bool = False) -> Structure
             flush_items()
             body = strip_inline_markup(colon.group("text"))
             if body:
-                blocks.append(
-                    AnswerBlock(type=AnswerBlockType.HEADING, text=body, level=3)
-                )
+                blocks.append(AnswerBlock(type=AnswerBlockType.HEADING, text=body, level=3))
             continue
 
         flush_items()
@@ -221,7 +219,5 @@ def _as_plain_text(blocks: list[AnswerBlock]) -> str:
         elif block.type is AnswerBlockType.BULLETS:
             parts.extend(f"• {item}" for item in block.items)
         elif block.type is AnswerBlockType.STEPS:
-            parts.extend(
-                f"{index}. {item}" for index, item in enumerate(block.items, start=1)
-            )
+            parts.extend(f"{index}. {item}" for index, item in enumerate(block.items, start=1))
     return "\n".join(part for part in parts if part)

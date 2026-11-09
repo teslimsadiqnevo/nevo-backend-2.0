@@ -311,10 +311,7 @@ async def prepare_adaptation(session, principal, payload, signals):
                 and attempts[0].segment_id == current.id
                 and attempts[0].source in {"checkpoint", "calculation"}
                 and attempts[0].correct is False
-                and not any(
-                    event.timestamp >= attempts[0].submitted_at
-                    for event in adaptations
-                )
+                and not any(event.timestamp >= attempts[0].submitted_at for event in adaptations)
             ),
             current_depth=(
                 (segment_choice(sitting, current).get("depth") or "original")

@@ -334,8 +334,12 @@ async def apply_marked_attempt(
     if collect_level:
         from nevo.api.lesson_review import approved_level_ids
 
-        level_scope = str(attempt.lesson_id) if attempt.source == "assessment" else str(attempt.segment_id)
-        collect_level = (level_scope, attempt.question_id) in await approved_level_ids(session, attempt.lesson_id)
+        level_scope = (
+            str(attempt.lesson_id) if attempt.source == "assessment" else str(attempt.segment_id)
+        )
+        collect_level = (level_scope, attempt.question_id) in await approved_level_ids(
+            session, attempt.lesson_id
+        )
     if collect_level:
         level_row = await session.scalar(
             select(StudentConceptLevelMastery)
@@ -376,7 +380,12 @@ async def apply_marked_attempt(
         level_row.mastery_probability = level_result.state.mastery_probability_concept
         level_row.practice_count = level_result.state.practice_count
         level_row.supported_pass_count += int(attempt.correct and supported)
-        level_row.independent_pass_count += int(attempt.correct and not supported and attempt.response_time_ms is not None and attempt.response_time_ms >= minimum_reading_time(question))
+        level_row.independent_pass_count += int(
+            attempt.correct
+            and not supported
+            and attempt.response_time_ms is not None
+            and attempt.response_time_ms >= minimum_reading_time(question)
+        )
         if (
             level_row.strengthened_at is None
             and level_row.mastery_probability >= MASTERY_THRESHOLD

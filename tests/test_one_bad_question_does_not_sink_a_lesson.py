@@ -73,9 +73,7 @@ def test_what_was_dropped_is_named() -> None:
     # A shorter lesson with no explanation is the failure the parse notes
     # exist to prevent. The teacher is told which question went.
     payload = {"assessment": [dict(OPEN)]}
-    assert _drop_unusable_questions(payload) == [
-        "Why does an egg float in very salty water?"
-    ]
+    assert _drop_unusable_questions(payload) == ["Why does an egg float in very salty water?"]
 
 
 def test_a_dropped_question_is_reported_as_a_review_note() -> None:
@@ -108,7 +106,7 @@ def test_repair_giving_up_is_caught_as_well_as_repair_failing() -> None:
     """
 
     source = inspect.getsource(service.ContentParsingService.parse)
-    repair = source[source.index("repair_questions("):]
+    repair = source[source.index("repair_questions(") :]
     # The call itself is guarded, not only what comes after it.
     guarded = repair[: repair.index("_mark_source_authorship")]
     assert "except UnclassifiableQuestionError:" in guarded

@@ -14,9 +14,7 @@ def standalone_question(question: str) -> bool:
     )
 
 
-def ordered_options(
-    options, *, seed, answer_key=None, question_index=None, position_seed=None
-):
+def ordered_options(options, *, seed, answer_key=None, question_index=None, position_seed=None):
     """Stable item shuffle with balanced correct-answer positions across a set."""
     ordered = sorted(
         options,
@@ -39,8 +37,7 @@ def ordered_options(
         (
             index
             for index, option in enumerate(ordered)
-            if option.get("value") == answer_key
-            and type(option.get("value")) is type(answer_key)
+            if option.get("value") == answer_key and type(option.get("value")) is type(answer_key)
         ),
         None,
     )

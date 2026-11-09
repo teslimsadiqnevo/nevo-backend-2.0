@@ -193,5 +193,5 @@ def test_every_checks_comparison_uses_the_tolerant_one() -> None:
     source = inspect.getsource(lesson_review)
     for name in ("approved_check_ids", "approved_level_ids"):
         assert "checks_signoff_hashes" in _comparison_source(name), name
-    assert "record.kind == \"checks\"" in inspect.getsource(lesson_review._current_signoff)
+    assert 'record.kind == "checks"' in inspect.getsource(lesson_review._current_signoff)
     assert source.count("checks_signoff_hashes(") >= 4

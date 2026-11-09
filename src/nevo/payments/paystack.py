@@ -171,7 +171,8 @@ def _parse_transaction(data: dict[str, Any]) -> ProviderTransaction:
         provider_reference=str(provider_reference) if provider_reference else None,
         paid_at=_parse_timestamp(data.get("paid_at") or data.get("paidAt")),
         customer_email=(
-            str(customer.get("email")) if isinstance(customer, dict) and customer.get("email")
+            str(customer.get("email"))
+            if isinstance(customer, dict) and customer.get("email")
             else None
         ),
         authorization=_parse_authorization(data.get("authorization")),

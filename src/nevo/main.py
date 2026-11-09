@@ -517,16 +517,21 @@ async def health(request: Request) -> dict[str, str]:
         "lessonAudioLastCall": PROVIDERS.state(LESSON_AUDIO),
         "lessonImagesLastFailure": PROVIDERS.last_failure(LESSON_IMAGES) or "",
         "lessonAudioLastFailure": PROVIDERS.last_failure(LESSON_AUDIO) or "",
-        # Told apart because the remedy is different. A failing provider may
-        # be back in ten minutes; one out of credit needs somebody to pay,
-        # and until they do every lesson uploaded loses that feature.
-        "lessonImagesNeedsTopUp": needs_a_human_with_a_card(
-            PROVIDERS.last_failure(LESSON_IMAGES)
-        ),
-        "lessonAudioNeedsTopUp": needs_a_human_with_a_card(
-            PROVIDERS.last_failure(LESSON_AUDIO)
-        ),
+        # Which kind of broken, because the remedy differs. A failing
+        # provider may be back in ten minutes; one out of credit needs
+        # somebody to pay, and until they do every lesson uploaded loses
+        # that feature. Empty when it is not failing at all.
+        "lessonImagesFailureKind": _failure_kind(LESSON_IMAGES),
+        "lessonAudioFailureKind": _failure_kind(LESSON_AUDIO),
     }
+
+
+def _failure_kind(provider: str) -> str:
+    """``out_of_credit``, ``service``, or empty when the provider is fine."""
+    detail = PROVIDERS.last_failure(provider)
+    if detail is None:
+        return ""
+    return "out_of_credit" if needs_a_human_with_a_card(detail) else "service"
 
 
 def _bank_details_state() -> str:

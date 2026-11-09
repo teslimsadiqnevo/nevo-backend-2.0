@@ -46,8 +46,9 @@ def upgrade() -> None:
             ).bindparams(name=name, rules=FORMAT_RULES)
         )
         op.execute(
-            sa.text("UPDATE ai_prompt_templates SET active = false WHERE name = :name")
-            .bindparams(name=name)
+            sa.text("UPDATE ai_prompt_templates SET active = false WHERE name = :name").bindparams(
+                name=name
+            )
         )
         op.execute(
             sa.text(
@@ -73,8 +74,7 @@ def downgrade() -> None:
                       SELECT max(version) FROM ai_prompt_templates WHERE name = :name
                   )
                 """
-            )
-            .bindparams(name=name)
+            ).bindparams(name=name)
         )
         op.execute(
             sa.text(
@@ -87,4 +87,3 @@ def downgrade() -> None:
                 """
             ).bindparams(name=name)
         )
-

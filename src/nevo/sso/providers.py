@@ -37,8 +37,7 @@ class MicrosoftSsoProviderClient:
                 "redirect_uri": redirect_uri,
                 "response_mode": "query",
                 "scope": (
-                    "openid email profile offline_access "
-                    "https://graph.microsoft.com/.default"
+                    "openid email profile offline_access https://graph.microsoft.com/.default"
                 ),
                 "prompt": "consent",
                 "state": state,
@@ -92,9 +91,7 @@ class MicrosoftSsoProviderClient:
             email=str(body.get("mail") or body.get("userPrincipalName")),
             first_name=body.get("givenName"),
             last_name=body.get("surname"),
-            role=(
-                UserRole.STUDENT if primary_role == "student" else UserRole.TEACHER
-            ),
+            role=(UserRole.STUDENT if primary_role == "student" else UserRole.TEACHER),
         )
 
     async def roster_for_school(
@@ -130,9 +127,7 @@ class MicrosoftSsoProviderClient:
             memberships: dict[str, set[str]] = {}
             accounts: dict[str, dict[str, object]] = {}
             for school_class in classes:
-                class_ref = str(
-                    school_class.get("externalId") or school_class.get("id") or ""
-                )
+                class_ref = str(school_class.get("externalId") or school_class.get("id") or "")
                 class_id = school_class.get("id")
                 if not class_ref or not class_id:
                     continue
@@ -233,8 +228,7 @@ class MicrosoftSsoProviderClient:
             if query:
                 escaped = quote(query.replace("'", "''"), safe="")
                 url = (
-                    f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/"
-                    f"search(q='{escaped}')"
+                    f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/search(q='{escaped}')"
                 )
             else:
                 url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/children"
@@ -272,9 +266,7 @@ class GoogleSsoProviderClient:
         self._refresh_token = refresh_token
 
     def cloud_files_ready(self, *, config: SsoSchoolConfig) -> bool:
-        return bool(
-            self._client_secret and (config.provider_credential or self._refresh_token)
-        )
+        return bool(self._client_secret and (config.provider_credential or self._refresh_token))
 
     def authorization_url(
         self,
@@ -337,8 +329,7 @@ class GoogleSsoProviderClient:
             )
         body = profile.json()
         verified_teacher = bool(
-            classroom_profile.is_success
-            and classroom_profile.json().get("verifiedTeacher")
+            classroom_profile.is_success and classroom_profile.json().get("verifiedTeacher")
         )
         return SsoProviderIdentity(
             provider=SsoProvider.GOOGLE,
@@ -501,9 +492,7 @@ class GoogleSsoProviderClient:
                 "q": " and ".join(clauses),
                 "pageSize": str(limit),
                 "orderBy": "modifiedTime desc",
-                "fields": (
-                    "files(id,name,mimeType,size,modifiedTime,driveId),nextPageToken"
-                ),
+                "fields": ("files(id,name,mimeType,size,modifiedTime,driveId),nextPageToken"),
                 "supportsAllDrives": "true",
                 "includeItemsFromAllDrives": "true",
             }

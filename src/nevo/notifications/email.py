@@ -78,11 +78,16 @@ class ResendEmailDelivery:
                         "text": text,
                         **({"html": html} if html else {}),
                         **(
-                            {"attachments": [{
-                                "filename": attachment[0],
-                                "content": b64encode(attachment[1]).decode("ascii"),
-                            }]}
-                            if attachment else {}
+                            {
+                                "attachments": [
+                                    {
+                                        "filename": attachment[0],
+                                        "content": b64encode(attachment[1]).decode("ascii"),
+                                    }
+                                ]
+                            }
+                            if attachment
+                            else {}
                         ),
                     },
                 )

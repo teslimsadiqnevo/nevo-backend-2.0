@@ -63,7 +63,9 @@ class SqlAlchemyTeacherAssignmentRepository:
                     )
                 )
                 if existing_subject is None:
-                    session.add(TeacherSubject(teacher_id=teacher_id, school_subject_id=school_subject_id))
+                    session.add(
+                        TeacherSubject(teacher_id=teacher_id, school_subject_id=school_subject_id)
+                    )
                     await session.flush()
             await self._require_subject_on_both(
                 session,
@@ -194,10 +196,12 @@ class SqlAlchemyTeacherAssignmentRepository:
                     )
                 )
                 if existing_subject is None:
-                    session.add(TeacherSubject(
-                        teacher_id=new_teacher_id,
-                        school_subject_id=current.school_subject_id,
-                    ))
+                    session.add(
+                        TeacherSubject(
+                            teacher_id=new_teacher_id,
+                            school_subject_id=current.school_subject_id,
+                        )
+                    )
                     await session.flush()
             await self._require_subject_on_both(
                 session,
@@ -449,7 +453,8 @@ class SqlAlchemyTeacherAssignmentRepository:
                     Admin.school_id == school_id,
                     AdminScopeAssignment.scope == PermissionScope.TEACHER,
                     AdminScopeAssignment.revoked_at.is_(None),
-                ).limit(1)
+                )
+                .limit(1)
             )
             if has_teacher_scope is None:
                 raise TeacherNotFoundError

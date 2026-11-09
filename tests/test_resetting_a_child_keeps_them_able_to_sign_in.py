@@ -71,8 +71,7 @@ def test_nothing_a_lesson_gates_on_is_ever_deleted(script) -> None:
     }
     removable = set(script.PROGRESS) | set(script.SUPPORT)
     assert gates & removable == set(), (
-        f"{sorted(gates & removable)} would be deleted, leaving a child who "
-        "signs in and is refused"
+        f"{sorted(gates & removable)} would be deleted, leaving a child who signs in and is refused"
     )
     assert gates <= set(script.KEPT)
 

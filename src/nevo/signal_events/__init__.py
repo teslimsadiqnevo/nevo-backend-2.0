@@ -1,2 +1,1 @@
 """Signal ingestion feature."""
-

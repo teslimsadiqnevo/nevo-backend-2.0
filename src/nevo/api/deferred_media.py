@@ -25,9 +25,7 @@ from nevo.db.models.deferred_media import DeferredLessonMedia, VisualSafetyResta
 
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 WITHDRAWAL_UNDO_WINDOW = timedelta(hours=24)
-REVIEW_EXCLUDED_FAILURES = frozenset(
-    {"content_safety_blocked", "answer_revealing_content"}
-)
+REVIEW_EXCLUDED_FAILURES = frozenset({"content_safety_blocked", "answer_revealing_content"})
 
 
 class MediaQualityEvent(CamelResponse):
@@ -86,27 +84,34 @@ class FailedVisualReview(CamelResponse):
     response_model=list[FailedVisualReview],
 )
 async def failed_visual_reviews(
-    lesson_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
 ):
     await _lesson(session, principal, lesson_id)
-    rows = (await session.execute(
-        select(VisualSafetyRestamp, LessonSegment)
-        .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
-        .where(
-            LessonSegment.lesson_id == lesson_id,
-            VisualSafetyRestamp.policy_version == POLICY_VERSION,
-            VisualSafetyRestamp.status == "failed",
+    rows = (
+        await session.execute(
+            select(VisualSafetyRestamp, LessonSegment)
+            .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
+            .where(
+                LessonSegment.lesson_id == lesson_id,
+                VisualSafetyRestamp.policy_version == POLICY_VERSION,
+                VisualSafetyRestamp.status == "failed",
+            )
+            .order_by(LessonSegment.sequence_order)
         )
-        .order_by(LessonSegment.sequence_order)
-    )).all()
-    return [FailedVisualReview(
-        segment_id=segment.id,
-        segment_title=segment.title,
-        category=restamp.failure_code or "review_failed",
-        retryable=restamp.failure_code == "review_unavailable",
-        checked_at=restamp.completed_at,
-    ) for restamp, segment in rows
-      if (segment.visual_variant or {}).get("storagePath") == restamp.storage_path]
+    ).all()
+    return [
+        FailedVisualReview(
+            segment_id=segment.id,
+            segment_title=segment.title,
+            category=restamp.failure_code or "review_failed",
+            retryable=restamp.failure_code == "review_unavailable",
+            checked_at=restamp.completed_at,
+        )
+        for restamp, segment in rows
+        if (segment.visual_variant or {}).get("storagePath") == restamp.storage_path
+    ]
 
 
 @router.post(
@@ -114,7 +119,9 @@ async def failed_visual_reviews(
     response_model=VisualRestampRetry,
 )
 async def retry_unavailable_visual_reviews(
-    lesson_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
 ):
     await _lesson(session, principal, lesson_id)
     result = await session.execute(
@@ -135,24 +142,29 @@ async def retry_unavailable_visual_reviews(
 
 @router.get("/lessons/{lesson_id}/visual-captions", response_model=list[VisualCaptionReview])
 async def pending_visual_captions(
-    lesson_id: UUID, principal: PrincipalDependency, session: DatabaseSession,
+    lesson_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
 ):
     await _lesson(session, principal, lesson_id)
-    rows = (await session.execute(
-        select(VisualSafetyRestamp, LessonSegment)
-        .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
-        .where(
-            LessonSegment.lesson_id == lesson_id,
-            VisualSafetyRestamp.policy_version == POLICY_VERSION,
-            VisualSafetyRestamp.status == "passed",
-            VisualSafetyRestamp.caption_candidate.is_not(None),
-            VisualSafetyRestamp.caption_approved_at.is_(None),
+    rows = (
+        await session.execute(
+            select(VisualSafetyRestamp, LessonSegment)
+            .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
+            .where(
+                LessonSegment.lesson_id == lesson_id,
+                VisualSafetyRestamp.policy_version == POLICY_VERSION,
+                VisualSafetyRestamp.status == "passed",
+                VisualSafetyRestamp.caption_candidate.is_not(None),
+                VisualSafetyRestamp.caption_approved_at.is_(None),
+            )
+            .order_by(LessonSegment.sequence_order)
         )
-        .order_by(LessonSegment.sequence_order)
-    )).all()
+    ).all()
     return [
         VisualCaptionReview(
-            segment_id=segment.id, segment_title=segment.title,
+            segment_id=segment.id,
+            segment_title=segment.title,
             caption=restamp.caption_candidate,
             image_url=(segment.visual_variant or {}).get("imageUrl"),
             safety_reviewed_at=restamp.completed_at,
@@ -176,16 +188,18 @@ async def approve_visual_captions(
     actor = await _lesson(session, principal, lesson_id)
     if not segment_ids or len(segment_ids) != len(set(segment_ids)):
         raise HTTPException(422, detail={"code": "invalid_visual_caption_selection"})
-    rows = (await session.execute(
-        select(VisualSafetyRestamp, LessonSegment)
-        .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
-        .where(
-            LessonSegment.lesson_id == lesson_id,
-            LessonSegment.id.in_(segment_ids),
-            VisualSafetyRestamp.policy_version == POLICY_VERSION,
+    rows = (
+        await session.execute(
+            select(VisualSafetyRestamp, LessonSegment)
+            .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
+            .where(
+                LessonSegment.lesson_id == lesson_id,
+                LessonSegment.id.in_(segment_ids),
+                VisualSafetyRestamp.policy_version == POLICY_VERSION,
+            )
+            .with_for_update()
         )
-        .with_for_update()
-    )).all()
+    ).all()
     if len(rows) != len(segment_ids) or any(
         restamp.status != "passed"
         or not restamp.caption_candidate
@@ -196,7 +210,11 @@ async def approve_visual_captions(
     ):
         raise HTTPException(409, detail={"code": "visual_caption_review_changed"})
     now = datetime.now(UTC)
-    reviewer_name = " ".join(part for part in (actor.first_name, actor.last_name) if part) or actor.email or str(actor.id)
+    reviewer_name = (
+        " ".join(part for part in (actor.first_name, actor.last_name) if part)
+        or actor.email
+        or str(actor.id)
+    )
     for restamp, segment in rows:
         restamp.caption_approved_by = actor.id
         restamp.caption_approved_by_name = reviewer_name
@@ -208,7 +226,12 @@ async def approve_visual_captions(
             "captionAuthoredBy": "nevo",
         }
     await session.commit()
-    return VisualCaptionApproval(approved_count=len(rows), approved_by=actor.id, approved_by_name=reviewer_name, approved_at=now)
+    return VisualCaptionApproval(
+        approved_count=len(rows),
+        approved_by=actor.id,
+        approved_by_name=reviewer_name,
+        approved_at=now,
+    )
 
 
 @router.put(
@@ -236,14 +259,19 @@ async def edit_visual_caption(
     if segment is None or segment.lesson_id != lesson_id:
         raise HTTPException(404, detail={"code": "lesson_section_not_found"})
     if (
-        restamp is None or restamp.status != "passed"
+        restamp is None
+        or restamp.status != "passed"
         or restamp.caption_approved_at is not None
         or (segment.visual_variant or {}).get("storagePath") != restamp.storage_path
         or (segment.visual_variant or {}).get("safetyPolicyVersion") != POLICY_VERSION
     ):
         raise HTTPException(409, detail={"code": "visual_caption_review_changed"})
     now = datetime.now(UTC)
-    reviewer_name = " ".join(part for part in (actor.first_name, actor.last_name) if part) or actor.email or str(actor.id)
+    reviewer_name = (
+        " ".join(part for part in (actor.first_name, actor.last_name) if part)
+        or actor.email
+        or str(actor.id)
+    )
     segment.visual_variant = {
         **segment.visual_variant,
         "caption": payload.caption,
@@ -253,7 +281,9 @@ async def edit_visual_caption(
     restamp.caption_approved_by, restamp.caption_approved_at = actor.id, now
     restamp.caption_approved_by_name = reviewer_name
     await session.commit()
-    return VisualCaptionApproval(approved_count=1, approved_by=actor.id, approved_by_name=reviewer_name, approved_at=now)
+    return VisualCaptionApproval(
+        approved_count=1, approved_by=actor.id, approved_by_name=reviewer_name, approved_at=now
+    )
 
 
 def reviewable_media():
@@ -274,9 +304,7 @@ async def media_quality_events(
     limit: int = Query(100, ge=1, le=200),
 ):
     """Show withheld media and repeat failures to school administrators only."""
-    actor = await require_school_actor(
-        session, principal, roles={"senco_admin", "other_admin"}
-    )
+    actor = await require_school_actor(session, principal, roles={"senco_admin", "other_admin"})
     rows = await session.execute(
         select(DeferredLessonMedia, Lesson, LessonSegment)
         .join(Lesson, Lesson.id == DeferredLessonMedia.lesson_id)
@@ -303,18 +331,20 @@ async def media_quality_events(
         )
         for job, lesson, segment in rows
     ]
-    restamps = (await session.execute(
-        select(VisualSafetyRestamp, Lesson, LessonSegment)
-        .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
-        .join(Lesson, Lesson.id == LessonSegment.lesson_id)
-        .where(
-            Lesson.school_id == actor.school_id,
-            VisualSafetyRestamp.policy_version == POLICY_VERSION,
-            VisualSafetyRestamp.status.in_(["blocked", "failed"]),
+    restamps = (
+        await session.execute(
+            select(VisualSafetyRestamp, Lesson, LessonSegment)
+            .join(LessonSegment, LessonSegment.id == VisualSafetyRestamp.segment_id)
+            .join(Lesson, Lesson.id == LessonSegment.lesson_id)
+            .where(
+                Lesson.school_id == actor.school_id,
+                VisualSafetyRestamp.policy_version == POLICY_VERSION,
+                VisualSafetyRestamp.status.in_(["blocked", "failed"]),
+            )
+            .order_by(VisualSafetyRestamp.completed_at.desc())
+            .limit(limit)
         )
-        .order_by(VisualSafetyRestamp.completed_at.desc())
-        .limit(limit)
-    )).all()
+    ).all()
     events.extend(
         MediaQualityEvent(
             lesson_id=lesson.id,
@@ -329,7 +359,9 @@ async def media_quality_events(
         )
         for review, lesson, segment in restamps
     )
-    return sorted(events, key=lambda item: item.detected_at or datetime.min.replace(tzinfo=UTC), reverse=True)[:limit]
+    return sorted(
+        events, key=lambda item: item.detected_at or datetime.min.replace(tzinfo=UTC), reverse=True
+    )[:limit]
 
 
 async def media_summary(session, lesson_id):
@@ -391,10 +423,7 @@ def _restore_unavailable_reason(job, segment, now):
     result = job.result or {}
     if job.kind == "image":
         image = result.get("image") or {}
-        if (
-            image.get("safetyPolicyVersion") != POLICY_VERSION
-            or not image.get("imageUrl")
-        ):
+        if image.get("safetyPolicyVersion") != POLICY_VERSION or not image.get("imageUrl"):
             return "media_restore_review_required"
     else:
         narrations = result.get("stepNarrations") or []
@@ -414,15 +443,11 @@ def _restore_unavailable_reason(job, segment, now):
 def _view(job, segment):
     now = datetime.now(UTC)
     unavailable_reason = (
-        _restore_unavailable_reason(job, segment, now)
-        if job.status == "withdrawn"
-        else None
+        _restore_unavailable_reason(job, segment, now) if job.status == "withdrawn" else None
     )
     can_undo = unavailable_reason is None and job.status == "withdrawn"
     undo_until = (
-        job.withdrawn_at + WITHDRAWAL_UNDO_WINDOW
-        if can_undo and job.withdrawn_at
-        else None
+        job.withdrawn_at + WITHDRAWAL_UNDO_WINDOW if can_undo and job.withdrawn_at else None
     )
     return LessonMediaItem(
         id=job.id,
@@ -775,9 +800,7 @@ async def retry_media(
         require_current=False,
         allow_answer_revealing_retry=True,
     )
-    if (
-        job.status not in {"failed", "stale", "awaiting_review"}
-    ) or job.approved_at is not None:
+    if (job.status not in {"failed", "stale", "awaiting_review"}) or job.approved_at is not None:
         raise HTTPException(409, detail={"code": "media_retry_not_allowed"})
     if source_hash(segment) != job.source_hash:
         payload = dict(job.payload)

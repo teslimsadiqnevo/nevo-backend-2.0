@@ -14,15 +14,24 @@ def upgrade():
     op.create_table(
         "age_check_edits",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("age_check_id", sa.Uuid(), sa.ForeignKey("age_checks.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("student_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "age_check_id",
+            sa.Uuid(),
+            sa.ForeignKey("age_checks.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "student_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("actor_user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="SET NULL")),
         sa.Column("actor_name", sa.String(250), nullable=False),
         sa.Column("previous_school_date_of_birth", sa.Date()),
         sa.Column("new_school_date_of_birth", sa.Date(), nullable=False),
         sa.Column("changed_at", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_index("ix_age_check_edits_check_changed", "age_check_edits", ["age_check_id", "changed_at"])
+    op.create_index(
+        "ix_age_check_edits_check_changed", "age_check_edits", ["age_check_id", "changed_at"]
+    )
 
 
 def downgrade():

@@ -27,7 +27,10 @@ class AttentionTransition(BaseModel):
     segment_id: UUID = Field(alias="segmentId")
     client_event_id: UUID | None = Field(default=None, alias="clientEventId")
     client_away_duration_ms: int | None = Field(
-        default=None, alias="clientAwayDurationMs", ge=0, le=36_000_000,
+        default=None,
+        alias="clientAwayDurationMs",
+        ge=0,
+        le=36_000_000,
         description="Elapsed away time measured on the device; only valid on return.",
     )
 
@@ -49,7 +52,9 @@ def _view(sitting: LessonSession) -> AttentionState:
     current = attention.get("open") or {}
     latest = (attention.get("intervals") or [{}])[-1]
     recorded = current.get("awayAt") or latest.get("returnedAt")
-    fresh = bool(recorded and datetime.fromisoformat(recorded) >= datetime.now(UTC) - timedelta(minutes=5))
+    fresh = bool(
+        recorded and datetime.fromisoformat(recorded) >= datetime.now(UTC) - timedelta(minutes=5)
+    )
     return AttentionState(
         session_id=sitting.id,
         student_id=sitting.student_id,
@@ -58,7 +63,9 @@ def _view(sitting: LessonSession) -> AttentionState:
         segment_id=current.get("segmentId"),
         away_since=current.get("awayAt"),
         recorded_at=recorded,
-        timing_source=(current or latest).get("timingSource", "server_arrival") if recorded else None,
+        timing_source=(current or latest).get("timingSource", "server_arrival")
+        if recorded
+        else None,
     )
 
 
@@ -75,7 +82,12 @@ async def record_attention_transition(
     if student.role.value != "student":
         raise HTTPException(403, detail={"code": "student_required"})
     sitting = await session.get(LessonSession, session_id, with_for_update=True)
-    if sitting is None or sitting.student_id != student.id or sitting.ended_at is not None or sitting.lesson_id is None:
+    if (
+        sitting is None
+        or sitting.student_id != student.id
+        or sitting.ended_at is not None
+        or sitting.lesson_id is None
+    ):
         raise HTTPException(404, detail={"code": "active_session_not_found"})
     segment = await session.get(LessonSegment, payload.segment_id)
     if segment is None or segment.lesson_id != sitting.lesson_id:
@@ -83,7 +95,9 @@ async def record_attention_transition(
     if payload.client_away_duration_ms is not None and payload.action != "return":
         raise HTTPException(422, detail={"code": "away_duration_requires_return"})
     transition(
-        sitting, action=payload.action, segment_id=str(segment.id),
+        sitting,
+        action=payload.action,
+        segment_id=str(segment.id),
         client_event_id=str(payload.client_event_id) if payload.client_event_id else None,
         client_away_duration_ms=payload.client_away_duration_ms,
     )
@@ -101,12 +115,16 @@ async def teacher_student_attention(
         raise HTTPException(403, detail={"code": "class_teacher_required"})
     assignment = await session.scalar(
         select(TeacherClassAssignment.id)
-        .join(StudentClassEnrollment, StudentClassEnrollment.class_id == TeacherClassAssignment.class_id)
+        .join(
+            StudentClassEnrollment,
+            StudentClassEnrollment.class_id == TeacherClassAssignment.class_id,
+        )
         .where(
             TeacherClassAssignment.teacher_id == principal.user_id,
             TeacherClassAssignment.removed_at.is_(None),
             StudentClassEnrollment.student_id == student_id,
-        ).limit(1)
+        )
+        .limit(1)
     )
     if assignment is None:
         raise HTTPException(404, detail={"code": "student_not_in_teachers_class"})
@@ -118,6 +136,7 @@ async def teacher_student_attention(
             LessonSession.ended_at.is_(None),
             LessonSession.started_at >= datetime.now(UTC) - timedelta(hours=10),
         )
-        .order_by(LessonSession.started_at.desc()).limit(1)
+        .order_by(LessonSession.started_at.desc())
+        .limit(1)
     )
     return _view(sitting) if sitting is not None else None

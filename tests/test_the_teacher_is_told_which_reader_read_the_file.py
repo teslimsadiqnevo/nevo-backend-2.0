@@ -86,7 +86,10 @@ async def _parse(**metadata) -> tuple[FakeRepository, object]:
         request=ContentParseRequest(
             title="Food Chains",
             source_type=LessonSourceType.PDF,
-            source_text="Producers make their own food. Consumers eat other living things.",
+            source_text=(
+                "[Page 1]\nProducers make their own food. Consumers eat other "
+                "living things.\n[Page 2]\n"
+            ),
             source_metadata=dict(metadata),
         ),
         requested_by_user_id=uuid4(),
@@ -153,3 +156,35 @@ def test_the_worker_decides_from_the_console_s_own_read_not_the_file_type() -> N
     source = upload_worker.__loader__.get_source(upload_worker.__name__)
     assert 'not metadata.get("contentIsExtractedText")' in source
     assert '"readByBackupReader": True' in source
+
+
+@pytest.mark.asyncio
+async def test_a_clean_read_says_nothing_even_though_the_server_read_it() -> None:
+    """Every PDF uses this reader, so "it was used" cannot be the trigger.
+
+    Checking the uploads: every PDF since 23 October was read on the server,
+    and only .txt files ever arrived as console-extracted text. A note on
+    every PDF lesson would be ignored within a day and would take the real
+    ones with it. The trigger is a page that gave up no text.
+    """
+    repository = FakeRepository()
+    service = ContentParsingService(repository=repository, ai_gateway=FakeGateway())
+    await service.parse(
+        request=ContentParseRequest(
+            title="Food Chains",
+            source_type=LessonSourceType.PDF,
+            # Every page has text, so the read went fine.
+            source_text="[Page 1]\nProducers make their own food.\n[Page 2]\nA hawk eats a lizard.",
+            source_metadata={"readByBackupReader": True},
+        ),
+        requested_by_user_id=uuid4(),
+    )
+    assert _note(repository.parsed) is None
+
+
+@pytest.mark.asyncio
+async def test_the_note_names_the_pages_that_gave_up_nothing() -> None:
+    repository, _ = await _parse(readByBackupReader=True)
+    note = _note(repository.parsed)
+    assert note is not None
+    assert note["pageNumbers"], "the teacher is not told which pages to check"

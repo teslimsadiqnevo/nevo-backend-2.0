@@ -16,6 +16,7 @@ from nevo.content_parsing.entities import (
     ParseRunState,
     SourcePage,
 )
+from nevo.content_parsing.failures import failure_code
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia
@@ -156,6 +157,12 @@ class ParseRunResponse(BaseModel):
     error: str | None = None
     #: What a teacher quotes for a failed run, and what finds it in the log.
     incident_id: str | None = Field(default=None, alias="incidentId")
+    #: Which kind of failure, so the screen can choose its own words instead
+    #: of only echoing failureReason. Carries safety_held for a file the
+    #: safety check refused, which is what lets "Try that again" say a safety
+    #: check held it rather than showing a generic failure. Null unless the
+    #: run failed. It never says which rule fired or what matched it.
+    reason_code: str | None = Field(default=None, alias="reasonCode")
     review_notes: list[dict[str, object]] = Field(alias="reviewNotes")
     segment_count: int = Field(alias="segmentCount")
     #: Segments the AI contributed nothing to. Equal to segmentCount means the
@@ -179,6 +186,11 @@ class ParseRunResponse(BaseModel):
             failureReason=state.failure_reason,
             error=state.error,
             incidentId=state.incident_id,
+            reasonCode=(
+                failure_code(state.error or state.failure_reason or "")
+                if state.status is ContentParseStatus.FAILED
+                else None
+            ),
             reviewNotes=list(state.review_notes),
             segmentCount=state.segment_count,
             fallbackSegmentCount=state.fallback_segment_count,

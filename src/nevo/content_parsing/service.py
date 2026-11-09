@@ -251,15 +251,26 @@ class ContentParsingService:
         review_notes: list[dict[str, object]] = (
             [{"code": "page_text_missing", "pageNumbers": missing_pages}] if missing_pages else []
         )
-        if request.source_metadata.get("readByBackupReader"):
+        # Only when that reader visibly struggled, not merely because it was
+        # the one used. Every PDF goes through it: checking the uploads, every
+        # PDF since 23 October was read on the server and only .txt files ever
+        # arrived as console-extracted text. A note on every PDF lesson would
+        # be ignored inside a day and would take the real ones with it.
+        #
+        # A page that came back with no text at all is the evidence that the
+        # read went badly - a scan, a column layout, an image of a table. When
+        # every page yielded text, the read was fine and there is nothing to
+        # tell the teacher.
+        if request.source_metadata.get("readByBackupReader") and missing_pages:
             review_notes.append(
                 {
                     "code": "source_read_by_backup_reader",
+                    "pageNumbers": missing_pages,
                     "message": (
-                        "The console could not read this file, so Nevo read it with "
-                        "a plainer reader that ignores layout and cannot read a "
-                        "scanned page. Columns, tables and anything handwritten may "
-                        "have come through jumbled or not at all. Check the sections "
+                        "Nevo read this file with a reader that ignores layout and "
+                        "cannot read a scanned page, and some pages gave up no text "
+                        "at all. Columns, tables and anything handwritten may have "
+                        "come through jumbled or be missing. Check the sections "
                         "against the original, and if the lesson looks thin, try "
                         "uploading the text itself."
                     ),
@@ -512,6 +523,42 @@ class ContentParsingService:
                 # was the only record that the AI had contributed nothing, and
                 # it named the exception class and no more - which is how a
                 # whole library of fallback lessons went unnoticed.
+                from nevo.ai_gateway.safety import SafetyBlocked
+
+                if isinstance(error, SafetyBlocked):
+                    # Its own note, so the teacher is told a safety check held
+                    # the lesson back rather than silently receiving two plain
+                    # segments with no questions in them. Food Chains 5815fe01
+                    # did exactly that on 9 November: the source passed and the
+                    # generated lesson was refused, and nothing said so.
+                    #
+                    # The rule and the trigger stay out of it, as with a
+                    # refused picture. The detail goes to the log.
+                    logger.warning(
+                        "Lesson text refused by safety chunk=%s phase=%s categories=%s",
+                        index,
+                        error.phase,
+                        ",".join(sorted(error.categories or ())) or "unnamed",
+                    )
+                    review_notes.append(
+                        {
+                            "code": "lesson_text_blocked_by_safety",
+                            "textRetained": True,
+                            "chunkNumber": index,
+                            "message": (
+                                "A safety check held back the lesson Nevo wrote from "
+                                "this part of your file, so this part came through as "
+                                "plain text with no questions. Your file was not the "
+                                "problem - it passed its own check. Tell us the lesson "
+                                "name and we will look at the check."
+                            ),
+                            "pageNumbers": [
+                                int(value) for value in re.findall(r"\[Page (\d+)\]", chunk)
+                            ],
+                        }
+                    )
+                    segments.extend(_fallback_segments(chunk, sequence_offset=len(segments)))
+                    continue
                 review_notes.append(
                     {
                         "code": "ai_parse_fallback",

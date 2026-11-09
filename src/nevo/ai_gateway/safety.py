@@ -212,9 +212,28 @@ class ContentSafetyGuard:
             "Content-Type": "application/json",
         }
 
+    #: Phases whose content is lesson material and must be judged as such.
+    #:
+    #: The prefix matters as much as the name. A lesson's own text is checked
+    #: twice: once as the teacher's file (lesson_source) and again as what
+    #: Nevo generated from it, under "output:" plus the prompt name. Only the
+    #: first was getting the lesson policy, so Food Chains passed the source
+    #: check on 9 November and was then blocked at
+    #: "output:content_parse.default" for privacy_abuse - the same pond, the
+    #: same hawk, the same two children in one question. The phase with no
+    #: policy fell through to the general rules, where two first names beside
+    #: a sentence about eating read as exposed personal data.
+    LESSON_PHASES = ("lesson_source",)
+    LESSON_OUTPUT_PREFIXES = ("output:content_parse", "output:content_question_repair")
+
+    def _is_lesson_material(self, phase: str) -> bool:
+        return phase in self.LESSON_PHASES or str(phase).startswith(
+            self.LESSON_OUTPUT_PREFIXES
+        )
+
     def _payload(self, content, phase):
         phase_policy = ""
-        if phase == "lesson_source":
+        if self._is_lesson_material(phase):
             phase_policy = (
                 " Review this as educational lesson material. Ordinary fictional or "
                 "illustrative names, textbook examples, numbers, dates, currency, and "

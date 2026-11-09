@@ -89,6 +89,7 @@ from nevo.api.response_models import (
 )
 from nevo.content_parsing.activity import activity_for_delivery
 from nevo.content_parsing.chunks import reading_chunks, reading_groups
+from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.content_parsing.entities import SourcePage
 from nevo.content_parsing.failures import (
     UploadReasonCode,
@@ -2447,7 +2448,14 @@ async def _check_in_outcome(
     for row in rows:
         snapshot = row.question_snapshot or {}
         concept_id = snapshot.get("conceptId")
-        name = str(snapshot.get("conceptName") or "").strip()
+        # Humanised here, at the read, and not only where it is written: the
+        # lessons already stored carry keys like conductorVsInsulator in them,
+        # and Chidi read all five of Heat Transfer's on his result screen.
+        # Doing it here fixes those lessons today rather than after a
+        # backfill, and covers all three places the name surfaces -
+        # masteredConcepts, the concepts needing another look, and the
+        # sentence, since every one of them is derived from this list.
+        name = readable_concept_name(snapshot.get("conceptName"))
         if not name:
             # No concept on the question, so nothing to attribute the answer
             # to. Counted nowhere rather than lumped under a made-up heading.

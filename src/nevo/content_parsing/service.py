@@ -16,6 +16,7 @@ from nevo.api.lesson_contracts import UnclassifiableQuestionError, checkpoint_pa
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
 from nevo.content_parsing.activity import activity_for_delivery
 from nevo.content_parsing.activity import activity_observations as _activity_observations
+from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.content_parsing.depth import (
     DEPTH_CONCURRENCY,
     DepthVariantError,
@@ -1424,6 +1425,13 @@ def _segment_from_payload(
             "conceptName",
             str(item.get("concept_name") or item.get("title") or body[:80]),
         )
+        # The model is asked for the name of the idea and sometimes writes an
+        # identifier instead - conductorVsInsulator, stack_pitfall. Fixed on
+        # the way in as well as on the way out, so new lessons stop carrying
+        # keys at all rather than relying on every reader to tidy them.
+        readable = readable_concept_name(checkpoint.get("conceptName"))
+        if readable:
+            checkpoint["conceptName"] = readable
         # Generated guidance is never published directly to a learner. Teacher
         # approval covers both the open-ended prompts and their markable steps.
         if checkpoint.get("guidedSteps") or checkpoint.get("guidedQuestions"):

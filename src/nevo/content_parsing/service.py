@@ -250,6 +250,20 @@ class ContentParsingService:
         review_notes: list[dict[str, object]] = (
             [{"code": "page_text_missing", "pageNumbers": missing_pages}] if missing_pages else []
         )
+        if request.source_metadata.get("readByBackupReader"):
+            review_notes.append(
+                {
+                    "code": "source_read_by_backup_reader",
+                    "message": (
+                        "The console could not read this file, so Nevo read it with "
+                        "a plainer reader that ignores layout and cannot read a "
+                        "scanned page. Columns, tables and anything handwritten may "
+                        "have come through jumbled or not at all. Check the sections "
+                        "against the original, and if the lesson looks thin, try "
+                        "uploading the text itself."
+                    ),
+                }
+            )
         #: Questions no renderer could take, after repair had already tried
         #: three times. Collected across passes and reported as a note, so a
         #: teacher is told what was left out instead of quietly receiving a
@@ -476,8 +490,22 @@ class ContentParsingService:
                 if index == len(chunks):
                     assessment = _assessment_questions(payload)
             except (AiGatewayError, ValueError, json.JSONDecodeError) as error:
-                if isinstance(error, UnclassifiableQuestionError):
-                    raise
+                # An unusable question used to be re-raised here, which lost
+                # the whole upload. By the time one reaches this point repair
+                # has had its three goes and the unrenderable questions have
+                # already been dropped, so what is left is a payload broken
+                # in some way dropping questions cannot fix - a checkpoint
+                # list that is not a list, duplicate section keys. Raising
+                # then hands the teacher nothing at all; falling through
+                # hands them the teaching text with a note saying the AI
+                # structure was unusable, which is the same deal every other
+                # malformed response already gets.
+                #
+                # It is not a safety question: an unreviewed check is withheld
+                # from delivery since SCRUM-307 and a lesson carrying one is
+                # not assignable, so no child can be shown an unrenderable
+                # question whichever way this goes.
+                #
                 # Say what went wrong, not just that something did. This note
                 # was the only record that the AI had contributed nothing, and
                 # it named the exception class and no more - which is how a
@@ -848,8 +876,43 @@ class ContentParsingService:
         except VisualGenerationError as error:
             from nevo.ai_gateway.safety import SafetyBlocked
 
-            if isinstance(error.__cause__, SafetyBlocked):
-                raise error.__cause__ from None
+            blocked = error.__cause__ if isinstance(error.__cause__, SafetyBlocked) else None
+            if blocked is not None:
+                # Used to re-raise, which cost the teacher the whole upload
+                # because one segment's picture was refused. The block here is
+                # about the image prompt or the drawn image, not the lesson:
+                # the source itself is checked once at the top of the parse and
+                # still fails the upload if it is refused. So this costs the
+                # segment its picture, the way a dropped connection or a failed
+                # educational review already does.
+                #
+                # The categories are named in the note because a safety block
+                # with nothing to read is what made Food Chains unexplainable
+                # for seven uploads on 8 November.
+                PROVIDERS.record(LESSON_IMAGES, ok=False, detail=str(blocked))
+                notes.append(
+                    {
+                        "code": "visual_blocked_by_safety",
+                        "segment": segment.segment_key,
+                        "categories": sorted(blocked.categories or ()),
+                        "phase": blocked.phase,
+                        "message": (
+                            "The safety check refused the picture for this section, so "
+                            "the section has no picture. Its teaching text is unchanged. "
+                            "If the refusal looks wrong, say so with the lesson name and "
+                            "this section - a classifier is a model, not a rule."
+                        ),
+                        "secondsSpent": round(time.perf_counter() - started, 1),
+                    }
+                )
+                return replace(
+                    segment,
+                    visual_variant=None,
+                    needs_review=True,
+                    review_reasons=tuple(
+                        dict.fromkeys((*segment.review_reasons, "visual_blocked_by_safety"))
+                    ),
+                )
             PROVIDERS.record(LESSON_IMAGES, ok=False, detail=str(error))
             # Into the run's notes, not only the log. "visual_generation_failed"
             # on its own told nobody why, which is how every image in a lesson

@@ -19,6 +19,9 @@ So failing the parse buys no safety any more and costs the lesson.
 from __future__ import annotations
 
 import inspect
+import json
+
+import pytest
 
 from nevo.api.lesson_contracts import UnclassifiableQuestionError, checkpoint_payloads
 from nevo.content_parsing import service
@@ -107,7 +110,8 @@ def test_repair_giving_up_is_caught_as_well_as_repair_failing() -> None:
     source = inspect.getsource(service.ContentParsingService.parse)
     repair = source[source.index("repair_questions("):]
     # The call itself is guarded, not only what comes after it.
-    assert "except UnclassifiableQuestionError:" in repair[: repair.index("_mark_source_authorship")]
+    guarded = repair[: repair.index("_mark_source_authorship")]
+    assert "except UnclassifiableQuestionError:" in guarded
 
 
 def test_the_unrepaired_payload_is_what_gets_dropped_from() -> None:
@@ -116,3 +120,53 @@ def test_the_unrepaired_payload_is_what_gets_dropped_from() -> None:
     # drop in it.
     source = inspect.getsource(service.ContentParsingService.parse)
     assert "_drop_unusable_questions(candidate)" in source
+
+
+@pytest.mark.asyncio
+async def test_a_payload_dropping_cannot_fix_still_returns_the_teaching_text():
+    """The last way an upload could be lost to a question.
+
+    Repair has had its three goes and the unrenderable questions have been
+    dropped, and the payload is still broken - here a checkpoint list that is
+    not a list, which no amount of dropping questions can fix. That used to
+    be re-raised and the teacher got nothing. They now get the teaching text
+    and a note saying the AI structure was unusable, which is what every
+    other malformed response has always got.
+    """
+
+    from uuid import uuid4
+
+    from nevo.content_parsing.entities import ContentParseRequest
+    from nevo.content_parsing.service import ContentParsingService
+    from nevo.domain.intelligence.vocabulary import LessonSourceType
+    from tests.content_parsing.test_service import FakeGateway, FakeRepository
+
+    payload = {
+        "segments": [
+            {
+                "title": "Pressure",
+                "body": "Pressure is force divided by area.",
+                "comprehension_checkpoints": "not a list at all",
+            }
+        ]
+    }
+
+    class Gateway(FakeGateway):
+        async def generate(self, request):
+            self.text = json.dumps(payload)
+            return await super().generate(request)
+
+    service = ContentParsingService(repository=FakeRepository(), ai_gateway=Gateway(""))
+    result = await service.parse(
+        request=ContentParseRequest(
+            title="Pressure",
+            source_type=LessonSourceType.TEXT,
+            source_text="Pressure is force divided by area. It is measured in pascals.",
+        ),
+        requested_by_user_id=uuid4(),
+    )
+
+    assert result.segments, "the upload was lost to a payload dropping cannot repair"
+    body = " ".join(segment.body for segment in result.segments)
+    assert "force divided by area" in body, "the teaching text did not survive"
+    assert "ai_parse_fallback" in {note.get("code") for note in result.review_notes}

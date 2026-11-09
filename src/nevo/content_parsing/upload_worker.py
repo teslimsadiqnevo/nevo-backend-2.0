@@ -113,10 +113,17 @@ class UploadParsingWorker:
                 _title_from_filename,
             )
 
+            # The console reads the file itself and posts the text. When it
+            # cannot, it posts the file and this reads it instead - a plainer
+            # reader with no layout and no handling of a scanned page. The
+            # lesson is built from worse text and nothing said so, which is
+            # how a thin lesson looked like Nevo's fault rather than the
+            # file's. Recorded so the teacher is told which reader was used.
+            read_by_backup = not metadata.get("contentIsExtractedText")
             source_text = (
-                content.decode("utf-8", errors="replace")
-                if metadata.get("contentIsExtractedText")
-                else _extract_text(filename, content)
+                _extract_text(filename, content)
+                if read_by_backup
+                else content.decode("utf-8", errors="replace")
             )
             source_type = LessonSourceType(metadata.get("sourceType") or _source_type(filename))
             request = ContentParseRequest(
@@ -126,6 +133,7 @@ class UploadParsingWorker:
                 source_metadata={
                     **({"subject": metadata["subject"]} if metadata.get("subject") else {}),
                     **(metadata.get("sourceMetadata") or {}),
+                    **({"readByBackupReader": True} if read_by_backup else {}),
                 },
             )
 

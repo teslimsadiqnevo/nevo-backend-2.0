@@ -110,9 +110,28 @@ def test_what_the_child_did_is_actually_removed(script) -> None:
         "lesson_progress",
         "student_concept_mastery",
         "student_concept_level_mastery",
-        "signal_events",
     ):
         assert table in script.PROGRESS, table
+
+
+def test_the_append_only_table_is_left_alone_and_said_so(script) -> None:
+    """signal_events cannot be deleted, and does not need to be.
+
+    A database trigger refuses the delete outright - the raw record of what a
+    child did is audit evidence. Attempting it took the whole reset down with
+    it the first time, which the single transaction rolled back.
+
+    It costs the reset nothing, because every read of those events joins
+    through the child's lesson sessions, and those do go. The accommodation
+    repository returns an empty aggregate as soon as a child has no sessions.
+    """
+    assert "signal_events" in script.APPEND_ONLY
+    assert "signal_events" not in script.PROGRESS
+    assert "signal_events" not in script.KEPT
+    source = SCRIPT.read_text()
+    assert "append-only" in source
+    # The run says what it left behind rather than looking like it forgot.
+    assert "row(s) stay" in source
 
 
 def test_billing_is_not_the_child_s_to_lose(script) -> None:
@@ -136,7 +155,7 @@ def test_support_flags_cannot_be_cleared_for_a_real_child(script) -> None:
 
 
 def test_the_classification_lists_are_not_accidentally_empty(script) -> None:
-    assert len(script.PROGRESS) >= 15
+    assert len(script.PROGRESS) >= 14
     assert len(script.KEPT) >= 20
     assert len(script.SUPPORT) >= 4
     assert _student_tables() >= set(script.PROGRESS)

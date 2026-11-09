@@ -888,21 +888,29 @@ class ContentParsingService:
                 # segment its picture, the way a dropped connection or a failed
                 # educational review already does.
                 #
-                # The categories are named in the note because a safety block
-                # with nothing to read is what made Food Chains unexplainable
-                # for seven uploads on 8 November.
+                # The categories and the phase go to the log, not to the note.
+                # A teacher is told that a safety check held the picture back
+                # and never which rule fired or what in her material matched
+                # it (Lydia, 9 November). We still need the detail to tell a
+                # real refusal from a Food Chains-style false positive, so it
+                # is recorded where we can read it and she cannot.
                 PROVIDERS.record(LESSON_IMAGES, ok=False, detail=str(blocked))
+                logger.warning(
+                    "Picture refused by safety segment=%s title=%s phase=%s categories=%s",
+                    segment.segment_key,
+                    segment.title,
+                    blocked.phase,
+                    ",".join(sorted(blocked.categories or ())) or "unnamed",
+                )
                 notes.append(
                     {
                         "code": "visual_blocked_by_safety",
                         "segment": segment.segment_key,
-                        "categories": sorted(blocked.categories or ()),
-                        "phase": blocked.phase,
                         "message": (
-                            "The safety check refused the picture for this section, so "
+                            "A safety check held back the picture for this section, so "
                             "the section has no picture. Its teaching text is unchanged. "
-                            "If the refusal looks wrong, say so with the lesson name and "
-                            "this section - a classifier is a model, not a rule."
+                            "If that looks wrong, tell us the lesson and this section "
+                            "and we will look at the check rather than your material."
                         ),
                         "secondsSpent": round(time.perf_counter() - started, 1),
                     }

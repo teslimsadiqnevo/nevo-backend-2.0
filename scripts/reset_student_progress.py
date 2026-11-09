@@ -57,10 +57,27 @@ PROGRESS = (
     "student_concept_scheduling",
     "adaptation_decisions",
     "probe_responses",
-    "signal_events",
     "out_of_school_learning",
     "offline_downloads",
 )
+
+#: Telemetry that cannot be deleted, and does not need to be.
+#:
+#: signal_events carries a database trigger, signal_events_append_only, that
+#: refuses any delete. That is deliberate - the raw record of what a child did
+#: is audit evidence - and a reset is not a reason to go round it.
+#:
+#: It costs the reset nothing. Every read of these events joins through the
+#: child's lesson sessions: adaptation context, the accommodation inference
+#: and the attention-flag service all select by session_id, and the
+#: accommodation repository returns an empty aggregate the moment a child has
+#: no sessions. Deleting the sessions therefore orphans the events. They stay
+#: for audit and are unreachable from delivery, which is the behaviour a reset
+#: wants anyway.
+#:
+#: Listed here rather than in KEPT so the script can say out loud what it left
+#: behind and why, instead of looking like it forgot.
+APPEND_ONLY = ("signal_events",)
 
 #: Derived signals about how the child is getting on.
 #:
@@ -158,7 +175,7 @@ def unclassified() -> set[str]:
     be silently left behind, and a reset that quietly misses something is
     worse than one that refuses.
     """
-    return _every_student_table() - set(PROGRESS) - set(SUPPORT) - set(KEPT)
+    return _every_student_table() - set(PROGRESS) - set(SUPPORT) - set(APPEND_ONLY) - set(KEPT)
 
 
 async def _resolve(session, who: str) -> User:
@@ -266,6 +283,19 @@ async def main() -> None:
                 )
             print()
             print(f"  keeping: {kept_counts} and the onboarding in learner_profiles")
+
+            for table in APPEND_ONLY:
+                held = await session.scalar(
+                    text(f"select count(*) from {table} where student_id = :id"),
+                    {"id": student.id},
+                )
+                if held:
+                    print(
+                        f"  {held} {table} row(s) stay: the table is append-only by "
+                        "policy. Every read of them joins through the child's lesson "
+                        "sessions, so removing those leaves these unreachable from "
+                        "delivery while still on the record."
+                    )
 
             if not args.apply:
                 print()

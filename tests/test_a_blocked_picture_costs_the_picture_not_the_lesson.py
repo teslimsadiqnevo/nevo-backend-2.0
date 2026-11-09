@@ -78,15 +78,24 @@ async def test_the_teaching_text_survives_a_refused_picture() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_note_says_what_was_refused_and_where() -> None:
+async def test_the_teacher_is_never_told_which_rule_fired() -> None:
+    """Lydia, 9 November: a safety stop names no rule and no trigger.
+
+    The note says a check held the picture back and which section. It must
+    not carry the categories or the phase, in any field: the app would have
+    nothing to render them as, and the ruling is that she is not told.
+    """
     _, notes = await _illustrate(
         Refuses(categories=("privacy_abuse", "self_harm"), phase="image_output")
     )
 
     note = next(item for item in notes if item["code"] == "visual_blocked_by_safety")
     assert note["segment"] == "food-chains-2"
-    assert note["categories"] == ["privacy_abuse", "self_harm"]
-    assert note["phase"] == "image_output"
+    assert "categories" not in note
+    assert "phase" not in note
+    written = " ".join(str(value) for value in note.values()).casefold()
+    for leak in ("privacy_abuse", "self_harm", "image_output", "image_prompt"):
+        assert leak not in written, f"{leak} reached the teacher's note"
 
 
 @pytest.mark.asyncio
@@ -95,7 +104,8 @@ async def test_the_note_tells_a_teacher_what_to_do_about_a_wrong_refusal() -> No
 
     message = next(item for item in notes if item["code"] == "visual_blocked_by_safety")["message"]
     assert "Its teaching text is unchanged" in message
-    assert "a classifier is a model, not a rule" in message
+    # Routes a wrong refusal to us rather than leaving her to edit her file.
+    assert "we will look at the check rather than your material" in message
 
 
 @pytest.mark.asyncio
@@ -145,3 +155,21 @@ def test_the_lesson_source_is_still_checked_before_any_section_exists() -> None:
 
     source = service.__loader__.get_source(service.__name__)
     assert 'phase="lesson_source"' in source[: source.index("blocked = error.__cause__")]
+
+
+@pytest.mark.asyncio
+async def test_we_can_still_tell_a_real_refusal_from_a_false_positive(caplog) -> None:
+    """The detail has to survive somewhere, or Food Chains is unexplainable again.
+
+    Withholding it from the teacher is the ruling; losing it entirely would
+    put us back where seven uploads failed and nothing said "safety".
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        await _illustrate(Refuses(categories=("privacy_abuse",), phase="image_prompt"))
+
+    logged = " ".join(item.getMessage() for item in caplog.records)
+    assert "privacy_abuse" in logged
+    assert "image_prompt" in logged
+    assert "food-chains-2" in logged

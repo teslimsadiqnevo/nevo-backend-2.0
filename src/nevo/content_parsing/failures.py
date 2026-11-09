@@ -30,6 +30,14 @@ class UploadReasonCode(StrEnum):
     SAVE_FAILED = "save_failed"
     OUTPUT_LIMIT = "output_limit"
     PARTIAL_READING = "partial_reading"
+    #: The lesson's own text was refused. Its own state, so the app can say a
+    #: safety check held the file back rather than showing a failed or empty
+    #: upload. Carries no rule and no trigger: the teacher is told that a
+    #: check fired, never which one or what in her file matched it.
+    SAFETY_HELD = "safety_held"
+    #: The check could not run. A different thing to tell her, because trying
+    #: again shortly will work, where a refusal will refuse again.
+    SAFETY_CHECK_UNAVAILABLE = "safety_check_unavailable"
     UNCLASSIFIABLE_QUESTION = "unclassifiable_question"
     UNKNOWN = "unknown"
 
@@ -45,6 +53,16 @@ def failure_code(error: BaseException | str) -> UploadReasonCode:
         f"{error.__class__.__name__} {error}" if isinstance(error, BaseException) else str(error)
     ).casefold()
     rules = (
+        # Before the others, because a safety message can contain words that
+        # a later rule would match on and mislabel.
+        (
+            UploadReasonCode.SAFETY_CHECK_UNAVAILABLE,
+            ("safetyunavailable", "safety_check_unavailable"),
+        ),
+        (
+            UploadReasonCode.SAFETY_HELD,
+            ("content safety blocked", "safetyblocked", "content_safety_blocked"),
+        ),
         (
             UploadReasonCode.UNCLASSIFIABLE_QUESTION,
             (

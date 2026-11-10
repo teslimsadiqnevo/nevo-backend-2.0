@@ -612,7 +612,7 @@ async def generate_transfer_items(
         generated_count=len(questions),
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
-        estimated_cost_usd=str(audit.estimated_cost_usd if audit else 0),
+        estimated_cost_usd=money(audit.estimated_cost_usd if audit else 0),
         ai_call_id=result.call_id,
         review=await _review_result(session, lesson),
     )
@@ -720,7 +720,7 @@ async def generate_calculation_parts(
         generated_step_count=generated,
         input_tokens=tokens_in,
         output_tokens=tokens_out,
-        estimated_cost_usd=str(cost),
+        estimated_cost_usd=money(cost),
         review=await _review_result(session, lesson),
     )
 
@@ -1282,6 +1282,30 @@ def _forget_approvals_on_write(session, flush_context, instances) -> None:
         if isinstance(item, _APPROVAL_INPUTS):
             forget_approvals(session)
             return
+
+
+def money(value: object) -> str:
+    """A cost as a plain decimal string, never in scientific notation.
+
+    str() on a Decimal uses exponent notation whenever the exponent makes it
+    shorter, so a zero cost quantised to eight places came out as "0E-8" and
+    a console rendered that to a teacher. Decimal keeps the arithmetic exact;
+    only the spelling changes here.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        amount = Decimal(str(value or 0))
+    except (InvalidOperation, ValueError):
+        return "0.00"
+    if amount == 0:
+        return "0.00"
+    # Trim the trailing zeros an 8-place column carries, but never below
+    # whole pennies, so a real cost still reads as money.
+    trimmed = amount.normalize()
+    if -trimmed.as_tuple().exponent < 2:
+        trimmed = trimmed.quantize(Decimal("0.01"))
+    return f"{trimmed:f}"
 
 
 async def approved_check_ids(session, lesson_id):

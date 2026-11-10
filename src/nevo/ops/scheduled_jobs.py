@@ -58,6 +58,15 @@ def build_scheduled_jobs(
                 if invoice.due_at == today or invoice.due_at == today + timedelta(days=7):
                     kind = "reminder_due" if invoice.due_at == today else "reminder_7d"
                     queued += await queue_billing_emails(session, invoice=invoice, kind=kind)
+                elif invoice.due_at < today:
+                    # SCRUM-310. One reminder once an invoice is past its due
+                    # date, and exactly one: queue_billing_emails already
+                    # refuses a second of the same kind for the same invoice
+                    # and address, so this stays at one however many days the
+                    # invoice sits unpaid and however often this job runs.
+                    queued += await queue_billing_emails(
+                        session, invoice=invoice, kind="reminder_overdue"
+                    )
         return f"queued {queued} invoice reminder emails"
 
     async def attention_digests() -> str:

@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from nevo.api.dependencies import DatabaseSession
@@ -885,6 +885,27 @@ async def remove_billing_contact(
     )
     if record is None:
         raise HTTPException(404, detail={"code": "billing_contact_not_found"})
+    # SCRUM-311. Removing the last one left the school with nobody to invoice
+    # and billing_contact_id null, which is not a state anyone chose: an
+    # invoice would be issued and queued to an empty recipient list, and the
+    # only sign would be a zero in the email worker's count.
+    remaining = await session.scalar(
+        select(func.count(BillingContact.id)).where(
+            BillingContact.school_id == record.school_id,
+            BillingContact.id != record.id,
+        )
+    )
+    if not remaining:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "last_billing_contact",
+                "message": (
+                    "This is the school's only billing contact. Add another one "
+                    "before removing this one, or the school cannot be invoiced."
+                ),
+            },
+        )
     school = await session.get(School, record.school_id, with_for_update=True)
     if school.billing_contact_id == record.id:
         replacement = await session.scalar(

@@ -78,7 +78,16 @@ class BillingEmailWorker:
         if kind != "issued" and invoice.status.value == "paid":
             await self._finish(delivery_id, None)
             return True
-        label = "Invoice" if kind == "issued" else "Payment reminder"
+        # An overdue reminder says so. "Payment reminder" for an invoice whose
+        # date has passed reads as though it has not, and a bursar deciding
+        # what to pay first needs to know which it is.
+        label = (
+            "Invoice"
+            if kind == "issued"
+            else "Overdue payment reminder"
+            if kind == "reminder_overdue"
+            else "Payment reminder"
+        )
         subject = f"Nevo {label.lower()}: {invoice.invoice_number}"
         summary = (
             f"{school.name}: invoice {invoice.invoice_number} for {invoice.period_label}, "

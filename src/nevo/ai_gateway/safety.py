@@ -212,22 +212,51 @@ class ContentSafetyGuard:
             "Content-Type": "application/json",
         }
 
-    #: Phases whose content is lesson material and must be judged as such.
+    #: Prompts whose content is a lesson, under any of the three prefixes.
     #:
-    #: The prefix matters as much as the name. A lesson's own text is checked
-    #: twice: once as the teacher's file (lesson_source) and again as what
-    #: Nevo generated from it, under "output:" plus the prompt name. Only the
-    #: first was getting the lesson policy, so Food Chains passed the source
-    #: check on 9 November and was then blocked at
-    #: "output:content_parse.default" for privacy_abuse - the same pond, the
-    #: same hawk, the same two children in one question. The phase with no
-    #: policy fell through to the general rules, where two first names beside
-    #: a sentence about eating read as exposed personal data.
-    LESSON_PHASES = ("lesson_source",)
-    LESSON_OUTPUT_PREFIXES = ("output:content_parse", "output:content_question_repair")
+    #: Each call is checked up to three times - input:, output: and final: -
+    #: and the phase carries the prompt name after the prefix. Only
+    #: lesson_source was getting the lesson policy, so the same Food Chains
+    #: text passed its source check and was blocked on the way out.
+    #:
+    #: Widened after reading every blocking decision we have recorded. All 38
+    #: of them are privacy_abuse, not one other category has ever fired, and
+    #: they are spread over eleven phases: output:lesson_depth.default (7),
+    #: rewrite_approval (5), output:content_parse.default (8),
+    #: illustration_source (2), lesson_narration (2),
+    #: input:content_parse.default (2), lesson_source (2),
+    #: final:lesson_depth.default (2), final:content_parse.default (1).
+    #: Covering one of them was never going to be enough.
+    LESSON_PROMPTS = ("content_parse", "content_question_repair", "lesson_depth")
+    PHASE_PREFIXES = ("input:", "output:", "final:")
+
+    #: Phases that are lesson text under their own name rather than a prompt's.
+    #:
+    #: lesson_narration is the lesson read aloud; illustration_source is a
+    #: section's body, sent to decide what to draw. Both are the same words a
+    #: teacher uploaded, so the same rule has to apply to them.
+    LESSON_PHASES = (
+        "lesson_source",
+        "lesson_narration",
+        "illustration_source",
+        "lesson_rewrite",
+        "rewrite_approval",
+    )
+
+    #: Deliberately not lesson material: ask_nevo, where a name can be a real
+    #: child a teacher is asking about rather than a character in a question,
+    #: and the image phases, which judge a drawing. Those blocks may well be
+    #: right, and widening into them is Lydia's call, not a guess here.
+    REWRITE_PHASES = ("lesson_rewrite", "rewrite_approval")
 
     def _is_lesson_material(self, phase: str) -> bool:
-        return phase in self.LESSON_PHASES or str(phase).startswith(self.LESSON_OUTPUT_PREFIXES)
+        phase = str(phase)
+        if phase in self.LESSON_PHASES:
+            return True
+        for prefix in self.PHASE_PREFIXES:
+            if phase.startswith(prefix):
+                return phase[len(prefix) :].split(".", 1)[0] in self.LESSON_PROMPTS
+        return False
 
     def _payload(self, content, phase):
         phase_policy = ""
@@ -242,8 +271,8 @@ class ContentSafetyGuard:
                 "precautions and adult-supervision instructions. Block an actually "
                 "hazardous procedure or clearly exposed private data."
             )
-        if phase in {"lesson_rewrite", "rewrite_approval"}:
-            phase_policy = (
+        if phase in self.REWRITE_PHASES:
+            phase_policy += (
                 " This material is a proposed teacher-authored or AI-assisted educational rewrite. "
                 "Evaluate the actions it directs, not precautionary wording. Explicitly telling "
                 "learners not to drink laboratory liquids, asking an adult to pour warm water, "

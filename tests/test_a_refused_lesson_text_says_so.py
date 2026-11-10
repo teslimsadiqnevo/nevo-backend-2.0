@@ -169,8 +169,63 @@ def test_the_lesson_policy_now_covers_what_nevo_generated() -> None:
     from nevo.ai_gateway import safety
 
     source = safety.__loader__.get_source(safety.__name__)
-    assert "LESSON_OUTPUT_PREFIXES" in source
-    assert "output:content_parse" in source
     assert "_is_lesson_material(phase)" in source
-    # The policy itself is unchanged and still only reached by lesson phases.
     assert "are not privacy abuse" in source
+
+    policy = next(v for v in vars(safety).values() if hasattr(v, "_is_lesson_material"))
+    judge = object.__new__(policy)
+
+    # Every phase that carries a lesson's own words, under all three
+    # prefixes. Taken from the blocking decisions actually recorded: all 38
+    # are privacy_abuse, spread across eleven phases.
+    for phase in (
+        "lesson_source",
+        "lesson_narration",
+        "illustration_source",
+        "lesson_rewrite",
+        "rewrite_approval",
+        "input:content_parse.default",
+        "output:content_parse.default",
+        "final:content_parse.default",
+        "output:lesson_depth.default",
+        "final:lesson_depth.default",
+        "output:content_question_repair.default",
+    ):
+        assert policy._is_lesson_material(judge, phase), phase
+
+    # And nothing else. A name in Ask Nevo can be a real child a teacher is
+    # asking about rather than a character in a question, so widening into it
+    # is a ruling, not a guess.
+    for phase in (
+        "input:ask_nevo.teacher",
+        "output:ask_nevo.teacher",
+        "image_prompt",
+        "image_output",
+        "image_cached",
+        "source",
+    ):
+        assert not policy._is_lesson_material(judge, phase), phase
+
+
+def test_a_rewrite_gets_both_rules_not_just_the_hazard_one() -> None:
+    """rewrite_approval safeguarded five times on privacy_abuse.
+
+    It had the hazard policy and not the names policy, because the two were
+    written as alternatives. They stack now.
+    """
+    from nevo.ai_gateway import safety
+
+    policy = next(v for v in vars(safety).values() if hasattr(v, "_is_lesson_material"))
+    judge = object.__new__(policy)
+    judge._model = "test-model"
+
+    written = policy._payload(judge, "content", "rewrite_approval")["system"]
+    assert "are not privacy abuse" in written
+    assert "precautionary wording" in written
+
+    plain = policy._payload(judge, "content", "lesson_source")["system"]
+    assert "are not privacy abuse" in plain
+    assert "precautionary wording" not in plain
+
+    image = policy._payload(judge, "content", "image_prompt")["system"]
+    assert "are not privacy abuse" not in image

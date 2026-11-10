@@ -32,6 +32,7 @@ from nevo.api.response_models import (
     TeacherHomeResponse,
     TransformationMetricsResponse,
 )
+from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.db.models.account import Class, ConsentRecord, StudentClassEnrollment, User
 from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.db.models.attention_flag import AttentionFlag
@@ -749,7 +750,7 @@ async def class_misconceptions(
     return [
         {
             "conceptId": str(concept_id),
-            "conceptName": name or "Concept",
+            "conceptName": readable_concept_name(name) or "Concept",
             "pattern": attribution.value,
             "studentCount": count,
             "description": _misconception_description(name, attribution.value, count),
@@ -908,7 +909,7 @@ async def _progress_payload(session, student_id, subject, *, student_view=False)
             {
                 "conceptId": str(item.concept_id),
                 "lessonId": concept.lesson_id if concept else None,
-                "name": concept.name if concept else "Concept",
+                "name": readable_concept_name(concept.name) if concept else "Concept",
                 "subject": concept.subject if concept else None,
                 "understanding": round(item.mastery_probability_concept, 4)
                 if not student_view
@@ -959,7 +960,7 @@ def _topic_counts(mastery: object) -> dict[str, object]:
     done = 0
     unfinished: list[tuple[int, str]] = []
     for item, concept in rows:
-        name = concept.name if concept else "Concept"
+        name = readable_concept_name(concept.name) if concept else "Concept"
         if item.mastery_probability_concept >= TOPIC_DONE_AT:
             done += 1
         else:

@@ -858,7 +858,11 @@ async def _question_for_attempt(
         )
         bound = named or (concepts[0] if len(concepts) == 1 else None)
         if bound is not None:
-            question = {**question, "conceptId": str(bound.id), "conceptName": bound.name}
+            question = {
+                **question,
+                "conceptId": str(bound.id),
+                "conceptName": readable_concept_name(bound.name),
+            }
     return question, segment_id
 
 

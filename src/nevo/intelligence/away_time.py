@@ -52,6 +52,7 @@ def transition(
     client_event_id: str | None = None,
     at: datetime | None = None,
     client_away_duration_ms: int | None = None,
+    client_visible_for_ms: int | None = None,
 ) -> dict:
     now = at or datetime.now(UTC)
     delivery = dict(sitting.delivery_state or {})
@@ -67,16 +68,55 @@ def transition(
     elif action == "return" and open_interval is not None:
         if open_interval.get("segmentId") != segment_id:
             return attention
+        # When the return was sent is not when the child came back. A first
+        # return after a reload waits 8 to 12 seconds for the sitting id, so
+        # dating it by arrival credits the child with being away for that
+        # wait. clientVisibleForMs is how long the page had been visible when
+        # the return was sent, so arrival minus it is when they came back.
+        returned_at = now
+        if client_visible_for_ms is not None:
+            returned_at = max(
+                now - timedelta(milliseconds=client_visible_for_ms), sitting.started_at
+            )
+
         if client_away_duration_ms is not None:
-            measured_start = now - timedelta(milliseconds=client_away_duration_ms)
+            measured_start = returned_at - timedelta(milliseconds=client_away_duration_ms)
             if measured_start < sitting.started_at:
                 measured_start = sitting.started_at
+            # The device's figure is kept, and the arrival-based one recorded
+            # beside it when they disagree materially.
+            #
+            # Taking the larger of the two was the first instinct and it is
+            # wrong: the gap between the away event arriving and the return
+            # arriving is an upper bound on the real absence, so the device
+            # would almost always lose and the measurement e5a0544 added
+            # would quietly stop being used.
+            #
+            # The exposure Yinka raised is real but narrow - a device clock
+            # that stops while the screen is locked reports short, and short
+            # hurts, because away time is subtracted from how long an answer
+            # took, so undercounting it makes a child look slower than they
+            # were. It is not fixable by arithmetic here, because nothing in
+            # this process can tell a slept clock from a child who genuinely
+            # came straight back. So it is made visible instead: a disagreement
+            # is written down, and a run of them on one device is the signal.
+            arrival_based_ms = (now - datetime.fromisoformat(open_interval["awayAt"])) / timedelta(
+                milliseconds=1
+            )
             open_interval = {
                 **open_interval,
                 "awayAt": measured_start.isoformat(),
                 "timingSource": "client_elapsed_duration",
             }
-        closed = {**open_interval, "returnedAt": now.isoformat()}
+            shortfall = arrival_based_ms - client_away_duration_ms
+            if shortfall > max(5_000, arrival_based_ms * 0.25):
+                open_interval["clientTimingDisagreement"] = {
+                    "clientReportedAwayMs": client_away_duration_ms,
+                    "arrivalIntervalMs": int(arrival_based_ms),
+                    "shortfallMs": int(shortfall),
+                    "note": "device reported far less away time than the gap between events",
+                }
+        closed = {**open_interval, "returnedAt": returned_at.isoformat()}
         intervals = [*(attention.get("intervals") or []), closed]
         if len(intervals) > 200:
             attention["historyTruncatedAt"] = intervals[-200]["awayAt"]

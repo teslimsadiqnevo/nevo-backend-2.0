@@ -3,6 +3,7 @@ from uuid import UUID
 
 from sqlalchemy import or_, select
 
+from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import Concept, LessonAssignment
 from nevo.db.models.mastery import (
@@ -192,7 +193,7 @@ async def next_work(session, student, subject=None, lesson_id=None):
     result = {
         "lessonId": target_lesson_id,
         "conceptId": concept.id,
-        "conceptName": concept.name,
+        "conceptName": readable_concept_name(concept.name),
         "segmentId": target.id,
         "segmentPosition": lesson_segments.index(target),
         "kind": "review" if review else "new_work",

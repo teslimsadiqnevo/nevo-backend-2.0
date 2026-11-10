@@ -523,6 +523,15 @@ async def health(request: Request) -> dict[str, str]:
         # that feature. Empty when it is not failing at all.
         "lessonImagesFailureKind": _failure_kind(LESSON_IMAGES),
         "lessonAudioFailureKind": _failure_kind(LESSON_AUDIO),
+        # Which database this process is actually using. DATABASE_URL is set
+        # by hand per environment, so what a running service connected to was
+        # not knowable from outside without the dashboard - a whole day went
+        # on guessing whether the migrated project was live. Host, project ref
+        # and region only: no user, no password, no database name.
+        **{
+            f"database{key[0].upper()}{key[1:]}": value
+            for key, value in get_settings().database_identity.items()
+        },
     }
 
 

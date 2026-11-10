@@ -41,6 +41,7 @@ from nevo.api.lesson_contracts import (
 )
 from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
+from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.content_parsing.depth import DepthVariantError, _json_payload
 from nevo.content_parsing.media_contracts import LessonMediaResponse
 from nevo.db.models.account import User
@@ -531,7 +532,7 @@ async def generate_transfer_items(
         raise HTTPException(409, detail={"code": "concept_has_no_source_section"})
     source = "\n\n".join(segment.body for segment in segments)[:12000]
     segment_id = segments[0].id
-    concept_name = concept.name
+    concept_name = readable_concept_name(concept.name)
     await session.commit()
     try:
         result = await gateway.generate(
@@ -1212,7 +1213,13 @@ def _checks_material(segments, lesson=None, concept_names=None):
                     segment_title=segment_title,
                     scope=scope,
                     concept_id=concept_id,
-                    concept_name=raw.get("conceptName") or concept_names.get(str(concept_id)),
+                    # "or None" so a check with no concept stays null on the
+                    # wire rather than becoming an empty string: the field is
+                    # optional and the review screen distinguishes them.
+                    concept_name=readable_concept_name(
+                        raw.get("conceptName") or concept_names.get(str(concept_id))
+                    )
+                    or None,
                     question_id=item["questionId"],
                     question_prompt=item["questionPrompt"],
                     question_answer_type=item["questionAnswerType"],

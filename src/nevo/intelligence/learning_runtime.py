@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.db.models.account import User
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import (
@@ -290,7 +291,7 @@ async def apply_marked_attempt(
                 for name in MasteryState.__dataclass_fields__
                 if name != "concept_name"
             },
-            concept_name=concept.name,
+            concept_name=readable_concept_name(concept.name),
         )
     result = engine.update(
         state=state,

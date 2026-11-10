@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import StudentConceptMastery
@@ -210,7 +211,8 @@ def _state_from_record(
     return MasteryState(
         student_id=record.student_id,
         concept_id=record.concept_id,
-        concept_name=concept_name or _fallback_concept_name(record.concept_id),
+        concept_name=readable_concept_name(concept_name)
+        or _fallback_concept_name(record.concept_id),
         mastery_probability_concept=record.mastery_probability_concept,
         mastery_probability_reading=record.mastery_probability_reading,
         attention_weights=dict(record.attention_weights),
@@ -231,7 +233,7 @@ def _aggregate_from_row(
     concept_id, concept_name, student_count, concept_avg, reading_avg = row
     return ConceptMasteryAggregate(
         concept_id=concept_id,
-        concept_name=concept_name or _fallback_concept_name(concept_id),
+        concept_name=readable_concept_name(concept_name) or _fallback_concept_name(concept_id),
         student_count=student_count,
         mastery_probability_concept=round(float(concept_avg or 0), 6),
         mastery_probability_reading=round(float(reading_avg or 0), 6),

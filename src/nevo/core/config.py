@@ -74,6 +74,39 @@ class Settings(BaseSettings):
             )
 
     @property
+    def database_identity(self) -> dict[str, str]:
+        """Which database this process is using, with nothing secret in it.
+
+        Yinka, 10 November: the one thing that would have settled a day of
+        guessing from outside. The code pins a production project ref and
+        render.yaml declares it, but DATABASE_URL is set by hand per
+        environment, so what a running service actually connected to was not
+        knowable without the dashboard.
+
+        Host and project ref only. No user, no password, no database name.
+        """
+        parsed = urlsplit(self.database_url)
+        host = parsed.hostname or ""
+        username = unquote(parsed.username or "")
+        ref = username.removeprefix("postgres.") if username.startswith("postgres.") else ""
+        if not ref and host.startswith("db.") and host.endswith(".supabase.co"):
+            ref = host.removeprefix("db.").removesuffix(".supabase.co")
+        # aws-0-eu-west-1.pooler.supabase.com -> eu-west-1
+        region = ""
+        if ".pooler.supabase.com" in host:
+            first = host.split(".", 1)[0]
+            region = first.split("-", 2)[-1] if "-" in first else first
+        return {
+            "host": host,
+            "projectRef": ref,
+            "region": region,
+            "port": str(parsed.port or ""),
+            "isPinnedProductionProject": str(
+                bool(ref) and ref == self.production_supabase_project_ref
+            ).casefold(),
+        }
+
+    @property
     def is_production_runtime(self) -> bool:
         on_render_main = (
             os.environ.get("RENDER", "").strip().casefold() == "true"

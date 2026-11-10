@@ -12,6 +12,7 @@ from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.response_models import CamelResponse
 from nevo.consent.entities import ParentChildView
+from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import StudentConceptLevelMastery, StudentConceptScheduling
 from nevo.db.models.out_of_school import OutOfSchoolLearning
@@ -208,7 +209,7 @@ async def parent_learning_evidence(
             concept.id,
             StrengthenedConcept(
                 concept_id=concept.id,
-                concept_name=concept.name,
+                concept_name=readable_concept_name(concept.name),
                 recorded_at=row.strengthened_at,
             ),
         )
@@ -218,7 +219,7 @@ async def parent_learning_evidence(
         scheduled_returns=[
             ScheduledConceptReturn(
                 concept_id=concept.id,
-                concept_name=concept.name,
+                concept_name=readable_concept_name(concept.name),
                 due_at=row.next_review_due,
             )
             for row, concept in due
@@ -226,7 +227,7 @@ async def parent_learning_evidence(
         out_of_school_learning=[
             ReportedOutsideWork(
                 concept_id=concept.id,
-                concept_name=concept.name,
+                concept_name=readable_concept_name(concept.name),
                 activity_kind=row.activity_kind,
                 recorded_at=row.created_at,
             )

@@ -227,9 +227,7 @@ class ContentSafetyGuard:
     LESSON_OUTPUT_PREFIXES = ("output:content_parse", "output:content_question_repair")
 
     def _is_lesson_material(self, phase: str) -> bool:
-        return phase in self.LESSON_PHASES or str(phase).startswith(
-            self.LESSON_OUTPUT_PREFIXES
-        )
+        return phase in self.LESSON_PHASES or str(phase).startswith(self.LESSON_OUTPUT_PREFIXES)
 
     def _payload(self, content, phase):
         phase_policy = ""

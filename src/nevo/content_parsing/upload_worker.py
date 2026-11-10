@@ -113,12 +113,17 @@ class UploadParsingWorker:
                 _title_from_filename,
             )
 
-            # The console reads the file itself and posts the text. When it
-            # cannot, it posts the file and this reads it instead - a plainer
-            # reader with no layout and no handling of a scanned page. The
-            # lesson is built from worse text and nothing said so, which is
-            # how a thin lesson looked like Nevo's fault rather than the
-            # file's. Recorded so the teacher is told which reader was used.
+            # Which reader produced the text. The console posts extracted text
+            # for a .txt upload; everything else arrives as a file and is read
+            # here with pypdf - no layout, no scanned pages, tables and
+            # columns coming through jumbled or not at all.
+            #
+            # The comment that was here said the console reads files itself
+            # and only falls back to this. It has not done that since 31
+            # August (Yinka, 10 November), and every PDF since 23 October was
+            # read here. That mattered: a note on "the backup reader was
+            # used" would have fired on every PDF lesson, so it fires only
+            # when this reader visibly struggled - see the note in service.py.
             read_by_backup = not metadata.get("contentIsExtractedText")
             source_text = (
                 _extract_text(filename, content)

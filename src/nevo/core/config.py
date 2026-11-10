@@ -5,7 +5,13 @@ from urllib.parse import unquote, urlsplit
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-PRODUCTION_SUPABASE_PROJECT_REF = "ibavgeinubvmktxufvvr"
+#: The live project. Changed from ibavgeinubvmktxufvvr on 10 November, which
+#: was the Ireland project the data was migrated away from. The guard below
+#: refuses to let a non-production backend write to this one, and while the
+#: constant named the old project it was guarding a database nothing was
+#: using while leaving the live one open. Confirmed from /health at 12:51Z:
+#: utskhzqynxepmlwkafxv, eu-west-2.
+PRODUCTION_SUPABASE_PROJECT_REF = "utskhzqynxepmlwkafxv"
 
 
 class Settings(BaseSettings):

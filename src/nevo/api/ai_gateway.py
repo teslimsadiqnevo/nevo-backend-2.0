@@ -152,10 +152,21 @@ def public_ai_error(
             "answered it. Rephrasing it usually helps. If a child's name is in "
             "the question, leaving it out will."
         )
-    return HTTPException(
-        status_code=status_code,
-        detail={
-            "code": error.code,
-            "message": message,
-        },
-    )
+    detail: dict[str, object] = {"code": error.code, "message": message}
+    if isinstance(error, SafetyBlocked) and audience == "teacher":
+        # Which of Lydia's two lines applies. She has one for a block that
+        # names someone and one for everything else, and the 403 carried no
+        # way to tell them apart, so the app had to show the general line for
+        # every block.
+        #
+        # Deliberately two values and not the category list: the categories
+        # are our own vocabulary, they change as the policy changes, and a
+        # teacher is never told which rule fired.
+        #
+        # Teacher only. A child gets one line whatever the reason, and there
+        # is no sense putting the shape of the refusal in a response destined
+        # for a child's device.
+        detail["reason"] = (
+            "names_person" if "privacy_abuse" in (error.categories or ()) else "other"
+        )
+    return HTTPException(status_code=status_code, detail=detail)

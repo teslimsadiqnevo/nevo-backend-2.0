@@ -2498,15 +2498,44 @@ def _result_note(mastered: list[dict[str, object]], revisit: list[dict[str, obje
         return ""
     kept = [str(item["conceptName"]) for item in mastered]
     again = [str(item["conceptName"]) for item in revisit]
-    # Lydia's wording, 10 November: "Today you worked on {concepts}." It was
-    # "You explored ... today." Worked on is what a child did; explored says
-    # how it went, which this sentence is not for - the concepts worth
-    # another look are named separately.
-    if kept and not again:
-        return f"Today you worked on {_join(kept)}."
-    if again and not kept:
-        return f"{_join(again).capitalize()} is worth another look."
-    return f"Today you worked on {_join(kept)}. {_join(again).capitalize()} is worth another look."
+
+    # Lydia's wording, 10 and 11 November:
+    #
+    #   "Today you worked on {concepts}."
+    #   "Today you worked on {concepts}. {concept} is one to come back to."
+    #
+    # {concepts} is every concept the check-in covered, not only the ones
+    # that went well - a child worked on all of them, and which went well is
+    # what the ticked rows beside this sentence are for. It used to name the
+    # mastered ones only, so a child who missed something was told they had
+    # worked on less than they had.
+    covered = kept + again
+    if not covered:
+        return ""
+    worked_on = f"Today you worked on {_join(covered)}."
+    if not again:
+        return worked_on
+    if len(again) == 1:
+        return f"{worked_on} {_starts_a_sentence(again[0])} is one to come back to."
+    # Lydia has not given a form for two or more yet (Yinka is asking her).
+    # Her own sentence inflected, rather than a new one invented here or -
+    # worse - saying nothing, which would leave a child unable to tell which
+    # of the concepts needs another look.
+    return f"{worked_on} {_starts_a_sentence(_join(again))} are ones to come back to."
+
+
+def _starts_a_sentence(name: str) -> str:
+    """Capitalise a concept name that is about to open a sentence.
+
+    Only when it is all lower case. str.capitalize() would lower the rest,
+    turning "pH scale" into "Ph scale" and "ASCII Bit Width" into "Ascii bit
+    width" - a child reading their own result screen should not see a
+    quantity renamed. Most names are already capitalised; this is for the
+    ones written in lower case.
+    """
+    if not name or not name.islower():
+        return name
+    return name[0].upper() + name[1:]
 
 
 def _join(names: list[str]) -> str:

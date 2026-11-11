@@ -17,6 +17,7 @@ from nevo.api.age_checks import router as age_check_router
 from nevo.api.ai_gateway import router as ai_gateway_router
 from nevo.api.application_attention import router as application_attention_router
 from nevo.api.ask_nevo import router as ask_nevo_router
+from nevo.api.assurance import router as assurance_router
 from nevo.api.auth import router as auth_router
 from nevo.api.billing import router as billing_router
 from nevo.api.client_errors import router as client_errors_router
@@ -408,6 +409,7 @@ async def request_timing(request: Request, call_next):  # type: ignore[no-untype
 app.include_router(safety_retention_router)
 app.include_router(admin_router)
 app.include_router(application_attention_router)
+app.include_router(assurance_router)
 app.include_router(ai_gateway_router)
 app.include_router(age_check_router)
 app.include_router(ask_nevo_router)

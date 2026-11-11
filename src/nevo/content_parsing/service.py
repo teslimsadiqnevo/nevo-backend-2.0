@@ -12,7 +12,11 @@ from uuid import UUID
 from nevo.ai_gateway.entities import AiGenerationRequest
 from nevo.ai_gateway.errors import AiGatewayError
 from nevo.ai_gateway.service import AiGatewayService
-from nevo.api.lesson_contracts import UnclassifiableQuestionError, checkpoint_payloads
+from nevo.api.lesson_contracts import (
+    UnclassifiableQuestionError,
+    app_can_deliver,
+    checkpoint_payloads,
+)
 from nevo.audio.service import AudioGenerationError, AudioGenerationService
 from nevo.content_parsing.activity import activity_for_delivery
 from nevo.content_parsing.activity import activity_observations as _activity_observations
@@ -246,6 +250,7 @@ class ContentParsingService:
         modules = []
         await _report(on_stage, UploadStage.READING_DOCUMENT)
         chunks = _bounded_chunks(source.strip(), MAX_CHUNK_CHARS - 2100)
+        chunk_pages = _pages_per_chunk(source.strip(), chunks)
         await _report(on_stage, UploadStage.FINDING_SECTIONS)
         segments: list[ParsedLessonSegment] = []
         review_notes: list[dict[str, object]] = (
@@ -552,9 +557,7 @@ class ContentParsingService:
                                 "problem - it passed its own check. Tell us the lesson "
                                 "name and we will look at the check."
                             ),
-                            "pageNumbers": [
-                                int(value) for value in re.findall(r"\[Page (\d+)\]", chunk)
-                            ],
+                            "pageNumbers": chunk_pages[index - 1],
                         }
                     )
                     segments.extend(_fallback_segments(chunk, sequence_offset=len(segments)))
@@ -571,9 +574,7 @@ class ContentParsingService:
                         "error": error.__class__.__name__,
                         "reason": str(error)[:300],
                         **_response_forensics(locals().get("result")),
-                        "pageNumbers": [
-                            int(value) for value in re.findall(r"\[Page (\d+)\]", chunk)
-                        ],
+                        "pageNumbers": chunk_pages[index - 1],
                     }
                 )
                 segments.extend(
@@ -603,6 +604,45 @@ class ContentParsingService:
         normalized_segments = [
             _normalize_segment(core_only(segment)) for segment in prepared_segments
         ]
+
+        # Checks the student app cannot put in front of a child.
+        #
+        # Valid here and undeliverable there were two different things, and
+        # only the first was being tested. Heat Transfer had four checks a
+        # teacher read and approved; the class saw one. The other three
+        # passed review and were dropped by the app at delivery with nothing
+        # said, so she believed she had approved four questions no child was
+        # ever asked.
+        #
+        # Approved by Lydia on 10 November: drop them and tell the teacher,
+        # rather than lose them silently. Delivering them properly is ranked
+        # straight after the three levels pieces, and when that lands this
+        # filter narrows to nothing on its own, because the set it checks is
+        # APP_DELIVERABLE_ANSWER_TYPES and widening that set is the change.
+        undeliverable: list[str] = []
+        normalized_segments, assessment = _drop_undeliverable_checks(
+            normalized_segments, assessment, undeliverable
+        )
+        if undeliverable:
+            review_notes.append(
+                {
+                    "code": "question_unusable",
+                    "textRetained": True,
+                    "reason": "not_deliverable_by_app",
+                    "questionCount": len(undeliverable),
+                    "questions": undeliverable,
+                    "message": (
+                        "The app cannot yet ask "
+                        f"{'these questions' if len(undeliverable) > 1 else 'this question'} "
+                        "in a way a child can answer and have marked, so "
+                        f"{'they are' if len(undeliverable) > 1 else 'it is'} not in "
+                        "the lesson. The rest of the lesson is unaffected. It only "
+                        "asks multiple-choice questions today - a question with a "
+                        "number or a typed answer is waiting on that. Nothing is "
+                        "wrong with the question itself."
+                    ),
+                }
+            )
 
         if dropped:
             review_notes.append(
@@ -2325,6 +2365,71 @@ def _review_reasons(value: object) -> list[str]:
             reason if reason in known else SegmentReviewReason.MODEL_FLAGGED_FOR_REVIEW.value
         )
     return list(dict.fromkeys(reasons))
+
+
+#: Page markers look like "[Page 12]" and are written by the PDF reader.
+_PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
+
+
+def _pages_per_chunk(source: str, chunks: list[str]) -> list[list[int]]:
+    """Which pages of the file each chunk covers, including the one it continues.
+
+    Reading the markers inside a chunk is not enough. A page longer than one
+    chunk is split across several, and only the first of those carries its
+    marker: a two-page source with one long page produced eight chunks, of
+    which six reported no page at all. Lydia asked (10 November) whether the
+    page numbers beside a held-back part are always set, and that was the
+    honest answer - no.
+
+    So each chunk also inherits the last page opened at or before it starts.
+    The chunks concatenate to the source, so the offsets are exact rather
+    than a search for matching text.
+    """
+
+    opened: list[tuple[int, int]] = [
+        (match.start(), int(match.group(1))) for match in _PAGE_MARKER.finditer(source)
+    ]
+    per_chunk: list[list[int]] = []
+    offset = 0
+    for chunk in chunks:
+        inside = [int(value) for value in _PAGE_MARKER.findall(chunk)]
+        carried = [page for start, page in opened if start < offset]
+        pages = sorted({*inside, *carried[-1:]})
+        per_chunk.append(pages)
+        offset += len(chunk)
+    return per_chunk
+
+
+def _drop_undeliverable_checks(
+    segments: list[ParsedLessonSegment],
+    assessment: list[dict[str, object]],
+    dropped: list[str],
+) -> tuple[list[ParsedLessonSegment], list[dict[str, object]]]:
+    """Remove checks the student app cannot ask, recording which went.
+
+    Returns the segments and the end-of-lesson questions with the
+    undeliverable ones taken out. The prompts are collected into ``dropped``
+    so the teacher can be told what is missing and why.
+    """
+
+    def label(question: dict[str, object]) -> str:
+        written = " ".join(str(question.get("prompt") or "").split())[:160]
+        return written or str(question.get("id") or "an unnamed question")
+
+    kept_segments = []
+    for segment in segments:
+        checks = list(segment.comprehension_checkpoints or ())
+        usable = [question for question in checks if app_can_deliver(question)]
+        if len(usable) != len(checks):
+            dropped.extend(label(q) for q in checks if not app_can_deliver(q))
+            segment = replace(segment, comprehension_checkpoints=tuple(usable))
+        kept_segments.append(segment)
+
+    usable_assessment = [question for question in assessment if app_can_deliver(question)]
+    if len(usable_assessment) != len(assessment):
+        dropped.extend(label(q) for q in assessment if not app_can_deliver(q))
+
+    return kept_segments, usable_assessment
 
 
 def _labels(value: object) -> list[str]:

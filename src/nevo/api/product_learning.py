@@ -2498,11 +2498,15 @@ def _result_note(mastered: list[dict[str, object]], revisit: list[dict[str, obje
         return ""
     kept = [str(item["conceptName"]) for item in mastered]
     again = [str(item["conceptName"]) for item in revisit]
+    # Lydia's wording, 10 November: "Today you worked on {concepts}." It was
+    # "You explored ... today." Worked on is what a child did; explored says
+    # how it went, which this sentence is not for - the concepts worth
+    # another look are named separately.
     if kept and not again:
-        return f"You explored {_join(kept)} today."
+        return f"Today you worked on {_join(kept)}."
     if again and not kept:
         return f"{_join(again).capitalize()} is worth another look."
-    return f"You explored {_join(kept)}. {_join(again).capitalize()} is worth another look."
+    return f"Today you worked on {_join(kept)}. {_join(again).capitalize()} is worth another look."
 
 
 def _join(names: list[str]) -> str:

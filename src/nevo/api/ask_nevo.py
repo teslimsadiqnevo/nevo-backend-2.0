@@ -253,6 +253,9 @@ async def ask_nevo(
         raise public_ai_error(
             error,
             audience="teacher" if payload.role is AskNevoRole.TEACHER else "learner",
+            # A question, not lesson content. Lydia's note, 10 November: names
+            # stay blocked here, and the reason a teacher reads should say so.
+            about="question",
         ) from error
     return AskResponse.from_result(result)
 

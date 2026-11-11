@@ -119,8 +119,18 @@ async def generate(
 
 
 def public_ai_error(
-    error: AiGatewayError, *, audience: Literal["learner", "teacher"]
+    error: AiGatewayError,
+    *,
+    audience: Literal["learner", "teacher"],
+    about: Literal["lesson", "question"] = "lesson",
 ) -> HTTPException:
+    """Turn a gateway failure into something the caller can show.
+
+    ``about`` says what was being checked, because a teacher refused on Ask
+    Nevo was being told "this lesson content did not pass the safety review"
+    about a question she had just typed. The app does not show it today, but
+    an untrue sentence sitting in a 403 is one somebody eventually reads.
+    """
     from nevo.ai_gateway.safety import SafetyBlocked, SafetyUnavailable
 
     status_code = status.HTTP_400_BAD_REQUEST
@@ -137,6 +147,10 @@ def public_ai_error(
         message = (
             "This lesson content did not pass the safety review. "
             "Please review the wording and try again."
+            if about == "lesson"
+            else "The safety review held this question back, so Nevo has not "
+            "answered it. Rephrasing it usually helps. If a child's name is in "
+            "the question, leaving it out will."
         )
     return HTTPException(
         status_code=status_code,

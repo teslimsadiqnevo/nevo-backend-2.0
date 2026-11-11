@@ -134,3 +134,59 @@ def test_the_old_project_is_no_longer_treated_as_production() -> None:
     settings.assert_database_target_allowed()
     assert settings.database_identity["isPinnedProductionProject"] == "false"
     assert settings.database_identity["region"] == "eu-west-1"
+
+
+# --- where the files are ----------------------------------------------------
+
+LIVE_DB = (
+    "postgresql+asyncpg://postgres.utskhzqynxepmlwkafxv:s3cret"
+    "@aws-0-eu-west-2.pooler.supabase.com:5432/postgres"
+)
+
+
+def test_storage_and_database_agreeing_is_reported() -> None:
+    found = Settings(
+        DATABASE_URL=LIVE_DB, SUPABASE_URL="https://utskhzqynxepmlwkafxv.supabase.co"
+    ).storage_identity
+    assert found["project"] == "utskhzqynxepmlwkafxv"
+    assert found["configured"] == "true"
+    assert found["matchesDatabase"] == "true"
+
+
+def test_storage_pointing_at_a_different_project_is_reported() -> None:
+    """The state found on 11 November: data moved, files left behind.
+
+    The two are separate variables, so each looks fine on its own - lessons
+    in one project, their pictures and audio in another.
+    """
+    found = Settings(
+        DATABASE_URL=LIVE_DB, SUPABASE_URL="https://ibavgeinubvmktxufvvr.supabase.co"
+    ).storage_identity
+    assert found["project"] == "ibavgeinubvmktxufvvr"
+    assert found["matchesDatabase"] == "false"
+
+
+def test_unset_storage_is_not_claimed_to_match() -> None:
+    # Explicitly empty: Settings reads .env, so leaving it out would pick up
+    # whatever this machine happens to have configured.
+    found = Settings(DATABASE_URL=LIVE_DB, SUPABASE_URL="").storage_identity
+    assert found["configured"] == "false"
+    assert found["project"] == ""
+    assert found["matchesDatabase"] == "false"
+
+
+def test_storage_reporting_carries_nothing_secret() -> None:
+    found = Settings(
+        DATABASE_URL=LIVE_DB, SUPABASE_URL="https://utskhzqynxepmlwkafxv.supabase.co"
+    ).storage_identity
+    written = " ".join(found.values())
+    for secret in ("s3cret", "key", "service_role"):
+        assert secret not in written
+
+
+def test_health_publishes_the_storage_fields_too() -> None:
+    from nevo import main
+
+    source = main.__loader__.get_source(main.__name__)
+    assert "storage_identity" in source
+    assert 'f"storage{key[0].upper()}{key[1:]}"' in source

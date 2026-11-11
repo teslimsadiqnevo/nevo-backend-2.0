@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/nevo"
+    #: Read here only to report it on /health; storage itself is configured
+    #: per service. Named by SUPABASE_URL, separately from DATABASE_URL,
+    #: which is how the two came to point at different projects.
+    supabase_url: str | None = Field(default=None, validation_alias="SUPABASE_URL")
     app_environment: str = Field(default="development", validation_alias="APP_ENV")
     deferred_media_worker_enabled: bool = Field(
         default=False, validation_alias="DEFERRED_MEDIA_WORKER_ENABLED"
@@ -110,6 +114,31 @@ class Settings(BaseSettings):
             "isPinnedProductionProject": str(
                 bool(ref) and ref == self.production_supabase_project_ref
             ).casefold(),
+        }
+
+    @property
+    def storage_identity(self) -> dict[str, str]:
+        """Which Supabase project holds the files, and whether it matches the data.
+
+        Yinka asked (11 November) whether /health could report this the way it
+        reports the database's. It is the more useful of the two, because the
+        two are set by separate variables and can drift: the database can be
+        moved to a new project while SUPABASE_URL still names the old one,
+        which leaves lessons in one project and their pictures and audio in
+        another, each looking fine on its own.
+
+        The URL is https://<project>.supabase.co and carries no region, so the
+        region is not derivable here. The ref and whether it agrees with the
+        database are what answer the question.
+        """
+        url = str(getattr(self, "supabase_url", "") or "")
+        host = urlsplit(url).hostname or ""
+        ref = host.removesuffix(".supabase.co") if host.endswith(".supabase.co") else ""
+        database_ref = self.database_identity["projectRef"]
+        return {
+            "project": ref,
+            "configured": str(bool(url)).casefold(),
+            "matchesDatabase": str(bool(ref) and ref == database_ref).casefold(),
         }
 
     @property

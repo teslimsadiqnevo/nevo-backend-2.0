@@ -532,6 +532,14 @@ async def health(request: Request) -> dict[str, str]:
             f"database{key[0].upper()}{key[1:]}": value
             for key, value in get_settings().database_identity.items()
         },
+        # And where the files are. Set by SUPABASE_URL, separately from
+        # DATABASE_URL, so the two can point at different projects and each
+        # look fine on its own - lessons in one, their pictures and audio in
+        # the other. matchesDatabase is the field worth watching.
+        **{
+            f"storage{key[0].upper()}{key[1:]}": value
+            for key, value in get_settings().storage_identity.items()
+        },
     }
 
 

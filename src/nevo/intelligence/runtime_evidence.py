@@ -158,6 +158,13 @@ def derive_runtime_evidence(
             min(180, int(focus_ms / 1000)) if below else 0,
             engagement_decline_seconds(events, engagement_baseline, now),
         ),
+        # The same figure with focus_drop left out. focus_drop is what the
+        # page emits when a child switches app or tab, and counting it made
+        # switching tabs a reason to offer a break. Break offers read this
+        # one; the adaptation engine still reads the full figure above.
+        engagement_decline_seconds_excluding_away=engagement_decline_seconds(
+            events, engagement_baseline, now
+        ),
         consecutive_errors=errors,
         replay_count_on_segment=replay_count,
         continuous_minutes=max(0, (now - continuous_start).total_seconds() / 60),

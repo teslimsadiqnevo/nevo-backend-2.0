@@ -5,34 +5,82 @@ from nevo.intelligence.entities import (
     RuntimeSignals,
 )
 
+#: Lydia's numbers, 10 November. The pill only; the standing buttons are
+#: unaffected by any of this.
+#:
+#: She said breaks came too often, and the reasons were cheap triggers rather
+#: than a missing rate limit: one wrong answer plus one replay was enough, a
+#: tab switch counted as disengagement, declining bought two minutes, and
+#: nothing capped how many a child could be offered in one lesson.
+
+#: "Not now" lasts fifteen minutes. Was two.
+DECLINE_QUIET_SECONDS = 15 * 60
+
+#: At least ten minutes between offers, declined or simply ignored.
+BETWEEN_OFFERS_SECONDS = 10 * 60
+
+#: At most two per lesson. After the second the pill does not come back.
+MAX_OFFERS_PER_LESSON = 2
+
+#: Three misses in a row on one concept.
+FRUSTRATION_ERRORS_SAME_CONCEPT = 3
+
+#: Or two on one step, with a replay or a Slower in between.
+FRUSTRATION_ERRORS_SAME_STEP = 2
+
+#: An early, short pause comes after several misses, not the first.
+EARLY_PAUSE_MIN_ERRORS = 2
+
+
+def _offer_is_quiet(signals: RuntimeSignals) -> bool:
+    """Whether the pill is being held back regardless of what the child did."""
+    if signals.break_in_progress:
+        return True
+    if signals.session_break_count >= MAX_OFFERS_PER_LESSON:
+        return True
+    declined = signals.break_declined_seconds_ago
+    if declined is not None and declined < DECLINE_QUIET_SECONDS:
+        return True
+    offered = signals.break_offered_seconds_ago
+    return offered is not None and offered < BETWEEN_OFFERS_SECONDS
+
+
+def _frustrated(signals: RuntimeSignals) -> bool:
+    """Lydia's definition, which is narrower than one miss and a replay.
+
+    Either three misses in a row on the same concept, or two on the same step
+    with a replay or a Slower in between - the second being a child who has
+    already asked for help and still cannot get past it.
+    """
+    if signals.frustration_detected:
+        return True
+    if signals.consecutive_errors_same_concept >= FRUSTRATION_ERRORS_SAME_CONCEPT:
+        return True
+    return (
+        signals.consecutive_errors_same_step >= FRUSTRATION_ERRORS_SAME_STEP
+        and signals.support_used_between_errors
+    )
+
 
 def monitor_break_thresholds(
     *,
     signals: RuntimeSignals,
     profile: LearnerProfileSnapshot,
 ) -> BreakThresholdResult:
-    if signals.break_in_progress or (
-        signals.break_declined_seconds_ago is not None and signals.break_declined_seconds_ago < 120
-    ):
+    if _offer_is_quiet(signals):
         return BreakThresholdResult((), BreakSeverity.NONE, None, None)
     thresholds: list[BreakThreshold] = []
-    # A marked miss plus a separate struggle signal can offer relief immediately;
-    # elapsed work time remains an independent, secondary reason to pause.
-    if signals.frustration_detected or (
-        signals.consecutive_errors >= 1
-        and (
-            signals.replay_count_on_segment >= 1
-            or _comprehension_drop(signals)
-            or signals.engagement_below_baseline_seconds >= 60
-        )
-    ):
+    if _frustrated(signals):
         thresholds.append(BreakThreshold.FRUSTRATION_HIGH)
     if signals.session_adaptation_count >= 2 and signals.consecutive_errors >= 2:
         thresholds.append(BreakThreshold.PERSISTENT_STALL)
     attention_window = min(20, max(5, profile.attention_span or 20))
     if signals.continuous_minutes >= attention_window:
         thresholds.append(BreakThreshold.TIME_THRESHOLD)
-    if signals.engagement_below_baseline_seconds >= 180:
+    # Switching app or tab no longer counts. The full figure includes
+    # focus_drop events, which is what the page emits when a child switches
+    # away; the adaptation engine still reads that one.
+    if signals.engagement_decline_seconds_excluding_away >= 180:
         thresholds.append(BreakThreshold.ENGAGEMENT_DECLINE)
     if _comprehension_drop(signals):
         thresholds.append(BreakThreshold.COMPREHENSION_DROP)
@@ -76,6 +124,12 @@ def select_break_type(
             return BreakType.STOP_FOR_DAY
         if signals.session_break_count >= 1 or signals.consecutive_errors >= 3:
             return BreakType.FULL
+        # The early, short pause. It cannot reach a first miss: the only
+        # route here is FRUSTRATION_HIGH or PERSISTENT_STALL, and both now
+        # need at least two misses - three on one concept, or two on one
+        # step with support in between. Asserted in the tests rather than
+        # re-checked here, because there is no "no break" break type and
+        # inventing one would change what the whole function returns.
         return BreakType.MICRO
     high_severity = {
         "engagement_decline",

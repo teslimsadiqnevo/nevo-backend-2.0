@@ -241,6 +241,14 @@ async def prepare_adaptation(session, principal, payload, signals):
             for event in events
             if event.event_type is SignalEventType.BREAK_DECLINED and event.timestamp <= now
         ]
+        # Every offer, not only the refused ones. BREAK_SUGGESTED is recorded
+        # when the pill is shown, so this is what spaces offers apart whether
+        # the child said no or said nothing at all.
+        offered_breaks = [
+            event.timestamp
+            for event in events
+            if event.event_type is SignalEventType.BREAK_SUGGESTED and event.timestamp <= now
+        ]
         break_boundaries = [
             event
             for event in events
@@ -348,6 +356,12 @@ async def prepare_adaptation(session, principal, payload, signals):
             support_grace_until=grace_until,
             break_declined_seconds_ago=(
                 int((now - max(declined_breaks)).total_seconds()) if declined_breaks else None
+            ),
+            # Every offer, declined or simply ignored. Declining used to be
+            # the only thing that held the pill back, so a child who ignored
+            # it could be offered again on the next answer.
+            break_offered_seconds_ago=(
+                int((now - max(offered_breaks)).total_seconds()) if offered_breaks else None
             ),
             break_in_progress=bool(
                 break_boundaries and break_boundaries[-1].event_type is SignalEventType.BREAK_START

@@ -87,6 +87,28 @@ class RuntimeSignals:
     question_support_ready: bool = True
     support_grace_until: datetime | None = None
     break_declined_seconds_ago: int | None = None
+    #: Seconds since the last break pill was offered, declined or not.
+    #:
+    #: Lydia, 10 November: at least ten minutes between offers. Declining was
+    #: the only thing that held one back before, so a child who ignored the
+    #: pill could be offered again immediately.
+    break_offered_seconds_ago: int | None = None
+    #: Engagement decline with app and tab switching taken out.
+    #:
+    #: engagement_below_baseline_seconds counts focus_drop events, which is
+    #: what the page emits when a child switches away. That made switching
+    #: tabs a reason to offer a break, which Lydia ruled out. The adaptation
+    #: engine still reads the full figure; only break offers use this one.
+    engagement_decline_seconds_excluding_away: int = 0
+    #: Misses in a row on the same concept, and on the same step.
+    #:
+    #: consecutive_errors counts across the whole sitting, so two misses on
+    #: unrelated ideas read as a struggle with one. Frustration is now three
+    #: in a row on one concept, or two on one step with a replay or a Slower
+    #: in between.
+    consecutive_errors_same_concept: int = 0
+    consecutive_errors_same_step: int = 0
+    support_used_between_errors: bool = False
     break_in_progress: bool = False
     #: Device-derived transient cue; never stored on the learner or in signal events.
     frustration_detected: bool = False

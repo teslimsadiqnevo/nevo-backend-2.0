@@ -19,7 +19,7 @@ def test_monitor_break_thresholds_selects_movement_for_sedentary_decline() -> No
     result = monitor_break_thresholds(
         signals=RuntimeSignals(
             continuous_minutes=22,
-            engagement_below_baseline_seconds=190,
+            engagement_decline_seconds_excluding_away=190,
         ),
         profile=balanced_profile(),
     )
@@ -47,7 +47,7 @@ def test_monitor_break_thresholds_selects_consolidation_mid_session() -> None:
 def test_monitor_break_thresholds_selects_full_for_multiple_high_severity() -> None:
     result = monitor_break_thresholds(
         signals=RuntimeSignals(
-            engagement_below_baseline_seconds=200,
+            engagement_decline_seconds_excluding_away=200,
             comprehension_score=40,
             session_average_comprehension=70,
             consecutive_errors=3,

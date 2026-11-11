@@ -1,6 +1,8 @@
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from time import perf_counter
 from uuid import uuid4
 
@@ -122,6 +124,11 @@ from nevo.storage.wiring import build_lesson_media_service
 from nevo.teacher_assignments.wiring import build_teacher_assignment_service
 
 logger = logging.getLogger(__name__)
+
+#: When this process started. Not when the deploy happened - a restart moves
+#: it - but it is what tells a check that the service came back up after the
+#: deploy it is gating, rather than having been up all along.
+_STARTED_AT = datetime.now(UTC).isoformat()
 
 
 @asynccontextmanager
@@ -479,6 +486,14 @@ async def health(request: Request) -> dict[str, str]:
     )
     return {
         "status": "ok",
+        # Which build is answering. Render sets these; empty elsewhere.
+        #
+        # Yinka, 11 November: without it the deploy check cannot tell whether
+        # it is reading the version that was just deployed or the one before
+        # it, which makes a green check meaningless on a slow rollout.
+        "commit": os.environ.get("RENDER_GIT_COMMIT", ""),
+        "branch": os.environ.get("RENDER_GIT_BRANCH", ""),
+        "deployedAt": _STARTED_AT,
         "deferredMediaWorker": (
             "running" if getattr(request.app.state, "deferred_media_worker", None) else "disabled"
         ),

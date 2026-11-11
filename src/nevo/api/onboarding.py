@@ -869,6 +869,24 @@ async def stage_import(
     return state
 
 
+#: Stages in which a school may still rename, drop or merge a class.
+#:
+#: Lydia, 11 November: these stay open until something is activated. Confirm
+#: creates the classes and lets the invoice be raised, but nothing is live and
+#: nobody is billed until payment, and a school transferring money can sit in
+#: awaiting_payment for days. Refusing a typo correction in that window made
+#: the school wait for activation to fix a name - or worse, kept the typo.
+#:
+#: Not stage_import, which is a different thing: re-uploading a file after
+#: Confirm rebuilds a list the school has already agreed to, and the classes
+#: and people derived from the first one already exist.
+EDITABLE_STAGES = (
+    OnboardingStage.UPLOADING,
+    OnboardingStage.CONFIRMED,
+    OnboardingStage.AWAITING_PAYMENT,
+)
+
+
 @router.patch("/classes", response_model=OnboardingState)
 async def correct_derived_classes(
     payload: ClassCorrections,
@@ -884,12 +902,15 @@ async def correct_derived_classes(
 
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
     record = await _onboarding(session, actor.school_id)
-    if record.stage is not OnboardingStage.UPLOADING:
+    if record.stage not in EDITABLE_STAGES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
-                "code": "onboarding_already_confirmed",
-                "message": "The roster is confirmed. Change classes in the admin console.",
+                "code": "onboarding_already_activated",
+                "message": (
+                    "This school is running. Change classes in the admin "
+                    "console, so nobody is billed twice for the same child."
+                ),
             },
         )
     rows = await _rows(session, record.id)
@@ -924,11 +945,11 @@ async def decide_class_merges(
 
     actor = await require_school_actor(session, principal, roles=ADMIN_ROLES)
     record = await _onboarding(session, actor.school_id)
-    if record.stage is not OnboardingStage.UPLOADING:
+    if record.stage not in EDITABLE_STAGES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
-                "code": "onboarding_already_confirmed",
+                "code": "onboarding_already_activated",
                 "message": "The roster is confirmed. Merge classes in the admin console.",
             },
         )

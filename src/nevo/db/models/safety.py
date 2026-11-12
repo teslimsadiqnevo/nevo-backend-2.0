@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Uuid, func, text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,4 +33,12 @@ class ContentSafetyEvent(Base):
         Uuid, ForeignKey("users.id", ondelete="SET NULL")
     )
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The text behind a finding we allowed through.
+    #:
+    #: Lydia's condition on Option A: a privacy_abuse finding on Nevo's own
+    #: lesson text no longer blocks, and is still recorded with the text so a
+    #: true positive would show. Null for everything else - storing the
+    #: material for every decision would keep every lesson several times
+    #: over, and the ones worth reading are the ones we did not act on.
+    allowed_material: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

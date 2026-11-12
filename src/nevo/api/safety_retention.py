@@ -32,6 +32,35 @@ class SafetyEventResponse(CamelResponse):
     acknowledged_by_name: str | None
 
 
+#: A finding an adult has to act on.
+#:
+#: Lydia's ruling, 12 November: a name block does not go on the safeguarding
+#: list at all. Only categories an adult needs to act on stay.
+#:
+#: A privacy finding on its own is now allowed through rather than refused
+#: (Option A), and putting it in front of a Learning Support holder asks them
+#: to act on something nobody decided was wrong. Thirty-one of the
+#: thirty-eight blocks ever recorded were exactly this, so the list was mostly
+#: noise - and a list that is mostly noise is one nobody reads, which is worse
+#: than a short one.
+#:
+#: A privacy finding alongside anything else still appears, because the
+#: anything else is the part that matters.
+NOT_ACTIONABLE_ALONE = "privacy_abuse"
+
+
+def actionable_by_an_adult():
+    """A filter for the safeguarding list: everything except a bare name finding."""
+    from sqlalchemy import and_, func, not_, or_
+
+    categories = ContentSafetyEvent.categories
+    only_a_name = and_(
+        func.jsonb_array_length(categories) == 1,
+        categories.contains([NOT_ACTIONABLE_ALONE]),
+    )
+    return or_(categories.is_(None), not_(only_a_name))
+
+
 async def _safeguarding_actor(session, principal):
     actor = await require_school_actor(
         session, principal, roles={"teacher", "other_admin", "senco_admin"}
@@ -78,6 +107,7 @@ async def safety_events(
             User.school_id == actor.school_id,
             User.role == "student",
             ContentSafetyEvent.action.in_(["block", "safeguard"]),
+            actionable_by_an_adult(),
         )
     )
     if pending_only:
@@ -106,6 +136,9 @@ async def acknowledge_safety(
         row is None
         or row.school_id != actor.school_id
         or row.action not in {"block", "safeguard"}
+        # Not acknowledgeable either, or a holder could clear something the
+        # list never showed them and the two reads would disagree.
+        or list(row.categories or ()) == [NOT_ACTIONABLE_ALONE]
         or student is None
         or student.school_id != actor.school_id
         or student.role.value != "student"

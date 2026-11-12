@@ -199,11 +199,53 @@ class ContentSafetyGuard:
                     decision = SafetyDecision.model_validate(tools[0]["input"])
                 else:
                     decision = SafetyDecision.model_validate_json("".join(blocks))
-                await self._record(decision, phase, context, body.get("usage") or {})
+                allowed_through = self._privacy_finding_on_our_own_text(decision, phase)
+                await self._record(
+                    decision,
+                    phase,
+                    context,
+                    body.get("usage") or {},
+                    allowed_material=chunk if allowed_through else None,
+                )
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
                 raise SafetyUnavailable() from error
-            if decision.action != "allow":
+            if decision.action != "allow" and not allowed_through:
                 raise SafetyBlocked(tuple(decision.categories), phase)
+
+    #: Phases where a privacy finding alone no longer blocks.
+    #:
+    #: Lydia's ruling, 12 November, Option A. These carry text Nevo itself
+    #: wrote or derived - the lesson it generated, the narration script, the
+    #: body it sends to decide a picture. The teacher's file has already had
+    #: its own privacy check at lesson_source and passed it, so finding
+    #: exposed personal data in our rewrite of material we judged clean is
+    #: incoherent. Thirty-one of the thirty-eight blocks ever recorded were
+    #: this, and not one has been shown to be right.
+    #:
+    #: Deliberately excluded, and each for its own reason: lesson_source is
+    #: the file's own first check and must still refuse; lesson_rewrite and
+    #: rewrite_approval are words a person has just typed and never checked,
+    #: where a real child's name is a real possibility; ask_nevo is a
+    #: question about a named child by design; the image phases judge a
+    #: picture rather than a lesson.
+    #:
+    #: Every other category still blocks here, including alongside privacy -
+    #: the test is that privacy is the only thing found.
+    PRIVACY_NON_BLOCKING_PHASES = ("lesson_narration", "illustration_source")
+
+    def _privacy_finding_on_our_own_text(self, decision, phase: str) -> bool:
+        """Whether this finding is recorded and allowed rather than refused."""
+        if decision.action == "allow":
+            return False
+        if set(decision.categories) != {"privacy_abuse"}:
+            return False
+        phase = str(phase)
+        if phase in self.PRIVACY_NON_BLOCKING_PHASES:
+            return True
+        for prefix in self.PHASE_PREFIXES:
+            if phase.startswith(prefix):
+                return phase[len(prefix) :].split(".", 1)[0] in self.LESSON_PROMPTS
+        return False
 
     def _headers(self):
         return {
@@ -297,7 +339,7 @@ class ContentSafetyGuard:
             "messages": [{"role": "user", "content": content}],
         }
 
-    async def _record(self, decision, phase, context, usage):
+    async def _record(self, decision, phase, context, usage, *, allowed_material=None):
         if self._sessions is None:
             return
         from nevo.db.models.safety import ContentSafetyEvent
@@ -316,6 +358,9 @@ class ContentSafetyGuard:
                         model=self._model,
                         input_tokens=int(usage.get("input_tokens", 0)),
                         output_tokens=int(usage.get("output_tokens", 0)),
+                        # Only for a finding we allowed through, so a person
+                        # can read it and see whether it was ever right.
+                        allowed_material=allowed_material,
                     )
                 )
         except Exception as error:

@@ -2657,6 +2657,7 @@ async def student_profile(
     )
     acknowledgements = []
     if await holds_learning_support(session, actor):
+        from nevo.api.safety_retention import actionable_by_an_adult
         from nevo.db.models.safety import ContentSafetyEvent
 
         rows = await session.execute(
@@ -2667,6 +2668,10 @@ async def student_profile(
                 ContentSafetyEvent.school_id == actor.school_id,
                 ContentSafetyEvent.action.in_(["block", "safeguard"]),
                 ContentSafetyEvent.acknowledged_at.is_not(None),
+                # The same rule as the safeguarding list itself: a name
+                # finding on its own is not something an adult acts on, so it
+                # does not appear on a child's profile either.
+                actionable_by_an_adult(),
             )
             .order_by(ContentSafetyEvent.acknowledged_at.desc())
         )

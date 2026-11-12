@@ -15,7 +15,24 @@ def _number(value):
     )
 
 
-def engagement(events):
+#: Indicators that mean "the child went somewhere else", rather than "the
+#: child is struggling with this".
+#:
+#: Left out of the figure that break offers read, and only that one. Lydia
+#: ruled that switching app or tab must not lead to a break offer. The first
+#: attempt at this left out focus_drop, which the app never sends: on a tab
+#: switch it sends task_switch and then return_after_pause, and engagement()
+#: folds return_after_pause into the focus penalty whenever any navigation
+#: count is present. So the exclusion removed the one term that was never
+#: there and a tab switch could still produce an offer about three minutes
+#: later (Yinka, 12 November).
+#:
+#: navigation_fragmentation and rapid_guessing stay in. Those are a child
+#: casting about inside the lesson, which is the thing a break is for.
+AWAY_INDICATORS = frozenset({"focus_drop", "task_switch", "return_after_pause"})
+
+
+def engagement(events, *, ignore=frozenset()):
     readings = [row for row in events if row.event_type is Event.ENGAGEMENT_SIGNAL]
     if not readings:
         return None
@@ -24,12 +41,14 @@ def engagement(events):
     for row in readings:
         data = row.event_data or {}
         key, value = data.get("indicator"), _number(data.get("value"))
+        if key in ignore:
+            continue
         if key in durations:
             durations[key] += value
         elif key in {"task_switch", "navigation_fragmentation", "rapid_guessing"}:
             counts += value
     # A pause alone can be thought. Count interrupted time only alongside navigation changes.
-    if counts:
+    if counts and "return_after_pause" not in ignore:
         durations["focus_drop"] += sum(
             _number(row.event_data.get("value"))
             for row in readings
@@ -49,7 +68,7 @@ def engagement(events):
     return max(0.0, 1 - focus_fraction - min(0.6, counts * 0.08 / span_minutes))
 
 
-def engagement_decline_seconds(events, baseline, now):
+def engagement_decline_seconds(events, baseline, now, *, ignore=frozenset()):
     if baseline is None:
         return 0
     readings = sorted(
@@ -70,7 +89,7 @@ def engagement_decline_seconds(events, baseline, now):
             for item in readings[: index + 1]
             if item.timestamp >= row.timestamp - timedelta(seconds=60)
         ]
-        score = engagement(window)
+        score = engagement(window, ignore=ignore)
         if score is not None and score <= baseline - 0.15:
             since = since or row.timestamp
         else:
@@ -112,6 +131,18 @@ def derive_runtime_evidence(
         if (value := engagement(group)) is not None
     ]
     engagement_baseline = mean(personal) if personal else engagement(earlier_events)
+    # A baseline for the break-offer figure, measured the same way the figure
+    # is. Comparing an away-blind score against a baseline that counted away
+    # time would read as a decline the moment a child switched tab once, which
+    # is the whole thing being removed. Falls back to the unfiltered baseline
+    # when there is no earlier material to measure from: the away-blind score
+    # is always the higher of the two, so the comparison then fires less often
+    # rather than more, which is the safe direction.
+    away_blind_baseline = (
+        engagement(earlier_events, ignore=AWAY_INDICATORS) if earlier_events else None
+    )
+    if away_blind_baseline is None:
+        away_blind_baseline = engagement_baseline
     errors = 0
     for item in marked:
         if item.correct:
@@ -158,12 +189,13 @@ def derive_runtime_evidence(
             min(180, int(focus_ms / 1000)) if below else 0,
             engagement_decline_seconds(events, engagement_baseline, now),
         ),
-        # The same figure with focus_drop left out. focus_drop is what the
-        # page emits when a child switches app or tab, and counting it made
-        # switching tabs a reason to offer a break. Break offers read this
-        # one; the adaptation engine still reads the full figure above.
+        # The same figure with everything that means "went somewhere else"
+        # left out - focus_drop, task_switch and return_after_pause. Break
+        # offers read this one; the adaptation engine still reads the full
+        # figure above, because a child who keeps leaving is worth adapting
+        # for even if they are not worth interrupting.
         engagement_decline_seconds_excluding_away=engagement_decline_seconds(
-            events, engagement_baseline, now
+            events, away_blind_baseline, now, ignore=AWAY_INDICATORS
         ),
         consecutive_errors=errors,
         replay_count_on_segment=replay_count,

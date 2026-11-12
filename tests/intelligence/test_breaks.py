@@ -34,6 +34,10 @@ def test_monitor_break_thresholds_selects_movement_for_sedentary_decline() -> No
 def test_monitor_break_thresholds_selects_consolidation_mid_session() -> None:
     result = monitor_break_thresholds(
         signals=RuntimeSignals(
+            # Two misses: a comprehension drop needs several, not one. Lydia,
+            # 10 November, applied to this route after Chidi was offered a
+            # consolidation break on a single miss on 12 November.
+            consecutive_errors=2,
             comprehension_score=55,
             session_average_comprehension=80,
             midpoint_reached=True,

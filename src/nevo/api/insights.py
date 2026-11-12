@@ -1129,7 +1129,19 @@ async def _teacher_recent_activity(
         await session.execute(
             select(AttentionFlag, User)
             .join(User, User.id == AttentionFlag.student_id)
-            .where(User.school_id == school_id, AttentionFlag.student_id.in_(student_ids))
+            .where(
+                User.school_id == school_id,
+                AttentionFlag.student_id.in_(student_ids),
+                # Open ones only. There was no status filter at all, so a
+                # flag a teacher had already acknowledged or resolved stayed
+                # on Home for ever and the list could not be cleared by
+                # dealing with anything - Spare Teacher's Home was still
+                # showing fixtures raised on 25 September. "Open" is already
+                # a concept in the schema; ix_attention_flags_open_student
+                # is a partial index on exactly this condition.
+                AttentionFlag.acknowledged_at.is_(None),
+                AttentionFlag.resolved_at.is_(None),
+            )
             .order_by(AttentionFlag.generated_at.desc())
             .limit(12)
         )

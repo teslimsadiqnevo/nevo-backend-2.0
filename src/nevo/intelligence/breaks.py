@@ -82,7 +82,20 @@ def monitor_break_thresholds(
     # away; the adaptation engine still reads that one.
     if signals.engagement_decline_seconds_excluding_away >= 180:
         thresholds.append(BreakThreshold.ENGAGEMENT_DECLINE)
-    if _comprehension_drop(signals):
+    # A comprehension drop needs several misses too.
+    #
+    # Chidi was offered "let's go back over what you just did" at 08:17:55 on
+    # 12 November, straight after one miss and its retry. This is the route
+    # that did it: the score after a miss sits more than twenty points under
+    # the session average, which is still high from before it, so one miss
+    # clears the bar on its own. With the midpoint passed that becomes a
+    # consolidation break.
+    #
+    # Lydia's rule was that a pause comes after several misses and not the
+    # first. That was applied to the frustration and stall routes; this one
+    # is a different break type reached a different way and went round it.
+    # Her intent is the same either way, so the same floor applies.
+    if _comprehension_drop(signals) and signals.consecutive_errors >= EARLY_PAUSE_MIN_ERRORS:
         thresholds.append(BreakThreshold.COMPREHENSION_DROP)
     if signals.consecutive_errors >= 3:
         thresholds.append(BreakThreshold.REPEATED_ERRORS)

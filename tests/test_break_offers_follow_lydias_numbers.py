@@ -174,3 +174,46 @@ def test_nothing_at_all_offers_nothing() -> None:
     assert result.triggered_thresholds == ()
     assert result.break_type is None
     assert result.severity is BreakSeverity.NONE
+
+
+# --- the route that went round the rule ------------------------------------
+
+
+def test_chidis_offer_on_12_november_no_longer_happens() -> None:
+    """One miss and its retry, at 08:17:55 in Osmosis.
+
+    A comprehension drop reached a consolidation break without passing
+    through frustration or a stall, so the "several misses, not the first"
+    floor did not apply to it. The score after one miss sits more than twenty
+    points under the session average, which is still high from before it, so
+    a single miss cleared the bar on its own.
+    """
+    assert not _offered(
+        consecutive_errors=1,
+        comprehension_score=50,
+        session_average_comprehension=80,
+        midpoint_reached=True,
+    )
+
+
+def test_a_comprehension_drop_still_offers_one_after_several_misses() -> None:
+    result = _offer(
+        consecutive_errors=2,
+        comprehension_score=50,
+        session_average_comprehension=80,
+        midpoint_reached=True,
+    )
+    assert BreakThreshold.COMPREHENSION_DROP in result.triggered_thresholds
+    assert result.break_type is BreakType.CONSOLIDATION
+
+
+def test_a_hidden_tab_beside_one_miss_is_still_not_an_offer() -> None:
+    """The timing on 12 November - two minutes after the tab was hidden - was
+    coincidence rather than cause, and must stay that way."""
+    assert not _offered(
+        consecutive_errors=1,
+        engagement_below_baseline_seconds=120,
+        comprehension_score=50,
+        session_average_comprehension=80,
+        midpoint_reached=True,
+    )

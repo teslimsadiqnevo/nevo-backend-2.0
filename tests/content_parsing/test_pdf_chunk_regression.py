@@ -38,7 +38,17 @@ def test_27_page_pdf_without_blank_lines_keeps_all_text_and_page_boundaries():
     assert len(fallback) >= 27
     assert all(len(segment.body) <= 1800 for segment in fallback)
     assert all(not re.fullmatch(r"\[Page \d+\]", segment.title or "") for segment in fallback)
-    assert "".join("".join(segment.body.split()) for segment in fallback) == "".join(source.split())
+    # Every word the author wrote survives. Compared against the source with
+    # the page markers taken out, because those are our own annotation from
+    # the PDF reader and not the author's words - a child read "[Page 1]" off
+    # a fallback section on 12 November, so they are now stripped before the
+    # body is built. The guard this line exists for is unchanged: no teaching
+    # text may be lost.
+    without_markers = re.sub(r"\[Page \d+\]", "", source)
+    assert "".join("".join(segment.body.split()) for segment in fallback) == "".join(
+        without_markers.split()
+    )
+    assert all("[Page" not in segment.body for segment in fallback)
 
 
 def test_failed_pages_are_extraction_failures_not_ai_formatting_failures():

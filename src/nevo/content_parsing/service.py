@@ -1548,6 +1548,44 @@ def _segment_from_payload(
     )
 
 
+#: A page marker anywhere in a line, not only alone on one.
+_PAGE_MARKER_ANYWHERE = re.compile(r"\[Page \d+\][ \t]*")
+
+
+def _readable_body(part: str) -> str:
+    """Tidy raw extracted text before a child is shown it.
+
+    A fallback section is the PDF reader's own output, and two of its habits
+    reach the child. It writes "[Page 1]" markers for our benefit, and Chidi
+    read one on 12 November. And it breaks lines where the page broke them,
+    so "A mixture contains two / or more substances" arrives as two lines
+    mid-sentence.
+
+    A line is joined to the next only when it does not end in sentence
+    punctuation and the next begins in lower case. That is a wrapped
+    sentence. A heading, a numbered step and a line ending in a full stop
+    all keep their break, so the activity lists in a practical still read as
+    lists.
+    """
+
+    without_markers = _PAGE_MARKER_ANYWHERE.sub("", part)
+    lines = [line.rstrip() for line in without_markers.split("\n")]
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if (
+            out
+            and stripped
+            and out[-1]
+            and not re.search(r"[.!?:;]$", out[-1])
+            and stripped[:1].islower()
+        ):
+            out[-1] = f"{out[-1]} {stripped}"
+            continue
+        out.append(stripped)
+    return "\n".join(out).strip()
+
+
 def _fallback_segments(
     source: str,
     *,
@@ -1563,7 +1601,8 @@ def _fallback_segments(
         parts = [source.strip() or "Teacher review required."]
     segments: list[ParsedLessonSegment] = []
     for index, part in enumerate(parts, start=1):
-        if not re.sub(r"(?m)^\[Page \d+\][ \t]*$", "", part).strip():
+        part = _readable_body(part)
+        if not part:
             continue
         sequence_order = sequence_offset + index
         content_type = _infer_content_type(part)

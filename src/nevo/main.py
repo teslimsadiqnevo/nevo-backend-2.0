@@ -534,6 +534,11 @@ async def health(request: Request) -> dict[str, str]:
         "lessonAudioLastCall": PROVIDERS.state(LESSON_AUDIO),
         "lessonImagesLastFailure": PROVIDERS.last_failure(LESSON_IMAGES) or "",
         "lessonAudioLastFailure": PROVIDERS.last_failure(LESSON_AUDIO) or "",
+        # When we last heard anything, so a state is never read without its
+        # age. Empty means nothing has called the provider since this process
+        # started, which is not the same as working.
+        "lessonImagesLastCallAt": PROVIDERS.last_call_at(LESSON_IMAGES),
+        "lessonAudioLastCallAt": PROVIDERS.last_call_at(LESSON_AUDIO),
         # Which kind of broken, because the remedy differs. A failing
         # provider may be back in ten minutes; one out of credit needs
         # somebody to pay, and until they do every lesson uploaded loses

@@ -13,11 +13,13 @@ because no retry clears the first one.
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 
 import pytest
 
 from nevo.ops.provider_health import (
     LESSON_AUDIO,
+    STALE_AFTER_HOURS,
     ProviderHealth,
     needs_a_human_with_a_card,
 )
@@ -137,3 +139,73 @@ def test_health_tells_an_administrator_which_kind_of_broken_it_is() -> None:
     source = main.__loader__.get_source(main.__name__)
     assert '"lessonAudioFailureKind"' in source
     assert '"lessonImagesFailureKind"' in source
+
+
+# --- a stale failure is not a current one -----------------------------------
+
+
+def _age(providers: ProviderHealth, provider: str, **delta) -> None:
+    """Backdate the recorded outcome, as a quiet day would."""
+    from datetime import datetime, timedelta
+
+    outcome = providers._outcomes[provider]
+    providers._outcomes[provider] = type(outcome)(
+        ok=outcome.ok,
+        at=datetime.now(UTC) - timedelta(**delta),
+        detail=outcome.detail,
+    )
+
+
+def test_a_three_week_old_failure_is_not_reported_as_a_live_one(providers) -> None:
+    """The fault Yinka hit on 12 November.
+
+    state() went to "unknown" after a day while last_failure() returned the
+    same sentence for ever, with no date beside it. So /health read "YarnGPT
+    requests paused after QUOTA_EXCEEDED" for three weeks after the last such
+    failure, which was 23 October, and he was about to rotate a working API
+    key over it. Narration had been fine throughout.
+    """
+    providers.record(LESSON_AUDIO, ok=False, detail="QUOTA_EXCEEDED")
+    _age(providers, LESSON_AUDIO, days=20)
+
+    assert providers.state(LESSON_AUDIO) == "unknown"
+    assert providers.last_failure(LESSON_AUDIO) is None, (
+        "a three-week-old failure still reads as the current state"
+    )
+
+
+def test_a_fresh_failure_is_still_reported(providers) -> None:
+    """The staleness window must not swallow a real one."""
+    providers.record(LESSON_AUDIO, ok=False, detail="QUOTA_EXCEEDED")
+    assert providers.state(LESSON_AUDIO) == "failing"
+    assert providers.last_failure(LESSON_AUDIO) == "QUOTA_EXCEEDED"
+
+
+def test_the_two_readers_go_stale_together(providers) -> None:
+    """They disagreeing is what caused this, so they share one window."""
+    providers.record(LESSON_AUDIO, ok=False, detail="QUOTA_EXCEEDED")
+    _age(providers, LESSON_AUDIO, hours=STALE_AFTER_HOURS + 1)
+
+    assert providers.state(LESSON_AUDIO) == "unknown"
+    assert providers.last_failure(LESSON_AUDIO) is None
+
+    providers.record(LESSON_AUDIO, ok=False, detail="QUOTA_EXCEEDED")
+    _age(providers, LESSON_AUDIO, hours=STALE_AFTER_HOURS - 1)
+
+    assert providers.state(LESSON_AUDIO) == "failing"
+    assert providers.last_failure(LESSON_AUDIO) == "QUOTA_EXCEEDED"
+
+
+def test_the_age_is_reported_so_a_state_is_never_read_without_it(providers) -> None:
+    assert providers.last_call_at(LESSON_AUDIO) == ""
+    providers.record(LESSON_AUDIO, ok=True)
+    stamped = providers.last_call_at(LESSON_AUDIO)
+    assert stamped and stamped.startswith("20")
+
+
+def test_health_publishes_the_age(providers) -> None:
+    from nevo import main
+
+    source = main.__loader__.get_source(main.__name__)
+    assert '"lessonAudioLastCallAt"' in source
+    assert '"lessonImagesLastCallAt"' in source

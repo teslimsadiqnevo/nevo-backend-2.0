@@ -114,9 +114,37 @@ class ProviderHealth:
         return "working" if outcome.ok else "failing"
 
     def last_failure(self, provider: str) -> str | None:
+        """Why the last call failed, or None once that is too old to mean anything.
+
+        The staleness window is the same one state() uses, and leaving it out
+        of here was a real fault. state() went to "unknown" after a day while
+        this went on returning the same sentence for ever, with no date beside
+        it - so /health read "YarnGPT requests paused after QUOTA_EXCEEDED"
+        for three weeks after the last such failure, which was 23 October.
+        Yinka read that on 12 November as a live condition and was about to
+        rotate a working API key over it. Narration had been fine throughout:
+        every section of every lesson since has its audio.
+        """
+
         with self._lock:
             outcome = self._outcomes.get(provider)
-        return None if outcome is None or outcome.ok else outcome.detail
+        if outcome is None or outcome.ok:
+            return None
+        if (datetime.now(UTC) - outcome.at).total_seconds() / 3600 > STALE_AFTER_HOURS:
+            return None
+        return outcome.detail
+
+    def last_call_at(self, provider: str) -> str:
+        """When we last heard anything from this provider, as an ISO string.
+
+        Reported beside the state so that "failing" and "unknown" can never be
+        read without knowing how old they are. A sentence about a provider
+        with no date attached is the thing that caused the confusion above.
+        """
+
+        with self._lock:
+            outcome = self._outcomes.get(provider)
+        return outcome.at.isoformat() if outcome else ""
 
 
 #: One per process. The parse records into it; /health reads it.

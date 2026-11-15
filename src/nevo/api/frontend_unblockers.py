@@ -1512,9 +1512,7 @@ async def lesson_detail(
 
         await _lesson_for_actor(lesson_id, principal, session)
         await ensure_onboarding(session, actor)
-        segments = [
-            item for item in segments if "safety_hold" not in (item.review_reasons or ())
-        ]
+        segments = [item for item in segments if "safety_hold" not in (item.review_reasons or ())]
     modules = delivery_modules(lesson.id, segments, modules)
     from nevo.api.lesson_contracts import depth_reviewer_names
 

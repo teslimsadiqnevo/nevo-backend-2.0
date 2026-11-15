@@ -165,6 +165,7 @@ class SafetyFinding(BaseModel):
         }
         return aliases.get(value, value) if isinstance(value, str) else value
 
+
 class SafetyDecisionV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
     findings: list[SafetyFinding] = Field(max_length=8)

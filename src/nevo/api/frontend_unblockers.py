@@ -1512,6 +1512,9 @@ async def lesson_detail(
 
         await _lesson_for_actor(lesson_id, principal, session)
         await ensure_onboarding(session, actor)
+        segments = [
+            item for item in segments if "safety_hold" not in (item.review_reasons or ())
+        ]
     modules = delivery_modules(lesson.id, segments, modules)
     from nevo.api.lesson_contracts import depth_reviewer_names
 
@@ -2159,11 +2162,18 @@ async def approve_segment(
         segment.approved_at = datetime.now(UTC)
         segment.approved_by = user.id
     variants = dict(segment.depth_variants or {})
+    from nevo.api.lesson_review import _lesson_safety_context
+
     for key in ("simplified", "expanded"):
         if isinstance(variants.get(key), dict) and variants[key].get("body"):
             try:
                 await gateway.check_content(
-                    variants[key]["body"], requester_user_id=user.id, phase="rewrite_approval"
+                    variants[key]["body"],
+                    requester_user_id=user.id,
+                    phase="rewrite_approval",
+                    lesson_context=_lesson_safety_context(
+                        lesson, segment, review_status="teacher_approval_pending"
+                    ),
                 )
             except AiGatewayError as error:
                 raise public_ai_error(error, audience="teacher") from error

@@ -1,9 +1,11 @@
 """Restricted, content-free safeguarding decisions and erasure audit reads."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
@@ -13,9 +15,153 @@ from nevo.api.product_common import require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.db.models.account import User
 from nevo.db.models.retention import LearnerPurgeReceipt
-from nevo.db.models.safety import ContentSafetyEvent
+from nevo.db.models.safety import ContentSafetyEvent, SafetyReviewAccess
 
 router = APIRouter(prefix="/api/v1", tags=["data compliance"])
+
+
+class SafetyReviewItem(CamelResponse):
+    id: UUID
+    phase: str
+    action: str
+    categories: list[str]
+    findings: list[dict[str, str]]
+    policy_version: str
+    created_at: datetime
+    review_label: str | None
+    material_expires_at: datetime | None
+
+
+class SafetyReviewDetail(SafetyReviewItem):
+    material: str
+
+
+class SafetyReviewLabel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: Literal["true_positive", "false_positive", "uncertain"]
+
+
+@router.get("/safety/lesson-review/weekly-metrics")
+async def lesson_safety_weekly_metrics(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    actor = await require_school_actor(session, principal, roles={"senco_admin"})
+    rows = await session.execute(
+        select(ContentSafetyEvent.categories, ContentSafetyEvent.review_label).where(
+            ContentSafetyEvent.school_id == actor.school_id,
+            ContentSafetyEvent.policy_version == "child-safety-2026-11-v2",
+            ContentSafetyEvent.created_at >= datetime.now(UTC) - timedelta(days=7),
+        )
+    )
+    counts: dict[str, dict[str, int]] = {}
+    for categories, label in rows:
+        for category in set(categories or []):
+            entry = counts.setdefault(
+                category, {"findings": 0, "falsePositives": 0, "truePositives": 0}
+            )
+            entry["findings"] += 1
+            if label == "false_positive":
+                entry["falsePositives"] += 1
+            elif label == "true_positive":
+                entry["truePositives"] += 1
+    return {
+        "windowDays": 7,
+        "categories": [
+            {
+                "category": category,
+                **entry,
+                "falsePositiveRate": (
+                    entry["falsePositives"] / (entry["falsePositives"] + entry["truePositives"])
+                    if entry["falsePositives"] + entry["truePositives"]
+                    else None
+                ),
+                "needsLydiaReview": (
+                    entry["truePositives"] == 0
+                    and entry["falsePositives"] > 0
+                    and entry["falsePositives"] / entry["findings"] > 0.5
+                ),
+            }
+            for category, entry in sorted(counts.items())
+        ],
+    }
+
+
+def _review_item(row: ContentSafetyEvent) -> SafetyReviewItem:
+    return SafetyReviewItem(
+        id=row.id,
+        phase=row.phase,
+        action=row.action,
+        categories=list(row.categories or []),
+        findings=list(row.findings or []),
+        policy_version=row.policy_version,
+        created_at=row.created_at,
+        review_label=row.review_label,
+        material_expires_at=row.material_expires_at,
+    )
+
+
+@router.get("/safety/lesson-review", response_model=list[SafetyReviewItem])
+async def lesson_safety_review_queue(
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    limit: int = Query(50, ge=1, le=100),
+):
+    actor = await require_school_actor(session, principal, roles={"senco_admin"})
+    rows = await session.scalars(
+        select(ContentSafetyEvent)
+        .where(
+            ContentSafetyEvent.school_id == actor.school_id,
+            ContentSafetyEvent.findings.is_not(None),
+            ContentSafetyEvent.review_label.is_(None),
+        )
+        .order_by(ContentSafetyEvent.created_at.desc())
+        .limit(limit)
+    )
+    return [_review_item(row) for row in rows]
+
+
+@router.get("/safety/lesson-review/{event_id}", response_model=SafetyReviewDetail)
+async def lesson_safety_review_detail(
+    event_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    actor = await require_school_actor(session, principal, roles={"senco_admin"})
+    row = await session.get(ContentSafetyEvent, event_id)
+    if (
+        row is None
+        or row.school_id != actor.school_id
+        or row.findings is None
+        or row.review_material is None
+        or row.material_expires_at is None
+        or row.material_expires_at <= datetime.now(UTC)
+    ):
+        raise HTTPException(404, detail={"code": "safety_review_not_found"})
+    session.add(SafetyReviewAccess(event_id=row.id, actor_user_id=actor.id, action="read_material"))
+    await session.commit()
+    return SafetyReviewDetail(**_review_item(row).model_dump(), material=row.review_material)
+
+
+@router.post("/safety/lesson-review/{event_id}/label", response_model=SafetyReviewItem)
+async def label_lesson_safety_finding(
+    event_id: UUID,
+    payload: SafetyReviewLabel,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+):
+    actor = await require_school_actor(session, principal, roles={"senco_admin"})
+    row = await session.get(ContentSafetyEvent, event_id, with_for_update=True)
+    if row is None or row.school_id != actor.school_id or row.findings is None:
+        raise HTTPException(404, detail={"code": "safety_review_not_found"})
+    if row.review_label is not None:
+        raise HTTPException(409, detail={"code": "safety_review_already_labelled"})
+    row.review_label = payload.label
+    row.reviewed_by = actor.id
+    row.reviewed_at = datetime.now(UTC)
+    session.add(SafetyReviewAccess(event_id=row.id, actor_user_id=actor.id, action="label"))
+    await session.commit()
+    return _review_item(row)
 
 
 class SafetyEventResponse(CamelResponse):

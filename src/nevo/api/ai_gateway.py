@@ -169,4 +169,12 @@ def public_ai_error(
         detail["reason"] = (
             "names_person" if "privacy_abuse" in (error.categories or ()) else "other"
         )
+        if error.event_id is not None:
+            detail["safetyEventId"] = str(error.event_id)
+            detail["reasonCategory"] = error.categories[0] if error.categories else "unspecified"
+            if error.disposition == "hold":
+                detail["message"] = (
+                    "This lesson content is held for safety review. "
+                    "Other sections have not been changed."
+                )
     return HTTPException(status_code=status_code, detail=detail)

@@ -2,13 +2,14 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.billing.issuance import InvoiceIssuanceService, queue_billing_emails
 from nevo.consent.expiry import ConsentExpiryService
 from nevo.content_parsing.service import ContentParsingService
 from nevo.db.models.billing import Invoice
+from nevo.db.models.safety import ContentSafetyEvent
 from nevo.db.models.sso import SchoolSsoConfiguration
 from nevo.domain.accounts.vocabulary import SsoConnectionStatus
 from nevo.domain.billing.vocabulary import InvoiceStatus
@@ -80,6 +81,15 @@ def build_scheduled_jobs(
 
     async def consent_expiry_sweep() -> str:
         return (await ConsentExpiryService(sessions).sweep()).summary()
+
+    async def expire_safety_review_text() -> str:
+        async with sessions.begin() as session:
+            result = await session.execute(
+                update(ContentSafetyEvent)
+                .where(ContentSafetyEvent.material_expires_at <= datetime.now(UTC))
+                .values(review_material=None)
+            )
+        return f"expired {result.rowcount or 0} safety review texts"
 
     async def refresh_due_dates() -> str:
         refreshed = await scheduler_service.refresh_all_due_dates()
@@ -159,6 +169,9 @@ def build_scheduled_jobs(
         ),
         ScheduledJob(name="retention.anonymise", interval=HOURLY, run=retention_sweep),
         ScheduledJob(name="consent.expire_unanswered", interval=DAILY, run=consent_expiry_sweep),
+        ScheduledJob(
+            name="safety.expire_review_text", interval=DAILY, run=expire_safety_review_text
+        ),
         ScheduledJob(name="scheduler.refresh_due_dates", interval=DAILY, run=refresh_due_dates),
         ScheduledJob(name="sso.roster_sync", interval=DAILY, run=roster_sync),
         ScheduledJob(name="sso.health_probe", interval=HOURLY, run=sso_health_probe),

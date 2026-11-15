@@ -13,7 +13,12 @@ import httpx
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from nevo.ai_gateway.safety import ContentSafetyGuard, SafetyBlocked, SafetyUnavailable
+from nevo.ai_gateway.safety import (
+    ContentSafetyGuard,
+    LessonSafetyContext,
+    SafetyBlocked,
+    SafetyUnavailable,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "evaluations" / "lesson_safety_cases.json"
@@ -46,7 +51,7 @@ class ObservedClient(httpx.AsyncClient):
         return response
 
 
-async def current_checker(case, client, settings):
+async def current_checker(case, client, settings, *, policy_v2=False):
     client.verdict = None
     guard = ContentSafetyGuard(
         api_key=settings.anthropic_key,
@@ -54,9 +59,25 @@ async def current_checker(case, client, settings):
         model=settings.anthropic_model,
         version=settings.anthropic_version,
         client=client,
+        policy_v2=policy_v2,
     )
     try:
-        await guard.check(case["text"], phase=case["phase"])
+        await guard.check(
+            case["text"],
+            phase=case["phase"],
+            lesson_context=(
+                LessonSafetyContext(
+                    subject=str(case.get("subject") or "unspecified"),
+                    level=str(case.get("level") or "unspecified"),
+                    curriculum=str(case.get("curriculum") or "unspecified"),
+                    source_type="text",
+                    uploader_provenance="authenticated_account",
+                    review_status="not_reviewed",
+                )
+                if policy_v2
+                else None
+            ),
+        )
         outcome = "allow"
     except SafetyBlocked:
         outcome = "withhold"
@@ -81,11 +102,11 @@ async def openai_checker(case, client, key):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--provider", choices=("current", "openai"), required=True)
+    parser.add_argument("--provider", choices=("current", "v2", "openai"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     settings = EvalSettings()
-    key = settings.anthropic_key if args.provider == "current" else settings.openai_key
+    key = settings.anthropic_key if args.provider in {"current", "v2"} else settings.openai_key
     if not key:
         raise SystemExit(f"{args.provider} key is not configured locally")
     incidents = json.loads(INCIDENTS.read_text())
@@ -100,8 +121,10 @@ async def main():
         for case in cases:
             for attempt in range(3):
                 try:
-                    if args.provider == "current":
-                        actual, detail = await current_checker(case, client, settings)
+                    if args.provider in {"current", "v2"}:
+                        actual, detail = await current_checker(
+                            case, client, settings, policy_v2=args.provider == "v2"
+                        )
                     else:
                         actual, detail = await openai_checker(case, client, key)
                 except (httpx.HTTPError, KeyError, ValueError) as error:

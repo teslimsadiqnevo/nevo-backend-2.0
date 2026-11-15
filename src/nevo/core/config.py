@@ -46,6 +46,9 @@ class Settings(BaseSettings):
         ),
     )
     focus_timing_verified: bool = Field(default=False, validation_alias="FOCUS_TIMING_VERIFIED")
+    safety_policy_v2_enabled: bool = Field(
+        default=False, validation_alias="SAFETY_POLICY_V2_ENABLED"
+    )
     level_mastery_collection_enabled: bool = Field(
         default=False, validation_alias="LEVEL_MASTERY_COLLECTION_ENABLED"
     )

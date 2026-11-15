@@ -76,7 +76,9 @@ class AiGatewayService:
     def safety_guard(self):
         return self._safety
 
-    async def check_content(self, text, *, requester_user_id, student_id=None, phase="source"):
+    async def check_content(
+        self, text, *, requester_user_id, student_id=None, phase="source", lesson_context=None
+    ):
         context = await self._calls.resolve_context(
             requester_user_id=requester_user_id, student_id=student_id
         )
@@ -85,7 +87,7 @@ class AiGatewayService:
             pseudonym=self._privacy.pseudonym(student_id or requester_user_id),
             sensitive_terms=context.sensitive_terms,
         )
-        await self._safety.check(safe, phase=phase, context=context)
+        await self._safety.check(safe, phase=phase, context=context, lesson_context=lesson_context)
         return context
 
     @property
@@ -184,7 +186,12 @@ class AiGatewayService:
                 provider_request: ProviderRequest = provider_request,
             ) -> ProviderResponse:
                 provider = _SafetyReviewedProvider(
-                    self._provider, self._safety, context, request.prompt_name, self._privacy
+                    self._provider,
+                    self._safety,
+                    context,
+                    request.prompt_name,
+                    self._privacy,
+                    request.lesson_safety_context,
                 )
                 if provider_request.tools and request.tool_executor is not None:
                     outcome = await run_tool_loop(
@@ -243,6 +250,7 @@ class AiGatewayService:
             ),
             phase="final:" + request.prompt_name,
             context=context,
+            lesson_context=request.lesson_safety_context,
         )
         call_id = await self._calls.record(
             AiCallAudit(
@@ -305,7 +313,7 @@ def public_ai_error(error: Exception) -> AiGatewayError:
 
 
 class _SafetyReviewedProvider:
-    def __init__(self, provider, safety, context, prompt_name, privacy):
+    def __init__(self, provider, safety, context, prompt_name, privacy, lesson_safety_context=None):
         self.provider, self.safety, self.context, self.prompt_name, self.privacy = (
             provider,
             safety,
@@ -313,6 +321,7 @@ class _SafetyReviewedProvider:
             prompt_name,
             privacy,
         )
+        self.lesson_safety_context = lesson_safety_context
 
     async def generate(self, request):
         import json
@@ -325,7 +334,12 @@ class _SafetyReviewedProvider:
             ),
             sensitive_terms=self.context.sensitive_terms,
         )
-        await self.safety.check(material, phase="input:" + self.prompt_name, context=self.context)
+        await self.safety.check(
+            material,
+            phase="input:" + self.prompt_name,
+            context=self.context,
+            lesson_context=self.lesson_safety_context,
+        )
         response = await self.provider.generate(request)
         output = (
             response.text
@@ -342,5 +356,6 @@ class _SafetyReviewedProvider:
             ),
             phase="output:" + self.prompt_name,
             context=self.context,
+            lesson_context=self.lesson_safety_context,
         )
         return response

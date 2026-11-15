@@ -214,6 +214,7 @@ class DepthVariantService:
         body: str,
         requested_by_user_id: UUID,
         key_terms: list[str] | None = None,
+        lesson_safety_context=None,
     ) -> tuple[DepthVariants, str | None]:
         """Both versions of one segment, and the model that wrote them."""
 
@@ -239,6 +240,7 @@ class DepthVariantService:
                     title=title,
                     body=part,
                     requested_by_user_id=requested_by_user_id,
+                    lesson_safety_context=lesson_safety_context,
                     key_terms=[
                         term for term in (key_terms or []) if term.casefold() in part.casefold()
                     ],
@@ -270,6 +272,7 @@ class DepthVariantService:
                 result = await self._ai_gateway.generate(
                     AiGenerationRequest(
                         requester_user_id=requested_by_user_id,
+                        lesson_safety_context=lesson_safety_context,
                         # Parse-time work, so it queues with the parse rather
                         # than jumping into the adaptation lane, which exists for
                         # calls made while a child is waiting.

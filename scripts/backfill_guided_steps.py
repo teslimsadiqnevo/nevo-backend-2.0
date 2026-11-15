@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from nevo.ai_gateway.config import AiGatewaySettings
 from nevo.ai_gateway.entities import AiGenerationRequest
+from nevo.ai_gateway.safety import LessonSafetyContext
 from nevo.ai_gateway.wiring import build_ai_gateway
 from nevo.api.lesson_contracts import GuidedCheckStep
 from nevo.content_parsing.service import _json_payload
@@ -88,6 +89,17 @@ async def backfill(lesson_id: UUID, *, apply: bool, confirm_production_write: bo
         result = await gateway.generate(
             AiGenerationRequest(
                 requester_user_id=requester_id,
+                lesson_safety_context=LessonSafetyContext(
+                    subject=lesson.subject or "unspecified",
+                    level=str((lesson.source_reference or {}).get("level") or "unspecified"),
+                    curriculum=str(
+                        (lesson.source_reference or {}).get("curriculum") or "unspecified"
+                    ),
+                    source_type=lesson.source_type.value,
+                    uploader_provenance="authenticated_account",
+                    review_status="generation_pending_review",
+                    lesson_id=str(lesson.id),
+                ),
                 service=AiService.LESSON_GENERATION,
                 prompt_name=PROMPT_NAME,
                 variables={

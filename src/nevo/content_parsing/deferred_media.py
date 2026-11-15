@@ -11,10 +11,10 @@ from uuid import uuid4
 
 from sqlalchemy import or_, select, update
 
-from nevo.ai_gateway.safety import POLICY_VERSION, SafetyBlocked
+from nevo.ai_gateway.safety import POLICY_VERSION, LessonSafetyContext, SafetyBlocked
 from nevo.api.lesson_contracts import AudioVariant, VisualVariant, is_practice_question
 from nevo.content_parsing.entities import ParsedLessonSegment
-from nevo.db.models.content import LessonSegment
+from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.deferred_media import DeferredLessonMedia, VisualSafetyRestamp
 from nevo.domain.intelligence.vocabulary import ContentModality, LessonContentType
 from nevo.visuals.service import VisualEducationalReviewError, VisualGenerationError
@@ -378,10 +378,27 @@ class DeferredMediaWorker:
                 job.status, job.completed_at = "stale", now
                 job.lease_token = job.lease_until = None
                 return True
+            lesson = await session.get(Lesson, job.lesson_id)
+            if lesson is None:
+                job.status, job.completed_at = "stale", now
+                job.lease_token = job.lease_until = None
+                return True
+            lesson_context = LessonSafetyContext(
+                subject=lesson.subject or "unspecified",
+                level=str((lesson.source_reference or {}).get("level") or "unspecified"),
+                curriculum=str((lesson.source_reference or {}).get("curriculum") or "unspecified"),
+                source_type=lesson.source_type.value,
+                uploader_provenance="authenticated_account",
+                review_status="awaiting_media_review",
+                lesson_id=str(lesson.id),
+                section_id=str(row.id),
+            )
         heartbeat = asyncio.create_task(self._renew(identity, token))
         try:
             async with asyncio.timeout(15 * 60):
-                result = await self._generate(kind, segment_from_payload(payload), actor)
+                result = await self._generate(
+                    kind, segment_from_payload(payload), actor, lesson_context=lesson_context
+                )
             await self._finish(identity, token, result=result)
         except asyncio.CancelledError:
             async with self.sessions.begin() as session:
@@ -425,7 +442,7 @@ class DeferredMediaWorker:
                 await heartbeat
         return True
 
-    async def _generate(self, kind, source, actor):
+    async def _generate(self, kind, source, actor, *, lesson_context=None):
         notes = []
         if kind == "image":
             if (
@@ -434,7 +451,10 @@ class DeferredMediaWorker:
             ):
                 raise MediaPreparationFailure("provider_not_configured")
             generated = await self.parser._generate_segment_visual(
-                source, notes, requested_by_user_id=actor
+                source,
+                notes,
+                requested_by_user_id=actor,
+                lesson_safety_context=lesson_context,
             )
             asset = generated.visual_variant
             if (
@@ -469,7 +489,10 @@ class DeferredMediaWorker:
         scripts = [str((audio or {}).get("script") or "")]
         scripts.extend(str(step["audio"].get("script") or "") for step in steps)
         await self.parser._ai_gateway.check_content(
-            "\n".join(scripts), requester_user_id=actor, phase="lesson_narration"
+            "\n".join(scripts),
+            requester_user_id=actor,
+            phase="lesson_narration",
+            lesson_context=lesson_context,
         )
         return {
             "audio": AudioVariant.model_validate(audio).model_dump(mode="json", by_alias=True)

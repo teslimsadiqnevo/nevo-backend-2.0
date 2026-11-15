@@ -737,6 +737,8 @@ async def _question_for_attempt(
         segment = await session.get(LessonSegment, payload.segment_id)
         if segment is None or segment.lesson_id != lesson.id:
             raise HTTPException(status_code=404, detail="Lesson question not found")
+        if "safety_hold" in (segment.review_reasons or ()):
+            raise HTTPException(status_code=404, detail="Lesson question not found")
         if payload.source == "calculation":
             variant = segment.calculation_variant or {}
             concept_id = segment.concept_id or variant.get("conceptId")
@@ -1031,6 +1033,8 @@ async def lesson_detail(
             .order_by(LessonSegment.sequence_order)
         )
     ).all()
+    if not for_teacher:
+        segments = [item for item in segments if "safety_hold" not in (item.review_reasons or ())]
     modules = (
         await session.scalars(
             select(LessonModule)
@@ -2203,6 +2207,8 @@ async def set_segment_preferences(
         raise HTTPException(404, detail={"code": "lesson_session_not_found"})
     if sitting.ended_at or sitting.completion_status != LessonCompletionStatus.IN_PROGRESS:
         raise HTTPException(409, detail={"code": "lesson_session_ended"})
+    if "safety_hold" in (segment.review_reasons or ()):
+        raise HTTPException(404, detail={"code": "lesson_segment_not_found"})
     available = student_modalities(segment)
     if payload.modality is not None and payload.modality not in available:
         raise HTTPException(409, detail={"code": "format_unavailable"})
@@ -3584,6 +3590,7 @@ async def _offline_package_payload(
             .order_by(LessonSegment.sequence_order)
         )
     ).all()
+    segments = [item for item in segments if "safety_hold" not in (item.review_reasons or ())]
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
     from nevo.api.lesson_review import approved_check_ids, approved_level_ids

@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from nevo.ai_gateway.entities import AiGenerationRequest, AiRequestContext
 from nevo.ai_gateway.errors import AiGatewayError
-from nevo.ai_gateway.safety import POLICY_VERSION
+from nevo.ai_gateway.safety import POLICY_VERSION, LessonSafetyContext
 from nevo.api.ai_gateway import AiGatewayDependency, public_ai_error
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
@@ -56,6 +56,20 @@ from nevo.domain.intelligence.vocabulary import KeyPointConfidence, KeyPointRevi
 router = APIRouter(prefix="/api/v1", tags=["learning product"])
 
 REVIEW_ROLES = {"teacher", "senco_admin", "other_admin"}
+
+
+def _lesson_safety_context(lesson, segment, *, review_status: str) -> LessonSafetyContext:
+    return LessonSafetyContext(
+        subject=lesson.subject or "unspecified",
+        level=str((lesson.source_reference or {}).get("level") or "unspecified"),
+        curriculum=str((lesson.source_reference or {}).get("curriculum") or "unspecified"),
+        source_type=lesson.source_type.value,
+        uploader_provenance="authenticated_account",
+        review_status=review_status,
+        lesson_id=str(lesson.id),
+        section_id=str(segment.id),
+    )
+
 
 #: The states that mean a person has dealt with this point.
 RESOLVED_STATES = {
@@ -214,6 +228,9 @@ async def write_guided_reask(
         await gateway.safety_guard.check(
             text,
             phase="lesson_source",
+            lesson_context=_lesson_safety_context(
+                lesson, segment, review_status="teacher_edit_pending"
+            ),
             context=AiRequestContext(
                 requester_user_id=actor.id,
                 school_id=actor.school_id,
@@ -317,6 +334,9 @@ async def write_calculation_support(
         await gateway.safety_guard.check(
             support_text,
             phase="lesson_source",
+            lesson_context=_lesson_safety_context(
+                lesson, segment, review_status="teacher_edit_pending"
+            ),
             context=AiRequestContext(
                 requester_user_id=actor.id,
                 school_id=actor.school_id,
@@ -469,6 +489,9 @@ async def approve_class_practical(
             await gateway.safety_guard.check(
                 "\n".join([*payload.materials, *payload.requirements]),
                 phase="lesson_source",
+                lesson_context=_lesson_safety_context(
+                    lesson, segment, review_status="teacher_edit_pending"
+                ),
                 context=AiRequestContext(
                     requester_user_id=actor.id,
                     school_id=actor.school_id,
@@ -538,6 +561,9 @@ async def generate_transfer_items(
         result = await gateway.generate(
             AiGenerationRequest(
                 requester_user_id=actor.id,
+                lesson_safety_context=_lesson_safety_context(
+                    lesson, segments[0], review_status="generation_pending_review"
+                ),
                 service=AiService.LESSON_GENERATION,
                 prompt_name="content_transfer.default",
                 variables={"concept_name": concept_name, "source_text": source},
@@ -653,6 +679,9 @@ async def generate_calculation_parts(
         result = await gateway.generate(
             AiGenerationRequest(
                 requester_user_id=actor.id,
+                lesson_safety_context=_lesson_safety_context(
+                    lesson, segment, review_status="generation_pending_review"
+                ),
                 service=AiService.LESSON_GENERATION,
                 prompt_name="calculation_parts.default",
                 variables={
@@ -1571,6 +1600,7 @@ async def review_complete_map(session, lesson_ids):
         approvals = approvals_by_lesson[lesson_id]
         result[lesson_id] = (
             bool(segments)
+            and not any("safety_hold" in (segment.review_reasons or ()) for segment in segments)
             and all(
                 not material or (kind in approvals and _current_signoff(approvals[kind], material))
                 for kind, material in materials.items()
@@ -1668,6 +1698,8 @@ async def _review_result(session, lesson):
     outstanding_steps = [
         step for step, required in required_by_step.items() if not _settled(step, required=required)
     ]
+    if any("safety_hold" in (segment.review_reasons or ()) for segment in segments):
+        outstanding_steps.append("safety_hold")
     if result.outstanding_count and "key_points" not in outstanding_steps:
         # Key points approved, but some segment still has none written.
         outstanding_steps.insert(0, "key_points")
@@ -2112,7 +2144,12 @@ async def edit_rewrite(
     if original["body"] != payload.body:
         try:
             await gateway.check_content(
-                payload.body, requester_user_id=actor.id, phase="lesson_rewrite"
+                payload.body,
+                requester_user_id=actor.id,
+                phase="lesson_rewrite",
+                lesson_context=_lesson_safety_context(
+                    lesson, segment, review_status="teacher_edit_pending"
+                ),
             )
         except AiGatewayError as error:
             raise public_ai_error(error, audience="teacher") from error

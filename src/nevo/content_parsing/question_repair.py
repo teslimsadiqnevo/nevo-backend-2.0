@@ -10,7 +10,9 @@ from nevo.domain.ai_gateway.vocabulary import AiService
 PROMPT_NAME = "content_question_repair.default"
 
 
-async def repair_questions(payload, *, source, gateway, requester_user_id):
+async def repair_questions(
+    payload, *, source, gateway, requester_user_id, lesson_safety_context=None
+):
     fixed = deepcopy(payload)
     containers = []
     for section in fixed.get("segments", []):
@@ -44,6 +46,7 @@ async def repair_questions(payload, *, source, gateway, requester_user_id):
         response = await gateway.generate(
             AiGenerationRequest(
                 requester_user_id=requester_user_id,
+                lesson_safety_context=lesson_safety_context,
                 service=AiService.LESSON_GENERATION,
                 prompt_name=PROMPT_NAME,
                 variables={

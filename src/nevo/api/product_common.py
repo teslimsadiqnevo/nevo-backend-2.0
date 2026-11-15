@@ -336,6 +336,7 @@ REVIEW_STEP_NAMES = {
     "checks": "checks",
     "calculation_parts": "calculation parts",
     "media": "pictures",
+    "safety_hold": "content held for safety review",
 }
 
 

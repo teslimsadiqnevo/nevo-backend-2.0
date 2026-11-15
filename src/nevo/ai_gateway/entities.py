@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from nevo.ai_gateway.safety import LessonSafetyContext
 from nevo.domain.ai_gateway.vocabulary import (
     AiCallStatus,
     AiPriority,
@@ -42,6 +43,7 @@ class AiGenerationRequest:
     #: Runs one tool call and returns its payload. Supplied by the caller
     #: because only the caller knows who is asking and what they may see.
     tool_executor: Any = None
+    lesson_safety_context: LessonSafetyContext | None = None
 
 
 @dataclass(frozen=True, slots=True)

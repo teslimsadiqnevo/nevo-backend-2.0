@@ -241,9 +241,27 @@ class ContentParsingService:
         lose a lesson.
         """
         source = _source_for_prompt(request)
-        if isinstance(self._ai_gateway, AiGatewayService):
+        from nevo.ai_gateway.safety import LessonSafetyContext
+
+        lesson_safety_context = LessonSafetyContext(
+            subject=str(request.source_metadata.get("subject") or "unspecified"),
+            level=str(request.source_metadata.get("level") or "unspecified"),
+            curriculum=str(request.source_metadata.get("curriculum") or "unspecified"),
+            source_type=request.source_type.value,
+            uploader_provenance="authenticated_account",
+            review_status="not_reviewed",
+            lesson_id=str(existing_lesson_id) if existing_lesson_id else None,
+        )
+        source_checked_by_chunk = (
+            isinstance(self._ai_gateway, AiGatewayService)
+            and self._ai_gateway.safety_guard._policy_v2
+        )
+        if isinstance(self._ai_gateway, AiGatewayService) and not source_checked_by_chunk:
             await self._ai_gateway.check_content(
-                source, requester_user_id=requested_by_user_id, phase="lesson_source"
+                source,
+                requester_user_id=requested_by_user_id,
+                phase="lesson_source",
+                lesson_context=lesson_safety_context,
             )
         missing_pages = _missing_text_pages(source)
         source, navigation_pages = _without_contents_pages(source)
@@ -251,6 +269,32 @@ class ContentParsingService:
         await _report(on_stage, UploadStage.READING_DOCUMENT)
         chunks = _bounded_chunks(source.strip(), MAX_CHUNK_CHARS - 2100)
         chunk_pages = _pages_per_chunk(source.strip(), chunks)
+        blocked_source = {}
+        safe_chunks = list(chunks)
+        if source_checked_by_chunk:
+            from nevo.ai_gateway.safety import SafetyBlocked
+
+            async def check_source_chunk(index: int, chunk: str):
+                try:
+                    await self._ai_gateway.check_content(
+                        chunk,
+                        requester_user_id=requested_by_user_id,
+                        phase="lesson_source",
+                        lesson_context=lesson_safety_context.model_copy(
+                            update={"section_id": f"source-chunk-{index}"}
+                        ),
+                    )
+                    return None
+                except SafetyBlocked as error:
+                    return error
+
+            decisions = await asyncio.gather(
+                *(check_source_chunk(index, chunk) for index, chunk in enumerate(chunks, 1))
+            )
+            for index, decision in enumerate(decisions, 1):
+                if decision is not None:
+                    blocked_source[index] = decision
+                    safe_chunks[index - 1] = "This source section is held for safety review."
         await _report(on_stage, UploadStage.FINDING_SECTIONS)
         segments: list[ParsedLessonSegment] = []
         review_notes: list[dict[str, object]] = (
@@ -305,6 +349,8 @@ class ContentParsingService:
         pass_limit = asyncio.Semaphore(2)
 
         async def read_pass(index: int, chunk: str):
+            if index in blocked_source:
+                return blocked_source[index], 0
             async with pass_limit:
                 calls = 1
                 generated = None
@@ -323,9 +369,12 @@ class ContentParsingService:
                         try:
                             candidate = await repair_questions(
                                 candidate,
-                                source=_pass_source(chunks, index),
+                                source=_pass_source(safe_chunks, index),
                                 gateway=self._ai_gateway,
                                 requester_user_id=requested_by_user_id,
+                                lesson_safety_context=lesson_safety_context.model_copy(
+                                    update={"section_id": f"source-chunk-{index}"}
+                                ),
                             )
                         except UnclassifiableQuestionError:
                             # Repair gave up rather than returning something
@@ -378,6 +427,9 @@ class ContentParsingService:
                 return await self._ai_gateway.generate(
                     AiGenerationRequest(
                         requester_user_id=requested_by_user_id,
+                        lesson_safety_context=lesson_safety_context.model_copy(
+                            update={"section_id": f"source-chunk-{index}"}
+                        ),
                         service=AiService.LESSON_GENERATION,
                         prompt_name=PROMPT_NAME,
                         variables={
@@ -416,7 +468,7 @@ class ContentParsingService:
                                 "source-authored lines. Copy them verbatim from the "
                                 "upload only when explicitly present. Do not compose, infer, "
                                 "or default either line; omit absent fields.\n\n"
-                                + _pass_source(chunks, index)
+                                + _pass_source(safe_chunks, index)
                             ),
                         },
                         max_output_tokens=PARSE_OUTPUT_TOKENS,
@@ -448,7 +500,8 @@ class ContentParsingService:
                     replace(
                         segment,
                         interactive_variant=source_activity_observations(
-                            segment.interactive_variant, source
+                            segment.interactive_variant,
+                            "\n\n".join(safe_chunks) if source_checked_by_chunk else source,
                         ),
                     )
                     for segment in chunk_segments
@@ -548,19 +601,36 @@ class ContentParsingService:
                     review_notes.append(
                         {
                             "code": "lesson_text_blocked_by_safety",
-                            "textRetained": True,
+                            "textRetained": False,
                             "chunkNumber": index,
+                            "safetyEventId": str(error.event_id) if error.event_id else None,
+                            "reasonCategory": (
+                                error.categories[0] if error.categories else "unspecified"
+                            ),
                             "message": (
-                                "A safety check held back the lesson Nevo wrote from "
-                                "this part of your file, so this part came through as "
-                                "plain text with no questions. Your file was not the "
-                                "problem - it passed its own check. Tell us the lesson "
-                                "name and we will look at the check."
+                                "A safety check held source material in this part of your file. "
+                                "The lesson cannot be assigned until this part is resolved."
+                                if error.phase == "lesson_source"
+                                else "A safety check held generated content for this part of "
+                                "your file. The lesson cannot be assigned until it is resolved."
                             ),
                             "pageNumbers": chunk_pages[index - 1],
                         }
                     )
-                    segments.extend(_fallback_segments(chunk, sequence_offset=len(segments)))
+                    segments.extend(
+                        replace(
+                            segment,
+                            body="This section is held for safety review.",
+                            text_variant={"body": "This section is held for safety review."},
+                            audio_variant=None,
+                            available_modalities=(ContentModality.TEXT,),
+                            review_reasons=(*segment.review_reasons, "safety_hold"),
+                        )
+                        for segment in _fallback_segments(
+                            "This section is held for safety review.",
+                            sequence_offset=len(segments),
+                        )
+                    )
                     continue
                 review_notes.append(
                     {
@@ -594,7 +664,10 @@ class ContentParsingService:
         await _report(on_stage, UploadStage.PREPARING_ADAPTATIONS)
         prepared_segments = await _in_parallel(
             lambda segment: self._generate_segment_depth(
-                segment, media_notes, requested_by_user_id=requested_by_user_id
+                segment,
+                media_notes,
+                requested_by_user_id=requested_by_user_id,
+                lesson_safety_context=lesson_safety_context,
             ),
             segments,
             limit=DEPTH_CONCURRENCY,
@@ -753,6 +826,7 @@ class ContentParsingService:
         notes: list[dict[str, object]],
         *,
         requested_by_user_id: UUID,
+        lesson_safety_context=None,
     ) -> ParsedLessonSegment:
         """The simpler and the longer version of one segment's text.
 
@@ -768,6 +842,11 @@ class ContentParsingService:
                 title=segment.title,
                 body=segment.body,
                 requested_by_user_id=requested_by_user_id,
+                lesson_safety_context=(
+                    lesson_safety_context.model_copy(update={"section_id": segment.segment_key})
+                    if lesson_safety_context
+                    else None
+                ),
                 key_terms=[
                     str(item.get("term"))
                     for item in (segment.text_variant or {}).get("keyTerms", [])
@@ -918,6 +997,7 @@ class ContentParsingService:
         notes: list[dict[str, object]],
         *,
         requested_by_user_id=None,
+        lesson_safety_context=None,
     ) -> ParsedLessonSegment:
         generator = self._visual_generation
         # Calculation drawings are deterministic scaffold data. A generated
@@ -953,6 +1033,7 @@ class ContentParsingService:
                         segment.body,
                         requester_user_id=requested_by_user_id,
                         phase="illustration_source",
+                        lesson_context=lesson_safety_context,
                     )
 
                 kwargs["source_check"] = source_check

@@ -37,6 +37,12 @@ DATABASE_URL:
     python scripts/migrate_database.py --copy     # do it
     python scripts/migrate_database.py --verify   # compare the two
 
+At cutover the service is stopped and the copy is taken again, because the
+first one is a snapshot and everything written since exists only on the
+source. The target is not empty by then, so that second copy needs --reset:
+
+    python scripts/migrate_database.py --copy --reset
+
 Nothing is written without --copy.
 """
 
@@ -194,7 +200,7 @@ async def _counts(engine, tables) -> dict[str, int]:
     return found
 
 
-async def _preflight(source, target, tables, *, force: bool) -> dict[str, int]:
+async def _preflight(source, target, tables, *, force: bool, reset: bool) -> dict[str, int]:
     """Refuse to copy into a database that is not ready for it."""
     source_revision, target_revision = await _revision(source), await _revision(target)
     print(f"source revision   {source_revision}")
@@ -236,6 +242,9 @@ async def _preflight(source, target, tables, *, force: bool) -> dict[str, int]:
             "completely."
         )
 
+    if reset:
+        await _reset(target, tables)
+
     existing = await _counts(target, tables)
     seeded = {name: n for name, n in existing.items() if n and name in SEEDED_BY_MIGRATIONS}
     if seeded:
@@ -254,6 +263,53 @@ async def _preflight(source, target, tables, *, force: bool) -> dict[str, int]:
     return source_triggers
 
 
+async def _reset(engine, tables) -> None:
+    """Empty every copied table, so a second copy starts from a clean target.
+
+    This is the cutover, not a convenience. The first copy is a snapshot, and
+    everything written to the live database afterwards exists only there, so
+    the real switch is: stop the service, empty the target, copy again,
+    verify, change DATABASE_URL. Without this the only way to empty it is to
+    drop the schema and run all 143 migrations again, which adds minutes to a
+    window where the service is down.
+
+    One TRUNCATE naming every table at once, so foreign keys between them
+    never have to be satisfied in an intermediate state and no order has to be
+    worked out. CASCADE is accepted here rather than feared: the statement
+    already names every table in the schema bar alembic_version, so there is
+    nothing left for it to reach that we did not intend.
+
+    RESTART IDENTITY because a sequence left where the deleted rows ended
+    would hand out keys the copied rows already hold.
+
+    Checked, not assumed: no trigger in this schema fires on TRUNCATE, so the
+    retention and consent guards cannot be tripped by it - and because it is
+    one statement in one transaction, a failure leaves the target exactly as
+    it was rather than half-emptied.
+    """
+    names = ", ".join(f'"{table.name}"' for table in tables)
+    print(f"emptying {len(tables)} tables on the target")
+    async with engine.begin() as connection:
+        fired = await connection.execute(
+            text(
+                "select count(*) from pg_trigger t "
+                "join pg_class c on c.oid = t.tgrelid "
+                "join pg_namespace n on n.oid = c.relnamespace "
+                "where n.nspname = 'public' and not t.tgisinternal "
+                "and (t.tgtype & 32) <> 0"
+            )
+        )
+        on_truncate = fired.scalar_one()
+        if on_truncate:
+            raise SystemExit(
+                f"Refusing: {on_truncate} trigger(s) in this schema fire on TRUNCATE, "
+                "which this was written on the basis that none do. Check what they "
+                "do before emptying the target."
+            )
+        await connection.execute(text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"))
+    print("   emptied")
+
+
 async def _set_triggers(engine, tables, *, enabled: bool) -> None:
     word = "ENABLE" if enabled else "DISABLE"
     async with engine.begin() as connection:
@@ -261,8 +317,8 @@ async def _set_triggers(engine, tables, *, enabled: bool) -> None:
             await connection.execute(text(f'ALTER TABLE "{table.name}" {word} TRIGGER USER'))
 
 
-async def copy(source, target, tables, *, force: bool) -> None:
-    expected_triggers = await _preflight(source, target, tables, force=force)
+async def copy(source, target, tables, *, force: bool, reset: bool) -> None:
+    expected_triggers = await _preflight(source, target, tables, force=force, reset=reset)
 
     print("\ndisabling user triggers on the target")
     await _set_triggers(target, tables, enabled=False)
@@ -371,6 +427,11 @@ async def main() -> None:
         action="store_true",
         help="copy even though the target already holds rows",
     )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="empty the target first - for the second, cutover copy",
+    )
     args = parser.parse_args()
 
     try:
@@ -393,7 +454,7 @@ async def main() -> None:
     tables = _tables()
     try:
         if args.copy:
-            await copy(source, target, tables, force=args.force)
+            await copy(source, target, tables, force=args.force, reset=args.reset)
             print()
             sys.exit(await verify(source, target, tables))
         if args.verify:

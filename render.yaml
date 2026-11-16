@@ -21,6 +21,18 @@ services:
         value: "true"
       - key: PRODUCTION_SUPABASE_PROJECT_REF
         value: utskhzqynxepmlwkafxv
+      # The live database's host. Set this when the database moves to Render
+      # Postgres, where there is no project ref to pin and the guard above
+      # would otherwise protect nothing. Both may be set at once: either one
+      # matching means production, so there is no window during the cutover
+      # where a development backend could write to the live database.
+      - key: PRODUCTION_DATABASE_HOST
+        sync: false
+      # The Supabase project the media lives in. The files stay on Supabase
+      # when the database moves, so "storage matches the database" stops
+      # being a useful test and /health compares against this instead.
+      - key: EXPECTED_STORAGE_PROJECT
+        value: utskhzqynxepmlwkafxv
       - key: DATABASE_URL
         sync: false
       - key: AUTH_PASSWORD_PEPPER

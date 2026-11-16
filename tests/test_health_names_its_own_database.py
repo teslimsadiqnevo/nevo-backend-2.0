@@ -190,3 +190,113 @@ def test_health_publishes_the_storage_fields_too() -> None:
     source = main.__loader__.get_source(main.__name__)
     assert "storage_identity" in source
     assert 'f"storage{key[0].upper()}{key[1:]}"' in source
+
+
+# --- the move to Render Postgres -------------------------------------------
+
+RENDER = "postgresql+asyncpg://nevo:s3cret@dpg-abc123-a.frankfurt-postgres.render.com:5432/nevo"
+RENDER_HOST = "dpg-abc123-a.frankfurt-postgres.render.com"
+
+
+def test_a_render_database_is_named_rather_than_coming_back_blank() -> None:
+    """projectRef is Supabase's way of naming a database and Render has none.
+
+    An empty ref must read as "not Supabase" rather than "unknown", or
+    /health stops answering the question it was added to answer.
+    """
+    found = Settings(DATABASE_URL=RENDER, PRODUCTION_DATABASE_HOST=RENDER_HOST).database_identity
+    assert found["provider"] == "render"
+    assert found["projectRef"] == ""
+    assert found["host"] == RENDER_HOST
+    assert found["port"] == "5432"
+
+
+def test_the_guard_still_protects_the_live_database_after_the_move() -> None:
+    """The whole point. Pinning a Supabase ref protects nothing on Render."""
+    settings = Settings(
+        DATABASE_URL=RENDER, PRODUCTION_DATABASE_HOST=RENDER_HOST, APP_ENV="development"
+    )
+    assert settings.points_at_production_database()
+    assert settings.database_identity["isPinnedProductionProject"] == "true"
+    with pytest.raises(RuntimeError, match="live database"):
+        settings.assert_database_target_allowed()
+
+
+def test_another_render_database_is_not_production() -> None:
+    other = RENDER.replace("dpg-abc123-a", "dpg-zzz999-a")
+    settings = Settings(
+        DATABASE_URL=other, PRODUCTION_DATABASE_HOST=RENDER_HOST, APP_ENV="development"
+    )
+    assert not settings.points_at_production_database()
+    settings.assert_database_target_allowed()
+
+
+def test_both_pins_hold_at_once_through_the_cutover() -> None:
+    """There must be no window where the guard protects neither."""
+    both = {
+        "PRODUCTION_SUPABASE_PROJECT_REF": "utskhzqynxepmlwkafxv",
+        "PRODUCTION_DATABASE_HOST": RENDER_HOST,
+    }
+    assert Settings(DATABASE_URL=POOLED, **both).points_at_production_database()
+    assert Settings(DATABASE_URL=RENDER, **both).points_at_production_database()
+
+
+@pytest.mark.parametrize(
+    "url,provider",
+    [
+        (POOLED, "supabase"),
+        (DIRECT, "supabase"),
+        (RENDER, "render"),
+        ("postgresql+asyncpg://postgres:postgres@localhost:5432/nevo", "local"),
+    ],
+)
+def test_the_provider_is_named(url: str, provider: str, monkeypatch) -> None:
+    monkeypatch.setenv("NEVO_ALLOW_DATABASE_TARGET", "1")
+    assert Settings(DATABASE_URL=url).database_identity["provider"] == provider
+
+
+def test_storage_is_judged_against_what_we_expect_not_the_database() -> None:
+    """Once the database moves, the files stay put and never match it again.
+
+    A field that is permanently false is one people learn to ignore, so the
+    comparison moves to the project we intend the media to be in.
+    """
+    media = "https://utskhzqynxepmlwkafxv.supabase.co"
+    moved = Settings(
+        DATABASE_URL=RENDER,
+        SUPABASE_URL=media,
+        EXPECTED_STORAGE_PROJECT="utskhzqynxepmlwkafxv",
+    ).storage_identity
+    assert moved["isExpectedProject"] == "true"
+    assert moved["matchesDatabase"] == "false", "they genuinely do not match any more"
+
+    stale = Settings(
+        DATABASE_URL=RENDER,
+        SUPABASE_URL="https://ibavgeinubvmktxufvvr.supabase.co",
+        EXPECTED_STORAGE_PROJECT="utskhzqynxepmlwkafxv",
+    ).storage_identity
+    assert stale["isExpectedProject"] == "false", "a stale media project must still be caught"
+
+
+def test_storage_falls_back_to_the_database_while_they_are_together() -> None:
+    """Nothing to set until the move, so today's behaviour is unchanged."""
+    media = "https://utskhzqynxepmlwkafxv.supabase.co"
+    together = Settings(DATABASE_URL=POOLED, SUPABASE_URL=media).storage_identity
+    assert together["expected"] == "utskhzqynxepmlwkafxv"
+    assert together["isExpectedProject"] == "true"
+    assert together["matchesDatabase"] == "true"
+
+
+def test_a_direct_postgres_keeps_its_statement_cache_and_full_pool() -> None:
+    """Supabase's transaction pooler forbids both; Render's database does not.
+
+    Worth asserting because it is a silent performance change either way:
+    the cache measured at roughly 40% of query time against a remote
+    database.
+    """
+    from nevo.db.session import _is_supabase_session_pooler, statement_cache_size
+
+    assert statement_cache_size(RENDER) == 256
+    assert not _is_supabase_session_pooler(RENDER)
+    # And the Supabase transaction pooler still gets zero.
+    assert statement_cache_size(POOLED.replace(":5432", ":6543")) == 0

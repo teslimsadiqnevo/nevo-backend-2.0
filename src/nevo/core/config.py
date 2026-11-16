@@ -46,6 +46,22 @@ class Settings(BaseSettings):
         ),
     )
     focus_timing_verified: bool = Field(default=False, validation_alias="FOCUS_TIMING_VERIFIED")
+    #: The Supabase project the media is meant to be in.
+    #:
+    #: The files stay on Supabase when the database moves to Render, so
+    #: "storage matches the database" stops being a useful test and this
+    #: replaces it. Left empty while the two are together, where the
+    #: database's own ref is the right expectation.
+    expected_storage_project: str = Field(default="", validation_alias="EXPECTED_STORAGE_PROJECT")
+
+    #: The live database's host, for the guard above and for /health.
+    #:
+    #: Added for the move to Render Postgres, where there is no project ref
+    #: to pin. While the database is still on Supabase both this and
+    #: PRODUCTION_SUPABASE_PROJECT_REF can be set; either one matching means
+    #: production, so the guard holds through the cutover rather than having
+    #: a window where it protects nothing.
+    production_database_host: str = Field(default="", validation_alias="PRODUCTION_DATABASE_HOST")
     safety_policy_v2_enabled: bool = Field(
         default=False, validation_alias="SAFETY_POLICY_V2_ENABLED"
     )
@@ -71,19 +87,35 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
+    def points_at_production_database(self) -> bool:
+        """Whether this DATABASE_URL is the live database, whoever hosts it.
+
+        Two tests, because the database is moving off Supabase and the guard
+        has to hold on both sides of that. A Supabase project is named by the
+        ref in the username or in a db.<ref>.supabase.co host; a Render
+        database has no ref at all, so it is named by host.
+
+        Keyed on host rather than on the full URL on purpose: the password
+        rotates, the database name and user may differ between a connection
+        string and a dashboard, and a guard that misses because one character
+        changed is a guard nobody can rely on.
+        """
+        parsed = urlsplit(self.database_url)
+        host = (parsed.hostname or "").casefold()
+        ref = unquote(parsed.username or "").removeprefix("postgres.")
+        pinned_ref = self.production_supabase_project_ref
+        if pinned_ref and (ref == pinned_ref or host == f"db.{pinned_ref}.supabase.co".casefold()):
+            return True
+        pinned_host = self.production_database_host.strip().casefold()
+        return bool(pinned_host) and host == pinned_host
+
     def assert_database_target_allowed(self) -> None:
         if self.is_production_runtime:
             return
-        parsed = urlsplit(self.database_url)
-        username = unquote(parsed.username or "")
-        project_ref = username.removeprefix("postgres.")
-        is_production_project = project_ref == self.production_supabase_project_ref or (
-            parsed.hostname == f"db.{self.production_supabase_project_ref}.supabase.co"
-        )
-        if is_production_project:
+        if self.points_at_production_database():
             raise RuntimeError(
-                "Refusing to start a non-production backend against the production "
-                "Supabase project. Set DATABASE_URL to the test database."
+                "Refusing to start a non-production backend against the live "
+                "database. Set DATABASE_URL to a test database."
             )
 
     @property
@@ -91,12 +123,16 @@ class Settings(BaseSettings):
         """Which database this process is using, with nothing secret in it.
 
         Yinka, 10 November: the one thing that would have settled a day of
-        guessing from outside. The code pins a production project ref and
-        render.yaml declares it, but DATABASE_URL is set by hand per
-        environment, so what a running service actually connected to was not
-        knowable without the dashboard.
+        guessing from outside. DATABASE_URL is set by hand per environment,
+        so what a running service had actually connected to was not knowable
+        without the dashboard - and when I read it off the wrong host I got
+        the answer wrong twice.
 
-        Host and project ref only. No user, no password, no database name.
+        Host, port, provider and project ref. No user, no password, no
+        database name. projectRef and region are Supabase's way of naming a
+        database and are empty on Render, which is why provider is reported
+        beside them: an empty ref must read as "not Supabase" rather than as
+        "unknown".
         """
         parsed = urlsplit(self.database_url)
         host = parsed.hostname or ""
@@ -109,39 +145,64 @@ class Settings(BaseSettings):
         if ".pooler.supabase.com" in host:
             first = host.split(".", 1)[0]
             region = first.split("-", 2)[-1] if "-" in first else first
+        if "supabase" in host:
+            provider = "supabase"
+        elif host.endswith(".render.com") or host.endswith(".onrender.com"):
+            provider = "render"
+        elif host in {"localhost", "127.0.0.1", "::1", ""}:
+            provider = "local"
+        else:
+            provider = "other"
         return {
             "host": host,
+            "provider": provider,
             "projectRef": ref,
             "region": region,
             "port": str(parsed.port or ""),
-            "isPinnedProductionProject": str(
-                bool(ref) and ref == self.production_supabase_project_ref
-            ).casefold(),
+            # True when this is the live database, by ref or by host. The
+            # name says "project" for the frontend check that already reads
+            # it; it means the pinned production database either way.
+            "isPinnedProductionProject": str(self.points_at_production_database()).casefold(),
         }
 
     @property
     def storage_identity(self) -> dict[str, str]:
-        """Which Supabase project holds the files, and whether it matches the data.
+        """Which Supabase project holds the files, and whether that is the one we meant.
 
-        Yinka asked (11 November) whether /health could report this the way it
-        reports the database's. It is the more useful of the two, because the
-        two are set by separate variables and can drift: the database can be
-        moved to a new project while SUPABASE_URL still names the old one,
-        which leaves lessons in one project and their pictures and audio in
-        another, each looking fine on its own.
+        Yinka asked (11 November) whether /health could report this the way
+        it reports the database's, and the first thing it found was a split:
+        the database had moved projects while SUPABASE_URL still named the
+        old one, leaving lessons in one project and their pictures in
+        another, each looking healthy alone.
 
-        The URL is https://<project>.supabase.co and carries no region, so the
-        region is not derivable here. The ref and whether it agrees with the
-        database are what answer the question.
+        "Matches the database" was the right test while both lived in the
+        same Supabase project. It stops being the right test the moment the
+        database moves to Render, because then they never match and a field
+        that is permanently false is one people learn to ignore. So the
+        comparison is against the storage project we intend - set by
+        EXPECTED_STORAGE_PROJECT - and falls back to the database's own ref
+        while the two are still together.
+
+        The URL is https://<project>.supabase.co and carries no region, so
+        the region is not derivable here.
         """
         url = str(getattr(self, "supabase_url", "") or "")
         host = urlsplit(url).hostname or ""
         ref = host.removesuffix(".supabase.co") if host.endswith(".supabase.co") else ""
-        database_ref = self.database_identity["projectRef"]
+        expected = (self.expected_storage_project or "").strip() or self.database_identity[
+            "projectRef"
+        ]
         return {
             "project": ref,
             "configured": str(bool(url)).casefold(),
-            "matchesDatabase": str(bool(ref) and ref == database_ref).casefold(),
+            "expected": expected,
+            "isExpectedProject": str(bool(ref) and ref == expected).casefold(),
+            # Kept because the console reads it. Now says only whether the
+            # files sit beside the data, which is informational once the
+            # database moves and is deliberately false afterwards.
+            "matchesDatabase": str(
+                bool(ref) and ref == self.database_identity["projectRef"]
+            ).casefold(),
         }
 
     @property

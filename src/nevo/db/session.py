@@ -11,7 +11,13 @@ from sqlalchemy.ext.asyncio import (
 from nevo.core.config import get_settings
 
 TRANSACTION_POOLER_PORT = 6543
-"""Supabase serves transaction-mode pooling here and session mode on 5432."""
+"""Supabase serves transaction-mode pooling here and session mode on 5432.
+
+A direct Postgres - Render's, or a local one - is neither: it listens on
+5432, every connection is ours for its lifetime, and the prepared-statement
+cache is worth having. Both helpers below return False for it, which is why
+moving the database needs no change here beyond the connection string.
+"""
 SESSION_POOLER_PORT = 5432
 
 #: How long to wait for a connection to be established.
@@ -46,6 +52,15 @@ def _is_transaction_pooler(database_url: str) -> bool:
 
 
 def _is_supabase_session_pooler(database_url: str) -> bool:
+    """Supabase's session pooler, which has a project-wide client limit.
+
+    Only Supabase. A direct Postgres - Render's, or a local one - is not a
+    shared pooler and does not need the pool clamped to two, so this returns
+    False there and the configured pool size applies. That is the behaviour
+    wanted on both sides of the move, and the reason this checks the host
+    rather than only the port: 5432 is the ordinary Postgres port everywhere
+    else.
+    """
     url = make_url(database_url)
     return bool(
         url.host and url.host.endswith(".pooler.supabase.com") and url.port == SESSION_POOLER_PORT
@@ -118,6 +133,11 @@ def create_engine(database_url: str) -> AsyncEngine:
         # far more than a query - so hold a few open rather than reopening.
         # The Supabase session pooler has a 15-client project limit. Multiple
         # services share it, so never let one process reserve most of it.
+        #
+        # Against a direct Postgres there is no shared pooler and the clamp
+        # does not apply, so the configured size is used. Mind the server's
+        # own max_connections instead: this process can hold pool_size +
+        # max_overflow, and the web service runs more than one worker.
         pool_size=min(settings.database_pool_size, 2)
         if session_pooler
         else settings.database_pool_size,

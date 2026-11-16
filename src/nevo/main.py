@@ -562,6 +562,9 @@ async def health(request: Request) -> dict[str, str]:
             f"storage{key[0].upper()}{key[1:]}": value
             for key, value in get_settings().storage_identity.items()
         },
+        # storageIsExpectedProject is the one to watch once the database
+        # moves to Render: the files stay on Supabase deliberately, so
+        # storageMatchesDatabase is false by design from then on.
     }
 
 

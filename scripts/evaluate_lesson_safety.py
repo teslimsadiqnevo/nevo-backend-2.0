@@ -161,7 +161,7 @@ async def main():
         "provider": args.provider,
         "datasets": [str(path.relative_to(ROOT)) for path in (CASES, INCIDENTS)],
         "labelStatus": (
-            "18 original labels approved; revised passages and near-miss pairs await Lydia review"
+            "12 revised and near-miss labels approved by Lydia on 2026-11-16; reconstructions are regression probes, not incidents"
         ),
         "cases": len(rows),
         "falseBlocks": sum(row["label"] == "allow" and row["actual"] == "withhold" for row in rows),

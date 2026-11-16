@@ -123,16 +123,17 @@ async def test_the_teacher_is_told_her_file_was_not_the_problem() -> None:
 
     message = _note(repository.parsed, "lesson_text_blocked_by_safety")["message"]
     assert "Your file was not the problem" in message
-    assert "we will look at the check" in message
+    assert "We will look at the check" in message
 
 
 @pytest.mark.asyncio
-async def test_the_note_names_no_rule_and_no_trigger() -> None:
+async def test_the_note_names_the_category_but_not_the_internal_phase() -> None:
     repository, _ = await _parse(Refuses())
 
     note = _note(repository.parsed, "lesson_text_blocked_by_safety")
     written = " ".join(str(value) for value in note.values()).casefold()
-    for leak in ("privacy_abuse", "content_parse", "output:"):
+    assert note["reasonCategory"] == "privacy_abuse"
+    for leak in ("content_parse", "output:"):
         assert leak not in written, f"{leak} reached the teacher"
 
 
@@ -143,6 +144,7 @@ async def test_the_teaching_text_still_comes_through() -> None:
     assert repository.parsed.segments
     body = " ".join(segment.body for segment in repository.parsed.segments)
     assert "hawk" in body
+    assert all("safety_hold" in segment.review_reasons for segment in repository.parsed.segments)
 
 
 @pytest.mark.asyncio

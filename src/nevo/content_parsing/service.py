@@ -590,8 +590,8 @@ class ContentParsingService:
                     # did exactly that on 9 November: the source passed and the
                     # generated lesson was refused, and nothing said so.
                     #
-                    # The rule and the trigger stay out of it, as with a
-                    # refused picture. The detail goes to the log.
+                    # The teacher gets the reason category and event reference,
+                    # never the rejected generated output.
                     logger.warning(
                         "Lesson text refused by safety chunk=%s phase=%s categories=%s",
                         index,
@@ -601,7 +601,7 @@ class ContentParsingService:
                     review_notes.append(
                         {
                             "code": "lesson_text_blocked_by_safety",
-                            "textRetained": False,
+                            "textRetained": error.phase != "lesson_source",
                             "chunkNumber": index,
                             "safetyEventId": str(error.event_id) if error.event_id else None,
                             "reasonCategory": (
@@ -611,23 +611,29 @@ class ContentParsingService:
                                 "A safety check held source material in this part of your file. "
                                 "The lesson cannot be assigned until this part is resolved."
                                 if error.phase == "lesson_source"
-                                else "A safety check held generated content for this part of "
-                                "your file. The lesson cannot be assigned until it is resolved."
+                                else "Your file was not the problem. A safety check held "
+                                "Nevo's generated content for this part. We will look at the "
+                                "check; the lesson cannot be assigned until it is resolved."
                             ),
                             "pageNumbers": chunk_pages[index - 1],
                         }
                     )
+                    held_text = (
+                        "This section is held for safety review."
+                        if error.phase == "lesson_source"
+                        else chunk
+                    )
                     segments.extend(
                         replace(
                             segment,
-                            body="This section is held for safety review.",
-                            text_variant={"body": "This section is held for safety review."},
+                            body=held_text,
+                            text_variant={"body": held_text},
                             audio_variant=None,
                             available_modalities=(ContentModality.TEXT,),
                             review_reasons=(*segment.review_reasons, "safety_hold"),
                         )
                         for segment in _fallback_segments(
-                            "This section is held for safety review.",
+                            held_text,
                             sequence_offset=len(segments),
                         )
                     )

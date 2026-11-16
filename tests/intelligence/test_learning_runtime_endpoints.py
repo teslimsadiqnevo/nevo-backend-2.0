@@ -421,6 +421,57 @@ def test_offline_delivery_contains_the_same_stable_reading_anchors(runtime):
     )
 
 
+def test_safety_held_section_is_absent_online_and_in_new_offline_package(runtime):
+    async def hold():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.review_reasons = ["safety_hold"]
+
+    run(hold())
+    lesson = runtime.ids["lesson"]
+    for path in (
+        f"/api/v1/lessons/{lesson}",
+        f"/api/v1/lessons/{lesson}/offline-package.json",
+    ):
+        response = runtime.client.get(path)
+        assert response.status_code == 200, response.text
+        assert response.json()["segments"] == []
+        assert "A whole divided into five" not in response.text
+
+
+def test_safety_held_check_cannot_be_attempted(runtime):
+    sitting = start(runtime)
+
+    async def hold():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.review_reasons = ["safety_hold"]
+
+    run(hold())
+    response = answer(runtime, sitting, 5)
+    assert response.status_code == 404, response.text
+
+
+def test_safety_hold_blocks_assignment_with_review_step(runtime):
+    from fastapi import HTTPException
+
+    from nevo.api.product_common import require_approved_lessons
+
+    async def check():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.review_reasons = ["safety_hold"]
+        async with runtime.sessions() as session:
+            with pytest.raises(HTTPException) as caught:
+                await require_approved_lessons(session, [runtime.ids["lesson"]])
+            return caught.value
+
+    refusal = run(check())
+    assert refusal.status_code == 409
+    assert "safety_hold" in refusal.detail["lessons"][0]["outstandingReviewSteps"]
+    assert "content held for safety review" in refusal.detail["message"]
+
+
 def test_calculation_marking_rejects_distractor_alias_in_historical_data(runtime):
     async def change():
         async with runtime.sessions.begin() as session:

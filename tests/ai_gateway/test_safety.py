@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from nevo.ai_gateway.safety import ContentSafetyGuard, SafetyBlocked, SafetyUnavailable
+from nevo.ai_gateway.safety import (
+    ContentSafetyGuard,
+    LessonSafetyContext,
+    SafetyBlocked,
+    SafetyUnavailable,
+)
 
 
 def guard(decision, *, status=200, stop_reason="end_turn"):
@@ -117,3 +122,97 @@ async def test_unsafe_output_is_not_returned():
     service._safety.check = AsyncMock(side_effect=[None, SafetyBlocked()])
     with pytest.raises(SafetyBlocked):
         await service.generate(request())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "finding,expected",
+    [
+        (
+            {
+                "category": "dangerous_instructions",
+                "finding_type": "hazardous_action",
+                "confidence": "high",
+            },
+            "block",
+        ),
+        (
+            {
+                "category": "privacy_abuse",
+                "finding_type": "exposed_credentials",
+                "confidence": "high",
+            },
+            "block",
+        ),
+        (
+            {"category": "violence", "finding_type": "historical_account", "confidence": "high"},
+            "record",
+        ),
+        (
+            {"category": "privacy_abuse", "finding_type": "ordinary_name", "confidence": "high"},
+            "record",
+        ),
+        (
+            {
+                "category": "privacy_abuse",
+                "finding_type": "ordinary_name",
+                "confidence": "uncertain",
+            },
+            "hold",
+        ),
+        ({"category": "privacy_abuse", "finding_type": "other", "confidence": "high"}, "block"),
+    ],
+)
+async def test_v2_lesson_policy_uses_typed_context_and_finding_type(finding, expected):
+    payloads = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "content_safety_decision",
+                        "input": {"findings": [finding]},
+                    }
+                ],
+            },
+        )
+
+    context = LessonSafetyContext(
+        subject="History",
+        level="SS1",
+        curriculum="Nigerian curriculum",
+        source_type="pdf",
+        uploader_provenance="authenticated_account",
+        review_status="not_reviewed",
+        section_id="section-1",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        reviewer = ContentSafetyGuard(api_key="test-only", client=client, policy_v2=True)
+        if expected == "record":
+            await reviewer.check("lesson material", phase="lesson_source", lesson_context=context)
+        else:
+            with pytest.raises(SafetyBlocked) as caught:
+                await reviewer.check(
+                    "lesson material", phase="lesson_source", lesson_context=context
+                )
+            assert caught.value.disposition == expected
+    submitted = json.loads(payloads[0]["messages"][0]["content"][0]["text"])
+    assert submitted["lessonContext"]["section_id"] == "section-1"
+    assert submitted["lessonContext"]["subject"] == "History"
+    assert submitted["phase"] == "lesson_source"
+
+
+@pytest.mark.asyncio
+async def test_v2_requires_context_and_checker_failure_does_not_become_a_finding():
+    reviewer, calls, client = guard('{"findings": []}')
+    reviewer._policy_v2 = True
+    async with client:
+        with pytest.raises(SafetyUnavailable):
+            await reviewer.check("lesson material", phase="lesson_source")
+    assert calls == []

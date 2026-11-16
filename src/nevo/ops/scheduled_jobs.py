@@ -28,6 +28,23 @@ WEEKLY = timedelta(days=7)
 HOURLY = timedelta(hours=1)
 
 
+async def expire_safety_review_text_rows(
+    sessions: async_sessionmaker[AsyncSession], *, now: datetime | None = None
+) -> int:
+    """Erase expired flagged material while retaining the decision audit."""
+    cutoff = now or datetime.now(UTC)
+    async with sessions.begin() as session:
+        result = await session.execute(
+            update(ContentSafetyEvent)
+            .where(
+                ContentSafetyEvent.material_expires_at <= cutoff,
+                ContentSafetyEvent.review_material.is_not(None),
+            )
+            .values(review_material=None)
+        )
+    return result.rowcount or 0
+
+
 def build_scheduled_jobs(
     *,
     sessions: async_sessionmaker[AsyncSession],
@@ -83,13 +100,8 @@ def build_scheduled_jobs(
         return (await ConsentExpiryService(sessions).sweep()).summary()
 
     async def expire_safety_review_text() -> str:
-        async with sessions.begin() as session:
-            result = await session.execute(
-                update(ContentSafetyEvent)
-                .where(ContentSafetyEvent.material_expires_at <= datetime.now(UTC))
-                .values(review_material=None)
-            )
-        return f"expired {result.rowcount or 0} safety review texts"
+        count = await expire_safety_review_text_rows(sessions)
+        return f"expired {count} safety review texts"
 
     async def refresh_due_dates() -> str:
         refreshed = await scheduler_service.refresh_all_due_dates()

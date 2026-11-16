@@ -16,6 +16,7 @@ from sqlalchemy.pool import NullPool
 from nevo.ai_gateway.safety import (
     ContentSafetyGuard,
     LessonSafetyContext,
+    SafetyBlocked,
     SafetyUnavailable,
 )
 from nevo.db.models.safety import ContentSafetyEvent
@@ -141,4 +142,55 @@ async def test_checker_outage_has_no_safety_event():
                 select(ContentSafetyEvent.id).where(ContentSafetyEvent.input_hash == digest)
             ) is None
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_v1_blocked_generated_output_is_captured_but_source_is_not():
+    engine, sessions = local_sessions()
+    generated = f"Synthetic generated chemistry explanation {uuid4()}"
+    source = f"Synthetic teacher source {uuid4()}"
+    hashes = [hashlib.sha256(value.encode()).hexdigest() for value in (generated, source)]
+
+    def block(_request):
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "content_safety_decision",
+                        "input": {"action": "block", "categories": ["dangerous_instructions"]},
+                    }
+                ],
+            },
+        )
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(block)) as client:
+            guard = ContentSafetyGuard(
+                api_key="test-only", client=client, sessions=sessions, policy_v2=False
+            )
+            for material, phase in (
+                (generated, "output:content_parse.default"),
+                (source, "lesson_source"),
+            ):
+                with pytest.raises(SafetyBlocked):
+                    await guard.check(material, phase=phase, lesson_context=lesson_context())
+        async with sessions() as session:
+            rows = [
+                await session.scalar(
+                    select(ContentSafetyEvent).where(ContentSafetyEvent.input_hash == digest)
+                )
+                for digest in hashes
+            ]
+            assert rows[0].review_material == generated
+            assert rows[0].material_expires_at > datetime.now(UTC) + timedelta(days=29)
+            assert rows[1].review_material is None
+    finally:
+        async with sessions.begin() as session:
+            await session.execute(
+                delete(ContentSafetyEvent).where(ContentSafetyEvent.input_hash.in_(hashes))
+            )
         await engine.dispose()

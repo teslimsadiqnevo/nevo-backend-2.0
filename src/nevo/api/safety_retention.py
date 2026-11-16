@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
@@ -112,7 +112,10 @@ async def lesson_safety_review_queue(
         select(ContentSafetyEvent)
         .where(
             ContentSafetyEvent.school_id == actor.school_id,
-            ContentSafetyEvent.findings.is_not(None),
+            or_(
+                ContentSafetyEvent.findings.is_not(None),
+                ContentSafetyEvent.review_material.is_not(None),
+            ),
             ContentSafetyEvent.review_label.is_(None),
         )
         .order_by(ContentSafetyEvent.created_at.desc())
@@ -132,7 +135,7 @@ async def lesson_safety_review_detail(
     if (
         row is None
         or row.school_id != actor.school_id
-        or row.findings is None
+        or (row.findings is None and row.review_material is None)
         or row.review_material is None
         or row.material_expires_at is None
         or row.material_expires_at <= datetime.now(UTC)
@@ -152,7 +155,9 @@ async def label_lesson_safety_finding(
 ):
     actor = await require_school_actor(session, principal, roles={"senco_admin"})
     row = await session.get(ContentSafetyEvent, event_id, with_for_update=True)
-    if row is None or row.school_id != actor.school_id or row.findings is None:
+    if row is None or row.school_id != actor.school_id or (
+        row.findings is None and row.review_material is None
+    ):
         raise HTTPException(404, detail={"code": "safety_review_not_found"})
     if row.review_label is not None:
         raise HTTPException(409, detail={"code": "safety_review_already_labelled"})

@@ -343,7 +343,17 @@ class ContentSafetyGuard:
                     context,
                     body.get("usage") or {},
                     allowed_material=chunk if allowed_through else None,
-                    review_material=chunk if use_v2 and decision.findings else None,
+                    review_material=(
+                        chunk
+                        if (use_v2 and decision.findings)
+                        or (
+                            not use_v2
+                            and disposition in {"block", "safeguard"}
+                            and not allowed_through
+                            and phase.startswith("output:")
+                        )
+                        else None
+                    ),
                     disposition=disposition,
                     input_hash=hashlib.sha256(chunk.encode()).hexdigest(),
                     prompt_hash=hashlib.sha256(

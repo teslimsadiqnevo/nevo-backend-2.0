@@ -2838,11 +2838,13 @@ async def read_offline_manifest(
     _actor, _lesson = await _lesson_for_actor(lesson_id, principal, session)
     package = await _offline_package_payload(session, lesson_id, _actor)
     archive = _offline_archive(package, lesson_id)
+    issued_at = datetime.now(UTC)
     return {
         "lessonId": str(lesson_id),
         "version": 1,
         "segmentCount": _segment_count(package),
-        "generatedAt": datetime.now(UTC).isoformat(),
+        "generatedAt": issued_at.isoformat(),
+        "expiresAt": (issued_at + timedelta(days=14)).isoformat(),
         "packageUrl": f"/api/v1/lessons/{lesson_id}/offline-package",
         "sizeBytes": len(archive),
         "files": ["lesson.json", "manifest.json"],
@@ -2903,11 +2905,14 @@ async def create_offline_download(
     # can show has to be measured rather than estimated, and the only honest
     # measure is the archive itself. Ask B31.
     archive = _offline_archive(package, lesson_id)
+    issued_at = datetime.now(UTC)
     manifest = {
         "lessonId": str(lesson_id),
         "version": 1,
         "segmentCount": _segment_count(package),
-        "generatedAt": datetime.now(UTC).isoformat(),
+        "generatedAt": issued_at.isoformat(),
+        "expiresAt": (issued_at + timedelta(days=14)).isoformat(),
+        "includedSegmentIds": [segment["id"] for segment in package["segments"]],
         "packageUrl": f"/api/v1/lessons/{lesson_id}/offline-package",
         "sizeBytes": len(archive),
         "files": ["lesson.json", "manifest.json"],
@@ -2924,6 +2929,65 @@ async def create_offline_download(
         record.manifest = manifest
     await session.commit()
     return {"id": str(record.id), "manifest": record.manifest}
+
+
+class OfflineDownloadStatus(CamelResponse):
+    id: UUID
+    usable: bool
+    reason: Literal["current", "expired", "safety_revoked"]
+    checked_at: datetime
+    expires_at: datetime
+
+
+@router.get(
+    "/offline-downloads/{download_id}/status",
+    response_model=OfflineDownloadStatus,
+    responses=CONSENT_WITHDRAWN_RESPONSE,
+)
+async def offline_download_status(
+    download_id: UUID,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    consent: StudentLearningConsent = None,
+) -> dict[str, object]:
+    """The first online check must precede opening any cached lesson content."""
+    del consent
+    actor = await actor_user(session, principal)
+    if actor.role != UserRole.STUDENT:
+        raise HTTPException(status_code=403, detail="Student account required")
+    record = await session.get(OfflineDownload, download_id)
+    if record is None or record.student_id != actor.id:
+        raise HTTPException(status_code=404, detail="Download not found")
+    manifest = record.manifest or {}
+    issued_at = (
+        datetime.fromisoformat(manifest["generatedAt"])
+        if manifest.get("generatedAt")
+        else record.downloaded_at
+    )
+    if issued_at.tzinfo is None:
+        issued_at = issued_at.replace(tzinfo=UTC)
+    expires_at = issued_at + timedelta(days=14)
+    now = datetime.now(UTC)
+    held_ids = set(
+        await session.scalars(
+            select(LessonSegment.id).where(
+                LessonSegment.lesson_id == record.lesson_id,
+                LessonSegment.review_reasons.contains(["safety_hold"]),
+            )
+        )
+    )
+    included = manifest.get("includedSegmentIds")
+    revoked = bool(held_ids) and (
+        included is None or bool(held_ids.intersection(UUID(value) for value in included))
+    )
+    reason = "safety_revoked" if revoked else "expired" if now >= expires_at else "current"
+    return {
+        "id": record.id,
+        "usable": reason == "current",
+        "reason": reason,
+        "checkedAt": now,
+        "expiresAt": expires_at,
+    }
 
 
 def _segment_count(package: dict[str, object]) -> int:
@@ -3602,6 +3666,8 @@ async def _offline_package_payload(
     # the spec publishes is the shape that actually ships. Ask B60.
     payload: dict[str, object] = {
         "id": str(lesson.id),
+        "generatedAt": datetime.now(UTC),
+        "expiresAt": datetime.now(UTC) + timedelta(days=14),
         "title": lesson.title,
         "version": str(lesson.parser_version),
         "modules": [

@@ -70,7 +70,7 @@ async def current_checker(case, client, settings, *, policy_v2=False):
                     subject=str(case.get("subject") or "unspecified"),
                     level=str(case.get("level") or "unspecified"),
                     curriculum=str(case.get("curriculum") or "unspecified"),
-                    source_type="text",
+                    source_type=str(case.get("sourceType") or "text"),
                     uploader_provenance="authenticated_account",
                     review_status="not_reviewed",
                 )
@@ -161,7 +161,8 @@ async def main():
         "provider": args.provider,
         "datasets": [str(path.relative_to(ROOT)) for path in (CASES, INCIDENTS)],
         "labelStatus": (
-            "12 revised and near-miss labels approved by Lydia on 2026-11-16; reconstructions are regression probes, not incidents"
+            "12 revised and near-miss labels approved by Lydia on 2026-11-16; "
+            "reconstructions are regression probes, not incidents"
         ),
         "cases": len(rows),
         "falseBlocks": sum(row["label"] == "allow" and row["actual"] == "withhold" for row in rows),

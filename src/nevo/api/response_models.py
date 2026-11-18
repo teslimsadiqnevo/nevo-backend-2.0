@@ -1154,6 +1154,8 @@ class OfflinePackage(CamelResponse):
     """
 
     id: UUID
+    generated_at: datetime | None = None
+    expires_at: datetime | None = None
     comprehension_policy: ComprehensionPolicy = Field(default_factory=ComprehensionPolicy.current)
     title: str
     #: The parser version the lesson was built by, so a client can tell a
@@ -1177,6 +1179,7 @@ class OfflineManifestResponse(CamelResponse):
     version: int
     segment_count: int
     generated_at: datetime
+    expires_at: datetime | None = None
     package_url: str
     #: The size of the package the Downloads screen is about to fetch, in
     #: bytes. The screen was drawing a size it had no way of knowing, so it

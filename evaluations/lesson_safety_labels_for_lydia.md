@@ -37,4 +37,4 @@ The incident file contains the exact stored Zobo precaution. The password wordin
 
 ## Additional generated-output reconstructions
 
-Six ordinary chemistry and biology explanations are in `lesson_safety_cases.json` as `reconstruction-*`. They contain no person, name, or instruction, and all are labelled `Allow` at `output:content_parse.default`. They are regression probes for the reported failure shape, not exact production incidents or part of the twelve approved labels.
+Twelve ordinary chemistry and biology explanations are in `lesson_safety_cases.json` as `reconstruction-*`. They contain no person, name, or instruction, and all are labelled `Allow` at `output:content_parse.default`. They are regression probes for the reported failure shape, not exact production incidents or part of the twelve approved labels. Lydia has not yet approved the six added on 18 November.

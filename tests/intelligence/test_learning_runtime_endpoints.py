@@ -5,7 +5,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -437,6 +437,89 @@ def test_safety_held_section_is_absent_online_and_in_new_offline_package(runtime
         assert response.status_code == 200, response.text
         assert response.json()["segments"] == []
         assert "A whole divided into five" not in response.text
+
+
+def test_existing_offline_download_is_revoked_on_first_online_status_check(runtime):
+    lesson = runtime.ids["lesson"]
+    created = runtime.client.post(f"/api/v1/lessons/{lesson}/download")
+    assert created.status_code == 200, created.text
+    download_id = created.json()["id"]
+    assert created.json()["manifest"]["expiresAt"]
+    current = runtime.client.get(f"/api/v1/offline-downloads/{download_id}/status")
+    assert current.status_code == 200, current.text
+    assert current.json()["reason"] == "current"
+
+    async def hold():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.review_reasons = ["safety_hold"]
+
+    run(hold())
+    revoked = runtime.client.get(f"/api/v1/offline-downloads/{download_id}/status")
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["usable"] is False
+    assert revoked.json()["reason"] == "safety_revoked"
+
+
+def test_offline_download_expires_after_fourteen_days(runtime):
+    from datetime import UTC, datetime, timedelta
+
+    from nevo.db.models.product import OfflineDownload
+
+    lesson = runtime.ids["lesson"]
+    created = runtime.client.post(f"/api/v1/lessons/{lesson}/download")
+    assert created.status_code == 200, created.text
+    download_id = created.json()["id"]
+
+    async def age():
+        async with runtime.sessions.begin() as session:
+            record = await session.get(OfflineDownload, UUID(download_id))
+            manifest = dict(record.manifest)
+            manifest["generatedAt"] = (datetime.now(UTC) - timedelta(days=15)).isoformat()
+            record.manifest = manifest
+
+    run(age())
+    expired = runtime.client.get(f"/api/v1/offline-downloads/{download_id}/status")
+    assert expired.status_code == 200, expired.text
+    assert expired.json()["reason"] == "expired"
+    assert expired.json()["usable"] is False
+
+
+def test_legacy_offline_download_is_revoked_if_a_section_is_held(runtime):
+    from nevo.db.models.product import OfflineDownload
+
+    lesson = runtime.ids["lesson"]
+    created = runtime.client.post(f"/api/v1/lessons/{lesson}/download")
+    assert created.status_code == 200, created.text
+    download_id = created.json()["id"]
+
+    async def make_legacy_and_hold():
+        async with runtime.sessions.begin() as session:
+            record = await session.get(OfflineDownload, UUID(download_id))
+            manifest = dict(record.manifest)
+            manifest.pop("includedSegmentIds")
+            record.manifest = manifest
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.review_reasons = ["safety_hold"]
+
+    run(make_legacy_and_hold())
+    response = runtime.client.get(f"/api/v1/offline-downloads/{download_id}/status")
+    assert response.status_code == 200, response.text
+    assert response.json()["reason"] == "safety_revoked"
+
+
+def test_unreviewed_picture_is_hidden_without_removing_teaching_text(runtime):
+    async def flag_picture():
+        async with runtime.sessions.begin() as session:
+            segment = await session.get(LessonSegment, runtime.ids["segment"])
+            segment.visual_variant = {"imageUrl": "https://example.invalid/held.png"}
+
+    run(flag_picture())
+    response = runtime.client.get(f"/api/v1/lessons/{runtime.ids['lesson']}")
+    assert response.status_code == 200, response.text
+    section = response.json()["segments"][0]
+    assert "A whole divided into five" in section["body"]
+    assert "visual" not in section["availableModalities"]
 
 
 def test_safety_held_check_cannot_be_attempted(runtime):

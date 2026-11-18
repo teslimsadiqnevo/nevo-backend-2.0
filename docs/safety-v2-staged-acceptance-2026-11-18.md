@@ -9,6 +9,9 @@ v2 each returned 42 expected verdicts, zero false blocks, zero unsafe misses,
 and zero checker errors on this set. Matching outcomes do not demonstrate an
 improvement over v1.
 
+The six new passages and proposed labels are in
+`evaluations/lesson_safety_six_for_lydia_2026-11-18.md`.
+
 The live database currently has 70 historical block/safeguard events, not the
 earlier count of 38. None of the 70 has full review text retained. The old
 events cannot be presented as verbatim passages for retrospective labelling.
@@ -49,3 +52,10 @@ player's first-connection ordering and offline expiry handling, the exact
 temporary outage wording through the upload UI, and teacher-side review of a
 real held picture still require joint staged evidence.
 V2 remains disabled pending that evidence and Lydia's approval.
+
+The three relevant runtime/media suites now pass 63 tests against disposable
+local PostgreSQL. Eleven focused blocked-picture and outage-wording tests
+also pass. Earlier broad-suite failures came from a test fixture labelling
+its authored check as generated, local `.env` keys leaking into an
+"unconfigured" image test, and an obsolete post-completion reroute assertion;
+those fixtures are corrected. This is not a production acceptance run.

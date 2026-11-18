@@ -193,6 +193,7 @@ def runtime(monkeypatch):
                             "hint": "Count the equal parts.",
                             "answerType": "numeric",
                             "answerKey": 5,
+                            "authoredBy": "person",
                             "conceptId": str(ids["concept"]),
                             "guidedQuestions": [
                                 "What does one fifth mean?",
@@ -1410,7 +1411,7 @@ def test_three_distinct_problems_fade_and_a_miss_restores_support(runtime):
     assert response.json()["segments"][0]["scaffolding"] == "strong"
 
 
-def test_lower_reroute_is_repeatable_and_has_real_support_directives(runtime):
+def test_completed_lesson_remains_completed_and_resumes_in_review_mode(runtime):
     sitting = start(runtime)
     assert answer(runtime, sitting, 0).status_code == 201
     payload = {
@@ -1421,15 +1422,15 @@ def test_lower_reroute_is_repeatable_and_has_real_support_directives(runtime):
     }
     first = runtime.client.put(f"/api/v1/lessons/{runtime.ids['lesson']}/progress", json=payload)
     assert first.status_code == 200, first.text
-    reroute = first.json()["reroute"]
-    assert reroute["deliveryState"]["engineConfig"]["support"]["initialScaffoldLevel"] == "strong"
-    assert reroute["deliveryState"]["engineConfig"]["support"]["shorterTextBlocks"] is True
+    assert first.json()["reroute"] is None
     again = runtime.client.put(f"/api/v1/lessons/{runtime.ids['lesson']}/progress", json=payload)
     assert again.status_code == 200, again.text
-    assert again.json()["reroute"]["sessionId"] == reroute["sessionId"]
+    assert again.json()["status"] == "completed"
+    assert again.json()["reroute"] is None
     resumed = runtime.client.post(f"/api/v1/lessons/{runtime.ids['lesson']}/session")
     assert resumed.status_code == 201, resumed.text
-    assert resumed.json()["sessionId"] == reroute["sessionId"]
+    assert resumed.json()["reviewMode"] is True
+    assert resumed.json()["sessionId"] == sitting
 
 
 def test_next_day_creates_a_new_snapshot_but_keeps_the_saved_position(runtime):

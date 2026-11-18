@@ -36,6 +36,16 @@ def _settings(**overrides: object) -> VisualGenerationSettings:
     return VisualGenerationSettings(**values)  # type: ignore[arg-type]
 
 
+def _unconfigured_settings() -> VisualGenerationSettings:
+    return VisualGenerationSettings(
+        _env_file=None,
+        OPENAI_API_KEY=None,
+        AI_ANTHROPIC_API_KEY=None,
+        SUPABASE_URL=None,
+        SUPABASE_SERVICE_ROLE_KEY=None,
+    )
+
+
 def _review(
     approved: bool,
     issues: str = "",
@@ -138,14 +148,14 @@ async def test_source_safety_and_rejected_candidates_are_metered(monkeypatch, me
 
 
 def test_service_is_unconfigured_without_keys() -> None:
-    assert not EducationalImageService(VisualGenerationSettings()).configured
+    assert not EducationalImageService(_unconfigured_settings()).configured
     assert not EducationalImageService(_settings(OPENAI_API_KEY=None)).configured
     assert not EducationalImageService(_settings(AI_ANTHROPIC_API_KEY=None)).configured
     assert EducationalImageService(_settings()).configured
 
 
 async def test_unconfigured_service_refuses_to_generate() -> None:
-    service = EducationalImageService(VisualGenerationSettings())
+    service = EducationalImageService(_unconfigured_settings())
 
     with pytest.raises(VisualGenerationError, match="not configured"):
         await service.generate(title="T", lesson_text="body", requested_prompt=None)

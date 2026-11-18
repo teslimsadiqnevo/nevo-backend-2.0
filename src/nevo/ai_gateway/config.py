@@ -16,6 +16,9 @@ class AiGatewaySettings(BaseSettings):
     )
 
     provider: Literal["claude"] = AI_PROVIDER_CLAUDE
+    safety_policy_v2_enabled: bool = Field(
+        default=False, validation_alias="SAFETY_POLICY_V2_ENABLED"
+    )
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-haiku-4-5"
     anthropic_sonnet_model: str = "claude-sonnet-5"

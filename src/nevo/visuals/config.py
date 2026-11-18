@@ -17,6 +17,10 @@ class VisualGenerationSettings(BaseSettings):
         populate_by_name=True,
     )
 
+    safety_policy_v2_enabled: bool = Field(
+        default=False, validation_alias="SAFETY_POLICY_V2_ENABLED"
+    )
+
     openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_base_url: AnyHttpUrl = Field(
         default=AnyHttpUrl("https://api.openai.com/v1"),

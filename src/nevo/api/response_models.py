@@ -189,6 +189,8 @@ class SchoolResponse(CamelResponse):
     school_type: str | None = None
     founding_partner: bool = False
     admin_seat_limit: int = 5
+    #: When this record last changed. T19, 19 November.
+    updated_at: datetime | None = None
 
 
 class SchoolRosterCounts(CamelResponse):
@@ -1186,6 +1188,15 @@ class OfflineManifestResponse(CamelResponse):
     #: had to either guess or leave it blank. Measured from the archive this
     #: manifest describes, not estimated. Ask B31.
     size_bytes: int = 0
+    #: Which segments the package actually contains.
+    #:
+    #: The manifest has always carried this and the response model did not
+    #: declare it, so it was built, stored on the download record, read back
+    #: by the revocation check - and then dropped on the way out, because an
+    #: undeclared field does not survive the response model. The app never
+    #: saw it. It does not need it; declaring it only makes the handoff match
+    #: what the manifest says it is. T10, 19 November.
+    included_segment_ids: list[UUID] = Field(default_factory=list)
     #: The files inside the archive, so a client knows what it is caching
     #: before it opens it.
     files: list[str] = Field(default_factory=lambda: ["lesson.json", "manifest.json"])

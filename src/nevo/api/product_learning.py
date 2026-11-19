@@ -2845,6 +2845,11 @@ async def read_offline_manifest(
         "segmentCount": _segment_count(package),
         "generatedAt": issued_at.isoformat(),
         "expiresAt": (issued_at + timedelta(days=14)).isoformat(),
+        # Same list the POST records, built from the same package. Added with
+        # the field on the response model: a declared field with a default
+        # would have made this route answer "no segments" rather than stay
+        # silent, which is the worse of the two failures.
+        "includedSegmentIds": [segment["id"] for segment in package["segments"]],
         "packageUrl": f"/api/v1/lessons/{lesson_id}/offline-package",
         "sizeBytes": len(archive),
         "files": ["lesson.json", "manifest.json"],

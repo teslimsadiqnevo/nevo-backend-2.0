@@ -318,6 +318,11 @@ def _school_payload(school: School) -> dict[str, object]:
         ),
         "foundingPartner": school.is_founding_partner,
         "adminSeatLimit": school.admin_seat_limit,
+        # When the school record last changed, so a console can show whether
+        # what it is displaying is current rather than implying it is. The
+        # column already existed on TimestampMixin; only the read was missing.
+        # Part of T19, 19 November.
+        "updatedAt": school.updated_at,
     }
 
 

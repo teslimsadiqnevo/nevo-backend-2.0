@@ -777,6 +777,7 @@ class ContentParsingService:
             modules=tuple(complete_modules(normalized_segments, modules)),
             defer_optional_media=True,
             optional_media_sources=tuple(prepared_segments),
+            page_total=_source_page_total(request.source_text),
         )
         return await self._repository.store(
             request=request,
@@ -2517,6 +2518,18 @@ def _review_reasons(value: object) -> list[str]:
 
 #: Page markers look like "[Page 12]" and are written by the PDF reader.
 _PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
+
+
+def _source_page_total(source: str) -> int | None:
+    """How many pages the source had, from the markers already in it.
+
+    The extractor writes "[Page N]" into the text, so the highest marker is
+    the page count and nothing new has to be stored or passed down. Pasted
+    text has no markers and honestly has no page count, so that answers null
+    rather than one. T11.
+    """
+    pages = [int(value) for value in _PAGE_MARKER.findall(source or "")]
+    return max(pages) if pages else None
 
 
 def _pages_per_chunk(source: str, chunks: list[str]) -> list[list[int]]:

@@ -506,6 +506,36 @@ async def reset_e2e_write_fixtures(
     return await _e2e_write_fixtures(principal=principal, session=session, reset=True)
 
 
+async def _class_names_by_lesson(
+    session: DatabaseSession, lesson_ids: list[UUID]
+) -> dict[UUID, list[str]]:
+    """Which classes each lesson is assigned to, in one query for the page.
+
+    One grouped query rather than one per lesson, deliberately. At ~280ms a
+    round trip from the dyno to Frankfurt, a per-lesson lookup turns a
+    four-lesson page into an extra second of waiting, and this route already
+    learned that lesson once. T11.
+    """
+    if not lesson_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(LessonAssignment.lesson_id, Class.name)
+            .join(Class, Class.id == LessonAssignment.class_id)
+            .where(
+                LessonAssignment.lesson_id.in_(lesson_ids),
+                LessonAssignment.status != "cancelled",
+            )
+            .distinct()
+        )
+    ).all()
+    found: dict[UUID, set[str]] = {}
+    for lesson_id, name in rows:
+        if name:
+            found.setdefault(lesson_id, set()).add(name)
+    return {lesson_id: sorted(names) for lesson_id, names in found.items()}
+
+
 async def _unapproved_counts(session: DatabaseSession, lesson_ids: list[UUID]) -> dict[UUID, int]:
     """Sections a teacher has still not cleared, per lesson, in one query.
 
@@ -536,6 +566,7 @@ def _lesson_summary(
     unapproved_segment_count: int = 0,
     review_complete: bool = False,
     can_assign: bool = False,
+    class_names: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "id": str(lesson.id),
@@ -547,6 +578,8 @@ def _lesson_summary(
         "reviewSegmentCount": lesson.review_segment_count,
         "subject": lesson.subject,
         "assignmentCount": assignment_count,
+        # Which classes, not only how many. T11.
+        "classNames": list(class_names or []),
         "reviewComplete": review_complete,
         "canAssign": can_assign,
         "estimatedMinutes": lesson.estimated_minutes,
@@ -976,6 +1009,7 @@ async def lessons(
         ).all()
     )
     authors = await _author_names(session, rows)
+    class_names = await _class_names_by_lesson(session, [item.id for item in rows])
     outstanding = await _unapproved_counts(session, [item.id for item in rows])
     from nevo.api.lesson_review import review_complete_map
 
@@ -990,6 +1024,7 @@ async def lessons(
             assignment_count=int(counts.get(item.id, 0)),
             author_names=authors,
             unapproved_segment_count=outstanding.get(item.id, 0),
+            class_names=class_names.get(item.id, []),
             review_complete=review_complete.get(item.id, False),
             can_assign=assignable.get(item.id, False) and outstanding.get(item.id, 0) == 0,
         )
@@ -3874,6 +3909,7 @@ def _upload_structure(parsed) -> dict[str, object]:
         "lessonId": str(parsed.lesson_id),
         "modules": modules,
         "reviewNotes": list(parsed.review_notes),
+        "pageTotal": parsed.page_total,
     }
 
 

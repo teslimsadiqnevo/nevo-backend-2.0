@@ -602,6 +602,7 @@ class SqlAlchemyContentParsingRepository:
             review_notes=parsed.review_notes,
             segments=parsed.segments,
             modules=parsed.modules,
+            page_total=parsed.page_total,
         )
 
 

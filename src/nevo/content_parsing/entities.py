@@ -73,6 +73,9 @@ class ParsedLesson:
     modules: tuple[ParsedLessonModule, ...] = ()
     defer_optional_media: bool = False
     optional_media_sources: tuple[ParsedLessonSegment, ...] = ()
+    #: How many pages the source had. Only the extractor sees the document.
+    #: T11.
+    page_total: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +94,12 @@ class StoredParsedLesson:
     recap: str | None = None
     assessment: tuple[dict[str, object], ...] = ()
     modules: tuple[ParsedLessonModule, ...] = ()
+    #: How many pages the source had. Only the extractor sees the document, so
+    #: only the parse can say. failedPages gave a numerator with no
+    #: denominator, which is why "three pages failed" could not be read as
+    #: fine or as catastrophic. Null for a source with no page markers at all,
+    #: such as pasted text. T11, 20 November.
+    page_total: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

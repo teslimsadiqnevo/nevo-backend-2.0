@@ -662,6 +662,13 @@ async def list_classes(
     # to be derived from the subjects of lessons already assigned, so a class
     # with nothing assigned read as having no subjects at all. SCRUM-194.
     subjects_by_class = await subjects_for_classes(session, class_ids)
+    # One school fetch for the whole page, not one per class. The term is the
+    # same for every class in it, and this route already learned that lesson
+    # the hard way at eighty-one queries. T11.
+    from nevo.api.onboarding import _current_term_label
+
+    school = await session.get(School, user.school_id)
+    term = _current_term_label(school) if school is not None else None
     result: list[dict[str, object]] = []
     for item in classes:
         student_count = counts.get(item.id, 0)
@@ -674,6 +681,7 @@ async def list_classes(
                 "yearGroup": item.year_group,
                 "section": item.section,
                 "academicSession": item.academic_session,
+                "term": term,
                 "capacity": item.capacity,
                 "source": item.source,
                 "subjects": subjects,
@@ -906,11 +914,20 @@ async def class_detail(
         )
     )
     subjects = await subjects_for_class(session, class_id)
+    from nevo.api.onboarding import _current_term_label
+
+    school = await session.get(School, school_class.school_id)
     return {
         "id": str(school_class.id),
         "name": school_class.name,
         "code": school_class.class_code,
         "yearGroup": school_class.year_group,
+        # This route answered with neither of these, so a detail view read as
+        # a class with no year and no term while the list beside it showed
+        # both. T11.
+        "section": school_class.section,
+        "academicSession": school_class.academic_session,
+        "term": _current_term_label(school) if school is not None else None,
         "source": school_class.source,
         "subjects": subjects,
         "studentCount": students or 0,

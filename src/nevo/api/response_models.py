@@ -253,6 +253,12 @@ class ClassSummaryResponse(CamelResponse):
     #: Which school year this class is. Two JSS 1As a year apart are two
     #: classes, and the console has to be able to say which is which.
     academic_session: str | None = None
+    #: Which term the school is in now, named the way the school names it.
+    #: Derived from the school's own term start dates rather than stored, so
+    #: there is nothing to keep in step. Null where a school has not
+    #: configured them: naming a term we guessed at would be worse than
+    #: naming none. T11, 20 November.
+    term: str | None = None
     capacity: int | None = None
     source: ClassSource | None = None
     subjects: list[str] = Field(default_factory=list)
@@ -517,6 +523,14 @@ class LessonSummaryResponse(CamelResponse):
     #: Sum of the lesson's segment estimates, so a list view can show a
     #: duration without fetching every segment.
     estimated_minutes: int = 0
+    #: Which classes this lesson is assigned to, by name.
+    #:
+    #: A list view showed a lesson's assignment count and not who it was
+    #: assigned to, so a teacher scanning the page could see "3" and not
+    #: which three. Taken from the live assignments in one grouped query for
+    #: the whole page: at ~280ms a round trip, a per-lesson lookup here would
+    #: have cost a second on a four-lesson page. T11, 20 November.
+    class_names: list[str] = Field(default_factory=list)
     #: Who wrote the lesson. Without it a client cannot tell its own teacher's
     #: work from the rest of the school's, even after fetching the list.
     created_by_id: UUID | None = None
@@ -1335,6 +1349,15 @@ class UploadStructureDocument(CamelResponse):
 
     #: The editable title of the uploaded unit or lesson.
     title: str | None = None
+    #: How many pages the source had, so a parse in progress can be reported
+    #: as "page 12 of 40" rather than as a spinner.
+    #:
+    #: Derived from the [Page N] markers the extractor already writes into the
+    #: source, so nothing new is stored and an old job simply answers null.
+    #: failedPages gave the numerator and never the denominator, which is why
+    #: "three pages failed" could not be read as good or catastrophic.
+    #: T11, 20 November.
+    page_total: int | None = Field(default=None, alias="pageTotal")
     #: Editable segment rows. Modules continue to reference them by key.
     segments: list[UploadSegmentDocument] = Field(default_factory=list)
     #: The full set of lessons this upload produced. A `lesson` scope yields

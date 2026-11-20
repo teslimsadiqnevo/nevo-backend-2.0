@@ -18,6 +18,7 @@ from nevo.api.product_common import (
 )
 from nevo.api.response_models import (
     AdaptationResponse,
+    CamelResponse,
     ClassInsightsNarrativeResponse,
     ConversationEvidenceResponse,
     EngineConfig,
@@ -34,7 +35,6 @@ from nevo.api.response_models import (
     TransformationMetricsResponse,
 )
 from nevo.content_parsing.concept_names import readable_concept_name
-from nevo.api.response_models import CamelResponse
 from nevo.db.models.account import Class, ConsentRecord, StudentClassEnrollment, User
 from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.db.models.attention_flag import AttentionFlag

@@ -29,5 +29,17 @@ EXPOSE 8000
 # tell the two apart. The same image is pushed to both process types:
 #   heroku container:push web worker -a nevo-backend
 #   heroku container:release web worker -a nevo-backend
+#
+# Boot the image before releasing it:
+#   docker build -t nevo-preflight . && docker run --rm nevo-preflight \
+#     python -c "import nevo.main"
+#
+# This is not belt and braces. The image is Python 3.12, which evaluates
+# annotations eagerly at import; local development is on 3.14, where PEP 649
+# defers them. So a name that exists only in an annotation imports fine
+# locally, passes the whole suite, and is a NameError on boot here - three
+# minutes of downtime on 20 November. tests/test_every_annotation_resolves.py
+# now catches that class on any version, and this command catches everything
+# else about the image that a local interpreter cannot see.
 CMD ["sh", "-c", "case \"${DYNO%%.*}\" in worker) exec python -m nevo.ops.run_workers ;; *) exec uvicorn nevo.main:app --host 0.0.0.0 --port ${PORT:-8000} ;; esac"]
 

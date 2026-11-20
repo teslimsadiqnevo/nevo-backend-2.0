@@ -18,6 +18,7 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import and_, delete, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nevo.api.auth import (
     AuthServiceDependency,
@@ -54,19 +55,15 @@ from nevo.db.models.account import (
 )
 from nevo.db.models.auth import AuthLoginAttempt, AuthSession
 from nevo.db.models.frontend_support import Notification, PasswordResetToken
-from nevo.db.models.permission import Admin, AdminScopeAssignment, LearningSupportGrant
 from nevo.db.models.invitation_class import SchoolInvitationClass
-from nevo.db.models.subject import SchoolSubject
+from nevo.db.models.permission import Admin, AdminScopeAssignment, LearningSupportGrant
 from nevo.db.models.product import (
     SchoolInvitation,
     SharedDeviceProfile,
     StudentOnboardingGrant,
 )
+from nevo.db.models.subject import SchoolSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
-from nevo.domain.teacher_assignments.vocabulary import (
-    TeacherAssignmentRole,
-    TeacherAssignmentSource,
-)
 from nevo.domain.accounts.age_bands import band_for_age
 from nevo.domain.accounts.codes import new_school_code
 from nevo.domain.accounts.vocabulary import (
@@ -80,6 +77,10 @@ from nevo.domain.accounts.vocabulary import (
 )
 from nevo.domain.consent.vocabulary import ParentContactMethod, ParentRightType
 from nevo.domain.permissions.vocabulary import AdminAccessLevel, PermissionScope
+from nevo.domain.teacher_assignments.vocabulary import (
+    TeacherAssignmentRole,
+    TeacherAssignmentSource,
+)
 from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.notifications.links import join_url

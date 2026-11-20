@@ -22,6 +22,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import Field
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +30,7 @@ from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_common import require_class_access, require_school_actor
 from nevo.api.response_models import CamelResponse
-from nevo.db.models.account import StudentClassEnrollment, User
+from nevo.db.models.account import Class, StudentClassEnrollment, User
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.domain.accounts.vocabulary import UserRole
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus, SignalEventType
@@ -42,6 +43,10 @@ router = APIRouter(prefix="/api/metrics/transformation", tags=["insights"])
 #: person. Proposed here; if counsel or design wants it higher it is one
 #: number to change.
 REPORTING_FLOOR = 5
+
+#: Printed wherever a figure is withheld. Fixed here rather than composed at
+#: the call site, so two charts cannot disagree about the words. T17.
+WITHHELD_LABEL = "Too few to report"
 
 #: Each window is four weeks, so a figure is compared with the four before it
 #: rather than with an all-time average that never moves.
@@ -89,8 +94,10 @@ class Flexibility(CamelResponse):
 
 
 class TransformationMetrics(CamelResponse):
-    scope: Literal["class", "school"]
-    scope_id: UUID
+    scope: Literal["class", "school", "year_group"]
+    #: Null for a year group, which is named rather than identified: there is
+    #: no year_groups table, only the label a school wrote on each class.
+    scope_id: UUID | None
     #: Null when the cohort is below the reporting floor. The client shows the
     #: message rather than an empty chart.
     self_regulation: Indicator | None
@@ -101,6 +108,17 @@ class TransformationMetrics(CamelResponse):
     reporting_floor: int
     suppressed: bool
     message: str | None = None
+    #: The year group this is about, where the scope is one.
+    year_group: str | None = None
+    #: What to print where a figure is withheld.
+    #:
+    #: Lydia, 20 November: where the floor hides a figure it should read as
+    #: "too few to report", not a blank and not a zero. A blank reads as
+    #: "nothing happened here" and a zero reads as a result, and a head
+    #: teacher comparing year groups would act on either. The suppressed flag
+    #: and the message already said so in prose; this is the same thing in a
+    #: word a chart axis can carry. T17.
+    withheld_label: str | None = Field(default=None, alias="withheldLabel")
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,9 +311,10 @@ def _calibration_is_not_measurable() -> Unavailable:
 async def _metrics(
     session: AsyncSession,
     *,
-    scope: Literal["class", "school"],
-    scope_id: UUID,
+    scope: Literal["class", "school", "year_group"],
+    scope_id: UUID | None,
     learners: list[UUID],
+    year_group: str | None = None,
 ) -> TransformationMetrics:
     window = _windows()
     if len(learners) < REPORTING_FLOOR:
@@ -309,6 +328,8 @@ async def _metrics(
             learner_count=len(learners),
             reporting_floor=REPORTING_FLOOR,
             suppressed=True,
+            year_group=year_group,
+            withheld_label=WITHHELD_LABEL,
             message=(
                 f"There are fewer than {REPORTING_FLOOR} learners here, so an "
                 "average would be about those children rather than about the "
@@ -325,6 +346,7 @@ async def _metrics(
         learner_count=len(learners),
         reporting_floor=REPORTING_FLOOR,
         suppressed=False,
+        year_group=year_group,
     )
 
 
@@ -363,3 +385,51 @@ async def school_metrics(
         select(User.id).where(User.school_id == school_id, User.role == UserRole.STUDENT),
     )
     return await _metrics(session, scope="school", scope_id=school_id, learners=learners)
+
+
+@router.get("/year-group/{year_group}", response_model=TransformationMetrics)
+async def year_group_metrics(
+    year_group: str,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> TransformationMetrics:
+    """One year group's figures, over every learner in its classes.
+
+    Lydia, 20 November: a head teacher asking where the school is weakest
+    gets nothing from one whole-school number and cannot hold twenty classes
+    in their head. A year group is the grain between the two.
+
+    Named rather than identified, because there is no year_groups table -
+    only the label a school wrote on each class - so this groups the classes
+    carrying that label. Matched case-insensitively on a trimmed label, since
+    "JSS 1" and "jss 1 " are one year group to everybody except a string
+    comparison.
+
+    The floor does more work here than it does on a whole school: a year
+    group with one class of four is below it, and the answer is "too few to
+    report" rather than a blank or a zero. T17.
+    """
+
+    actor = await require_school_actor(session, principal)
+    label = " ".join(year_group.split())
+    if not label:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Year group not found"
+        )
+    learners = await _learner_ids(
+        session,
+        select(StudentClassEnrollment.student_id)
+        .join(Class, Class.id == StudentClassEnrollment.class_id)
+        .where(
+            Class.school_id == actor.school_id,
+            Class.archived_at.is_(None),
+            func.lower(func.btrim(Class.year_group)) == label.casefold(),
+        ),
+    )
+    return await _metrics(
+        session,
+        scope="year_group",
+        scope_id=None,
+        learners=learners,
+        year_group=label,
+    )

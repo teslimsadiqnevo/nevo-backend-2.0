@@ -2,7 +2,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from nevo.api.auth import PrincipalDependency
@@ -33,13 +34,15 @@ from nevo.api.response_models import (
     TransformationMetricsResponse,
 )
 from nevo.content_parsing.concept_names import readable_concept_name
+from nevo.api.response_models import CamelResponse
 from nevo.db.models.account import Class, ConsentRecord, StudentClassEnrollment, User
 from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.db.models.attention_flag import AttentionFlag
 from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
 from nevo.db.models.frontend_support import Concept, LessonAssignment
+from nevo.db.models.mark_override import LessonMarkOverride
 from nevo.db.models.mastery import StudentConceptMastery
-from nevo.db.models.product import LessonProgress
+from nevo.db.models.product import LessonProgress, LessonQuestionAttempt
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 from nevo.domain.accounts.vocabulary import ConsentStatus, UserRole
@@ -1408,3 +1411,114 @@ def _time_seconds(value: object, *, milliseconds: bool = False) -> float | None:
     if milliseconds:
         seconds /= 1_000
     return max(0.0, seconds)
+
+
+class MarkOverrideWrite(BaseModel):
+    """A teacher's decision to change how one answer was marked."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    correct: bool
+    #: Required, and not a formality. A mark changed with no reason is
+    #: indistinguishable from a mistake, and the person who most needs it is
+    #: whoever reads the record months later - a parent asking, or the
+    #: teacher themself. T12 / SCRUM-350.
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class MarkOverrideResponse(CamelResponse):
+    attempt_id: UUID
+    #: What the machine said, kept so the correction can always be read
+    #: against what it replaced.
+    previous_correct: bool | None
+    corrected_to: bool
+    reason: str
+    corrected_by_id: UUID
+    corrected_by_name: str | None = None
+    occurred_at: datetime
+
+
+@router.post(
+    "/v1/students/{student_id}/attempts/{attempt_id}/mark",
+    response_model=MarkOverrideResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        403: {"description": "teacher_required when the actor is not school staff"},
+        404: {"description": "attempt_not_found, including when it is another child's"},
+        409: {"description": "mark_unchanged when the mark is already what was asked for"},
+    },
+)
+async def correct_a_mark(
+    student_id: UUID,
+    attempt_id: UUID,
+    payload: MarkOverrideWrite,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+) -> dict[str, object]:
+    """Change how one answer was marked, and record who decided.
+
+    An answer can be right in a way a comparison cannot see - a child writes
+    "half" where the key says 0.5 - so a teacher has to be able to correct
+    it. This is also the one write where an adult changes the record of what
+    a child did, so the correction is appended rather than applied silently:
+    the attempt carries the new mark so mastery and every report read the
+    truth, and the override row keeps the machine's mark, the teacher, the
+    time and the reason.
+
+    Not available to a child or a parent. A child correcting their own mark
+    is the end of the mastery estimate meaning anything.
+    """
+    actor = await require_student_access(session, principal, student_id)
+    if actor.role not in {UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "teacher_required",
+                "message": "Only a teacher or an administrator can change a mark.",
+            },
+        )
+    attempt = await session.get(LessonQuestionAttempt, attempt_id)
+    # The student in the path is the one access was checked against, so an
+    # attempt belonging to another child must read as absent rather than
+    # forbidden - otherwise the 403 confirms the attempt exists.
+    if attempt is None or attempt.student_id != student_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "attempt_not_found"},
+        )
+    if attempt.correct is payload.correct:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "mark_unchanged",
+                "message": "That answer is already marked that way.",
+            },
+        )
+    previous = attempt.correct
+    override = LessonMarkOverride(
+        attempt_id=attempt.id,
+        student_id=attempt.student_id,
+        lesson_id=attempt.lesson_id,
+        teacher_id=actor.id,
+        previous_correct=previous,
+        corrected_to=payload.correct,
+        reason=payload.reason.strip(),
+    )
+    session.add(override)
+    # The attempt itself carries the corrected mark, because everything
+    # downstream - mastery, the result state, a parent's report - reads
+    # `correct` and must not have to know about overrides to be right.
+    attempt.correct = payload.correct
+    await session.commit()
+    await session.refresh(override)
+    return {
+        "attemptId": str(attempt.id),
+        "previousCorrect": previous,
+        "correctedTo": override.corrected_to,
+        "reason": override.reason,
+        "correctedById": str(actor.id),
+        "correctedByName": " ".join(
+            part for part in (actor.first_name, actor.last_name) if part
+        )
+        or None,
+        "occurredAt": override.occurred_at,
+    }

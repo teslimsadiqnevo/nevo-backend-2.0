@@ -45,6 +45,17 @@ TEST_SCHOOL_ID = UUID("c5cd0a8d-043c-4f97-aad2-4a724a877a29")
 #: the state a fresh child starts a lesson in.
 PROGRESS = (
     "lesson_question_attempts",
+    # A teacher's mark correction, classified here rather than with the audit
+    # records it otherwise resembles - and deliberately, because the
+    # alternative would be a lie. The row's attempt_id cascades, so clearing
+    # lesson_question_attempts deletes these whatever this list says. Naming
+    # them keeps the script honest about it.
+    #
+    # It is also the right answer on its own terms: an override describes how
+    # one attempt was marked, so once that attempt is gone it describes
+    # nothing. A reset exists so the lesson can be done again, and the new
+    # attempt will be marked afresh. T12.
+    "lesson_mark_overrides",
     "paper_work_evidence",
     "concept_review_evidence",
     "scaffold_problem_logs",

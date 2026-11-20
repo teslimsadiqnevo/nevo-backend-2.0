@@ -295,6 +295,14 @@ class TeacherSummaryResponse(CamelResponse):
     email: str | None
     status: UserStatus
     class_count: int = 0
+    #: The classes this teacher holds, by name.
+    #:
+    #: classCount said how many and never which, so a roster could show "3"
+    #: against a name and leave an admin opening each teacher in turn to find
+    #: out who covers JSS 2B. The names are already joined for the count, so
+    #: this costs one grouped query for the page rather than one per teacher -
+    #: which at ~280ms a round trip is the whole difference. T14, 20 November.
+    teaches: list[str] = Field(default_factory=list)
     last_active_at: datetime | None = None
     learning_support: bool = False
     learning_support_granted_at: datetime | None = None

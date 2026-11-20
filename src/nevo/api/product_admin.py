@@ -1022,6 +1022,36 @@ async def restore_class(
     await session.commit()
 
 
+async def _class_names_by_teacher(
+    session: AsyncSession, teacher_ids: list[UUID]
+) -> dict[UUID, list[str]]:
+    """Which classes each teacher holds, in one query for the whole page.
+
+    The count beside it comes from the same assignments, so the two agree by
+    construction - including the removed_at filter, without which a teacher
+    taken off a class would still be shown teaching it. T14.
+    """
+    if not teacher_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(TeacherClassAssignment.teacher_id, Class.name)
+            .join(Class, Class.id == TeacherClassAssignment.class_id)
+            .where(
+                TeacherClassAssignment.teacher_id.in_(teacher_ids),
+                TeacherClassAssignment.removed_at.is_(None),
+                Class.archived_at.is_(None),
+            )
+            .distinct()
+        )
+    ).all()
+    found: dict[UUID, set[str]] = {}
+    for teacher_id, name in rows:
+        if name:
+            found.setdefault(teacher_id, set()).add(name)
+    return {teacher_id: sorted(names) for teacher_id, names in found.items()}
+
+
 @router.get("/teachers", response_model=list[TeacherSummaryResponse])
 async def list_teachers(
     principal: PrincipalDependency,
@@ -1054,6 +1084,7 @@ async def list_teachers(
         )
     teachers = (await session.execute(query.order_by(User.first_name))).all()
     support = await _learning_support_metadata(session, [item.id for item, _, _ in teachers])
+    teaches = await _class_names_by_teacher(session, [item.id for item, _, _ in teachers])
     return [
         {
             "id": str(item.id),
@@ -1061,6 +1092,7 @@ async def list_teachers(
             "email": item.email,
             "status": item.status.value,
             "classCount": class_count,
+            "teaches": teaches.get(item.id, []),
             "lastActiveAt": last_active_at,
             **support.get(item.id, {"learningSupport": False}),
         }

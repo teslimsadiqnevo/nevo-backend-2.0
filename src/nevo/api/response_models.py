@@ -453,6 +453,13 @@ class AuthSessionRecordResponse(CamelResponse):
     active: bool
 
 
+class InvitedClassResponse(CamelResponse):
+    class_id: UUID
+    class_name: str | None = None
+    subject_id: UUID
+    subject_name: str | None = None
+
+
 class InvitationResponse(CamelResponse):
     id: UUID
     token: str | None = None
@@ -463,6 +470,11 @@ class InvitationResponse(CamelResponse):
         None
     )
     class_id: UUID | None = None
+    #: The classes this invitation will attach on acceptance, each with the
+    #: subject the teacher takes to it. Empty for a student, and for a
+    #: teacher invitation written before this existed - those carry the
+    #: single classId above, which is recorded and not applied. T15.
+    classes: list["InvitedClassResponse"] = Field(default_factory=list)
     created_at: datetime | None = None
     expires_at: datetime
     delivery_status: InvitationDeliveryStatus | None = None

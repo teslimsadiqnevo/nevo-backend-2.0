@@ -55,12 +55,18 @@ from nevo.db.models.account import (
 from nevo.db.models.auth import AuthLoginAttempt, AuthSession
 from nevo.db.models.frontend_support import Notification, PasswordResetToken
 from nevo.db.models.permission import Admin, AdminScopeAssignment, LearningSupportGrant
+from nevo.db.models.invitation_class import SchoolInvitationClass
+from nevo.db.models.subject import SchoolSubject
 from nevo.db.models.product import (
     SchoolInvitation,
     SharedDeviceProfile,
     StudentOnboardingGrant,
 )
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
+from nevo.domain.teacher_assignments.vocabulary import (
+    TeacherAssignmentRole,
+    TeacherAssignmentSource,
+)
 from nevo.domain.accounts.age_bands import band_for_age
 from nevo.domain.accounts.codes import new_school_code
 from nevo.domain.accounts.vocabulary import (
@@ -243,6 +249,33 @@ class InvitationRequest(BaseModel):
     email: EmailStr | None = None
     parent_contact: str | None = Field(default=None, alias="parentContact", max_length=255)
     class_id: UUID | None = Field(default=None, alias="classId")
+    #: Several classes, each with the subject the teacher takes to it.
+    #:
+    #: A subject teacher covering six classes is normal, and one invitation
+    #: per class meant inviting the same person six times on day one of
+    #: setup. Lydia approved this on 20 November. The subject is required per
+    #: class because SCRUM-194 means a teacher cannot be assigned without
+    #: one, so an invitation naming a class and no subject could never be
+    #: applied - better refused when it is written than discovered at
+    #: acceptance.
+    #:
+    #: classId above is untouched and keeps its old meaning. It is recorded
+    #: and, for a teacher, still not applied: applying it would mean
+    #: inventing a subject, and changing what invitations already sent do on
+    #: acceptance would be a surprise. T15.
+    classes: list["InvitedClass"] = Field(default_factory=list, max_length=40)
+
+
+class InvitedClass(BaseModel):
+    """One class an invited teacher will hold, and the subject they take."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    class_id: UUID = Field(alias="classId")
+    #: A SchoolSubject id rather than a name. The school's own subject list is
+    #: what the invite screen picks from, and resolving a name here would
+    #: duplicate the spelling machinery that exists precisely because two
+    #: spellings of one subject is a real problem.
+    subject_id: UUID = Field(alias="subjectId")
 
 
 class JoinRequest(BaseModel):
@@ -989,6 +1022,145 @@ def _refuse_student_invitation(role: str) -> None:
     )
 
 
+async def _invited_class_rows(
+    session: AsyncSession, invitation_id: UUID
+) -> list[tuple[UUID, str | None, UUID, str | None]]:
+    """The classes on one invitation, with the names a screen needs.
+
+    One query with both joins rather than a lookup per class: an invitation
+    can carry forty, and at ~280ms a round trip that would be a visible wait
+    on a screen that just created one.
+    """
+    return list(
+        (
+            await session.execute(
+                select(
+                    SchoolInvitationClass.class_id,
+                    Class.name,
+                    SchoolInvitationClass.school_subject_id,
+                    SchoolSubject.name,
+                )
+                .outerjoin(Class, Class.id == SchoolInvitationClass.class_id)
+                .outerjoin(
+                    SchoolSubject,
+                    SchoolSubject.id == SchoolInvitationClass.school_subject_id,
+                )
+                .where(SchoolInvitationClass.invitation_id == invitation_id)
+                .order_by(Class.name)
+            )
+        ).all()
+    )
+
+
+async def _attach_invited_classes(
+    session: AsyncSession,
+    *,
+    record: SchoolInvitation,
+    teacher: User,
+) -> None:
+    """Give an accepting teacher every class their invitation named.
+
+    In the caller's transaction, deliberately: the account and its classes
+    land together or not at all.
+
+    Attributed to whoever wrote the invitation rather than to the teacher
+    accepting it, because the decision that this person teaches this class
+    was the administrator's. Re-accepting cannot double up: an assignment
+    that is already live for the same class and subject is left alone.
+    """
+    invited = list(
+        await session.scalars(
+            select(SchoolInvitationClass).where(
+                SchoolInvitationClass.invitation_id == record.id
+            )
+        )
+    )
+    if not invited:
+        return
+    existing = {
+        (row.class_id, row.school_subject_id)
+        for row in await session.scalars(
+            select(TeacherClassAssignment).where(
+                TeacherClassAssignment.teacher_id == teacher.id,
+                TeacherClassAssignment.removed_at.is_(None),
+            )
+        )
+    }
+    now = datetime.now(UTC)
+    for item in invited:
+        if (item.class_id, item.school_subject_id) in existing:
+            continue
+        session.add(
+            TeacherClassAssignment(
+                school_id=record.school_id,
+                teacher_id=teacher.id,
+                class_id=item.class_id,
+                school_subject_id=item.school_subject_id,
+                # CO_TEACHER, not PRIMARY. Primary is the class's own
+                # teacher, and deciding that an invited subject teacher holds
+                # that position is a policy call nobody has made - it would
+                # also collide with whoever already has it.
+                role=TeacherAssignmentRole.CO_TEACHER,
+                source=TeacherAssignmentSource.MANUAL,
+                source_reference=f"invitation:{record.id}",
+                assigned_by_user_id=record.created_by_id,
+                assigned_at=now,
+            )
+        )
+    await session.flush()
+
+
+async def _checked_invited_classes(
+    payload: "InvitationRequest",
+    actor: User,
+    session: AsyncSession,
+) -> list[tuple[UUID, UUID]]:
+    """The classes and subjects this invitation may carry, or a refusal.
+
+    Checked here rather than at acceptance. The teacher accepting has no way
+    to fix a class that was deleted or a subject that belongs to another
+    school, and discovering it then means they have set a password and
+    arrived holding nothing. T15.
+    """
+    if not payload.classes:
+        return []
+    if payload.role != "teacher":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "classes_are_for_teachers",
+                "message": "Only a teacher invitation carries classes to teach.",
+            },
+        )
+    pairs: list[tuple[UUID, UUID]] = []
+    seen: set[tuple[UUID, UUID]] = set()
+    for item in payload.classes:
+        pair = (item.class_id, item.subject_id)
+        if pair in seen:
+            # A duplicated pair is the caller repeating itself, not two
+            # assignments. Dropped rather than refused: the intent is clear.
+            continue
+        seen.add(pair)
+        school_class = await session.get(Class, item.class_id)
+        if (
+            school_class is None
+            or school_class.school_id != actor.school_id
+            or school_class.archived_at is not None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "class_not_found", "classId": str(item.class_id)},
+            )
+        subject = await session.get(SchoolSubject, item.subject_id)
+        if subject is None or subject.school_id != actor.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "subject_not_found", "subjectId": str(item.subject_id)},
+            )
+        pairs.append(pair)
+    return pairs
+
+
 async def _create_invitation(
     payload: InvitationRequest,
     actor: User,
@@ -1060,6 +1232,10 @@ async def _create_invitation(
         school_class = await session.get(Class, payload.class_id)
         if school_class is None or school_class.school_id != actor.school_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
+    # Every class and subject checked before the invitation exists, because an
+    # invitation that cannot be applied is worse than one refused on the way
+    # in - the teacher would set a password and arrive holding nothing.
+    invited_classes = await _checked_invited_classes(payload, actor, session)
     token = secrets.token_urlsafe(32)
     record = SchoolInvitation(
         school_id=actor.school_id,
@@ -1074,6 +1250,15 @@ async def _create_invitation(
         created_by_id=actor.id,
     )
     session.add(record)
+    await session.flush()
+    for class_id, subject_id in invited_classes:
+        session.add(
+            SchoolInvitationClass(
+                invitation_id=record.id,
+                class_id=class_id,
+                school_subject_id=subject_id,
+            )
+        )
     await session.commit()
     delivery_status = "not_requested"
     if record.email and defer_delivery:
@@ -1106,6 +1291,17 @@ async def _create_invitation(
         "token": token,
         "status": record.status,
         "classId": record.class_id,
+        "classes": [
+            {
+                "classId": str(class_id),
+                "className": class_name,
+                "subjectId": str(subject_id),
+                "subjectName": subject_name,
+            }
+            for class_id, class_name, subject_id, subject_name in await _invited_class_rows(
+                session, record.id
+            )
+        ],
         "createdAt": record.created_at,
         "expiresAt": record.expires_at,
         "deliveryStatus": delivery_status,
@@ -1570,6 +1766,16 @@ async def accept_join(
     await session.flush()
     if record.class_id and record.role == "student":
         session.add(StudentClassEnrollment(student_id=user.id, class_id=record.class_id))
+    # A teacher arrives holding the classes they were invited to. Until now
+    # the invitation's class was recorded and, for a teacher, never applied -
+    # so somebody invited to a class accepted and arrived attached to
+    # nothing, and an administrator had to assign them by hand afterwards.
+    #
+    # All of them, inside the transaction that activates the account. A
+    # part-applied acceptance would leave a teacher holding some of their
+    # classes and not others, which looks accepted and is not. T15.
+    if record.role == "teacher":
+        await _attach_invited_classes(session, record=record, teacher=user)
     record.status, record.accepted_at = "joined", datetime.now(UTC)
     await session.commit()
     consent_status: ConsentStatus | None = None

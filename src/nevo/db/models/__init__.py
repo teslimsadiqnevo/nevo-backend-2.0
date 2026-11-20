@@ -58,6 +58,7 @@ from nevo.db.models.learner_profile import (
     LearnerProfileHistory,
 )
 from nevo.db.models.lesson_signoff import LessonReviewSignoff
+from nevo.db.models.invitation_class import SchoolInvitationClass
 from nevo.db.models.mark_override import LessonMarkOverride
 from nevo.db.models.mastery import (
     ScaffoldProblemLog,
@@ -109,6 +110,7 @@ from nevo.db.models.subject import (
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
 
 __all__ = [
+    "SchoolInvitationClass",
     "LessonMarkOverride",
     "Admin",
     "AdminInvitation",

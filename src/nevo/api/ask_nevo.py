@@ -30,6 +30,7 @@ from nevo.db.models.ask_nevo import AskNevoInteraction
 from nevo.domain.ask_nevo.vocabulary import (
     AskNevoMessageAuthor,
     AskNevoQuestionCategory,
+    AskNevoRefusalReason,
     AskNevoRole,
 )
 
@@ -161,10 +162,11 @@ _ROLES_FOR_PRINCIPAL: dict[str, tuple[AskNevoRole, ...]] = {
         409: {"description": "use_lesson_guidance: in-lesson help uses the Socratic panel."},
         403: {
             "description": (
-                "content_safety_blocked, ask_role_forbidden, consent_pending, consent_required, "
-                "or consent_withdrawn "
-                "when learner processing "
-                "has been suspended"
+                "content_safety_blocked, ask_role_forbidden, student_context_forbidden, "
+                "consent_pending, consent_required, or consent_withdrawn when learner "
+                "processing has been suspended. A role or context refusal also carries "
+                "reason, one of role_not_available_to_account, account_cannot_ask or "
+                "another_learners_context, and availableRoles for the role refusals."
             ),
         },
         429: {
@@ -192,11 +194,21 @@ async def ask_nevo(
     # The asking role decides both the voice and the tools, so it cannot be
     # whatever the client sends. A learner claiming to be a teacher would
     # otherwise be offered the roster.
-    if payload.role not in _ROLES_FOR_PRINCIPAL.get(principal.role, ()):
+    available = _ROLES_FOR_PRINCIPAL.get(principal.role, ())
+    if payload.role not in available:
+        # The code stays as it was, because clients switch on it today. The
+        # reason is the addition: a screen can offer the roles this account
+        # does have instead of only saying no. T8, 20 November.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "ask_role_forbidden",
+                "reason": (
+                    AskNevoRefusalReason.ROLE_NOT_AVAILABLE_TO_ACCOUNT.value
+                    if available
+                    else AskNevoRefusalReason.ACCOUNT_CANNOT_ASK.value
+                ),
+                "availableRoles": [role.value for role in available],
                 "message": "You cannot ask Nevo in that role.",
             },
         )
@@ -207,6 +219,10 @@ async def ask_nevo(
                 403,
                 detail={
                     "code": "student_context_forbidden",
+                    # Nothing is wrong with the role here; the context is. A
+                    # screen that cannot tell these apart offers a role
+                    # switch for a problem a role switch does not fix.
+                    "reason": AskNevoRefusalReason.ANOTHER_LEARNERS_CONTEXT.value,
                     "message": "Student Ask Nevo must use the current student.",
                 },
             )
@@ -286,12 +302,19 @@ async def read_allowance(
 ) -> AskNevoAllowanceResponse:
     """How much asking this person has left today."""
 
-    asking_as = role or next(iter(_ROLES_FOR_PRINCIPAL.get(principal.role, ())), None)
-    if asking_as is None or asking_as not in _ROLES_FOR_PRINCIPAL.get(principal.role, ()):
+    available = _ROLES_FOR_PRINCIPAL.get(principal.role, ())
+    asking_as = role or next(iter(available), None)
+    if asking_as is None or asking_as not in available:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "ask_role_forbidden",
+                "reason": (
+                    AskNevoRefusalReason.ROLE_NOT_AVAILABLE_TO_ACCOUNT.value
+                    if available
+                    else AskNevoRefusalReason.ACCOUNT_CANNOT_ASK.value
+                ),
+                "availableRoles": [item.value for item in available],
                 "message": "You cannot ask Nevo in that role.",
             },
         )

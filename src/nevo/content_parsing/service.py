@@ -601,6 +601,28 @@ class ContentParsingService:
                     review_notes.append(
                         {
                             "code": "lesson_text_blocked_by_safety",
+                            #: Which check held it, as a word rather than as
+                            #: an inference.
+                            #:
+                            #: The two situations are not alike. A hold at
+                            #: the first check means the teacher's own file
+                            #: has something in it. A hold later means the
+                            #: file was fine and Nevo's generated content was
+                            #: refused, which is our problem and not theirs.
+                            #: The message said so, but the code did not, so
+                            #: the screen showed one banner for both and a
+                            #: teacher read "held" as "your file was
+                            #: rejected" - which is behind at least one of
+                            #: last week's false-positive escalations.
+                            #:
+                            #: textRetained happened to carry the same
+                            #: distinction, but as a double negative about
+                            #: something else. T12 / SCRUM-354, 20 November.
+                            "heldAtCheck": (
+                                "lesson_source"
+                                if error.phase == "lesson_source"
+                                else "generated_content"
+                            ),
                             "textRetained": error.phase != "lesson_source",
                             "chunkNumber": index,
                             "safetyEventId": str(error.event_id) if error.event_id else None,

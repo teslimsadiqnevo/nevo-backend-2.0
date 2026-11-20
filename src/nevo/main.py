@@ -486,13 +486,18 @@ async def health(request: Request) -> dict[str, str]:
     )
     return {
         "status": "ok",
-        # Which build is answering. Render sets these; empty elsewhere.
+        # Which build is answering. Baked into the image by the Dockerfile at
+        # build time; the Render variables stay as a fallback for anything
+        # still deployed there.
         #
         # Yinka, 11 November: without it the deploy check cannot tell whether
         # it is reading the version that was just deployed or the one before
-        # it, which makes a green check meaningless on a slow rollout.
-        "commit": os.environ.get("RENDER_GIT_COMMIT", ""),
-        "branch": os.environ.get("RENDER_GIT_BRANCH", ""),
+        # it, which makes a green check meaningless on a slow rollout. The
+        # Render variables alone could not do that job once the service moved
+        # to Heroku: they survived as config and kept naming a build from
+        # before the move, so a correct deploy read as the wrong one.
+        "commit": os.environ.get("DEPLOY_COMMIT") or os.environ.get("RENDER_GIT_COMMIT", ""),
+        "branch": os.environ.get("DEPLOY_BRANCH") or os.environ.get("RENDER_GIT_BRANCH", ""),
         "deployedAt": _STARTED_AT,
         "deferredMediaWorker": (
             "running" if getattr(request.app.state, "deferred_media_worker", None) else "disabled"

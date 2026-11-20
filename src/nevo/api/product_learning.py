@@ -595,9 +595,17 @@ async def _attempt_payload_with_outcome(
     prompts, deadline = await _socratic_handoff(session, item)
     payload["handoffTo"] = "socratic_panel" if prompts else None
     payload["guidedPrompts"] = prompts
-    from nevo.intelligence.comprehension import comprehension_gate_enabled
-
-    payload["advanceAfterHandoff"] = bool(prompts) and not comprehension_gate_enabled()
+    # Never. The hand-off happens because the child was stuck on this step, so
+    # sending them past it means we never learn whether the conversation
+    # worked and the mastery estimate keeps carrying the miss. They go back to
+    # the original check. Lydia, 20 November (T9).
+    #
+    # This read true in production until now: it was tied to the comprehension
+    # gate, and with COMPREHENSION_GATE_ENABLED off every hand-off told the
+    # player to advance - the opposite of what the field above has always
+    # claimed. Note that the gate is still what *holds* a child at a missed
+    # check; while it is off this field is the only signal the player gets.
+    payload["advanceAfterHandoff"] = False
     payload["handoffAvailableAt"] = deadline
     from nevo.intelligence.comprehension import gate_for_position
 

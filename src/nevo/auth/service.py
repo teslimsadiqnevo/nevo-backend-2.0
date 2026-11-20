@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Never
@@ -57,6 +58,29 @@ class AuthService:
         self._token_service = token_service
         self._now = now or (lambda: datetime.now(UTC))
 
+    @staticmethod
+    async def _together(*awaitables):
+        """Run independent database work at the same time, not one after the
+        other, and still fail on the first thing that failed.
+
+        Measured on the dyno, 20 November: a sign-in made four queries - not
+        the thirty that five seconds suggested - and each one cost about
+        280ms, because the dyno is in the US and the database is in
+        Frankfurt. Three of those four were sequential for no reason: the
+        rate-limit check does not depend on the user lookup, and recording an
+        attempt does not depend on writing an audit event.
+
+        return_exceptions so neither is left running after the other raises,
+        which would leak a session and log an unretrieved task error. The
+        first failure is re-raised in argument order, so the rate limiter
+        still wins over anything the lookup says.
+        """
+        results = await asyncio.gather(*awaitables, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        return results
+
     async def login_with_password(
         self,
         *,
@@ -67,9 +91,13 @@ class AuthService:
         normalized_email = email.casefold().strip()
         identity_digest = self._token_service.protect_identifier(f"email:{normalized_email}")
         ip_digest = self._token_service.protect_identifier(f"ip:{ip_address}")
-        await self._rate_limiter.check(identity_digest, ip_digest)
-
-        user = await self._users.find_by_email(normalized_email)
+        # Two independent reads, one wall-clock round trip instead of two.
+        # A rate-limited caller now also costs a user lookup, which is a read
+        # on the rare path and buys 280ms on the common one.
+        _, user = await self._together(
+            self._rate_limiter.check(identity_digest, ip_digest),
+            self._users.find_by_email(normalized_email),
+        )
         verified = await self._credential_hasher.verify_password_async(
             user.password_hash if user else None,
             password,
@@ -347,20 +375,27 @@ class AuthService:
             draft,
             replace_active=requires_single_session(user.role),
         )
-        await self._rate_limiter.record(
-            identity_digest,
-            ip_digest,
-            succeeded=True,
-            occurred_at=now,
-        )
-        await self._audit_log.record(
-            "login_succeeded",
-            occurred_at=now,
-            user_id=user.id,
-            session_id=draft.id,
-            identity_digest=identity_digest,
-            ip_digest=ip_digest,
-            details={"method": user.auth_method},
+        # After the session exists, deliberately. Recording a successful
+        # login for a session that failed to be created would leave an audit
+        # trail that disagrees with what actually happened, which is worse
+        # than one more round trip. These two, though, are independent of
+        # each other and of the create's result, so they go together.
+        await self._together(
+            self._rate_limiter.record(
+                identity_digest,
+                ip_digest,
+                succeeded=True,
+                occurred_at=now,
+            ),
+            self._audit_log.record(
+                "login_succeeded",
+                occurred_at=now,
+                user_id=user.id,
+                session_id=draft.id,
+                identity_digest=identity_digest,
+                ip_digest=ip_digest,
+                details={"method": user.auth_method},
+            ),
         )
         if replaced is not None:
             await self._audit_log.record(
@@ -392,24 +427,30 @@ class AuthService:
         error: type[AuthError] = InvalidCredentialsError,
     ) -> Never:
         now = self._now()
-        await self._rate_limiter.record(
-            identity_digest,
-            ip_digest,
-            succeeded=False,
-            occurred_at=now,
-        )
         event_type = (
             "deactivated_login_attempt"
             if user is not None and not self._is_active(user)
             else "login_failed"
         )
-        await self._audit_log.record(
-            event_type,
-            occurred_at=now,
-            user_id=user.id if user else None,
-            session_id=None,
-            identity_digest=identity_digest,
-            ip_digest=ip_digest,
+        # Both still committed before the caller is told anything - the
+        # attempt is what makes rate limiting work and the audit event is a
+        # security record, so neither may be dropped or deferred. They are
+        # simply written at the same time rather than one after the other.
+        await self._together(
+            self._rate_limiter.record(
+                identity_digest,
+                ip_digest,
+                succeeded=False,
+                occurred_at=now,
+            ),
+            self._audit_log.record(
+                event_type,
+                occurred_at=now,
+                user_id=user.id if user else None,
+                session_id=None,
+                identity_digest=identity_digest,
+                ip_digest=ip_digest,
+            ),
         )
         raise error
 

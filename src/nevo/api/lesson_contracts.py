@@ -275,6 +275,27 @@ class GuidedStepPrompt(BaseModel):
     options: list[CheckpointOption] = Field(default_factory=list)
 
 
+class PaperWorkOffer(BaseModel):
+    """Whether this item may be worked on paper, and what to tell the child.
+
+    Declared, not merely set. An undeclared key is dropped by the response
+    model on the way out - which is exactly how includedSegmentIds was
+    computed for weeks and never reached the app (T10). The default is the
+    safe direction: no offer, rather than offering working that the
+    paper-work route would then refuse. T6.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    allowed: bool = False
+    #: The sentence shown to the child, or null when there is no offer.
+    instruction: str | None = None
+    #: Whether a teacher approved the steps that make this markable.
+    requested_by_teacher: bool = Field(default=False, alias="requestedByTeacher")
+    #: Why not, when not: check_not_approved, no_steps, steps_not_approved
+    #: or steps_unmarkable. Null when it is allowed.
+    unavailable_reason: str | None = Field(default=None, alias="unavailableReason")
+
+
 class GuidedCheckStep(BaseModel):
     """A source-backed panel step; correctness is a comparison, never text inference."""
 
@@ -434,6 +455,12 @@ class ComprehensionCheckpoint(BaseModel):
         default=None, alias="guidedStepsReviewStatus"
     )
     teacher_reviewed: bool = Field(default=False, alias="teacherReviewed")
+    #: Whether this item may be worked on paper. Set by the one renderer every
+    #: player path goes through, including the offline package - a child
+    #: working offline is the one most likely to be working on paper. T6.
+    paper_work: PaperWorkOffer = Field(
+        default_factory=PaperWorkOffer, alias="paperWork"
+    )
 
     @model_validator(mode="after")
     def unique_guided_steps(self):
@@ -1404,6 +1431,12 @@ def checkpoint_payloads(
 
         rendered = question.model_dump(by_alias=True, mode="json")
         rendered["teacherReviewed"] = str(rendered["id"]) in (reviewed_question_ids or set())
+        # Computed from the question model rather than the rendered dict,
+        # because answer keys are stripped out of a student payload further
+        # down and the offer must not change depending on who is reading.
+        rendered["paperWork"] = paper_work_offer(
+            question, teacher_reviewed=rendered["teacherReviewed"]
+        )
         if (
             reviewed_level_ids is not None
             and rendered.get("masteryLevel") is not None
@@ -1432,6 +1465,60 @@ def checkpoint_payloads(
             )
         result.append(rendered)
     return result
+
+
+#: What a child is told when an item may be worked on paper. One sentence,
+#: fixed here rather than generated, because it is an instruction to a child
+#: about what to do and must not vary between two questions on one screen.
+PAPER_WORK_INSTRUCTION = (
+    "You can work this out on paper, then type each step in below."
+)
+
+
+def paper_work_offer(question, *, teacher_reviewed: bool) -> dict[str, object]:
+    """Whether this item may be done on paper, and what to say about it.
+
+    Derived from exactly the conditions the typed paper-work route enforces -
+    the check is approved, it has guided steps, those steps are approved, and
+    every one of them can be marked - so the field and the route cannot
+    disagree. If this said yes where the route says no, a child would do the
+    working and then be refused, which is the one outcome worth engineering
+    against.
+
+    No new storage. "requestedByTeacher" is the steps' own approval: a teacher
+    reviewing and approving guided steps is the act that sanctions working on
+    paper, and there is no separate teacher control to read. If Yinka needs
+    "the teacher asked for this one specifically" as distinct from "a teacher
+    allowed it", that needs a teacher-facing control and a column, which is a
+    different piece of work. T6, 20 November.
+
+    Carried on the offline package as well as the lesson read, because a child
+    working offline is the one most likely to be working on paper, and an
+    instruction that only appears online would be missing exactly when it
+    matters.
+    """
+    steps = question.guided_steps
+    approved_steps = question.guided_steps_review_status == "approved"
+    markable = bool(steps) and all(step.answer_key is not None for step in steps)
+    allowed = bool(teacher_reviewed and approved_steps and markable)
+    if allowed:
+        reason = None
+    elif not teacher_reviewed:
+        reason = "check_not_approved"
+    elif not steps:
+        reason = "no_steps"
+    elif not approved_steps:
+        reason = "steps_not_approved"
+    else:
+        reason = "steps_unmarkable"
+    return {
+        "allowed": allowed,
+        "instruction": PAPER_WORK_INSTRUCTION if allowed else None,
+        "requestedByTeacher": bool(approved_steps),
+        #: Why not, when not. A closed set, so the screen can stay quiet for
+        #: a lesson still in review and say something useful otherwise.
+        "unavailableReason": reason,
+    }
 
 
 def student_checkpoint_payloads(

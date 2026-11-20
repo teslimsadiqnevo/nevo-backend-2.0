@@ -24,5 +24,10 @@ ENV DEPLOY_BRANCH=$DEPLOY_BRANCH
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "exec uvicorn nevo.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# One image, two roles. Heroku names the dyno in $DYNO ("web.1", "worker.1"),
+# and config vars are app-wide, so the dyno name is the only thing that can
+# tell the two apart. The same image is pushed to both process types:
+#   heroku container:push web worker -a nevo-backend
+#   heroku container:release web worker -a nevo-backend
+CMD ["sh", "-c", "case \"${DYNO%%.*}\" in worker) exec python -m nevo.ops.run_workers ;; *) exec uvicorn nevo.main:app --host 0.0.0.0 --port ${PORT:-8000} ;; esac"]
 

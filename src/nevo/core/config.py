@@ -218,6 +218,41 @@ class Settings(BaseSettings):
     def run_deferred_media_worker(self) -> bool:
         return self.deferred_media_worker_enabled or self.is_production_runtime
 
+    @property
+    def process_role(self) -> str:
+        """Which kind of process this is, as the platform names it.
+
+        Heroku sets DYNO to "web.1", "worker.1" or "run.1234". Nothing sets
+        it locally or under test, and that case is reported as "local".
+        """
+        dyno = os.environ.get("DYNO", "").strip()
+        if not dyno:
+            return "local"
+        return dyno.split(".", 1)[0].casefold()
+
+    @property
+    def run_background_workers(self) -> bool:
+        """Whether this process runs the polling workers.
+
+        Never the API dyno. We serve from a single uvicorn process, so there
+        is one event loop: a worker's work is the API's latency, and fifteen
+        poll loops sharing the connection pool with real requests is what
+        took the service from 1.5s to 16s on 19 November. The workers get
+        their own dyno and the API gets its loop back.
+
+        A one-off `heroku run` dyno is excluded as well - it exists to run
+        one command, not to pick up the queue, and two processes draining
+        the same tables was never intended.
+
+        Off the platform, where DYNO is unset, the old single-process
+        behaviour stands: a developer running the app locally still gets the
+        workers without having to start a second process.
+        """
+        role = self.process_role
+        if role == "local":
+            return True
+        return role == "worker"
+
 
 @lru_cache
 def get_settings() -> Settings:

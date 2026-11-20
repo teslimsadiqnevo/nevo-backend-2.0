@@ -134,6 +134,18 @@ _STARTED_AT = datetime.now(UTC).isoformat()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    # Background work belongs to one process, and it is not the one serving
+    # requests. Every worker is still *built* here, because routes read the
+    # same services; only starting the poll loop is withheld. See
+    # Settings.run_background_workers for why.
+    started_background: list[object] = []
+
+    def start_background(worker):
+        if settings.run_background_workers:
+            worker.start()
+            started_background.append(worker)
+        return worker
+
     settings.assert_database_target_allowed()
     engine = create_engine(settings.database_url)
     sessions = create_session_factory(engine)
@@ -168,9 +180,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions=sessions,
         delivery=app.state.email_delivery,
     )
-    app.state.notification_email_worker.start()
+    start_background(app.state.notification_email_worker)
     app.state.billing_email_worker = BillingEmailWorker(sessions, app.state.email_delivery)
-    app.state.billing_email_worker.start()
+    start_background(app.state.billing_email_worker)
     app.state.permission_service = build_permission_service(
         sessions,
         credential_hasher=credential_hasher,
@@ -197,7 +209,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions=sessions,
         email=app.state.email_delivery,
     )
-    app.state.consent_delivery_worker.start()
+    start_background(app.state.consent_delivery_worker)
     app.state.ai_gateway = build_ai_gateway(
         sessions,
         AiGatewaySettings(),
@@ -223,13 +235,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sessions,
         app.state.content_parsing_service,
     )
-    app.state.upload_parsing_worker.start()
+    start_background(app.state.upload_parsing_worker)
     app.state.deferred_media_worker = None
     if settings.run_deferred_media_worker:
         app.state.deferred_media_worker = DeferredMediaWorker(
             sessions, app.state.content_parsing_service
         )
-        app.state.deferred_media_worker.start()
+        start_background(app.state.deferred_media_worker)
     app.state.lesson_media_service = build_lesson_media_service()
     app.state.post_lesson_profile_update_service = build_post_lesson_profile_update_service(
         sessions,
@@ -246,7 +258,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         flag_service=app.state.attention_flag_detection_service,
         accommodation_service=app.state.accommodation_inference_service,
     )
-    app.state.post_lesson_worker.start()
+    start_background(app.state.post_lesson_worker)
     app.state.adaptation_engine_service = build_adaptation_engine_service(
         sessions,
         app.state.ai_gateway,
@@ -282,25 +294,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             content_parsing_service=app.state.content_parsing_service,
         ),
     )
-    app.state.scheduled_job_runner.start()
+    start_background(app.state.scheduled_job_runner)
     ops_settings = OpsSettings()
     app.state.self_ping_loop = build_self_ping_loop(ops_settings)
-    app.state.self_ping_loop.start()
+    start_background(app.state.self_ping_loop)
     app.state.heartbeat_loop = build_heartbeat_loop(sessions, ops_settings)
-    app.state.heartbeat_loop.start()
+    start_background(app.state.heartbeat_loop)
     try:
         yield
     finally:
-        if app.state.deferred_media_worker is not None:
-            await app.state.deferred_media_worker.stop()
-        await app.state.upload_parsing_worker.stop()
-        await app.state.notification_email_worker.stop()
-        await app.state.billing_email_worker.stop()
-        await app.state.consent_delivery_worker.stop()
-        await app.state.scheduled_job_runner.stop()
-        await app.state.post_lesson_worker.stop()
-        await app.state.heartbeat_loop.stop()
-        await app.state.self_ping_loop.stop()
+        # Only what actually started, and in reverse order, so a worker is
+        # never asked to stop something it never began. On the API dyno this
+        # list is empty.
+        for worker in reversed(started_background):
+            await worker.stop()
         await app.state.ai_gateway.close()
         from nevo.ops.media_usage import close_ledger
 
@@ -471,6 +478,7 @@ async def health(request: Request) -> dict[str, str]:
     and looked like a bad model rather than an unset variable. These flags
     make that legible without reading the audit tables.
     """
+    settings = get_settings()
     ai_gateway = getattr(request.app.state, "ai_gateway", None)
     payments = getattr(request.app.state, "payment_service", None)
     media = getattr(request.app.state, "lesson_media_service", None)
@@ -499,8 +507,19 @@ async def health(request: Request) -> dict[str, str]:
         "commit": os.environ.get("DEPLOY_COMMIT") or os.environ.get("RENDER_GIT_COMMIT", ""),
         "branch": os.environ.get("DEPLOY_BRANCH") or os.environ.get("RENDER_GIT_BRANCH", ""),
         "deployedAt": _STARTED_AT,
+        #: Which process answered, so a slow reply can be pinned to a dyno.
+        "processRole": settings.process_role,
+        #: "running" only where the loops actually run. The API dyno cannot
+        #: see the worker dyno, so it says so rather than reporting
+        #: "disabled" and reading like an outage.
         "deferredMediaWorker": (
-            "running" if getattr(request.app.state, "deferred_media_worker", None) else "disabled"
+            (
+                "running"
+                if getattr(request.app.state, "deferred_media_worker", None)
+                else "disabled"
+            )
+            if settings.run_background_workers
+            else "separate_process"
         ),
         #: up_to_date, behind, or unknown. "behind" means some writes will
         #: fail at the database however healthy everything else looks.

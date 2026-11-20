@@ -101,6 +101,8 @@ class AiGatewayCall(Base):
             "school_id",
             "created_at",
         ),
+        Index("ix_ai_gateway_calls_lesson", "lesson_id", "created_at"),
+        Index("ix_ai_gateway_calls_student_lesson", "student_id", "lesson_id"),
         CheckConstraint(
             "input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0",
             name="token_counts_non_negative",
@@ -135,6 +137,19 @@ class AiGatewayCall(Base):
         ForeignKey("ai_prompt_templates.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    #: Which lesson this call was for, where there is one.
+    #:
+    #: Without it, "what did one learner's lesson cost" could only be asked of
+    #: a time window, and the expensive calls are lesson preparation, which
+    #: happens at upload with no learner in the picture at all. Lydia,
+    #: 20 November: everything about pricing is blocked on that number. The
+    #: value was already reaching the gateway on the safety context and was
+    #: simply not recorded. Null for a call that belongs to no lesson, such as
+    #: a learner's Ask Nevo question. L2.
+    lesson_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("lessons.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     service: Mapped[AiService] = mapped_column(ai_service_enum, nullable=False)
     priority: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     provider: Mapped[AiProviderName] = mapped_column(
@@ -163,6 +178,17 @@ class AiGatewayCall(Base):
         nullable=False,
         default=0,
         server_default=text("0"),
+    )
+    #: Cache writes and cache reads, kept because the cost depends on them -
+    #: a write is 1.25x a fresh input token and a read is a tenth of one - and
+    #: because without them there is no way to tell whether prompt caching is
+    #: working at all. The cost formula already used these; nothing stored
+    #: them, so the question "are we getting cache hits" had no answer. L2/L6.
+    cache_creation_input_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    cache_read_input_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
     )
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     estimated_cost_usd: Mapped[Decimal] = mapped_column(

@@ -36,6 +36,7 @@ def build_ai_gateway(
         output_cost_usd_per_million=settings.output_cost_usd_per_million,
         cache_write_cost_usd_per_million=settings.cache_write_cost_usd_per_million,
         cache_read_cost_usd_per_million=settings.cache_read_cost_usd_per_million,
+        prices_are_configured=settings.prices_are_configured,
         safety=safety_from_settings(settings, sessions=sessions),
     )
 

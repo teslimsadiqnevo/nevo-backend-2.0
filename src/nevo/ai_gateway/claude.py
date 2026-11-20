@@ -92,8 +92,27 @@ class ClaudeRestProvider:
         if request.tools:
             payload["tools"] = list(request.tools)
         if self._prompt_caching_enabled and request.cache_prompt:
-            payload["cache_control"] = {"type": "ephemeral"}
+            # Caching is a prefix match over tools -> system -> messages, and
+            # a breakpoint caches everything up to and including the block it
+            # sits on. Two breakpoints, deliberately:
+            #
+            # The system instruction, as before. It is identical across every
+            # chunk of one lesson, so this is the half that was already
+            # paying off.
+            #
+            # And the user content, which is the uploaded document. That was
+            # never cached, so a retry of the same chunk re-sent and re-paid
+            # for the whole thing. A cache read costs a tenth of a fresh read
+            # and lesson preparation is almost all of our model spend, so
+            # this is the cheapest saving available to us. L6, 20 November.
             payload["system"][0]["cache_control"] = {"type": "ephemeral"}
+            payload["messages"][0]["content"][-1]["cache_control"] = {
+                "type": "ephemeral"
+            }
+            # The top-level "cache_control" that used to be set here did
+            # nothing at all: the Messages API takes cache_control on content
+            # blocks, not on the request. It read like caching was on while
+            # only the system block was actually cached.
 
         try:
             response = await self._client.post(

@@ -15,9 +15,19 @@ async def test_claude_provider_uses_messages_api_and_prompt_caching() -> None:
         payload = json.loads(request.read().decode())
         assert payload["model"] == "claude-haiku-4-5"
         assert payload["max_tokens"] == 256
-        assert payload["cache_control"] == {"type": "ephemeral"}
+        # The top-level "cache_control" this used to assert did nothing: the
+        # Messages API takes cache_control on content blocks, not on the
+        # request body. Asserting it made caching look wired up when only the
+        # system block was really cached. 20 November.
+        assert "cache_control" not in payload
         assert payload["system"][0]["cache_control"] == {"type": "ephemeral"}
         assert payload["messages"][0]["content"][0]["text"] == "Teacher source"
+        # The document goes in the user content, and now carries a breakpoint
+        # of its own so a re-parse of the same source can be read from cache
+        # at a tenth of the price instead of being sent again.
+        assert payload["messages"][0]["content"][-1]["cache_control"] == {
+            "type": "ephemeral"
+        }
         return httpx.Response(
             200,
             json={

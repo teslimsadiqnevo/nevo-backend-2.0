@@ -138,6 +138,10 @@ class AiCallAudit:
     compliance_retries: int
     fallback_used: bool
     error_code: str | None = None
+    #: The lesson this call served, where there is one. L2.
+    lesson_id: UUID | None = None
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,5 +1,6 @@
 import time
 from decimal import Decimal
+from uuid import UUID
 
 from nevo.ai_gateway.agent import run_tool_loop
 from nevo.ai_gateway.compliance import (
@@ -54,6 +55,13 @@ class AiGatewayService:
         output_cost_usd_per_million: Decimal,
         cache_write_cost_usd_per_million: Decimal,
         cache_read_cost_usd_per_million: Decimal,
+        #: Whether the four prices above were chosen deliberately. Defaults
+        #: to True because anyone constructing this directly has just stated
+        #: them, and a stated price must never be silently replaced by a list
+        #: price. Only the wiring, which reads them from settings, knows when
+        #: nobody set them - and passes False so the published per-model table
+        #: applies instead of one flat pair across every model.
+        prices_are_configured: bool = True,
         privacy: AiPrivacyGuard | None = None,
         safety: ContentSafetyGuard | None = None,
     ) -> None:
@@ -69,6 +77,7 @@ class AiGatewayService:
         self._output_cost = output_cost_usd_per_million
         self._cache_write_cost = cache_write_cost_usd_per_million
         self._cache_read_cost = cache_read_cost_usd_per_million
+        self._prices_are_configured = prices_are_configured
         self._privacy = privacy or AiPrivacyGuard()
         self._safety = safety or ContentSafetyGuard()
 
@@ -238,6 +247,7 @@ class AiGatewayService:
             thought_tokens=thought_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            model=accepted.model,
         )
         text = accepted.text
         for alias, original in lesson_characters.items():
@@ -269,6 +279,14 @@ class AiGatewayService:
                 compliance_retries=compliance_retries,
                 fallback_used=fallback_used,
                 error_code=error_code,
+                # Already on the safety context and simply never recorded, so
+                # "what did one lesson cost" could only be asked of a time
+                # window. A bad lesson id is not worth failing a call that has
+                # already been paid for, so an unparseable one records as
+                # nothing. L2.
+                lesson_id=_lesson_uuid(request.lesson_safety_context),
+                cache_creation_input_tokens=cache_creation_input_tokens,
+                cache_read_input_tokens=cache_read_input_tokens,
             )
         )
         return AiGenerationResult(
@@ -289,6 +307,42 @@ class AiGatewayService:
         await self._scheduler.close()
         await self._provider.close()
 
+    def _prices(self, model: str | None) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        """The four per-million prices for the model that actually ran.
+
+        One flat pair used to be applied to every model, and it was the
+        cheapest one's. Of 2,626 recorded calls, 872 ran on Sonnet and were
+        billed at Haiku's rate, so the all-time figure read $9.97 when it was
+        about $15.70 - and Lydia has everything about pricing waiting on that
+        number. A model nobody has priced falls back to the configured pair,
+        which is the old behaviour and is at least explicit about it.
+        """
+        if self._prices_are_configured:
+            return (
+                self._input_cost,
+                self._output_cost,
+                self._cache_write_cost,
+                self._cache_read_cost,
+            )
+        from nevo.ai_gateway.config import AiGatewaySettings
+
+        published = AiGatewaySettings.MODEL_PRICES.get((model or "").strip())
+        if published is None:
+            # A dated snapshot ("claude-haiku-4-5-20251001") prices as its
+            # family, since that is what the provider charges for it.
+            for name, prices in AiGatewaySettings.MODEL_PRICES.items():
+                if (model or "").strip().startswith(name):
+                    published = prices
+                    break
+        if published is None:
+            return (
+                self._input_cost,
+                self._output_cost,
+                self._cache_write_cost,
+                self._cache_read_cost,
+            )
+        return tuple(Decimal(value) for value in published)  # type: ignore[return-value]
+
     def _estimated_cost(
         self,
         *,
@@ -297,13 +351,31 @@ class AiGatewayService:
         thought_tokens: int,
         cache_creation_input_tokens: int,
         cache_read_input_tokens: int,
+        model: str | None = None,
     ) -> Decimal:
+        input_cost, output_cost, cache_write_cost, cache_read_cost = self._prices(model)
         return (
-            Decimal(input_tokens) * self._input_cost
-            + Decimal(output_tokens + thought_tokens) * self._output_cost
-            + Decimal(cache_creation_input_tokens) * self._cache_write_cost
-            + Decimal(cache_read_input_tokens) * self._cache_read_cost
+            Decimal(input_tokens) * input_cost
+            + Decimal(output_tokens + thought_tokens) * output_cost
+            + Decimal(cache_creation_input_tokens) * cache_write_cost
+            + Decimal(cache_read_input_tokens) * cache_read_cost
         ) / ONE_MILLION
+
+
+def _lesson_uuid(lesson_safety_context) -> UUID | None:
+    """The lesson id off the safety context, when it is one.
+
+    The context carries it as a string because it is built from request data,
+    and a value that does not parse must not cost us the audit row for a call
+    the provider has already billed.
+    """
+    raw = getattr(lesson_safety_context, "lesson_id", None)
+    if not raw:
+        return None
+    try:
+        return UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 def public_ai_error(error: Exception) -> AiGatewayError:

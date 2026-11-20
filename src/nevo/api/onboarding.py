@@ -1089,8 +1089,20 @@ async def _commit_classes(
             )
         )
     }
+    # Classes these rows are already attached to. Looked up by id, so a class
+    # the school has since renamed is still found - which is the whole point.
+    # Without this, the folded name from the file no longer matched anything,
+    # a second class was created under the old spelling, and the rest of the
+    # roster landed in it: one class silently split in two. T18, 20 November.
+    pinned: dict[str, Class] = {}
+    for source in rows:
+        if source.class_id is None or not source.normalised_class_name:
+            continue
+        held = await session.get(Class, source.class_id)
+        if held is not None and held.archived_at is None:
+            pinned[source.normalised_class_name] = held
     for derived in _derived_classes(rows):
-        if derived.normalised_name in existing:
+        if derived.normalised_name in existing or derived.normalised_name in pinned:
             continue
         row = Class(
             school_id=school.id,
@@ -1104,7 +1116,21 @@ async def _commit_classes(
         session.add(row)
         await session.flush()
         existing[derived.normalised_name] = row
-    return existing
+    # Pin every row to the class it resolved to, now, while the folded name
+    # still matches. After this the attachment survives a rename: the name is
+    # what a school changes, and keying on it split a class in two when they
+    # did. Rows already pinned are left alone, so re-running this never moves
+    # a child from the class they are in. T18, 20 November.
+    for source in rows:
+        if not source.countable or source.class_id is not None:
+            continue
+        resolved = existing.get(source.normalised_class_name or "")
+        if resolved is not None:
+            source.class_id = resolved.id
+    await session.flush()
+    # A renamed class answers to its old folded name here, because that is
+    # the key the rows were read under.
+    return {**existing, **pinned}
 
 
 @router.post("/activate", response_model=OnboardingState)
@@ -1408,7 +1434,13 @@ async def _create_person(
         )
         session.add(user)
     await session.flush()
-    school_class = classes.get(row.normalised_class_name or "")
+    # The pinned id first, the folded name only for rows that predate it. A
+    # name is what the school renames; an id is not. T18, 20 November.
+    school_class = (
+        await session.get(Class, row.class_id)
+        if row.class_id is not None
+        else classes.get(row.normalised_class_name or "")
+    )
     if is_student and school_class is not None:
         await _hold_enrollment(session, user.id, school_class.id)
     return user

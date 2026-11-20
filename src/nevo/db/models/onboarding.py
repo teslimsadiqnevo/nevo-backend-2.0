@@ -156,6 +156,23 @@ class OnboardingRow(Base):
     )
     class_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     normalised_class_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: The live class this row was attached to, pinned the first time the
+    #: classes are committed.
+    #:
+    #: The name is what the school typed and the name is what they change.
+    #: Keying the attachment on it meant a class renamed between confirming
+    #: an import and activating it stopped matching, so activation built a
+    #: second class and the rest of the roster landed in that one - a class
+    #: silently split in two, which nobody notices until a register is half
+    #: empty. The id cannot be renamed. T18, 20 November.
+    #:
+    #: Null on rows imported before this existed; those still fall back to
+    #: the folded name, which is the behaviour they were created under.
+    class_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("classes.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     rejected: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

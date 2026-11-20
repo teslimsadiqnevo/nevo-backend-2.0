@@ -34,8 +34,9 @@ def test_committing_classes_pins_every_countable_row() -> None:
     source = inspect.getsource(onboarding._commit_classes)
     assert "source.class_id = resolved.id" in source
     # Never re-pin: re-running this must not move a child out of the class
-    # they are already in.
-    assert "source.class_id is not None" in source
+    # they are already in. Read through getattr, because this also runs over
+    # row objects that stand in for an OnboardingRow without the column.
+    assert 'getattr(source, "class_id", None) is not None' in source
 
 
 def test_committing_classes_finds_a_renamed_class_by_id() -> None:
@@ -47,7 +48,11 @@ def test_committing_classes_finds_a_renamed_class_by_id() -> None:
 
 def test_attachment_prefers_the_id_and_falls_back_to_the_name() -> None:
     source = inspect.getsource(onboarding._create_person)
-    assert "await session.get(Class, row.class_id)" in source
+    # The id is read through getattr and then used; a row object standing in
+    # for an OnboardingRow does not carry the column, and reading it
+    # directly raised AttributeError on the roster-import path.
+    assert 'getattr(row, "class_id", None)' in source
+    assert "await session.get(Class, pinned_class_id)" in source
     # The fallback has to stay for rows that predate the column.
     assert 'classes.get(row.normalised_class_name or "")' in source
 

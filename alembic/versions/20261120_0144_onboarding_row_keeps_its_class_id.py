@@ -73,6 +73,13 @@ def upgrade() -> None:
     # Say out loud what could not be backfilled, so it is a known list rather
     # than a surprise later. Reported, never merged: merging two registers is
     # a school's call.
+    #
+    # Only when there is a database to ask. In offline mode (`alembic upgrade
+    # --sql`, which a test renders the whole history through) there is no
+    # connection to read from, and reading anyway raised AttributeError on
+    # None and broke the rendering of every migration after this one.
+    if op.get_context().as_sql:
+        return
     rows = (
         op.get_bind()
         .execute(

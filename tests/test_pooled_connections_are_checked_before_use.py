@@ -13,6 +13,20 @@ transactions whatever its age.
 
 The port moved and the assumption did not, so a dead connection was handed
 to a request and failed on first use.
+
+20 November: the database moved again, to Render's own Postgres, and this
+test's own premise - "the cost of being right is a few milliseconds" -
+stopped being true with it. A round trip to Frankfurt from the US dyno
+measures ~185ms, so a pre-ping is ~185ms on the first query of every
+checkout. Measured on the dyno the same day: Render's idle_session_timeout
+is 0, so the server never closes an idle session, tcp_keepalives_idle is
+300, and a pooled connection was reused fine after 120s, 300s and 600s
+idle. There is no dropped connection there to catch.
+
+So the guard keeps its full force where the failure happens - both
+Supabase poolers, which the London project still is while it remains the
+rollback - and a direct Postgres stops paying for it. That is now asserted
+in both directions, so neither half can be dropped by accident.
 """
 
 from __future__ import annotations
@@ -27,11 +41,23 @@ TRANSACTION_POOLER = "postgresql+asyncpg://u:p@aws-0-eu-west-1.pooler.supabase.c
 LOCAL = "postgresql+asyncpg://u:p@localhost:5432/nevo"
 
 
-def test_every_checkout_is_validated() -> None:
-    # Whichever pooler, because the cost of being wrong is a failed request
-    # and the cost of being right is a few milliseconds.
-    for url in (SESSION_POOLER, TRANSACTION_POOLER, LOCAL):
+RENDER = "postgresql+asyncpg://u:p@dpg-x-a.frankfurt-postgres.render.com:5432/nevo"
+
+
+def test_every_pooled_checkout_is_validated() -> None:
+    # Whichever pooler, because the cost of being wrong is a failed request.
+    # This is the 7 November failure and it is not negotiable.
+    for url in (SESSION_POOLER, TRANSACTION_POOLER):
         assert create_engine(url).pool._pre_ping is True, url
+
+
+def test_a_direct_postgres_is_not_pinged() -> None:
+    # ~185ms per checkout against a database an ocean away, to catch a
+    # dropped connection that a direct Postgres does not drop. Asserted
+    # rather than merely allowed, so restoring the ping here has to be a
+    # decision somebody writes down.
+    for url in (RENDER, LOCAL):
+        assert create_engine(url).pool._pre_ping is False, url
 
 
 def test_recycling_is_kept_as_well() -> None:

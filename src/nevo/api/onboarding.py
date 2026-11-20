@@ -1096,7 +1096,7 @@ async def _commit_classes(
     # roster landed in it: one class silently split in two. T18, 20 November.
     pinned: dict[str, Class] = {}
     for source in rows:
-        if source.class_id is None or not source.normalised_class_name:
+        if getattr(source, "class_id", None) is None or not source.normalised_class_name:
             continue
         held = await session.get(Class, source.class_id)
         if held is not None and held.archived_at is None:
@@ -1122,7 +1122,7 @@ async def _commit_classes(
     # did. Rows already pinned are left alone, so re-running this never moves
     # a child from the class they are in. T18, 20 November.
     for source in rows:
-        if not source.countable or source.class_id is not None:
+        if not source.countable or getattr(source, "class_id", None) is not None:
             continue
         resolved = existing.get(source.normalised_class_name or "")
         if resolved is not None:
@@ -1436,9 +1436,12 @@ async def _create_person(
     await session.flush()
     # The pinned id first, the folded name only for rows that predate it. A
     # name is what the school renames; an id is not. T18, 20 November.
+    # getattr, because this is also reached with row objects that stand in
+    # for an OnboardingRow and do not carry the column.
+    pinned_class_id = getattr(row, "class_id", None)
     school_class = (
-        await session.get(Class, row.class_id)
-        if row.class_id is not None
+        await session.get(Class, pinned_class_id)
+        if pinned_class_id is not None
         else classes.get(row.normalised_class_name or "")
     )
     if is_student and school_class is not None:

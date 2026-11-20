@@ -16,6 +16,10 @@ from nevo.intelligence.compliance_audit import render_simple_pdf
 from nevo.notifications.branding import render_email
 from nevo.notifications.email import ResendEmailDelivery
 
+#: Invoice email delivery is not watched by anyone, so it does not need to
+#: wake every five seconds on the API's event loop. 19 November.
+IDLE_SECONDS = 30
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,10 +44,10 @@ class BillingEmailWorker:
                 worked = await self.process_next()
             except Exception:
                 logger.exception("Billing email worker iteration failed")
-                await asyncio.sleep(5)
+                await asyncio.sleep(IDLE_SECONDS)
                 continue
             if not worked:
-                await asyncio.sleep(5)
+                await asyncio.sleep(IDLE_SECONDS)
 
     async def process_next(self) -> bool:
         now = datetime.now(UTC)

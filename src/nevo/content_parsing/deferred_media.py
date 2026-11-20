@@ -119,11 +119,25 @@ class DeferredMediaWorker:
         self.tasks = []
         self.audio_limit = asyncio.Semaphore(4)
 
+    #: One loop per medium, not six. These share an event loop with the API,
+    #: and six loops waking every five seconds against a database an ocean
+    #: away bought nothing: the work is bounded by the providers, not by how
+    #: many pollers ask for it. 19 November, after the API went to 16s.
+    #: Raise these only once the loops have a dyno of their own.
+    CONCURRENCY = (("image", 1), ("audio", 1))
+    #: How long to wait after finding nothing. A lesson's media starting up
+    #: to this late is invisible to a teacher; the old five seconds was not
+    #: invisible to the API.
+    IDLE_SECONDS = 20
+    #: The stored-image safety recheck is housekeeping with no one waiting on
+    #: it, so it has no business polling every ten seconds.
+    RESTAMP_IDLE_SECONDS = 300
+
     def start(self):
         if not self.tasks:
             self.tasks = [
                 asyncio.create_task(self._run(kind), name=f"lesson-media-{kind}-{i}")
-                for kind, count in (("image", 2), ("audio", 4))
+                for kind, count in self.CONCURRENCY
                 for i in range(count)
             ]
             self.tasks.append(
@@ -140,23 +154,23 @@ class DeferredMediaWorker:
         while True:
             try:
                 if not await self.process_next(kind):
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(self.IDLE_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Optional lesson media worker failed")
-                await asyncio.sleep(5)
+                await asyncio.sleep(self.IDLE_SECONDS)
 
     async def _run_restamps(self):
         while True:
             try:
                 if not await self.process_restamp_next():
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(self.RESTAMP_IDLE_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Stored image safety recheck failed")
-                await asyncio.sleep(10)
+                await asyncio.sleep(self.RESTAMP_IDLE_SECONDS)
 
     async def process_restamp_next(self):
         if (

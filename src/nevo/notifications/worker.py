@@ -21,7 +21,9 @@ class NotificationEmailWorker:
         *,
         sessions: async_sessionmaker[AsyncSession],
         delivery: ResendEmailDelivery,
-        poll_seconds: float = 5,
+        # A notification email arriving 20s later is not noticed; the old
+        # 5s poll was. 19 November.
+        poll_seconds: float = 20,
     ) -> None:
         self._sessions = sessions
         self._delivery = delivery

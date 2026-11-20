@@ -52,7 +52,10 @@ class PostLessonProcessingWorker:
         profile_service: PostLessonProfileUpdateService,
         flag_service: AttentionFlagDetectionService,
         accommodation_service: AccommodationInferenceService | None = None,
-        poll_seconds: float = 3,
+        # Post-lesson profile work, 3s -> 15s. This was the hungriest
+        # loop of the lot and the one least in a hurry: the profile is
+        # read on the next lesson, not this second. 19 November.
+        poll_seconds: float = 15,
     ) -> None:
         self._sessions = sessions
         self._profile_service = profile_service

@@ -34,6 +34,12 @@ class Settings(BaseSettings):
         default=PRODUCTION_SUPABASE_PROJECT_REF,
         validation_alias="PRODUCTION_SUPABASE_PROJECT_REF",
     )
+    #: Which dyno owns the background poll loops. "web" keeps them in the API
+    #: process, which is where they have always run; "worker" moves them to a
+    #: dyno of their own and is what we want once one is paid for.
+    background_workers_dyno: str = Field(
+        default="web", validation_alias="BACKGROUND_WORKERS_DYNO"
+    )
     database_pool_size: int = Field(default=10, ge=1, le=100)
     database_max_overflow: int = Field(default=10, ge=0, le=100)
     cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
@@ -234,24 +240,33 @@ class Settings(BaseSettings):
     def run_background_workers(self) -> bool:
         """Whether this process runs the polling workers.
 
-        Never the API dyno. We serve from a single uvicorn process, so there
-        is one event loop: a worker's work is the API's latency, and fifteen
-        poll loops sharing the connection pool with real requests is what
-        took the service from 1.5s to 16s on 19 November. The workers get
-        their own dyno and the API gets its loop back.
+        We serve from a single uvicorn process, so there is one event loop: a
+        worker's work is the API's latency, and fourteen poll loops sharing
+        that loop and the connection pool with real requests is what took the
+        service from 1.5s to 16s on 19 November.
 
-        A one-off `heroku run` dyno is excluded as well - it exists to run
-        one command, not to pick up the queue, and two processes draining
-        the same tables was never intended.
+        The right answer is a `worker` dyno, and the machinery for it is
+        here: set BACKGROUND_WORKERS_DYNO to "worker", scale one, and the API
+        dyno stops running them. **The default is still "web"**, because a
+        worker dyno costs money and has not been bought - and defaulting the
+        other way would silently stop every email, upload parse and
+        post-lesson profile the moment this shipped. Until then the loops
+        stay here and the damage is cut by running fewer of them, far less
+        often (see DeferredMediaWorker and the workers' poll intervals).
+
+        A one-off `heroku run` dyno never joins in: it exists to run one
+        command, not to pick up the queue.
 
         Off the platform, where DYNO is unset, the old single-process
-        behaviour stands: a developer running the app locally still gets the
-        workers without having to start a second process.
+        behaviour stands, so a developer running locally still gets the
+        workers without starting a second process.
         """
         role = self.process_role
         if role == "local":
             return True
-        return role == "worker"
+        if role == "run":
+            return False
+        return role == self.background_workers_dyno.strip().casefold()
 
 
 @lru_cache

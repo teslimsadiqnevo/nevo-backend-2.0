@@ -111,7 +111,9 @@ class ConsentDeliveryWorker:
         *,
         sessions: async_sessionmaker[AsyncSession],
         email: ResendEmailDelivery,
-        poll_seconds: float = 5,
+        # Consent email delivery, 5s -> 20s. Nobody is watching the
+        # queue; the API was paying for the watching. 19 November.
+        poll_seconds: float = 20,
     ) -> None:
         self._sessions = sessions
         self._email = email

@@ -146,7 +146,14 @@ async def main(*, apply: bool, every_failure: bool, limit: int | None) -> None:
                 record = await session.get(NotificationEmailDelivery, row.id)
                 if record is None or record.delivered_at is not None:
                     continue
-                record.status = "pending"
+                # "failed", not "pending", and this matters. The worker
+                # claims a delivery whose status is "failed" or "processing",
+                # or whose row does not exist at all; "pending" is only the
+                # default a brand-new row is created with, so once a row
+                # exists, "pending" is never claimed by anything. Setting it
+                # here made these rows invisible rather than queued - worse
+                # than permanently_failed, which at least described reality.
+                record.status = "failed"
                 record.attempt_count = 0
                 record.next_attempt_at = now
                 record.last_error = None
@@ -173,7 +180,8 @@ async def main(*, apply: bool, every_failure: bool, limit: int | None) -> None:
                 .select_from(NotificationEmailDelivery)
                 .where(
                     NotificationEmailDelivery.delivered_at.is_(None),
-                    NotificationEmailDelivery.status == "pending",
+                    NotificationEmailDelivery.status == "failed",
+                    NotificationEmailDelivery.attempt_count == 0,
                 )
             )
             print(f"  notification queue now waiting to send: {still_waiting}")

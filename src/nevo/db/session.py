@@ -127,8 +127,31 @@ def create_engine(database_url: str) -> AsyncEngine:
         # round trip per checkout is a few milliseconds against a database
         # this far away, and it is the difference between a stale connection
         # being replaced and a request failing.
-        pool_pre_ping=True,
-        pool_recycle=280,
+        # Both of these are the pooler's, and only the pooler's.
+        #
+        # 7 November: the transaction pooler dropped client connections
+        # between transactions whatever their age, so a dead connection was
+        # handed to a request and failed on first use - a DBAPIError,
+        # intermittently, on a service that was up, at 18:41, 18:55, 19:34,
+        # 20:27 and 20:30. A pre-ping is the only thing that catches that,
+        # and an age limit under the pooler's idle timeout is what keeps a
+        # session-pooled connection fresh. Both stay for a pooler.
+        #
+        # Against Render's own Postgres neither earns its keep, and the first
+        # one is expensive. Measured on the dyno, 20 November:
+        # idle_session_timeout is 0, so the server never closes an idle
+        # session; tcp_keepalives_idle is 300, so the path is kept alive; and
+        # a pooled connection was reused fine after 120s, 300s and 600s
+        # idle. Meanwhile a round trip to Frankfurt from the US dyno measures
+        # ~185ms, so a pre-ping is ~185ms added to the first query of every
+        # checkout - the comment that used to sit here called it "a few
+        # milliseconds", which was true of the database we no longer use.
+        #
+        # A recycle is kept, long, as cheap insurance against a half-open
+        # connection after a network blip, which keepalives do not always
+        # catch.
+        pool_pre_ping=session_pooler or _is_transaction_pooler(database_url),
+        pool_recycle=280 if session_pooler or _is_transaction_pooler(database_url) else 1800,
         # Connections are expensive to establish here - the handshake costs
         # far more than a query - so hold a few open rather than reopening.
         # The Supabase session pooler has a 15-client project limit. Multiple

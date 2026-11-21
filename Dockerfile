@@ -30,9 +30,13 @@ EXPOSE 8000
 #   heroku container:push web worker -a nevo-backend
 #   heroku container:release web worker -a nevo-backend
 #
-# Boot the image before releasing it:
+# Before releasing, in this order, cheapest first:
+#   ruff check src/            # F821 catches an undefined name in an annotation
 #   docker build -t nevo-preflight . && docker run --rm nevo-preflight \
 #     python -c "import nevo.main"
+#
+# ruff alone would have caught the 20 November outage: the missing import was
+# F821, reported in under a second, by a tool already in this project.
 #
 # This is not belt and braces. The image is Python 3.12, which evaluates
 # annotations eagerly at import; local development is on 3.14, where PEP 649

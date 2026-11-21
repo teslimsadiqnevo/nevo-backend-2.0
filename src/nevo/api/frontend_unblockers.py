@@ -24,8 +24,9 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
-from sqlalchemy import false, func, or_, select, update
+from sqlalchemy import and_, false, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import aliased
 
 from nevo.access import accessible_lessons_page, accessible_lessons_query
 from nevo.ai_gateway.errors import AiGatewayError
@@ -122,7 +123,7 @@ from nevo.db.models.frontend_support import (
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.permission import Admin, AdminScopeAssignment
 from nevo.db.models.probe import ProbeItem
-from nevo.db.models.product import LessonModule, LessonProgress
+from nevo.db.models.product import LessonModule, LessonProgress, NotificationPreference
 from nevo.db.models.signal_event import LessonSession, SignalEvent
 from nevo.db.models.subject import ClassSubject, SchoolSubject
 from nevo.db.models.teacher_assignment import TeacherClassAssignment
@@ -2246,11 +2247,20 @@ async def list_notifications(
     archived_clause = (
         Notification.archived_at.is_not(None) if archived else Notification.archived_at.is_(None)
     )
+    preference, not_muted = _not_muted_in_app(principal.user_id)
     query = (
         select(Notification)
+        .outerjoin(
+            preference,
+            and_(
+                preference.user_id == Notification.recipient_id,
+                preference.category == Notification.category,
+            ),
+        )
         .where(
             Notification.recipient_id == principal.user_id,
             archived_clause,
+            not_muted,
         )
         .order_by(Notification.created_at.desc())
     )
@@ -2286,11 +2296,22 @@ async def unread_count(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> UnreadCountResponse:
+    # The same clause the list uses. A badge counting notifications the
+    # inbox will not show is a number nobody can clear.
+    preference, not_muted = _not_muted_in_app(principal.user_id)
     count = await session.scalar(
         select(func.count())
         .select_from(Notification)
+        .outerjoin(
+            preference,
+            and_(
+                preference.user_id == Notification.recipient_id,
+                preference.category == Notification.category,
+            ),
+        )
         .where(Notification.recipient_id == principal.user_id, Notification.read.is_(False))
         .where(Notification.archived_at.is_(None))
+        .where(not_muted)
     )
     return UnreadCountResponse(count=int(count or 0))
 
@@ -3614,6 +3635,37 @@ def _lesson_summary(
         createdById=lesson.created_by_user_id,
         createdByName=(author_names or {}).get(lesson.created_by_user_id),
         createdAt=lesson.created_at,
+    )
+
+
+def _not_muted_in_app(user_id: UUID):
+    """The clause that honours a muted category on the in-app side.
+
+    T19. The seven switches on the settings screen store an in_app flag and
+    an email flag per category. The email worker has always joined the email
+    one; nothing ever read in_app, so muting a category in the app silenced
+    nothing - every notification in it still arrived in the inbox and still
+    counted towards the unread badge. The switch was there and did nothing,
+    which is worse than not offering it.
+
+    Shaped exactly like the email worker's rule so the two cannot disagree:
+    show it when no preference row exists, because the default is on, and
+    show it when the row says in_app.
+
+    Consent is the exception, and the same exception the email side makes. A
+    parent or an administrator who mutes a category must not thereby hide a
+    consent action waiting on them - that is a notification about a child's
+    permission to learn, and a muted switch is not consent to stop being
+    asked.
+    """
+    preference = aliased(NotificationPreference)
+    return (
+        preference,
+        or_(
+            Notification.type == NotificationType.CONSENT_ACTION_REQUIRED.value,
+            preference.id.is_(None),
+            preference.in_app.is_(True),
+        ),
     )
 
 

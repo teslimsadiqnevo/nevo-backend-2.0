@@ -73,9 +73,9 @@ def test_the_offer_matches_what_the_route_will_accept() -> None:
     If these drift, a child does the working and is then refused - the one
     outcome worth engineering against.
     """
-    route = inspect.getsource(
-        __import__("nevo.api.paper_work", fromlist=["submit_typed_paper_work"]).submit_typed_paper_work
-    )
+    from nevo.api.paper_work import submit_typed_paper_work
+
+    route = inspect.getsource(submit_typed_paper_work)
     assert "paper_work_steps_not_approved" in route
     assert "paper_work_steps_unmarkable" in route
     offer = inspect.getsource(paper_work_offer)

@@ -38,7 +38,7 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"pretend pixels"
 
 def test_an_image_carries_bytes_rather_than_a_location() -> None:
     """A path or a key would be a thing that outlives the call."""
-    fields = {field for field in ProviderImage.__dataclass_fields__}
+    fields = set(ProviderImage.__dataclass_fields__)
     assert fields == {"data", "media_type"}
     assert isinstance(ProviderImage(data=PNG).data, bytes)
 

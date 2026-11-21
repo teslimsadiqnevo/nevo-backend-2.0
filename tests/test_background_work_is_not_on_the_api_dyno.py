@@ -26,7 +26,9 @@ from nevo.content_parsing.deferred_media import DeferredMediaWorker
 from nevo.core.config import Settings
 
 
-def _settings(monkeypatch: pytest.MonkeyPatch, dyno: str | None, owner: str | None = None) -> Settings:
+def _settings(
+    monkeypatch: pytest.MonkeyPatch, dyno: str | None, owner: str | None = None
+) -> Settings:
     if dyno is None:
         monkeypatch.delenv("DYNO", raising=False)
     else:

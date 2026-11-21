@@ -80,6 +80,55 @@ class ToolResult:
     is_error: bool = False
 
 
+#: The largest image the gateway will send, matching the ceiling the safety
+#: guard already enforces. A phone photograph of an exercise book is well
+#: inside it, and a request that would be refused by the provider is better
+#: refused here, where the caller can say something useful to the child.
+MAX_IMAGE_BYTES = 3_500_000
+
+#: What the provider accepts. Narrow on purpose: a camera route is the only
+#: caller, and widening this is a decision rather than a convenience.
+ALLOWED_IMAGE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderImage:
+    """One image sent with a request, held only for the call.
+
+    Raw bytes rather than a path or a key, because there is nowhere to put a
+    paper-work photograph: ADR 0009 says the image is never written to disk,
+    never put in the bucket, never reaches a backup, and is not kept on a
+    failure either. Passing bytes keeps it that way by construction - there
+    is no identifier for anything else to hold on to.
+
+    Never logged and never recorded on the audit row. The audit keeps token
+    counts and a cost; it must not become the place a photograph of a child's
+    book survives.
+    """
+
+    data: bytes
+    media_type: str = "image/png"
+
+    def __post_init__(self) -> None:
+        if self.media_type not in ALLOWED_IMAGE_MEDIA_TYPES:
+            raise ValueError(f"Unsupported image media type: {self.media_type}")
+        if not self.data:
+            raise ValueError("An image must have bytes")
+        if len(self.data) > MAX_IMAGE_BYTES:
+            raise ValueError(
+                f"Image is {len(self.data)} bytes, over the {MAX_IMAGE_BYTES} limit"
+            )
+
+    def __repr__(self) -> str:
+        """Size and type, never the bytes.
+
+        A dataclass repr would put a base64 photograph of a child's exercise
+        book into any log line, traceback or error report that formats the
+        request. ADR 0009.
+        """
+        return f"ProviderImage(media_type={self.media_type!r}, bytes={len(self.data)})"
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderRequest:
     system_instruction: str
@@ -98,6 +147,16 @@ class ProviderRequest:
     #: for thousands of tokens and needs minutes; a learner's question needs
     #: an answer now. One global timeout cannot serve both.
     timeout_seconds: float | None = None
+    #: Images to read alongside the text.
+    #:
+    #: The gateway could not send one at all: the safety guard reviewed images
+    #: through its own direct call, so anything that needed a model to *read*
+    #: a picture had no route. ADR 0009 calls this the substantial part of the
+    #: paper-work camera route - a new capability rather than a new route.
+    #:
+    #: Held for the call and no longer. Nothing here is written to the audit
+    #: row or to a log.
+    images: tuple[ProviderImage, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

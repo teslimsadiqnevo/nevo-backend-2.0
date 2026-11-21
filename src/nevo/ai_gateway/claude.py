@@ -1,3 +1,4 @@
+import base64
 from typing import Any
 
 import httpx
@@ -80,6 +81,21 @@ class ClaudeRestProvider:
                 {
                     "role": "user",
                     "content": [
+                        # Images first, then the text that asks about them.
+                        # The provider reads the content in order, and an
+                        # instruction that arrives before the picture it
+                        # refers to is an instruction about nothing.
+                        *(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": image.media_type,
+                                    "data": base64.b64encode(image.data).decode(),
+                                },
+                            }
+                            for image in request.images
+                        ),
                         {
                             "type": "text",
                             "text": request.user_content,
@@ -106,9 +122,15 @@ class ClaudeRestProvider:
             # and lesson preparation is almost all of our model spend, so
             # this is the cheapest saving available to us. L6, 20 November.
             payload["system"][0]["cache_control"] = {"type": "ephemeral"}
-            payload["messages"][0]["content"][-1]["cache_control"] = {
-                "type": "ephemeral"
-            }
+            # The last block, which is always the text: images are placed
+            # before it. A breakpoint on an image would cache a photograph of
+            # a child's exercise book on the provider's side for the cache
+            # lifetime, which ADR 0009 does not permit - it says the image is
+            # held for the read and then gone.
+            if not request.images:
+                payload["messages"][0]["content"][-1]["cache_control"] = {
+                    "type": "ephemeral"
+                }
             # The top-level "cache_control" that used to be set here did
             # nothing at all: the Messages API takes cache_control on content
             # blocks, not on the request. It read like caching was on while

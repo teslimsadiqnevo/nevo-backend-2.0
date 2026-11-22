@@ -94,27 +94,10 @@ class PaystackClient:
         body = await self._get(f"/transaction/verify/{reference}")
         return _parse_transaction(body)
 
-    async def charge_authorization(
-        self,
-        *,
-        email: str,
-        amount: Decimal,
-        reference: str,
-        authorization_code: str,
-        currency: PricingCurrency,
-    ) -> ProviderTransaction:
-        """Charge a stored authorization without the payer being present."""
-        body = await self._post(
-            "/transaction/charge_authorization",
-            {
-                "email": email,
-                "amount": to_minor_units(amount),
-                "reference": reference,
-                "authorization_code": authorization_code,
-                "currency": currency.value,
-            },
-        )
-        return _parse_transaction(body)
+    # charge_authorization was here, and it is gone. It was the only way to
+    # move money without the payer present, and Lydia's rule of 22 November
+    # says no path does that. Checkout and a confirmed bank transfer are the
+    # two ways money arrives now, and both have a person at one end.
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30) as client:

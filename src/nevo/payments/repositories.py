@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nevo.db.models.account import School, User
 from nevo.db.models.billing import (
     BillingContact,
-    BillingPaymentMethod,
     Invoice,
     PaymentTransaction,
     PaymentWebhookEvent,
@@ -217,97 +216,23 @@ class SqlAlchemyPaymentRepository:
                         navigates_to="/admin/billing",
                     )
 
-            method_saved = False
-            if authorization is not None and authorization.reusable:
-                await self._upsert_payment_method(
-                    session,
-                    school_id=record.school_id,
-                    authorization=authorization,
-                    customer_code=customer_code,
-                    actor_user_id=record.initiated_by_user_id,
-                )
-                method_saved = True
-            return invoice_paid, method_saved
+            # Nothing is stored from the authorization, ever.
+            #
+            # This used to keep the token, the last four digits, the brand and
+            # the expiry whenever Paystack returned a reusable card, which is
+            # how a stored instrument came to exist at all - nobody asked for
+            # one; a successful payment created it. Lydia's rule of
+            # 22 November: Nevo stores no reusable payment token for any
+            # customer, school or individual.
+            #
+            # The second element of the pair stays for the callers that read
+            # it and is now always False.
+            return invoice_paid, False
 
-    @staticmethod
-    async def _upsert_payment_method(
-        session: AsyncSession,
-        *,
-        school_id: UUID,
-        authorization: ProviderAuthorization,
-        customer_code: str | None,
-        actor_user_id: UUID | None,
-    ) -> None:
-        existing = await session.scalar(
-            select(BillingPaymentMethod).where(BillingPaymentMethod.school_id == school_id)
-        )
-        updated_by = actor_user_id or (existing.updated_by_user_id if existing else None)
-        if updated_by is None:
-            # The column is NOT NULL and there is no actor to attribute the
-            # change to, so leave the stored method alone rather than fail the
-            # settlement of a payment that already succeeded.
-            return
-        display_name = (
-            f"{authorization.card_brand or authorization.bank_name or 'Card'} "
-            f"ending {authorization.last_four}"
-        ).strip()
-        if existing is None:
-            session.add(
-                BillingPaymentMethod(
-                    school_id=school_id,
-                    method_type=authorization.method_type,
-                    processor_name="paystack",
-                    processor_payment_method_ref=authorization.authorization_code,
-                    processor_customer_code=customer_code,
-                    display_name=display_name,
-                    last_four=authorization.last_four,
-                    card_brand=authorization.card_brand,
-                    expiry_month=authorization.expiry_month,
-                    expiry_year=authorization.expiry_year,
-                    bank_name=authorization.bank_name,
-                    account_holder_name=authorization.account_name,
-                    is_reusable=authorization.reusable,
-                    updated_by_user_id=updated_by,
-                )
-            )
-            return
-        existing.method_type = authorization.method_type
-        existing.processor_name = "paystack"
-        existing.processor_payment_method_ref = authorization.authorization_code
-        existing.processor_customer_code = customer_code or existing.processor_customer_code
-        existing.display_name = display_name
-        existing.last_four = authorization.last_four
-        existing.card_brand = authorization.card_brand
-        existing.expiry_month = authorization.expiry_month
-        existing.expiry_year = authorization.expiry_year
-        existing.bank_name = authorization.bank_name
-        existing.account_holder_name = authorization.account_name
-        existing.is_reusable = authorization.reusable
-        existing.updated_by_user_id = updated_by
-
-    async def saved_method(self, school_id: UUID) -> SavedMethod | None:
-        async with self._sessions() as session:
-            row = (
-                await session.execute(
-                    select(
-                        BillingPaymentMethod.processor_payment_method_ref,
-                        BillingContact.email,
-                    )
-                    .join(School, School.id == BillingPaymentMethod.school_id)
-                    .join(BillingContact, BillingContact.id == School.billing_contact_id)
-                    .where(
-                        BillingPaymentMethod.school_id == school_id,
-                        BillingPaymentMethod.is_reusable.is_(True),
-                        BillingPaymentMethod.processor_payment_method_ref.is_not(None),
-                    )
-                )
-            ).first()
-        if row is None:
-            return None
-        authorization_code, email = row
-        if not authorization_code or not email:
-            return None
-        return SavedMethod(authorization_code=authorization_code, billing_email=email)
+    # _upsert_payment_method and saved_method were here, and they are gone:
+    # one wrote the token, the other read it back so a charge could be made
+    # with nobody present. Neither has a caller now. Lydia's rule of
+    # 22 November.
 
     async def claim_webhook_event(
         self,

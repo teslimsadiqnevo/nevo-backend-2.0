@@ -126,7 +126,6 @@ class PaymentMethodUpdate:
     display_name: str
     last_four: str
     processor_name: str | None = None
-    processor_payment_method_ref: str | None = None
     card_brand: str | None = None
     expiry_month: int | None = None
     expiry_year: int | None = None

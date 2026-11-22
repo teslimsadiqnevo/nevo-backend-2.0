@@ -235,36 +235,3 @@ async def test_provider_error_body_is_surfaced(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(PaymentProviderRejectedError, match="Invalid key"):
         await PaystackClient(_settings()).verify_transaction("nevo-1")
-
-
-async def test_charge_authorization_posts_the_saved_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    requests = _install(
-        monkeypatch,
-        lambda request: httpx.Response(
-            200,
-            json={
-                "status": True,
-                "data": {
-                    "reference": "nevo-2",
-                    "status": "success",
-                    "amount": 5_000,
-                    "currency": "NGN",
-                },
-            },
-        ),
-    )
-
-    result = await PaystackClient(_settings()).charge_authorization(
-        email="bursar@school.test",
-        amount=Decimal("50.00"),
-        reference="nevo-2",
-        authorization_code="AUTH_abc123",
-        currency=PricingCurrency.NGN,
-    )
-
-    body = json.loads(requests[0].content)
-    assert body["authorization_code"] == "AUTH_abc123"
-    assert body["amount"] == 5_000
-    assert result.status is PaymentTransactionStatus.SUCCESS

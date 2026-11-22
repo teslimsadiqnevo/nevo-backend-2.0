@@ -289,7 +289,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             retention_service=app.state.retention_service,
             scheduler_service=app.state.scheduler_service,
             sso_service=app.state.sso_service,
-            payment_service=app.state.payment_service,
             issuance_service=InvoiceIssuanceService(sessions),
             content_parsing_service=app.state.content_parsing_service,
         ),

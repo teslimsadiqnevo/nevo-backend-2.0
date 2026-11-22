@@ -14,11 +14,9 @@ from nevo.payments.errors import (
     InvalidWebhookSignatureError,
     InvoiceNotPayableError,
     MissingBillingContactError,
-    NoReusablePaymentMethodError,
     PaymentNotFoundError,
     PaymentProviderUnavailableError,
 )
-from nevo.payments.repositories import SavedMethod
 from nevo.payments.service import PaymentService
 from tests.payments.fakes import (
     ACTOR_ID,
@@ -251,47 +249,6 @@ async def test_webhook_re_verifies_rather_than_trusting_the_body() -> None:
     assert client.verified == [session.reference]
     assert outcome is not None
     assert outcome.invoice_paid is False
-
-
-async def test_charge_saved_method_requires_a_stored_authorization() -> None:
-    repository = FakePaymentRepository(invoice=payable_invoice())
-    service = _service(repository, FakePaystackClient())
-
-    with pytest.raises(NoReusablePaymentMethodError):
-        await service.charge_saved_method(school_id=SCHOOL_ID, invoice_id=INVOICE_ID)
-
-
-async def test_charge_saved_method_collects_and_settles() -> None:
-    repository = FakePaymentRepository(
-        invoice=payable_invoice(),
-        method=SavedMethod(
-            authorization_code="AUTH_abc123",
-            billing_email="bursar@school.test",
-        ),
-    )
-    client = FakePaystackClient()
-    service = _service(repository, client)
-
-    def charge(**kwargs: object):  # type: ignore[no-untyped-def]
-        client.charged.append(kwargs)
-        client.transaction = provider_transaction(reference=str(kwargs["reference"]))
-        return client.transaction
-
-    async def charge_authorization(**kwargs: object):  # type: ignore[no-untyped-def]
-        return charge(**kwargs)
-
-    client.charge_authorization = charge_authorization  # type: ignore[method-assign]
-
-    outcome = await service.charge_saved_method(school_id=SCHOOL_ID, invoice_id=INVOICE_ID)
-
-    assert outcome.status is PaymentTransactionStatus.SUCCESS
-    assert outcome.invoice_paid is True
-    assert client.charged[0]["authorization_code"] == "AUTH_abc123"
-
-
-# --- money that never went near the processor ------------------------------
-
-
 async def test_a_transfer_is_recorded_by_an_admin_not_claimed_by_the_payer() -> None:
     """verify_reference asks Paystack about a transaction it opened. A bank
     transfer never reaches Paystack, so the only thing that can confirm it is

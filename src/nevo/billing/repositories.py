@@ -159,7 +159,10 @@ class SqlAlchemyBillingRepository:
             values = {
                 "method_type": update_data.method_type,
                 "processor_name": update_data.processor_name,
-                "processor_payment_method_ref": (update_data.processor_payment_method_ref),
+                # Always cleared. Nothing may write a token here, and an
+                # update wipes one that predates the rule. Lydia,
+                # 22 November.
+                "processor_payment_method_ref": None,
                 "display_name": update_data.display_name,
                 "last_four": update_data.last_four,
                 "card_brand": update_data.card_brand,

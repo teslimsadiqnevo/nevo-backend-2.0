@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -15,8 +15,6 @@ from nevo.domain.accounts.vocabulary import SsoConnectionStatus
 from nevo.domain.billing.vocabulary import InvoiceStatus
 from nevo.notifications.digests import send_attention_digests
 from nevo.ops.jobs import ScheduledJob
-from nevo.payments.errors import PaymentError
-from nevo.payments.service import PaymentService
 from nevo.retention.service import RetentionService
 from nevo.scheduler.service import FsrsSchedulerService
 from nevo.sso.service import SsoService
@@ -51,7 +49,6 @@ def build_scheduled_jobs(
     retention_service: RetentionService,
     scheduler_service: FsrsSchedulerService,
     sso_service: SsoService,
-    payment_service: PaymentService,
     issuance_service: InvoiceIssuanceService,
     content_parsing_service: ContentParsingService,
 ) -> tuple[ScheduledJob, ...]:
@@ -146,30 +143,23 @@ def build_scheduled_jobs(
         failed = await sso_service.fail_stale_roster_syncs()
         return f"closed {failed} stale roster syncs"
 
-    async def collect_due_invoices() -> str:
-        if not payment_service.configured:
-            return "skipped: no payment provider configured"
-        due = await _collectable_invoices(sessions)
-        collected = 0
-        skipped = 0
-        for school_id, invoice_id in due:
-            try:
-                outcome = await payment_service.charge_saved_method(
-                    school_id=school_id,
-                    invoice_id=invoice_id,
-                )
-            except PaymentError:
-                skipped += 1
-                continue
-            except Exception:
-                logger.exception("Invoice collection failed for invoice %s", invoice_id)
-                skipped += 1
-                continue
-            if outcome.invoice_paid:
-                collected += 1
-            else:
-                skipped += 1
-        return f"collected {collected} invoices, {skipped} not collected"
+    # billing.collect_due_invoices was here, and it is gone.
+    #
+    # It charged each due invoice against the school's stored card, daily,
+    # with nobody present. Lydia's rule of 22 November: Nevo stores no
+    # reusable payment token for any customer, school or individual, and no
+    # path charges a stored instrument with nobody present. Schools pay by
+    # invoice and bank transfer, so there is no card to tokenise and nothing
+    # for this job to do.
+    #
+    # It was not idle. It ran 52 times, and on 22 November it attempted two
+    # real invoices - 150,500 and 6,450,000 - against a stored token. Nothing
+    # was collected and no money moved, but the attempt is the problem. It had
+    # skipped itself for months because no payment provider was configured;
+    # configuring Paystack on 20 November is what gave it the ability to try.
+    #
+    # Collection is now a person paying an invoice, which the payment routes
+    # already serve.
 
     return (
         # Weekly by ruling: a flag is a pattern noticed over days, and a
@@ -197,15 +187,8 @@ def build_scheduled_jobs(
             interval=HOURLY,
             run=close_stale_roster_syncs,
         ),
-        # Issuance runs before collection so a freshly raised invoice that is
-        # already due is picked up on the same sweep.
         ScheduledJob(name="billing.issue_invoices", interval=DAILY, run=issue_invoices),
         ScheduledJob(name="billing.invoice_reminders", interval=DAILY, run=invoice_reminders),
-        ScheduledJob(
-            name="billing.collect_due_invoices",
-            interval=DAILY,
-            run=collect_due_invoices,
-        ),
     )
 
 
@@ -222,21 +205,3 @@ async def _connected_sso_schools(
     return list(dict.fromkeys(rows.all()))
 
 
-async def _collectable_invoices(
-    sessions: async_sessionmaker[AsyncSession],
-    *,
-    today: date | None = None,
-) -> list[tuple[UUID, UUID]]:
-    """Invoices that are due now and still unpaid."""
-    cutoff = today or datetime.now(UTC).date()
-    async with sessions() as session:
-        rows = await session.execute(
-            select(Invoice.school_id, Invoice.id)
-            .where(
-                Invoice.status.in_((InvoiceStatus.PENDING, InvoiceStatus.OVERDUE)),
-                Invoice.due_at <= cutoff,
-            )
-            .order_by(Invoice.due_at)
-            .limit(500)
-        )
-    return [(school_id, invoice_id) for school_id, invoice_id in rows]

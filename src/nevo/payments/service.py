@@ -16,7 +16,6 @@ from nevo.payments.errors import (
     InvalidWebhookSignatureError,
     InvoiceNotPayableError,
     MissingBillingContactError,
-    NoReusablePaymentMethodError,
     PaymentNotFoundError,
     PaymentProviderUnavailableError,
 )
@@ -110,45 +109,17 @@ class PaymentService:
         provider_transaction = await self._client.verify_transaction(reference)
         return await self._settle(provider_transaction)
 
-    async def charge_saved_method(
-        self,
-        *,
-        school_id: UUID,
-        invoice_id: UUID,
-    ) -> PaymentOutcome:
-        """Collect an invoice against the school's stored authorization."""
-        self._require_configured()
-        invoice = await self._repository.payable_invoice(
-            school_id=school_id,
-            invoice_id=invoice_id,
-        )
-        if invoice is None:
-            raise PaymentNotFoundError
-        if invoice.status is InvoiceStatus.PAID:
-            raise InvoiceNotPayableError
-        method = await self._repository.saved_method(school_id)
-        if method is None:
-            raise NoReusablePaymentMethodError
-
-        reference = self._reference(invoice.invoice_number)
-        currency = self._client.currency
-        await self._repository.create_transaction(
-            school_id=school_id,
-            invoice_id=invoice_id,
-            reference=reference,
-            amount=invoice.amount,
-            amount_minor=to_minor_units(invoice.amount),
-            currency=currency,
-            initiated_by_user_id=None,
-        )
-        provider_transaction = await self._client.charge_authorization(
-            email=method.billing_email,
-            amount=invoice.amount,
-            reference=reference,
-            authorization_code=method.authorization_code,
-            currency=currency,
-        )
-        return await self._settle(provider_transaction)
+    # charge_saved_method was here, and it is gone.
+    #
+    # It collected an invoice against a school's stored authorization: a
+    # charge with nobody present. Lydia's rule of 22 November - no reusable
+    # payment token for any customer, and no path that charges a stored
+    # instrument with nobody present - removes the whole shape, not just the
+    # scheduled job that called it.
+    #
+    # An invoice is now paid by a person: start_payment for checkout, or
+    # confirm_manual_transfer for a bank transfer an administrator has
+    # confirmed receiving. Both have somebody present, which is the point.
 
     async def confirm_manual_transfer(
         self,

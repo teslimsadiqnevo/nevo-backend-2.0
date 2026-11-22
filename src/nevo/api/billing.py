@@ -405,11 +405,12 @@ class PaymentMethodRequest(BaseModel):
         alias="processorName",
         max_length=80,
     )
-    processor_payment_method_ref: str | None = Field(
-        default=None,
-        alias="processorPaymentMethodRef",
-        max_length=255,
-    )
+    # processorPaymentMethodRef is gone. It was the token, and this route was
+    # a second way for one to arrive - a client could store a chargeable
+    # instrument by asking. Lydia's rule of 22 November: Nevo stores no
+    # reusable payment token for any customer, school or individual. A
+    # request that still sends the field is ignored rather than refused, so a
+    # client mid-release does not break on it.
     card_brand: str | None = Field(default=None, alias="cardBrand", max_length=80)
     expiry_month: int | None = Field(default=None, alias="expiryMonth", ge=1, le=12)
     expiry_year: int | None = Field(default=None, alias="expiryYear", ge=2026)
@@ -692,7 +693,6 @@ async def update_payment_method(
                 display_name=payload.display_name,
                 last_four=payload.last_four,
                 processor_name=payload.processor_name,
-                processor_payment_method_ref=payload.processor_payment_method_ref,
                 card_brand=payload.card_brand,
                 expiry_month=payload.expiry_month,
                 expiry_year=payload.expiry_year,

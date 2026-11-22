@@ -135,6 +135,11 @@ def test_lesson_sessions_table_tracks_resume_and_counts() -> None:
         "started_at",
         "ended_at",
         "completion_status",
+        # The app's declaration above, and our own judgement here. Of 41
+        # sittings the app called completed, 22 have no recorded answer, so
+        # whether a lesson counts towards a learner's profile is decided on
+        # whether a check was taken and marked. Lydia, 22 November.
+        "verified_complete_at",
         "exit_position",
         "break_count",
         "proactive_adjustments_count",

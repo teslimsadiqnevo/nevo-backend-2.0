@@ -2422,6 +2422,13 @@ async def save_lesson_progress(
     if payload.status in {"completed", "exited"}:
         lesson_session.ended_at = lesson_session.ended_at or datetime.now(UTC)
         lesson_session.completion_status = LessonCompletionStatus(payload.status)
+    # And then our own judgement, beside the app's claim rather than instead
+    # of it. completion_status stays exactly what the player said; whether
+    # the lesson counts towards a learner's profile is ours to decide, on
+    # whether a check was taken and marked. Lydia, 22 November.
+    from nevo.intelligence.finished_lessons import judge_finished
+
+    await judge_finished(session, lesson_session)
     reroute: dict[str, object] | None = None
     if payload.status == "completed":
         from nevo.intelligence.learning_runtime import seed_completed_lesson_reviews

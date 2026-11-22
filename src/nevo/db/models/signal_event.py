@@ -114,6 +114,23 @@ class LessonSession(Base):
         default=LessonCompletionStatus.IN_PROGRESS,
         server_default=LessonCompletionStatus.IN_PROGRESS.value,
     )
+
+    #: When *we* judged this lesson finished, rather than when the app said so.
+    #:
+    #: completion_status is the player's declaration: it sends "completed" and
+    #: we record it. Of 41 sittings marked completed, 22 have no recorded
+    #: answer at all, so a profile built on that number is built on half
+    #: noise. Lydia, 22 November: the number is the lessons where the check
+    #: was taken and marked, stored as our decision.
+    #:
+    #: Null means we have not judged it finished - which is not the same as
+    #: the child not having finished, only that the evidence we require is
+    #: not there. Nothing is inferred from the absence except that it should
+    #: not be counted.
+    verified_complete_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     exit_position: Mapped[str | None] = mapped_column(
         String(120),
         nullable=True,

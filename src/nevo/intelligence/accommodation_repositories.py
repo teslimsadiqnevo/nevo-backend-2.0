@@ -72,7 +72,12 @@ class SqlAlchemyAccommodationPatternRepository:
                 .where(
                     LessonSession.student_id == student_id,
                     LessonSession.lesson_id.is_not(None),
-                    LessonSession.completion_status == LessonCompletionStatus.COMPLETED,
+                    # Our judgement, not the app's claim. Of 41 sittings the
+                    # app called completed, 22 have no recorded answer at
+                    # all - and an accommodation confirmed from lessons
+                    # half of which are noise is an accommodation applied
+                    # to a child on no evidence. Lydia, 22 November.
+                    LessonSession.verified_complete_at.is_not(None),
                 )
                 .subquery()
             )
@@ -83,7 +88,7 @@ class SqlAlchemyAccommodationPatternRepository:
                     .where(
                         latest.c.sitting == 1,
                         LessonSession.student_id == student_id,
-                        LessonSession.completion_status == LessonCompletionStatus.COMPLETED,
+                        LessonSession.verified_complete_at.is_not(None),
                     )
                     .order_by(LessonSession.started_at.desc())
                     .limit(lesson_limit)

@@ -42,16 +42,15 @@ from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 
+#: The six-attempt ceiling both workers stop at. Imported rather than
+#: repeated, so raising one of them cannot leave this script disagreeing
+#: with the worker about what "gave up" means.
+from nevo.consent.worker import MAX_ATTEMPTS as CONSENT_MAX_ATTEMPTS
 from nevo.core.config import get_settings
 from nevo.db.models.consent import ConsentNotificationOutbox
 from nevo.db.models.frontend_support import NotificationEmailDelivery
 from nevo.db.session import create_engine, create_session_factory
 from nevo.domain.consent.vocabulary import ConsentDeliveryStatus
-
-#: The six-attempt ceiling both workers stop at. Imported rather than
-#: repeated, so raising one of them cannot leave this script disagreeing
-#: with the worker about what "gave up" means.
-from nevo.consent.worker import MAX_ATTEMPTS as CONSENT_MAX_ATTEMPTS
 from nevo.notifications.worker import MAX_ATTEMPTS as NOTIFICATION_MAX_ATTEMPTS
 
 #: What a send raises when there is no provider. EmailDeliveryUnavailableError

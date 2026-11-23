@@ -153,6 +153,43 @@ class SafetyDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["allow", "block", "safeguard"]
     categories: list[Category] = Field(max_length=8)
+    #: One sentence a person can read, from whichever checker wrote it.
+    #: Lydia, 23 November: the weekly adjudication has to read reasons,
+    #: not category labels - "privacy_abuse" and a typed finding are both
+    #: our vocabulary, and neither tells a reviewer what the checker
+    #: actually objected to.
+    #:
+    #: Defaulted rather than required on purpose. A required field that
+    #: the model omits fails validation, which becomes SafetyUnavailable,
+    #: which fails a teacher's upload - and we have spent today learning
+    #: what that costs. A missing sentence should cost the review a line,
+    #: never cost a teacher her lesson.
+    reason: str = Field(
+        default="",
+        description=(
+            "One plain sentence saying what you objected to and why, or why "
+            "this is acceptable if you are allowing it. Written for a person "
+            "reviewing this decision later, not for a machine. Name no child."
+        ),
+    )
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _never_fail_on_the_reason(cls, value):
+        """Trim it; never reject it.
+
+        max_length here was a ValidationError waiting to happen, and it
+        happened within the hour: the checker wrote a 400-plus character
+        reason about Things Fall Apart, pydantic refused the whole decision,
+        and a lesson on a set text failed with "Nevo cannot complete its
+        safety check right now". A sentence we asked for as a convenience to
+        a human reviewer must not be able to fail the check it describes -
+        which is the same rule the default already follows, applied to the
+        other end of the string.
+        """
+        if value is None:
+            return ""
+        return str(value)[:400]
 
     @model_validator(mode="after")
     def consistent(self):
@@ -181,6 +218,43 @@ class SafetyFinding(BaseModel):
 class SafetyDecisionV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
     findings: list[SafetyFinding] = Field(max_length=8)
+    #: One sentence a person can read, from whichever checker wrote it.
+    #: Lydia, 23 November: the weekly adjudication has to read reasons,
+    #: not category labels - "privacy_abuse" and a typed finding are both
+    #: our vocabulary, and neither tells a reviewer what the checker
+    #: actually objected to.
+    #:
+    #: Defaulted rather than required on purpose. A required field that
+    #: the model omits fails validation, which becomes SafetyUnavailable,
+    #: which fails a teacher's upload - and we have spent today learning
+    #: what that costs. A missing sentence should cost the review a line,
+    #: never cost a teacher her lesson.
+    reason: str = Field(
+        default="",
+        description=(
+            "One plain sentence saying what you objected to and why, or why "
+            "this is acceptable if you are allowing it. Written for a person "
+            "reviewing this decision later, not for a machine. Name no child."
+        ),
+    )
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _never_fail_on_the_reason(cls, value):
+        """Trim it; never reject it.
+
+        max_length here was a ValidationError waiting to happen, and it
+        happened within the hour: the checker wrote a 400-plus character
+        reason about Things Fall Apart, pydantic refused the whole decision,
+        and a lesson on a set text failed with "Nevo cannot complete its
+        safety check right now". A sentence we asked for as a convenience to
+        a human reviewer must not be able to fail the check it describes -
+        which is the same rule the default already follows, applied to the
+        other end of the string.
+        """
+        if value is None:
+            return ""
+        return str(value)[:400]
 
 
 class LessonSafetyContext(BaseModel):
@@ -193,6 +267,12 @@ class LessonSafetyContext(BaseModel):
     review_status: str
     lesson_id: str | None = None
     section_id: str | None = None
+    #: The file the teacher sent. On a first upload there is no lesson yet -
+    #: we create it only after the parse succeeds - so a refusal at
+    #: lesson_source could name nothing at all. All thirteen of the refused
+    #: uploads are in that state. The upload exists at that moment, so it is
+    #: what the record can point at.
+    upload_id: str | None = None
 
 
 SERIOUS_CATEGORIES = frozenset(
@@ -379,6 +459,7 @@ class ContentSafetyGuard:
                         else None
                     ),
                     disposition=disposition,
+                    reason=getattr(decision, "reason", "") or "",
                     input_hash=hashlib.sha256(chunk.encode()).hexdigest(),
                     prompt_hash=hashlib.sha256(
                         self._payload(content, phase)["system"].encode()
@@ -650,6 +731,7 @@ class ContentSafetyGuard:
         lesson_context=None,
         chunk_index=None,
         chunk_count=None,
+        reason="",
     ):
         if self._sessions is None:
             return None
@@ -678,6 +760,7 @@ class ContentSafetyGuard:
                     chunk_index=chunk_index,
                     chunk_count=chunk_count,
                     lesson_context=lesson_context,
+                    reason=reason or None,
                     policy_version=POLICY_VERSION_V2
                     if isinstance(decision, SafetyDecisionV2)
                     else POLICY_VERSION,

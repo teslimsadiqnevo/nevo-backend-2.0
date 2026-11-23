@@ -37,7 +37,13 @@ def guard(decision, *, status=200, stop_reason="end_turn"):
         ('{"action":"safeguard","categories":["self_harm"]}', SafetyBlocked),
         ('{"action":"allow","categories":["violence"]}', SafetyUnavailable),
         ('{"action":"block","categories":[]}', SafetyUnavailable),
-        ('{"action":"allow","categories":[],"reason":"private text"}', SafetyUnavailable),
+        # "reason" used to stand for an unexpected field here. It is a real
+        # field now - Lydia asked for a sentence a reviewer can read - so the
+        # case that guards extra="forbid" needs a field that is genuinely not
+        # ours, and a new case checks that a reason is accepted rather than
+        # treated as contraband.
+        ('{"action":"allow","categories":[],"rationale":"private text"}', SafetyUnavailable),
+        ('{"action":"allow","categories":[],"reason":"Ordinary lesson text."}', None),
         ('{"action":"allow","categories":["unknown"]}', SafetyUnavailable),
         ("not JSON", SafetyUnavailable),
     ],
@@ -45,6 +51,9 @@ def guard(decision, *, status=200, stop_reason="end_turn"):
 async def test_rejects_unsafe_or_invalid_review(decision, exception):
     reviewer, _, client = guard(decision)
     async with client:
+        if exception is None:
+            await reviewer.check("untrusted material", phase="test")
+            return
         with pytest.raises(exception):
             await reviewer.check("untrusted material", phase="test")
 
@@ -238,3 +247,39 @@ def test_an_image_safety_check_gets_room_to_upload_the_image() -> None:
     assert with_image.write == 120.0, "the write is what was timing out"
     assert with_image.read == 120.0
     assert with_image.connect == 30.0, "a dead host should still fail fast"
+
+
+@pytest.mark.parametrize("model_name", ["SafetyDecision", "SafetyDecisionV2"])
+def test_a_long_reason_is_trimmed_not_refused(model_name) -> None:
+    """The reason must never be able to fail the check it describes.
+
+    It was max_length=400 for about an hour, and in that hour the live
+    checker wrote a longer sentence about Things Fall Apart. Pydantic
+    refused the whole decision, that became SafetyUnavailable, and a lesson
+    on a set text failed with "Nevo cannot complete its safety check right
+    now" - the same sentence, and the same lie, as the timeout did. A
+    convenience for a human reviewer does not get to block a child's lesson.
+    """
+    import nevo.ai_gateway.safety as safety_module
+
+    model = getattr(safety_module, model_name)
+    payload = (
+        {"action": "allow", "categories": [], "reason": "x" * 900}
+        if model_name == "SafetyDecision"
+        else {"findings": [], "reason": "x" * 900}
+    )
+    decision = model.model_validate(payload)
+    assert len(decision.reason) == 400
+
+
+@pytest.mark.parametrize("model_name", ["SafetyDecision", "SafetyDecisionV2"])
+def test_a_missing_reason_is_not_an_error_either(model_name) -> None:
+    import nevo.ai_gateway.safety as safety_module
+
+    model = getattr(safety_module, model_name)
+    payload = (
+        {"action": "allow", "categories": []}
+        if model_name == "SafetyDecision"
+        else {"findings": []}
+    )
+    assert model.model_validate(payload).reason == ""

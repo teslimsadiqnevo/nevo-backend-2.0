@@ -251,6 +251,12 @@ class ContentParsingService:
             uploader_provenance="authenticated_account",
             review_status="not_reviewed",
             lesson_id=str(existing_lesson_id) if existing_lesson_id else None,
+            # On a first upload there is no lesson yet - it is created only
+            # after the parse succeeds - so a refusal here would name nothing,
+            # which is the state all thirteen refused uploads are in. The parse
+            # run exists before the check does and carries the file name, so it
+            # is what the record can point at.
+            upload_id=str(parse_run_id) if parse_run_id else None,
         )
         source_checked_by_chunk = (
             isinstance(self._ai_gateway, AiGatewayService)

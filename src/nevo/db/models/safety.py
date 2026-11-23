@@ -26,6 +26,10 @@ class ContentSafetyEvent(Base):
     action: Mapped[str] = mapped_column(String(20))
     categories: Mapped[list] = mapped_column(JSONB)
     findings: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    #: One sentence from the checker that made this decision, for the weekly
+    #: adjudication to read. Nullable: it is a sentence we asked for and may
+    #: not get, and a missing one must never fail the check that produced it.
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     prompt_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)

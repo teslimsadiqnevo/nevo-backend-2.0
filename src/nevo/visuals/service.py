@@ -95,6 +95,9 @@ ILLUSTRATION_STYLE = (
     "brackets, callout rings, highlight bands, any annotation - uses only "
     "these four: navy #3b3f6e, cream #f7f1e6, elevated cream #ede8dc, soft "
     "violet #9a9ccb. "
+    "Never apply those four colours to the depicted subject itself - they "
+    "are for the added layer only, and a subject painted in them is wrong "
+    "even when it looks right. "
     "Aspect ratio 3:2. One consistent internal margin. One consistent line "
     "weight. No shadows and no implied light source. No gradients. Flat "
     "rendering, never photorealistic. Plain ground: no scenery, no texture, "
@@ -211,7 +214,7 @@ class EducationalImageService:
         width = height = byte_size = 0
         try:
             if not await self._storage.exists(object_path):
-                answer_safe_prompt = self._answer_safe_prompt()
+                answer_safe_prompt = self._answer_safe_prompt(title)
                 accepted, attempts, used_prompt, description = await self._draw_until_approved(
                     prompt,
                     safe_review_context,
@@ -338,11 +341,30 @@ class EducationalImageService:
                 )
         raise VisualEducationalReviewError(category, issues)
 
-    def _answer_safe_prompt(self) -> str:
-        # The title, body and teacher direction can all contain the answer.
-        # Keep this retry context-free; full source context is reviewer-only.
+    def _answer_safe_prompt(self, title: str | None) -> str:
+        """The retry after an answer-revealing rejection: the subject, no answer.
+
+        This used to send no subject at all - title "the broad lesson concept"
+        and an empty body - on the reasoning that the title, body and teacher
+        direction can each contain the answer, so the safest retry carries
+        none of them. It is safe and it cannot work. A prompt reading "Lesson
+        content: ." asks for a picture of nothing, so the model draws a
+        generic science poster; the reviewer still holds the full lesson text,
+        correctly calls it unrelated, and ``answer_safe_retry`` is already set
+        by then, so the loop raises at once. Every lesson that tripped the
+        answer-revealing classifier therefore lost its image for certain,
+        having paid for two generations and two reviews first. A litmus lesson
+        came back as photosynthesis, which is how it was found.
+
+        The title alone restores a subject. It is already in the first prompt,
+        it names what is being taught rather than its answer, and the body -
+        which is where a worked example or a solved check actually lives -
+        stays out. A title that does give the answer away is still caught,
+        because the reviewer sees every candidate and this retry is gated by
+        it like any other.
+        """
         return self._prompt(
-            "the broad lesson concept",
+            title or "the broad lesson concept",
             "",
             "Illustrate the broad concept only. Do not include a worked example, "
             "question, answer choice, numeric result, or solved assessment.",

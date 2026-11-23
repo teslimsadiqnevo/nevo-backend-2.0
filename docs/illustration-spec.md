@@ -7,6 +7,8 @@
 
 **Everything Nevo adds around the subject stays in the four.** Backgrounds, frames, arrows, brackets, callout rings, highlight bands and any annotation layer are chrome, they are ours, and they carry the house palette: Navy `#3b3f6e`, Cream `#f7f1e6`, Cream Elevated `#ede8dc`, Soft Violet `#9a9ccb`.
 
+**The four never go on the subject.** They are the added layer and only the added layer. The first generated set put house violet on litmus paper, pixel-exact, because "use these four" reads as a palette for the whole picture unless it is said otherwise. A subject painted in the house colours is wrong even where it looks right, and in a lesson where the colour is the content it teaches the child something false. So the prompt forbids it outright rather than leaving it to be inferred from the split above.
+
 ## Treatment, locked
 
 Consistency comes from treatment rather than from palette. Six pictures of six different subjects in their own real colours still read as one set when every one of them is drawn the same way.

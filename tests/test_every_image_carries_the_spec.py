@@ -97,3 +97,46 @@ def test_the_spec_is_in_the_repository_as_the_source() -> None:
     text = doc.read_text()
     for colour in HOUSE_COLOURS:
         assert colour.lstrip("#") in text.lower() or colour in text.lower()
+
+
+def test_the_house_colours_are_forbidden_on_the_subject_explicitly() -> None:
+    """Stating the split is not enough: it has to be stated as a prohibition.
+
+    The first set generated with this spec applied put house violet on
+    litmus paper, three units away from #9a9ccb in RGB. The model read a
+    palette for the picture rather than a palette for the chrome, because
+    the split described what the four govern without ever saying where they
+    must not go. In a litmus lesson the colour is the content, so that is a
+    wrong answer rather than an off-brand one.
+    """
+    assert "Never apply those four colours to the depicted subject" in ILLUSTRATION_STYLE
+    forbid = ILLUSTRATION_STYLE.index("Never apply those four")
+    palette = ILLUSTRATION_STYLE.index("#9a9ccb")
+    assert palette < forbid, "the prohibition follows the palette it restricts"
+
+
+def test_the_answer_safe_retry_still_has_a_subject() -> None:
+    """A retry with no subject cannot be approved, so it is not a retry.
+
+    The answer-revealing fallback sent title "the broad lesson concept" and
+    an empty body, which asks for a picture of nothing. The model obliged
+    with an unrelated science poster - a litmus lesson came back as
+    photosynthesis - and the reviewer, which still holds the real lesson
+    text, rejected it as unrelated. The fallback had already been used, so
+    the loop raised immediately. Guaranteed failure at the price of two
+    generations and two reviews.
+    """
+    service = object.__new__(EducationalImageService)
+    prompt = EducationalImageService._answer_safe_prompt(
+        service, "Testing liquids with litmus paper"
+    )
+    assert "Testing liquids with litmus paper" in prompt, "the subject must survive"
+    assert "Lesson content: ." in prompt, "the body, where an answer lives, stays out"
+    assert "Do not include a worked example" in prompt
+    assert prompt.rstrip().endswith(ILLUSTRATION_STYLE.rstrip()), "spec still last"
+
+
+def test_the_answer_safe_retry_falls_back_when_there_is_no_title() -> None:
+    service = object.__new__(EducationalImageService)
+    prompt = EducationalImageService._answer_safe_prompt(service, None)
+    assert "Lesson title: the broad lesson concept." in prompt

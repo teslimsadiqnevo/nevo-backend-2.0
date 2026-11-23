@@ -66,7 +66,17 @@ class SupabaseStorage:
                 content=content,
             )
         if response.is_error:
-            raise StorageError(f"Supabase upload failed with status {response.status_code}")
+            # The body is the only thing that says *why*. Without it an
+            # expired key, a missing bucket and a size limit are one
+            # indistinguishable 400 - which is how nine days of uploads
+            # failed on "signature verification failed" without anyone
+            # being able to tell what was wrong. Supabase returns a short
+            # JSON error here and no object contents, so it is safe to
+            # surface; the key is in the request headers, never the reply.
+            raise StorageError(
+                f"Supabase upload failed with status {response.status_code}: "
+                f"{response.text[:300]}"
+            )
 
     async def download(self, path: str) -> bytes:
         async with httpx.AsyncClient(timeout=30) as client:

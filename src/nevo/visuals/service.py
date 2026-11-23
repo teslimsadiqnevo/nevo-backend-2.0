@@ -67,6 +67,46 @@ REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
+#: The illustration spec, 22 November 2026, verbatim. It lives in the design
+#: system beside the palette and the radius scale, and it is sent with every
+#: image request.
+#:
+#: Verbatim and appended, not paraphrased per image and not rewritten per
+#: lesson, because that is what the spec itself requires: "two images from
+#: the same lesson, opened side by side, should be obviously from the same
+#: product". A style instruction reworded per call is how six pictures stop
+#: looking like one set.
+#:
+#: Two things in it are easy to get backwards. The four house colours govern
+#: what *Nevo adds* - backgrounds, frames, arrows, brackets, callout rings,
+#: highlight bands - and never the subject: veins, flames, litmus paper and
+#: minerals keep their own true colours, because a wrong colour teaches a
+#: child something false or makes the real thing harder to recognise later.
+#: And parts are told apart by shape, position and label rather than by hue,
+#: except where the real colour is itself the thing being taught.
+#:
+#: docs/illustration-spec.md is the source. Change it there first.
+ILLUSTRATION_STYLE = (
+    "STYLE, applies to every image and overrides any styling implied above. "
+    "Depict the subject in its own true colours: the picture teaches what the "
+    "thing actually looks like, so veins, flames, litmus paper, fruit, flags, "
+    "minerals, tissue and apparatus keep their real colours. "
+    "Everything added around the subject - background, frame, arrows, "
+    "brackets, callout rings, highlight bands, any annotation - uses only "
+    "these four: navy #3b3f6e, cream #f7f1e6, elevated cream #ede8dc, soft "
+    "violet #9a9ccb. "
+    "Aspect ratio 3:2. One consistent internal margin. One consistent line "
+    "weight. No shadows and no implied light source. No gradients. Flat "
+    "rendering, never photorealistic. Plain ground: no scenery, no texture, "
+    "no decorative background. "
+    "The image contains no text, no letters, no numerals and no watermark of "
+    "any kind: labels, axis names, units and captions are laid over the "
+    "picture afterwards by the product, in the product font. "
+    "Tell parts apart by shape, position and placement rather than by colour, "
+    "unless the real colour of the subject is itself what is being taught."
+)
+
+
 class VisualGenerationError(RuntimeError):
     pass
 
@@ -315,9 +355,13 @@ class EducationalImageService:
             "to understand on a tablet. Prefer a clear diagram, process illustration, number "
             "representation, or labelled instructional scene over decorative art. Preserve every "
             "mathematical quantity and scientific relationship exactly. Do not invent facts. Avoid "
-            "logos, watermarks, labels about pupils, student names, tiny text, long paragraphs. "
+            "logos, labels about pupils and student names. "
             f"Lesson title: {title or 'Untitled'}. Lesson content: {text}. "
-            f"Teacher visual direction: {requested or 'Choose the clearest instructional visual.'}"
+            f"Teacher visual direction: {requested or 'Choose the clearest instructional visual.'} "
+            # Last, so it is the final word on styling: the subject
+            # description comes first and the treatment is appended to it,
+            # which is the order the spec asks for.
+            + ILLUSTRATION_STYLE
         )
 
     def _image_client(self) -> httpx.AsyncClient:

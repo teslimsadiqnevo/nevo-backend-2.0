@@ -33,9 +33,22 @@ from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.signal_event import LessonSession
 from nevo.domain.signal_events.vocabulary import LessonCompletionStatus
 
-#: The one line to change when the rule is settled. "app_and_check" gives 18,
-#: "ended_and_check" gives 27, "check_only" gives 31.
-RULE = "app_and_check"
+#: Settled by Lydia, 22 November: 31, on marked evidence alone.
+#:
+#: She chose 27 - evidence plus the sitting having ended - and asked whether
+#: "ended" was ours or the app's. It is the app's: of the four paths that set
+#: ended_at, three are the app telling us (a progress save declaring
+#: completed or exited, a "stop for day" action, and a signal batch in which
+#: the client supplies the timestamp itself), and the fourth is a staleness
+#: sweep that means abandoned rather than finished. So by her own principle
+#: it came out too.
+#:
+#: What the number counts is lessons that gave us marked evidence. A learner
+#: who answered six checks and abandoned at segment five produced six checks
+#: of evidence, and whether they reached a final screen adds nothing to that.
+#:
+#: "app_and_check" gives 18, "ended_and_check" 27, "check_only" 31.
+RULE = "check_only"
 
 
 def _marked_check_exists(session_id: UUID):

@@ -38,8 +38,17 @@ def test_the_rule_is_one_named_place() -> None:
     )
 
 
-def test_the_default_is_the_number_she_reasoned_from() -> None:
-    assert finished_lessons.RULE == "app_and_check"
+def test_the_rule_is_marked_evidence_alone() -> None:
+    """Settled by Lydia on 22 November at 31, not the 27 she first chose.
+
+    She asked whether the "ended" half was ours or the app's. It is the
+    app's: three of the four paths that set ended_at are the app telling us,
+    and one of those lets the client supply the timestamp itself. So by her
+    own principle it came out, and what the number counts is lessons that
+    gave us marked evidence - a learner who answered six checks and
+    abandoned at segment five produced six checks of evidence.
+    """
+    assert finished_lessons.RULE == "check_only"
 
 
 def test_the_evidence_is_a_markable_answer_not_a_right_one() -> None:

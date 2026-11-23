@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     safety_policy_v2_enabled: bool = Field(
         default=False, validation_alias="SAFETY_POLICY_V2_ENABLED"
     )
+    #: Run v2 beside v1 and record what it would have said, acting on
+    #: none of it. Its own switch, not a consequence of the one above:
+    #: it doubles the checker calls on lesson material, so turning v2
+    #: on must not quietly turn a second bill on with it.
+    safety_policy_v2_shadow: bool = Field(
+        default=False, validation_alias="SAFETY_POLICY_V2_SHADOW"
+    )
     level_mastery_collection_enabled: bool = Field(
         default=False, validation_alias="LEVEL_MASTERY_COLLECTION_ENABLED"
     )

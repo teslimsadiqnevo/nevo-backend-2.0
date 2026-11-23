@@ -12,6 +12,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from nevo.ai_gateway.errors import AiGatewayError
 
+#: Strong refs to in-flight shadow comparisons, so they are not collected
+#: mid-call. Discarded by the done callback.
+_SHADOW_TASKS: set = set()
+
 POLICY_VERSION = "child-safety-2026-10-v1"
 POLICY_VERSION_V2 = "child-safety-2026-11-v2"
 Category = Literal[
@@ -232,6 +236,7 @@ class ContentSafetyGuard:
         sessions=None,
         client=None,
         policy_v2=False,
+        shadow_v2=False,
     ):
         self._key, self._base, self._model, self._version = (
             api_key,
@@ -241,6 +246,7 @@ class ContentSafetyGuard:
         )
         self._sessions, self._client = sessions, client
         self._policy_v2 = policy_v2
+        self._shadow_v2 = shadow_v2 and not policy_v2
         self._semaphore = asyncio.Semaphore(4)
 
     @property
@@ -383,6 +389,11 @@ class ContentSafetyGuard:
                 )
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
                 raise SafetyUnavailable() from error
+            # The shadow runs after the verdict is recorded and before it is
+            # acted on, so a blocked chunk - the only kind worth comparing -
+            # is sampled too rather than lost to the raise below.
+            if self._shadow_v2 and lesson_context is not None:
+                self._fire_shadow(chunk, phase, context, lesson_context)
             if disposition in {"block", "safeguard", "hold"} and not allowed_through:
                 categories = (
                     tuple(item.category for item in decision.findings)
@@ -390,6 +401,58 @@ class ContentSafetyGuard:
                     else tuple(decision.categories)
                 )
                 raise SafetyBlocked(categories, phase, event_id=event_id, disposition=disposition)
+
+    def _fire_shadow(self, chunk, phase, context, lesson_context) -> None:
+        """Ask v2 the same question, record its answer, act on none of it.
+
+        Why this exists: production holds seventy real blocks and not one of
+        them kept its material, so v2 cannot be judged against the decisions
+        that actually went wrong. Inventing test cases does not help either -
+        eight hard ones, including a set text ending in a suicide and a civic
+        lesson on FGM, agreed with v1 every time, because v1 never over-blocked
+        on any of them. The only material that can settle it is the material
+        teachers really upload, judged as it arrives.
+
+        Nothing here can change an outcome. The verdict is written and never
+        read back; every failure is swallowed, including a v2 block, which is
+        the most interesting result rather than an error. The pairing is by
+        input_hash, which both rows carry, so the two verdicts can be joined
+        later without either row storing the text.
+
+        It is fire-and-forget on purpose. Awaiting it would put a second
+        checker call in front of a teacher who is waiting for a parse, and
+        the whole point is that this one does not matter enough to wait for.
+        The cost is that a sample can be lost if the dyno stops mid-flight,
+        which is acceptable for a comparison and would not be for enforcement.
+        """
+        try:
+            task = asyncio.create_task(
+                self._shadow_compare(chunk, phase, context, lesson_context)
+            )
+        except RuntimeError:
+            return  # no running loop; the shadow is never worth raising for
+        _SHADOW_TASKS.add(task)
+        task.add_done_callback(_SHADOW_TASKS.discard)
+
+    async def _shadow_compare(self, chunk, phase, context, lesson_context) -> None:
+        sibling = ContentSafetyGuard(
+            api_key=self._key,
+            base_url=self._base,
+            model=self._model,
+            version=self._version,
+            sessions=self._sessions,
+            client=self._client,
+            policy_v2=True,      # shadow_v2 is forced off by the constructor
+        )
+        try:
+            await sibling.check(
+                chunk, phase=phase, context=context, lesson_context=lesson_context
+            )
+        except BaseException:
+            # A v2 block, an unavailable checker, a cancelled task at shutdown:
+            # all of them are results or shrugs, none of them is this request's
+            # problem. The row was already written before check() raised.
+            return
 
     #: Phases where a privacy finding alone no longer blocks.
     #:
@@ -646,4 +709,5 @@ def safety_from_settings(settings, *, sessions=None):
         version=settings.anthropic_version,
         sessions=sessions,
         policy_v2=getattr(settings, "safety_policy_v2_enabled", False),
+        shadow_v2=getattr(settings, "safety_policy_v2_shadow", False),
     )

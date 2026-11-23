@@ -14,7 +14,12 @@
 Consistency comes from treatment rather than from palette. Six pictures of six different subjects in their own real colours still read as one set when every one of them is drawn the same way.
 
 1. One aspect ratio: 3:2, filling the reading column (D195).
-2. One internal margin, set once on the first set and used by every image after it.
+2. One internal margin, stated as a number rather than as a habit: the subject fills the
+   central 80% of the frame, leaving 10% of the width clear at left and right and 10% of
+   the height clear at top and bottom. "Consistent" on its own cannot be obeyed, because
+   each image is drawn with no knowledge of any other - the first generated set put the
+   subject in the central 33% with 34% empty on either side, which is a perfectly
+   consistent margin as far as that one request could tell.
 3. One line weight, set the same way.
 4. No shadows and no implied light source.
 5. No gradients.

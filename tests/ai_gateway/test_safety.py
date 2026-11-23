@@ -216,3 +216,25 @@ async def test_v2_requires_context_and_checker_failure_does_not_become_a_finding
         with pytest.raises(SafetyUnavailable):
             await reviewer.check("lesson material", phase="lesson_source")
     assert calls == []
+
+
+def test_an_image_safety_check_gets_room_to_upload_the_image() -> None:
+    """30s flat was a quarter of what the reviewer gets for the same bytes.
+
+    The image phases send a megabyte and a half of PNG as base64. httpx's
+    flat timeout applies to the write as well as the read, so pushing that
+    in 30s needed a fast uplink; without one it raised WriteTimeout, which
+    is caught with the other HTTP errors and reaches a teacher as "Nevo
+    cannot complete its safety check right now" - a message that names no
+    cause and suggests the checker, not the clock. The image reviewer sends
+    identical bytes with 120s and succeeds.
+    """
+    from nevo.ai_gateway.safety import _timeout_for
+
+    text_only = _timeout_for(None)
+    assert text_only.write == 30.0 and text_only.read == 30.0, "text is unchanged"
+
+    with_image = _timeout_for(b"\x89PNG" + b"0" * 1_500_000)
+    assert with_image.write == 120.0, "the write is what was timing out"
+    assert with_image.read == 120.0
+    assert with_image.connect == 30.0, "a dead host should still fail fast"

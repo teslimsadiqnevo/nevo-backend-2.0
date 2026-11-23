@@ -140,3 +140,20 @@ def test_the_answer_safe_retry_falls_back_when_there_is_no_title() -> None:
     service = object.__new__(EducationalImageService)
     prompt = EducationalImageService._answer_safe_prompt(service, None)
     assert "Lesson title: the broad lesson concept." in prompt
+
+
+def test_the_margin_is_a_number_not_an_adjective() -> None:
+    """"One consistent internal margin" cannot be obeyed by one request.
+
+    Rules 2 and 3 of the spec are cross-image rules - set once on the first
+    set, used by every image after it - but each image is generated with no
+    knowledge of any other, so "consistent" leaves the model free to pick a
+    different margin every time and be consistent within each. The first
+    reviewed image put the subject in the central 33% of the width with 34%
+    clear on either side, which fails the spec's own test that two images
+    from one lesson look like one product. Lydia set the figure at 80%.
+    """
+    assert "central 80% of the frame" in ILLUSTRATION_STYLE
+    assert "10% of the width" in ILLUSTRATION_STYLE
+    assert "10% of" in ILLUSTRATION_STYLE and "the height" in ILLUSTRATION_STYLE
+    assert "same margin on every" in ILLUSTRATION_STYLE, "it has to bind across images"

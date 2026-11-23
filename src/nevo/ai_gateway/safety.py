@@ -106,6 +106,14 @@ from an isolated subject word. Never silently treat uncertainty as safe.
 """
 
 
+
+def _timeout_for(image: bytes | None) -> httpx.Timeout:
+    """Text gets 30s. An image gets room to be uploaded before it is judged."""
+    if image is None:
+        return httpx.Timeout(30.0)
+    return httpx.Timeout(120.0, connect=30.0, write=120.0, read=120.0)
+
+
 class SafetyUnavailable(AiGatewayError):
     code = "safety_check_unavailable"
     public_message = "Nevo cannot complete its safety check right now. Please try again later."
@@ -253,6 +261,16 @@ class ContentSafetyGuard:
         if not isinstance(text, str) or len(text) > 1_000_000:
             raise SafetyUnavailable()
         use_v2 = self._policy_v2 and self._is_v2_lesson_material(phase)
+        # A flat 30s covered connect, read and write alike, including on the
+        # image phases, which carry a megabyte and a half of PNG as base64.
+        # Pushing that in 30s needs a fast uplink and often did not have one:
+        # the failure arrives as httpx.WriteTimeout, is caught below with the
+        # other HTTP errors, and reaches a teacher as "Nevo cannot complete
+        # its safety check right now" with nothing saying why. The image
+        # reviewer sends the identical bytes with 120s and succeeds, so the
+        # checker was working to a quarter of the budget for the same
+        # payload. Text keeps the 30s it has always had.
+        request_timeout = _timeout_for(image)
         if use_v2 and lesson_context is None:
             raise SafetyUnavailable()
         # Every byte is reviewed; overlap protects boundaries in long uploads.
@@ -292,10 +310,10 @@ class ContentSafetyGuard:
                             retry_number=1,
                             headers=self._headers(),
                             json=self._payload(content, phase),
-                            timeout=30,
+                            timeout=request_timeout,
                         )
                     else:
-                        async with httpx.AsyncClient(timeout=30) as client:
+                        async with httpx.AsyncClient(timeout=request_timeout) as client:
                             from nevo.ops.media_usage import provider_request
 
                             response = await provider_request(

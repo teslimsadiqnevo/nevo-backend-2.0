@@ -62,6 +62,14 @@ SHARED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", f"{API_PREFIX}/auth/me"),
         ("POST", f"{API_PREFIX}/auth/session/refresh"),
         ("POST", f"{API_PREFIX}/auth/logout"),
+        # Phase 2: the learner's home, lesson list and onboarding, each read
+        # and made to work with no school (nevo.intelligence.learner_scope).
+        ("GET", f"{API_PREFIX}/students/me/dashboard"),
+        ("GET", f"{API_PREFIX}/lessons"),
+        ("GET", f"{API_PREFIX}/students/me/onboarding"),
+        # The onboarding assessment's results, which set the baseline band.
+        ("POST", "/api/baseline/trials"),
+        ("POST", "/api/baseline/submit"),
     }
 )
 

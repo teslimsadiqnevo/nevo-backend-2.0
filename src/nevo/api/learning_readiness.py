@@ -12,6 +12,7 @@ from nevo.api.product_common import actor_user, require_school_actor
 from nevo.api.response_models import CamelResponse
 from nevo.db.models.content import Lesson, LessonSegment
 from nevo.db.models.frontend_support import Concept
+from nevo.intelligence.learner_scope import is_individual
 from nevo.intelligence.learning_runtime import (
     ONBOARDING_MODULES,
     onboarding_modules,
@@ -69,14 +70,27 @@ async def readiness(
         from nevo.subjects.resolution import normalise
 
         lesson = await session.get(Lesson, lesson_id)
-        assignment = await session.scalar(
-            select(LessonAssignment.id).where(
-                LessonAssignment.lesson_id == lesson_id,
-                LessonAssignment.student_id == student.id,
-                LessonAssignment.status != "cancelled",
+        if is_individual(student):
+            # /me: a lesson is theirs by having uploaded it, never by assignment.
+            reachable = (
+                lesson is not None
+                and lesson.created_by_user_id == student.id
+                and lesson.school_id is None
             )
-        )
-        if lesson is None or lesson.school_id != student.school_id or assignment is None:
+        else:
+            assignment = await session.scalar(
+                select(LessonAssignment.id).where(
+                    LessonAssignment.lesson_id == lesson_id,
+                    LessonAssignment.student_id == student.id,
+                    LessonAssignment.status != "cancelled",
+                )
+            )
+            reachable = (
+                lesson is not None
+                and lesson.school_id == student.school_id
+                and assignment is not None
+            )
+        if not reachable:
             if not using_remembered:
                 raise HTTPException(404, detail={"code": "lesson_not_found"})
             profile = dict(student.baseline_profile or {})

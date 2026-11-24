@@ -49,6 +49,12 @@ async def onboarding_subjects(session: AsyncSession, user: User):
     from nevo.db.models.probe import ProbeItem
     from nevo.db.models.subject import ClassSubject, SchoolSubject
 
+    if user.school_id is None:
+        # An individual (/me) learner takes no school subjects, so there is
+        # no domain probe to place them with; refresh_onboarding records it
+        # as unavailable rather than fabricating a placement. Said here rather
+        # than left to a NULL comparison that matches nothing by accident.
+        return [], set()
     subjects = list(
         await session.scalars(
             select(SchoolSubject)

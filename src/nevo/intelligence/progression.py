@@ -1,17 +1,18 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from nevo.content_parsing.concept_names import readable_concept_name
 from nevo.db.models.content import Lesson, LessonSegment
-from nevo.db.models.frontend_support import Concept, LessonAssignment
+from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import (
     StudentConceptLevelMastery,
     StudentConceptMastery,
     StudentConceptScheduling,
 )
 from nevo.db.models.product import LessonProgress, LessonQuestionAttempt
+from nevo.intelligence.learner_scope import available_lesson_ids, learner_concepts
 from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
 
 LEVEL_INDEPENDENT_PASSES = 2
@@ -20,17 +21,8 @@ LEVEL_INDEPENDENT_PASSES = 2
 async def next_work(session, student, subject=None, lesson_id=None):
     """Choose only assigned, available content with satisfied prerequisites."""
     now = datetime.now(UTC)
-    assignment = (
-        select(LessonAssignment.lesson_id)
-        .join(Lesson, Lesson.id == LessonAssignment.lesson_id)
-        .where(
-            LessonAssignment.student_id == student.id,
-            LessonAssignment.status != "cancelled",
-            or_(LessonAssignment.available_from.is_(None), LessonAssignment.available_from <= now),
-            Lesson.school_id == student.school_id,
-            Lesson.status == "completed",
-        )
-    )
+    # A school learner's assigned lessons, or an individual's own (/me).
+    assignment = available_lesson_ids(student, now)
     from nevo.api.lesson_review import outstanding_key_points
 
     segments_query = select(LessonSegment).where(LessonSegment.lesson_id.in_(assignment))
@@ -56,7 +48,7 @@ async def next_work(session, student, subject=None, lesson_id=None):
                 continue
             targets.setdefault(concept_id, segment)
     query = select(Concept).where(
-        Concept.school_id == student.school_id,
+        learner_concepts(student),
         Concept.id.in_(targets),
     )
     if subject:

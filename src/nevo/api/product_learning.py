@@ -145,6 +145,7 @@ from nevo.intelligence.delivery_preferences import (
     save_choice,
     segment_choice,
 )
+from nevo.intelligence.learner_scope import is_individual, owned_lessons
 from nevo.intelligence.learning_runtime import (
     apply_marked_attempt,
     ensure_onboarding,
@@ -994,6 +995,8 @@ async def lessons(
     session: DatabaseSession,
     scope: LessonScopeFilter = None,
 ) -> list[dict[str, object]]:
+    if principal.account_type == "individual":
+        return await _individual_lessons(session, principal)
     actor = await require_school_actor(session, principal)
     rows = await accessible_lessons(session, actor, scope=scope)
     counts = dict(
@@ -1030,6 +1033,42 @@ async def lessons(
         )
         for item in rows
     ]
+
+
+#: The school-shaped keys an individual's lesson list leaves out: who it is
+#: assigned to, whether a teacher may assign it, a teacher's review state and
+#: who wrote it (always the learner). Omitted, not empty or zero.
+INDIVIDUAL_LESSON_OMITS = frozenset(
+    {
+        "assignment_count",
+        "class_names",
+        "can_assign",
+        "review_complete",
+        "review_segment_count",
+        "unapproved_segment_count",
+        "created_by_id",
+        "created_by_name",
+    }
+)
+
+
+async def _individual_lessons(session: DatabaseSession, principal) -> JSONResponse:
+    """GET /lessons for a /me learner: the lessons they uploaded themselves."""
+
+    actor = await actor_user(session, principal)
+    rows = (
+        await session.scalars(
+            select(Lesson).where(owned_lessons(actor)).order_by(Lesson.created_at.desc())
+        )
+    ).all()
+    return JSONResponse(
+        [
+            LessonSummaryResponse.model_validate(_lesson_summary(item)).model_dump(
+                mode="json", by_alias=True, exclude=INDIVIDUAL_LESSON_OMITS
+            )
+            for item in rows
+        ]
+    )
 
 
 async def _author_names(session: DatabaseSession, lessons: list[Lesson]) -> dict[UUID, str]:
@@ -2624,7 +2663,10 @@ async def student_dashboard(
     age_band = coerce_band(actor.age_band, actor.date_of_birth) or band_for_year_group(
         enrolled_class.year_group if enrolled_class else None
     )
-    items = await assignments(principal, session)
+    individual = is_individual(actor)
+    # An individual (/me) learner is never assigned anything, so they get no
+    # assignments block at all - omitted, not empty (Yinka's contract point).
+    items = [] if individual else await assignments(principal, session)
     due = [item for item in items if item["status"] != "completed"]
     progress = (
         await session.scalars(
@@ -2655,7 +2697,7 @@ async def student_dashboard(
     from nevo.intelligence.progression import next_work
 
     ready = set(ONBOARDING_MODULES).issubset(onboarding_modules(actor.baseline_profile or {}))
-    return {
+    body = {
         "onboardingComplete": ready,
         "nextWork": await next_work(session, actor) if ready else None,
         "student": {
@@ -2685,6 +2727,13 @@ async def student_dashboard(
             for item in recent
         ],
     }
+    if individual:
+        # Returned as a response so response_model cannot put the key back.
+        shaped = StudentDashboardResponse.model_validate(body).model_dump(
+            mode="json", by_alias=True, exclude={"assignments"}
+        )
+        return JSONResponse(shaped)
+    return body
 
 
 @router.get("/students/{student_id}/profile", response_model=StudentProfileResponse)

@@ -642,6 +642,12 @@ async def require_learning_consent_if_student(
     their separate authorisation checks.
     """
 
+    if principal.account_type == "individual":
+        # /me (ruling A). An adult needs no guardian; an under-18 has
+        # everything except upload while consent is outstanding, and upload
+        # checks it itself (nevo.consent.guardian). The route guard keeps an
+        # individual off every route that has not been made to serve one.
+        return None
     if principal.role != "student":
         # Teachers and admins share several of these endpoints and have their
         # own authorisation. A pupil's consent has nothing to say about them,

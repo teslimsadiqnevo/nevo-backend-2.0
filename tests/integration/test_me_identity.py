@@ -59,6 +59,7 @@ def me(monkeypatch):
     from nevo.api.frontend_unblockers import router as unblockers_router
     from nevo.api.guardian_consent import router as guardian_router
     from nevo.api.individual_auth import router as individual_router
+    from nevo.api.learning_readiness import router as readiness_router
     from nevo.api.product_learning import router as learning_router
     from nevo.auth.config import AuthSettings
     from nevo.auth.wiring import build_auth_service
@@ -86,6 +87,7 @@ def me(monkeypatch):
     app.include_router(unblockers_router)
     app.include_router(product_auth.router)
     app.include_router(guardian_router)
+    app.include_router(readiness_router)
     app.state.auth_service = build_auth_service(sessions, AuthSettings())
     app.state.email_delivery = mailer
 
@@ -233,7 +235,7 @@ def test_a_verified_individual_cannot_reach_a_school_route(me):
     ).json()["accessToken"]
 
     response = client.get(
-        "/api/v1/students/me/dashboard", headers={"Authorization": f"Bearer {token}"}
+        f"/api/v1/students/{uuid4()}/profile", headers={"Authorization": f"Bearer {token}"}
     )
 
     assert response.status_code == 403

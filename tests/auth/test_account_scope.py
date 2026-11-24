@@ -22,7 +22,8 @@ from nevo.api.product_learning import router as learning_router
 from nevo.auth.entities import AuthPrincipal
 from nevo.auth.service import AuthService
 
-DASHBOARD = "/api/v1/students/me/dashboard"
+#: A learner route that stays school-only: a teacher's view of one child.
+SCHOOL_ROUTE = f"/api/v1/students/{uuid4()}/profile"
 
 
 class _FixedPrincipalAuth(AuthService):
@@ -66,7 +67,7 @@ def _principal(**overrides) -> AuthPrincipal:
 def test_individual_learner_on_a_school_route_is_refused_not_given_an_empty_page():
     client = _client(_principal(account_type="individual", school_id=None))
 
-    response = client.get(DASHBOARD, headers={"Authorization": "Bearer t"})
+    response = client.get(SCHOOL_ROUTE, headers={"Authorization": "Bearer t"})
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "school_account_required"
@@ -75,7 +76,7 @@ def test_individual_learner_on_a_school_route_is_refused_not_given_an_empty_page
 def test_school_learner_with_no_school_is_refused_rather_than_matching_nothing():
     client = _client(_principal(school_id=None))
 
-    response = client.get(DASHBOARD, headers={"Authorization": "Bearer t"})
+    response = client.get(SCHOOL_ROUTE, headers={"Authorization": "Bearer t"})
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "school_scope_missing"
@@ -113,7 +114,8 @@ def test_school_account_is_refused_on_an_individual_route():
         ("GET", "/api/v1/me", RouteAudience.INDIVIDUAL_ONLY),
         ("GET", "/api/v1/me/usage", RouteAudience.INDIVIDUAL_ONLY),
         ("GET", "/api/v1/meetings", RouteAudience.SCHOOL_ONLY),
-        ("GET", "/api/v1/students/me/dashboard", RouteAudience.SCHOOL_ONLY),
+        ("GET", "/api/v1/students/me/dashboard", RouteAudience.SHARED),
+        ("GET", "/api/v1/students/{student_id}/profile", RouteAudience.SCHOOL_ONLY),
         ("GET", "/api/v1/parents/me/children", RouteAudience.SCHOOL_ONLY),
         ("GET", "/api/v1/auth/session", RouteAudience.SHARED),
         ("get", "/api/v1/auth/session", RouteAudience.SHARED),

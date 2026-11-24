@@ -4,10 +4,15 @@ The gate sits at upload and nowhere else: one check, in one place, asking
 whether this learner may start preparing one more lesson. Nothing after the
 upload is metered - the cost is incurred at preparation.
 
-Counted: the learner's own upload jobs started this calendar month (Lagos
-time) that did not fail. A re-upload Nevo serves from an earlier one makes no
-job and costs nothing. A preparation that failed on Nevo's side is not the
-learner's to pay for.
+Counted: the learner's own upload jobs started in the current allowance
+period that did not fail. On the free tier the period is the calendar month
+(Lagos time), because there is no purchase date. On a paid tier it is the
+month that was bought, so the allowance resets on the purchase anniversary
+(Lydia, ruling C, 24 November 2026): resetting paid tiers on the 1st would
+give someone who buys on the 28th two allowances for one payment.
+
+A re-upload Nevo serves from an earlier one makes no job and costs nothing.
+A preparation that failed on Nevo's side is not the learner's to pay for.
 
 Two refusals, never one: consent outstanding and allowance exhausted have
 different screens and different ways out (Yinka's contract point), so they
@@ -25,7 +30,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nevo.consent.guardian import upload_blocked_by_consent
 from nevo.core.config import get_settings
 from nevo.db.models.account import User
 from nevo.db.models.product import UploadJob
@@ -52,10 +56,23 @@ class UploadRefused(Exception):
         self,
         code: Literal["upload_consent_required", "upload_allowance_exhausted"],
         usage: Usage | None = None,
+        guardian_contact: str | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
         self.usage = usage
+        #: Where the consent request went, for "We sent [guardian email] a
+        #: page to read" (Lydia's copy). None if nobody is named yet.
+        self.guardian_contact = guardian_contact
+
+    @property
+    def upgrade_to(self) -> Tier | None:
+        """The next tier up, for "[tier name] gives you [n] lessons a month"."""
+
+        if self.usage is None or self.offer != "upgrade":
+            return None
+        bigger = [t for t in tiers.TIERS if t.lessons_per_month > self.usage.allowance]
+        return min(bigger, key=lambda t: t.lessons_per_month) if bigger else None
 
     @property
     def offer(self) -> Literal["guardian_consent", "upgrade", "contact"]:
@@ -85,8 +102,16 @@ async def current_tier(session: AsyncSession, user: User, now: datetime) -> Tier
 
 
 async def usage_for(session: AsyncSession, user: User, now: datetime | None = None) -> Usage:
+    from nevo.me.billing import current_purchase
+
     now = now or datetime.now(UTC)
-    start, end = month_window(now)
+    purchase = await current_purchase(session, user.id, now)
+    if purchase is not None:
+        tier = tiers.by_key(purchase.tier_key) or tiers.FREE
+        start, end = purchase.period_start, purchase.period_end
+    else:
+        tier = tiers.FREE
+        start, end = month_window(now)
     used = await session.scalar(
         select(func.count())
         .select_from(UploadJob)
@@ -98,7 +123,6 @@ async def usage_for(session: AsyncSession, user: User, now: datetime | None = No
             UploadJob.status != "failed",
         )
     )
-    tier = await current_tier(session, user, now)
     return Usage(tier=tier, used=int(used or 0), allowance=tier.lessons_per_month, resets_at=end)
 
 
@@ -115,8 +139,11 @@ async def require_upload_allowed(
         hashlib.sha256(f"me-upload:{user.id}".encode()).digest()[:8], "big", signed=True
     )
     await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
-    if await upload_blocked_by_consent(session, user):
-        raise UploadRefused("upload_consent_required")
+    from nevo.consent.guardian import consent_view
+
+    view = await consent_view(session, user)
+    if "upload" in view.blocked:
+        raise UploadRefused("upload_consent_required", guardian_contact=view.guardian_contact)
     usage = await usage_for(session, user, now)
     ceiling = get_settings().me_fair_use_ceiling
     effective = min(usage.allowance, ceiling) if ceiling is not None else usage.allowance

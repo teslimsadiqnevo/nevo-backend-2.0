@@ -129,6 +129,7 @@ def _register(client, email, born=date(2001, 5, 1)):
             "email": email,
             "password": PASSWORD,
             "dateOfBirth": born.isoformat(),
+            "acceptTerms": True,
         },
     )
 

@@ -128,12 +128,13 @@ async def _send(
     try:
         await mailer.send(
             to=invitation.contact,
-            subject=me_copy.GUARDIAN_SUBJECT,
+            subject=me_copy.guardian_subject(learner_first_name=learner.first_name),
             text=me_copy.guardian_text(learner_first_name=learner.first_name, link=link),
             html=render_email(
-                heading=me_copy.GUARDIAN_SUBJECT,
+                heading=me_copy.guardian_subject(learner_first_name=learner.first_name),
                 paragraphs=me_copy.guardian_paragraphs(learner_first_name=learner.first_name),
                 cta=(me_copy.GUARDIAN_CTA, link),
+                footnote=me_copy.guardian_footnote(learner_first_name=learner.first_name),
             ),
         )
     except EmailDeliveryUnavailableError:

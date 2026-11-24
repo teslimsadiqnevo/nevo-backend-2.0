@@ -41,6 +41,7 @@ from nevo.api.product_auth import credential_hasher
 from nevo.api.response_models import CamelResponse
 from nevo.auth.errors import AuthError
 from nevo.consent import guardian
+from nevo.consent.written import NOTICE_VERSION
 from nevo.core.config import get_settings
 from nevo.db.models.account import User
 from nevo.db.models.auth import AuthLoginAttempt, EmailConfirmation
@@ -79,6 +80,10 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: Annotated[str, Field(min_length=8, max_length=1024)]
     date_of_birth: date
+    #: Must be true. Lydia's ruling D: an adult's acceptance of the terms at
+    #: sign-up is their own agreement to how Nevo prepares their lessons,
+    #: material leaving Nigeria included, so it is recorded, not assumed.
+    accept_terms: Literal[True]
 
     @field_validator("first_name", "last_name")
     @classmethod
@@ -311,6 +316,8 @@ async def register(
         email=email,
         password_hash=password_hash,
         date_of_birth=payload.date_of_birth,
+        terms_accepted_at=now,
+        terms_version=NOTICE_VERSION,
     )
     session.add(user)
     try:

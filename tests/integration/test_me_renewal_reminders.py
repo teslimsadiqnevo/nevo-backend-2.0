@@ -63,9 +63,16 @@ def _run(sessions, mailer):
 
 
 def _sent_to(mailer, email):
-    from nevo.notifications.me_copy import RENEWAL_SUBJECT
+    return [
+        m for m in mailer.sent
+        if m["to"] == email and m["subject"].startswith("Your Nevo month ends")
+    ]
 
-    return [m for m in mailer.sent if m["to"] == email and m["subject"] == RENEWAL_SUBJECT]
+
+def _lapse_notices(mailer, email):
+    from nevo.notifications.me_copy import LAPSED_SUBJECT
+
+    return [m for m in mailer.sent if m["to"] == email and m["subject"] == LAPSED_SUBJECT]
 
 
 @pytest.fixture
@@ -88,14 +95,16 @@ def test_a_month_ending_soon_is_reminded_once(me, billing_on):
 
     assert len(_sent_to(mailer, email)) == 1
     assert _reminded_at(sessions, purchase) is not None
-    assert "ends on" in _sent_to(mailer, email)[0]["text"]
-    assert "renews by itself" in _sent_to(mailer, email)[0]["text"]
+    message = _sent_to(mailer, email)[0]
+    assert "Nothing renews on its own" in message["text"]
+    assert "Buy another month: " in message["text"]
+    assert "Your work and your progress stay where they are either way." in message["text"]
 
 
 def test_a_month_with_time_left_is_not_reminded_yet(me, billing_on):
     client, mailer, sessions = me
     email = _verified(client, mailer)
-    _month(sessions, email, ends_in=timedelta(days=10))
+    _month(sessions, email, ends_in=timedelta(days=8))
 
     _run(sessions, mailer)
 
@@ -164,3 +173,56 @@ def test_the_end_date_is_said_in_lagos_time():
 
     # 23:30 UTC on 30 November is already 1 December in Lagos.
     assert ends_on(datetime(2026, 11, 30, 23, 30, tzinfo=UTC)) == "1 December 2026"
+
+
+def test_seven_days_out_is_reminded(me, billing_on):
+    client, mailer, sessions = me
+    email = _verified(client, mailer)
+    _month(sessions, email, ends_in=timedelta(days=6, hours=23))
+
+    _run(sessions, mailer)
+
+    assert len(_sent_to(mailer, email)) == 1
+
+
+def test_the_day_it_lapses_gets_its_own_notice_once(me, billing_on):
+    client, mailer, sessions = me
+    email = _verified(client, mailer)
+    purchase = _month(sessions, email, ends_in=-timedelta(hours=3), starts_ago=30)
+
+    _run(sessions, mailer)
+    _run(sessions, mailer)
+
+    notices = _lapse_notices(mailer, email)
+    assert len(notices) == 1
+    assert "Your work and your progress are all still here." in notices[0]["text"]
+    assert _sent_to(mailer, email) == []  # the seven-day one is for a month still running
+
+    from nevo.db.models.me import MePurchase
+
+    async def marked():
+        async with sessions() as session:
+            return (await session.get(MePurchase, purchase)).lapse_notice_sent_at
+
+    assert asyncio.run(marked()) is not None
+
+
+def test_a_lapse_long_past_is_not_announced_as_today(me, billing_on):
+    client, mailer, sessions = me
+    email = _verified(client, mailer)
+    _month(sessions, email, ends_in=-timedelta(days=3), starts_ago=33)
+
+    _run(sessions, mailer)
+
+    assert _lapse_notices(mailer, email) == []
+
+
+def test_no_lapse_notice_when_they_already_bought_the_next_month(me, billing_on):
+    client, mailer, sessions = me
+    email = _verified(client, mailer)
+    _month(sessions, email, ends_in=-timedelta(hours=3), starts_ago=30)
+    _month(sessions, email, ends_in=timedelta(days=30), starts_ago=0)
+
+    _run(sessions, mailer)
+
+    assert _lapse_notices(mailer, email) == []

@@ -280,6 +280,13 @@ class User(TimestampMixin, Base):
         default="school",
         server_default="school",
     )
+    #: When a /me learner accepted the terms at sign-up, and which version.
+    #: Lydia's ruling D rests on it: an adult's acceptance is their own
+    #: agreement to their material leaving Nigeria. Null on school accounts.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terms_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     auth_method: Mapped[AuthMethod] = mapped_column(auth_method_enum, nullable=False)
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)

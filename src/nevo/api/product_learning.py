@@ -158,6 +158,7 @@ from nevo.intelligence.learning_runtime import (
 from nevo.intelligence.session_delivery import delivery_snapshot
 from nevo.learner_profiles.post_lesson_worker import enqueue_post_lesson
 from nevo.me.usage import UploadRefused, require_upload_allowed
+from nevo.notifications.me_copy import COULD_NOT_PREPARE
 from nevo.sso.service import SsoService
 
 logger = logging.getLogger(__name__)
@@ -964,7 +965,10 @@ async def _lesson_for_actor(
             if not owns_lesson(actor, lesson):
                 raise HTTPException(status_code=404, detail="Lesson not found")
             if lesson.status == "failed":
-                raise HTTPException(409, detail={"code": "lesson_preparation_failed"})
+                raise HTTPException(
+                    409,
+                    detail={"code": "lesson_preparation_failed", "message": COULD_NOT_PREPARE},
+                )
         else:
             assignment = await session.scalar(
                 select(LessonAssignment.id).where(
@@ -1073,14 +1077,18 @@ async def _individual_lessons(session: DatabaseSession, principal) -> JSONRespon
             select(Lesson).where(owned_lessons(actor)).order_by(Lesson.created_at.desc())
         )
     ).all()
-    return JSONResponse(
-        [
-            LessonSummaryResponse.model_validate(_lesson_summary(item)).model_dump(
+    summaries = []
+    for item in rows:
+        summary = _lesson_summary(item)
+        if summary.get("failureReason") or item.status == "failed":
+            # The teacher-facing reason assumes a teacher; a learner reads Lydia's.
+            summary["failureReason"] = COULD_NOT_PREPARE
+        summaries.append(
+            LessonSummaryResponse.model_validate(summary).model_dump(
                 mode="json", by_alias=True, exclude=INDIVIDUAL_LESSON_OMITS
             )
-            for item in rows
-        ]
-    )
+        )
+    return JSONResponse(summaries)
 
 
 async def _author_names(session: DatabaseSession, lessons: list[Lesson]) -> dict[UUID, str]:
@@ -3247,6 +3255,14 @@ def _same_school(actor: User):
     return UploadJob.school_id == actor.school_id
 
 
+def _failure_for(actor: User, job: UploadJob) -> str | None:
+    """The failure text: a /me learner reads Lydia's sentence, not a teacher's."""
+
+    if job.failure_reason and is_individual(actor):
+        return COULD_NOT_PREPARE
+    return job.failure_reason
+
+
 def _owns_upload(actor: User, job: UploadJob | None) -> bool:
     if job is None:
         return False
@@ -3269,6 +3285,14 @@ async def _upload_actor(session: DatabaseSession, principal) -> User:
 
 def _upload_refusal(refusal: UploadRefused) -> HTTPException:
     detail: dict[str, object] = {"code": refusal.code, "offer": refusal.offer}
+    if refusal.guardian_contact is not None:
+        detail["guardianContact"] = refusal.guardian_contact
+    if (upgrade := refusal.upgrade_to) is not None:
+        detail["upgradeTo"] = {
+            "tier": upgrade.key,
+            "lessonsPerMonth": upgrade.lessons_per_month,
+            "priceNaira": upgrade.price_naira,
+        }
     if refusal.usage is not None:
         detail["usage"] = {
             "used": refusal.usage.used,
@@ -3703,7 +3727,7 @@ async def upload_list(
             "failedPages": _failed_pages(job.structure),
             "structure": job.structure,
             "error": job.error_message,
-            "failureReason": job.failure_reason,
+            "failureReason": _failure_for(actor, job),
             "reasonCode": _upload_reason_code(job),
             "incidentId": job.incident_id,
         }
@@ -3757,7 +3781,7 @@ async def upload_status(
         "failedPages": _failed_pages(job.structure),
         "structure": job.structure,
         "error": job.error_message,
-        "failureReason": job.failure_reason,
+        "failureReason": _failure_for(actor, job),
         "reasonCode": _upload_reason_code(job),
         "incidentId": job.incident_id,
     }

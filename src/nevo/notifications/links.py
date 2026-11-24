@@ -78,3 +78,12 @@ GUARDIAN_CONSENT_PATH = "/guardian"
 
 def guardian_consent_url(base_url: str, *, token: str) -> str:
     return _url(base_url, f"{GUARDIAN_CONSENT_PATH}/{quote(token, safe='')}")
+
+
+#: Where "Buy another month" in a /me renewal reminder lands. Proposed, not
+#: yet confirmed with the frontend.
+ME_TIERS_PATH = "/me/tiers"
+
+
+def me_tiers_url(base_url: str) -> str:
+    return _url(base_url, ME_TIERS_PATH)

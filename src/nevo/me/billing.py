@@ -88,17 +88,27 @@ async def active_purchases(
     )
 
 
+async def current_purchase(
+    session: AsyncSession, learner_id, now: datetime
+) -> MePurchase | None:
+    """The paid month in force now: the highest tier among those active."""
+
+    active = await active_purchases(session, learner_id, now)
+    if not active:
+        return None
+    return max(
+        active,
+        key=lambda item: (tiers.by_key(item.tier_key) or tiers.FREE).lessons_per_month,
+    )
+
+
 async def subscription_for(
     session: AsyncSession, learner_id, now: datetime | None = None
 ) -> Subscription:
     now = now or datetime.now(UTC)
-    active = await active_purchases(session, learner_id, now)
-    if not active:
+    best = await current_purchase(session, learner_id, now)
+    if best is None:
         return Subscription(tier=tiers.FREE, period_end=None, reminder_sent_at=None)
-    best = max(
-        active,
-        key=lambda item: (tiers.by_key(item.tier_key) or tiers.FREE).lessons_per_month,
-    )
     # When the learner's paid access actually ends: the last month queued
     # behind this one of the same tier, if they renewed early.
     queued_end = await session.scalar(

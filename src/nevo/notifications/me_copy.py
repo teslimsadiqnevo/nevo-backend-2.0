@@ -116,3 +116,21 @@ COULD_NOT_PREPARE = (
     "Nevo could not prepare this one. Try uploading it again, and if it still does "
     "not work, send it to us and we will look at it."
 )
+
+
+def hard_refusal_message(*, category: str | None, page: int | None) -> str | None:
+    """Lydia's hard-tier refusal, for the one category it was written for.
+
+    Her sentence names what the passage does, so it fits self-harm alone.
+    Other hard categories have no approved wording yet and return None
+    rather than a guess: the app shows its own generic refusal until Lydia
+    writes theirs.
+    """
+
+    if category != "self_harm" or page is None:
+        return None
+    return (
+        f"Nevo can't teach this one. The passage on page {page} tells a reader to harm "
+        "themselves and keep it from an adult, and that isn't something Nevo will teach. "
+        "If you think that's wrong, send it to us and we'll look at it."
+    )

@@ -167,3 +167,19 @@ def test_the_month_turns_over_in_lagos_time():
     start, end = month_window(datetime(2026, 12, 15, tzinfo=UTC))
     assert start == datetime(2026, 11, 30, 23, 0, tzinfo=UTC)
     assert end == datetime(2026, 12, 31, 23, 0, tzinfo=UTC)
+
+
+def test_a_learners_upload_tells_the_parser_who_it_is_for(me):
+    """Ruling A turns on this: the parser releases flagged text only when told."""
+
+    client, mailer, sessions = me
+    _, auth = _signed_in(client, mailer)
+    upload_id = _upload(client, auth).json()["uploadId"]
+
+    from nevo.db.models.product import UploadSourceBlob
+
+    async def metadata():
+        async with sessions() as session:
+            return (await session.get(UploadSourceBlob, upload_id)).parse_metadata
+
+    assert asyncio.run(metadata())["sourceMetadata"] == {"meAudience": "individual"}

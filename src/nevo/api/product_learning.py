@@ -1328,8 +1328,58 @@ async def lesson_detail(
 
     if not for_teacher:
         validated = LessonDetailResponse.model_validate(result)
-        return JSONResponse(online_student_lesson(validated.model_dump(mode="json", by_alias=True)))
+        body = online_student_lesson(validated.model_dump(mode="json", by_alias=True))
+        if is_individual(actor):
+            await _with_safety_passages(session, lesson.id, segments, body)
+        return JSONResponse(body)
     return result
+
+
+async def _with_safety_passages(
+    session: DatabaseSession, lesson_id: UUID, segments, body: dict[str, object]
+) -> None:
+    """For a /me learner's own lesson: name what the safety check did (ruling A).
+
+    Added after the response model, which would otherwise strip fields it
+    does not declare. Flagged passages are released and named; hard-refused
+    ones are named with Lydia's message where one exists. A school-shaped
+    key the learner has no use for (classes) is left out, not sent empty.
+    """
+
+    from nevo.db.models.content import ContentParseRun
+
+    body.pop("classes", None)
+    notes = await session.scalar(
+        select(ContentParseRun.review_notes)
+        .where(ContentParseRun.lesson_id == lesson_id)
+        .order_by(ContentParseRun.created_at.desc())
+        .limit(1)
+    )
+    flagged, refused = [], []
+    for note in notes or []:
+        if not isinstance(note, dict):
+            continue
+        pages = [item for item in note.get("pageNumbers") or [] if isinstance(item, int)]
+        if note.get("code") == "lesson_text_flagged_released":
+            flagged.append({"pages": pages, "category": note.get("reasonCategory")})
+        elif note.get("code") == "lesson_text_refused_hard":
+            refused.append(
+                {
+                    "pages": pages,
+                    "category": note.get("reasonCategory"),
+                    **({"message": note["message"]} if note.get("message") else {}),
+                }
+            )
+    if flagged:
+        body["flaggedPassages"] = flagged
+    if refused:
+        body["refusedPassages"] = refused
+    marked = {
+        str(item.id) for item in segments if "safety_flagged" in (item.review_reasons or ())
+    }
+    for segment in body.get("segments") or []:
+        if isinstance(segment, dict) and segment.get("id") in marked:
+            segment["safetyFlagged"] = True
 
 
 @router.put(
@@ -3376,6 +3426,13 @@ async def _queue_upload(
                 "sourceType": payload.source_type.value,
                 "subject": payload.subject,
                 "contentIsExtractedText": source_is_extracted_text,
+                # /me: the parser releases flagged text to a learner's own
+                # upload rather than holding it for a school (ruling A).
+                **(
+                    {"sourceMetadata": {"meAudience": "individual"}}
+                    if is_individual(actor)
+                    else {}
+                ),
             },
         )
     )

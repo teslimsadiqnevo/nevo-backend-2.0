@@ -34,7 +34,7 @@ def _signed_in(client, mailer):
     return email, {"Authorization": f"Bearer {token}"}
 
 
-def _seed_lesson(sessions, email, *, needs_review=False):
+def _seed_lesson(sessions, email, *, needs_review=False, reasons=(), notes=()):
     from nevo.api.lesson_contracts import checkpoint_payloads
     from nevo.db.models.account import User
     from nevo.db.models.content import ContentParseRun, Lesson, LessonSegment
@@ -51,7 +51,8 @@ def _seed_lesson(sessions, email, *, needs_review=False):
             session.add(lesson)
             await session.flush()
             run_row = ContentParseRun(
-                lesson_id=lesson.id, requested_by_user_id=learner.id, source_type="pdf"
+                lesson_id=lesson.id, requested_by_user_id=learner.id, source_type="pdf",
+                review_notes=list(notes),
             )
             concept = Concept(name="osmosis", lesson_id=lesson.id)
             session.add_all([run_row, concept])
@@ -84,6 +85,7 @@ def _seed_lesson(sessions, email, *, needs_review=False):
                 concept_id=concept.id,
                 comprehension_checkpoints=checkpoints,
                 needs_review=needs_review,
+                review_reasons=list(reasons),
             )
             session.add(segment)
             await session.flush()
@@ -212,3 +214,44 @@ def test_the_review_switch_puts_the_teacher_gate_back(me, monkeypatch):
 
     assert answered.status_code == 409
     assert answered.json()["detail"]["code"] == "lesson_content_requires_review"
+
+
+def test_a_flagged_passage_is_released_and_named_in_the_lesson(me):
+    client, mailer, sessions = me
+    email, auth = _signed_in(client, mailer)
+    lesson_id, segment_id, _ = _seed_lesson(
+        sessions,
+        email,
+        reasons=["safety_flagged"],
+        notes=[
+            {
+                "code": "lesson_text_flagged_released", "pageNumbers": [4],
+                "reasonCategory": "violence",
+            },
+            {
+                "code": "lesson_text_refused_hard", "pageNumbers": [9],
+                "reasonCategory": "self_harm", "message": "Nevo can't teach this one.",
+            },
+        ],
+    )
+
+    body = client.get(f"/api/v1/lessons/{lesson_id}", headers=auth).json()
+
+    assert body["flaggedPassages"] == [{"pages": [4], "category": "violence"}]
+    assert body["refusedPassages"] == [
+        {"pages": [9], "category": "self_harm", "message": "Nevo can't teach this one."}
+    ]
+    segment = next(item for item in body["segments"] if item["id"] == str(segment_id))
+    assert segment["safetyFlagged"] is True
+    assert "classes" not in body
+
+
+def test_a_clean_lesson_carries_no_safety_keys(me):
+    client, mailer, sessions = me
+    email, auth = _signed_in(client, mailer)
+    lesson_id, _, _ = _seed_lesson(sessions, email)
+
+    body = client.get(f"/api/v1/lessons/{lesson_id}", headers=auth).json()
+
+    assert "flaggedPassages" not in body and "refusedPassages" not in body
+    assert all("safetyFlagged" not in item for item in body["segments"])

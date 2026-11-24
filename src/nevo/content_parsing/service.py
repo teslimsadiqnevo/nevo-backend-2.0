@@ -604,6 +604,75 @@ class ContentParsingService:
                         error.phase,
                         ",".join(sorted(error.categories or ())) or "unnamed",
                     )
+                    from nevo.me import safety as me_safety
+
+                    if me_safety.for_individual(request.source_metadata):
+                        # /me (Lydia, ruling A): no school reviews a learner's
+                        # own upload. Flagged text is released with the passage
+                        # named; Nevo's refused output gives way to the learner's
+                        # own text, which passed; hard refusals hold, as below.
+                        handling = me_safety.treatment(error)
+                        pages = chunk_pages[index - 1]
+                        category = error.categories[0] if error.categories else None
+                        if handling != "hard":
+                            review_notes.append(
+                                {
+                                    "code": (
+                                        "lesson_text_flagged_released"
+                                        if handling == "flagged"
+                                        else "generated_content_withheld"
+                                    ),
+                                    "chunkNumber": index,
+                                    "pageNumbers": pages,
+                                    "reasonCategory": category or "unspecified",
+                                    "safetyEventId": (
+                                        str(error.event_id) if error.event_id else None
+                                    ),
+                                }
+                            )
+                            segments.extend(
+                                replace(
+                                    segment,
+                                    review_reasons=(
+                                        (*segment.review_reasons, "safety_flagged")
+                                        if handling == "flagged"
+                                        else segment.review_reasons
+                                    ),
+                                )
+                                for segment in _fallback_segments(
+                                    chunk, sequence_offset=len(segments)
+                                )
+                            )
+                            continue
+                        from nevo.notifications.me_copy import hard_refusal_message
+
+                        review_notes.append(
+                            {
+                                "code": "lesson_text_refused_hard",
+                                "chunkNumber": index,
+                                "pageNumbers": pages,
+                                "reasonCategory": category or "unspecified",
+                                "safetyEventId": str(error.event_id) if error.event_id else None,
+                                "message": hard_refusal_message(
+                                    category=category, page=pages[0] if pages else None
+                                ),
+                            }
+                        )
+                        held_text = "This section is held for safety review."
+                        segments.extend(
+                            replace(
+                                segment,
+                                body=held_text,
+                                text_variant={"body": held_text},
+                                audio_variant=None,
+                                available_modalities=(ContentModality.TEXT,),
+                                review_reasons=(*segment.review_reasons, "safety_hold"),
+                            )
+                            for segment in _fallback_segments(
+                                held_text, sequence_offset=len(segments)
+                            )
+                        )
+                        continue
                     review_notes.append(
                         {
                             "code": "lesson_text_blocked_by_safety",

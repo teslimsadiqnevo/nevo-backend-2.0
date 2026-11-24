@@ -82,3 +82,24 @@ def test_the_two_ways_money_arrives_both_have_a_person() -> None:
     assert hasattr(service.PaymentService, "confirm_manual_transfer")
     confirm = inspect.getsource(service.PaymentService.confirm_manual_transfer)
     assert "confirmed_by_user_id" in confirm
+
+
+def test_a_learners_month_keeps_nothing_about_the_card() -> None:
+    """/me Phase 4. The individual band holds no instrument either."""
+    from nevo.db.models.me import MePurchase
+    from nevo.me import billing as me_billing
+
+    columns = {column.name for column in MePurchase.__table__.columns}
+    for forbidden in ("authorization", "card", "last4", "customer_code", "token", "bin"):
+        assert not any(forbidden in name for name in columns), (forbidden, columns)
+    source = inspect.getsource(me_billing)
+    assert "authorization_code" not in source
+    assert "authorization.reusable" not in source
+    assert "charge_authorization" not in source
+
+
+def test_a_learners_checkout_arms_on_its_own_flag_not_the_key() -> None:
+    from nevo.api import me_billing as me_billing_api
+
+    source = inspect.getsource(me_billing_api.me_checkout)
+    assert source.index("me_billing_enabled") < source.index("configured")

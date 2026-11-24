@@ -27,6 +27,13 @@ class PaystackSettings(BaseSettings):
         default=AnyHttpUrl("http://localhost:3000/billing/payment-complete"),
         validation_alias="PAYSTACK_CALLBACK_URL",
     )
+    #: Where Paystack returns a /me learner after checkout. Proposed path, to
+    #: be confirmed with the frontend. The return is only a screen: the month
+    #: is granted by the webhook, never by arriving here.
+    me_callback_url: AnyHttpUrl = Field(
+        default=AnyHttpUrl("http://localhost:3000/me/billing/complete"),
+        validation_alias="PAYSTACK_ME_CALLBACK_URL",
+    )
     currency: PricingCurrency = Field(
         default=PricingCurrency.NGN,
         validation_alias="PAYSTACK_CURRENCY",

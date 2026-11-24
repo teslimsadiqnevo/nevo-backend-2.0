@@ -11,8 +11,11 @@ def build_payment_service(
     settings: PaystackSettings | None = None,
 ) -> PaymentService:
     resolved = settings or PaystackSettings()
+    from nevo.me.billing import IndividualSettler
+
     return PaymentService(
         repository=SqlAlchemyPaymentRepository(sessions),
         client=PaystackClient(resolved),
         settings=resolved,
+        individual_settler=IndividualSettler(sessions),
     )

@@ -72,19 +72,21 @@ class PaystackClient:
         reference: str,
         currency: PricingCurrency,
         metadata: dict[str, Any] | None = None,
+        callback_url: str | None = None,
+        channels: list[str] | None = None,
     ) -> str:
         """Create a checkout and return the hosted authorization URL."""
-        body = await self._post(
-            "/transaction/initialize",
-            {
-                "email": email,
-                "amount": to_minor_units(amount),
-                "reference": reference,
-                "currency": currency.value,
-                "callback_url": str(self._settings.callback_url),
-                "metadata": metadata or {},
-            },
-        )
+        payload: dict[str, Any] = {
+            "email": email,
+            "amount": to_minor_units(amount),
+            "reference": reference,
+            "currency": currency.value,
+            "callback_url": callback_url or str(self._settings.callback_url),
+            "metadata": metadata or {},
+        }
+        if channels:
+            payload["channels"] = channels
+        body = await self._post("/transaction/initialize", payload)
         url = body.get("authorization_url")
         if not isinstance(url, str) or not url:
             raise PaymentProviderRejectedError("Paystack returned no authorization URL")

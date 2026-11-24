@@ -1,6 +1,7 @@
 import hashlib
 import json
 import secrets
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -10,6 +11,7 @@ from nevo.domain.billing.vocabulary import (
     PaymentTransactionStatus,
     WebhookEventStatus,
 )
+from nevo.me.references import is_individual_reference
 from nevo.payments.config import PaystackSettings
 from nevo.payments.entities import CheckoutSession, PaymentOutcome, ProviderTransaction
 from nevo.payments.errors import (
@@ -39,14 +41,27 @@ class PaymentService:
         repository: SqlAlchemyPaymentRepository,
         client: PaystackClient,
         settings: PaystackSettings,
+        individual_settler: Callable[[ProviderTransaction], Awaitable[PaymentOutcome]]
+        | None = None,
     ) -> None:
         self._repository = repository
         self._client = client
         self._settings = settings
+        #: /me Phase 4: grants a learner's month for a reference that band
+        #: made. Runs only after the checks every event gets above it.
+        self._individual_settler = individual_settler
 
     @property
     def configured(self) -> bool:
         return self._client.configured
+
+    @property
+    def client(self) -> PaystackClient:
+        return self._client
+
+    @property
+    def settings(self) -> PaystackSettings:
+        return self._settings
 
     async def start_invoice_payment(
         self,
@@ -217,7 +232,12 @@ class PaymentService:
         try:
             # Re-verify against the API rather than trusting the callback body.
             provider_transaction = await self._client.verify_transaction(reference)
-            outcome = await self._settle(provider_transaction)
+            if is_individual_reference(reference):
+                if self._individual_settler is None:
+                    raise PaymentNotFoundError
+                outcome = await self._individual_settler(provider_transaction)
+            else:
+                outcome = await self._settle(provider_transaction)
         except Exception as error:
             await self._repository.finish_webhook_event(
                 event_key=event_key,

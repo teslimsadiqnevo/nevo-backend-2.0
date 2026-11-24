@@ -47,6 +47,7 @@ from nevo.api.lesson_contracts import STRIP_STUDENT_ANSWERS
 from nevo.api.lesson_review import router as lesson_review_router
 from nevo.api.licences import router as licences_router
 from nevo.api.mastery import router as mastery_router
+from nevo.api.me_billing import router as me_billing_router
 from nevo.api.me_usage import router as me_usage_router
 from nevo.api.media_ops import router as media_ops_router
 from nevo.api.onboarding import router as onboarding_router
@@ -434,6 +435,7 @@ app.include_router(auth_router)
 app.include_router(individual_auth_router)
 app.include_router(guardian_consent_router)
 app.include_router(me_usage_router)
+app.include_router(me_billing_router)
 app.include_router(billing_router)
 app.include_router(consent_router)
 app.include_router(content_router)

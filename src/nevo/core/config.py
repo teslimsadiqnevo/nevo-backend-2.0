@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     me_registration_enabled: bool = Field(
         default=False, validation_alias="ME_REGISTRATION_ENABLED"
     )
+    #: /me, Phase 4. Opens individual checkout. Its own switch, and the only
+    #: one: setting PAYSTACK_SECRET_KEY must never be what turns a payment path
+    #: on (a billing job armed on a key on 20 November and attempted N6.6m on
+    #: the 22nd). Off by default. A webhook for a /me checkout already paid is
+    #: still honoured with this off - the learner's money has moved.
+    me_billing_enabled: bool = Field(default=False, validation_alias="ME_BILLING_ENABLED")
     #: /me fair-use ceiling on lessons per calendar month, above the top tier.
     #: Unset on purpose (Lydia's to set). Never shown to a learner and named
     #: by no copy: when set it only lowers the allowance the upload gate uses.

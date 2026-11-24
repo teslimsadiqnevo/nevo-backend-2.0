@@ -77,14 +77,11 @@ def month_window(now: datetime) -> tuple[datetime, datetime]:
 
 
 async def current_tier(session: AsyncSession, user: User, now: datetime) -> Tier:
-    """The tier this learner holds this month.
+    """The highest tier this learner holds a paid month of right now, or free."""
 
-    Free until Phase 4 builds the month a learner buys through checkout; that
-    record is what this reads then.
-    """
+    from nevo.me.billing import subscription_for
 
-    del session, user, now
-    return tiers.FREE
+    return (await subscription_for(session, user.id, now)).tier
 
 
 async def usage_for(session: AsyncSession, user: User, now: datetime | None = None) -> Usage:

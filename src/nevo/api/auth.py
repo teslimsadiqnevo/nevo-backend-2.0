@@ -11,6 +11,7 @@ from nevo.api.casing import CAMEL_CONFIG
 from nevo.auth.entities import AuthPrincipal, IssuedSession
 from nevo.auth.errors import (
     AuthError,
+    EmailUnverifiedError,
     InvalidSessionError,
     RateLimitExceededError,
     SchoolCodeRequiredError,
@@ -368,6 +369,8 @@ def public_auth_error(error: AuthError) -> HTTPException:
         status_code = status.HTTP_429_TOO_MANY_REQUESTS
     elif isinstance(error, SchoolCodeRequiredError):
         status_code = status.HTTP_409_CONFLICT
+    elif isinstance(error, EmailUnverifiedError):
+        status_code = status.HTTP_403_FORBIDDEN
     detail: dict[str, object] = {
         "code": error.code,
         "message": error.public_message,

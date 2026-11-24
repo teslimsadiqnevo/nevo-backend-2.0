@@ -36,6 +36,7 @@ from nevo.api.email_confirmation import router as email_confirmation_router
 from nevo.api.exports import router as exports_router
 from nevo.api.frontend_unblockers import router as frontend_unblockers_router
 from nevo.api.import_templates import router as import_templates_router
+from nevo.api.individual_auth import router as individual_auth_router
 from nevo.api.insights import router as insights_router
 from nevo.api.intelligence import router as intelligence_router
 from nevo.api.learning_readiness import router as learning_readiness_router
@@ -428,6 +429,7 @@ app.include_router(age_check_router)
 app.include_router(ask_nevo_router)
 app.include_router(client_errors_router)
 app.include_router(auth_router)
+app.include_router(individual_auth_router)
 app.include_router(billing_router)
 app.include_router(consent_router)
 app.include_router(content_router)

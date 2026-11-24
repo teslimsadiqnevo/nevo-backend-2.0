@@ -131,6 +131,7 @@ class SqlAlchemyUserRepository:
             deactivated_at=user.deactivated_at,
             preferences=dict(user.preferences or {}),
             account_type=user.account_type or "school",
+            email_confirmed_at=user.email_confirmed_at,
         )
 
 

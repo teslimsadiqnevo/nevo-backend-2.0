@@ -13,6 +13,7 @@ from nevo.auth.entities import (
 from nevo.auth.errors import (
     AccountPausedError,
     AuthError,
+    EmailUnverifiedError,
     InvalidCredentialsError,
     InvalidSessionError,
     SchoolCodeRequiredError,
@@ -115,6 +116,8 @@ class AuthService:
                 identity_digest=identity_digest,
                 ip_digest=ip_digest,
             )
+        if user.account_type == "individual" and user.email_confirmed_at is None:
+            raise EmailUnverifiedError
 
         return await self._complete_login(
             user=user,

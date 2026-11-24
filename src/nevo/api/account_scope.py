@@ -59,6 +59,7 @@ class RouteAudience(StrEnum):
 SHARED_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", f"{API_PREFIX}/auth/session"),
+        ("GET", f"{API_PREFIX}/auth/me"),
         ("POST", f"{API_PREFIX}/auth/session/refresh"),
         ("POST", f"{API_PREFIX}/auth/logout"),
     }

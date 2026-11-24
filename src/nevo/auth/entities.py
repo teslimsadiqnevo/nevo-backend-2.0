@@ -18,6 +18,7 @@ class AuthUser:
     deactivated_at: datetime | None = None
     preferences: dict[str, object] = field(default_factory=dict)
     account_type: str = "school"
+    email_confirmed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

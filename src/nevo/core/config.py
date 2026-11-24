@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     level_aware_return_enabled: bool = Field(
         default=False, validation_alias="LEVEL_AWARE_RETURN_ENABLED"
     )
+    #: /me, Phase 1. Opens individual registration and email verification.
+    #: Off until Lydia has approved the verification email copy in
+    #: nevo.notifications.me_copy - with it off, no individual account can be
+    #: created, so nothing a learner reads ships on a guess.
+    me_registration_enabled: bool = Field(
+        default=False, validation_alias="ME_REGISTRATION_ENABLED"
+    )
 
     @property
     def collect_level_mastery(self) -> bool:

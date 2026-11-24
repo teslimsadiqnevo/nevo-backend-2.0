@@ -47,6 +47,18 @@ class AccountClosedError(InvalidSessionError):
     public_message = "This account has been closed. Your school can tell you more."
 
 
+class EmailUnverifiedError(AuthError):
+    """An individual (/me) account with the right password and no proven address.
+
+    Only ever raised after the password matched, so it tells nobody anything
+    they did not already know - and it beats telling a person who closed the
+    tab before entering their code that their password is wrong.
+    """
+
+    code = "email_unverified"
+    public_message = "Confirm your email address with the code we sent before signing in."
+
+
 class AccountPausedError(InvalidSessionError):
     code = "account_paused"
     public_message = "This account is on pause. Your school can turn it back on."

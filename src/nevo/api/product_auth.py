@@ -1170,6 +1170,29 @@ async def _create_invitation(
     *,
     defer_delivery: bool = False,
 ) -> dict[str, object]:
+    if payload.email:
+        # Ruling C1: one email, one account type. An address that already
+        # holds a personal (/me) account cannot also be a school account, and
+        # saying so beats a teacher who cannot be invited with nobody knowing
+        # why. The school already holds the address, so naming the reason
+        # tells it nothing about anyone it does not already know.
+        held_individually = await session.scalar(
+            select(User.id).where(
+                func.lower(User.email) == str(payload.email).casefold(),
+                User.account_type == "individual",
+            )
+        )
+        if held_individually is not None:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "email_held_by_individual_account",
+                    "message": (
+                        "This address already belongs to a personal Nevo account. "
+                        "Invite them with a different address."
+                    ),
+                },
+            )
     if payload.role == "teacher" and payload.email:
         existing = await session.scalar(
             select(SchoolInvitation)

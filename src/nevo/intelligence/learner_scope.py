@@ -28,6 +28,18 @@ from nevo.db.models.frontend_support import Concept, LessonAssignment
 
 INDIVIDUAL = "individual"
 
+#: OPEN PRODUCT QUESTION, default chosen 24 November 2026 so Phase 3 could be
+#: built: does a lesson a /me learner uploads for themselves wait for a
+#: teacher's review, as a school lesson does (Lydia, 7 November)? There is no
+#: teacher in /me. Default: no - the learner is author and audience, and the
+#: safety checker still runs and still holds what it holds. Lydia's to
+#: confirm or reverse; reversing is setting this True.
+INDIVIDUAL_LESSONS_NEED_TEACHER_REVIEW = False
+
+
+def review_gate_applies(user: User) -> bool:
+    return not is_individual(user) or INDIVIDUAL_LESSONS_NEED_TEACHER_REVIEW
+
 
 def is_individual(user: User) -> bool:
     return getattr(user, "account_type", "school") == INDIVIDUAL

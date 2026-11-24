@@ -60,6 +60,7 @@ def me(monkeypatch):
     from nevo.api.guardian_consent import router as guardian_router
     from nevo.api.individual_auth import router as individual_router
     from nevo.api.learning_readiness import router as readiness_router
+    from nevo.api.me_usage import router as usage_router
     from nevo.api.product_learning import router as learning_router
     from nevo.auth.config import AuthSettings
     from nevo.auth.wiring import build_auth_service
@@ -88,6 +89,7 @@ def me(monkeypatch):
     app.include_router(product_auth.router)
     app.include_router(guardian_router)
     app.include_router(readiness_router)
+    app.include_router(usage_router)
     app.state.auth_service = build_auth_service(sessions, AuthSettings())
     app.state.email_delivery = mailer
 

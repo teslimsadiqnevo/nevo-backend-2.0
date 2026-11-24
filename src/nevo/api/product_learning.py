@@ -153,6 +153,7 @@ from nevo.intelligence.learning_runtime import (
 )
 from nevo.intelligence.session_delivery import delivery_snapshot
 from nevo.learner_profiles.post_lesson_worker import enqueue_post_lesson
+from nevo.me.usage import UploadRefused, require_upload_allowed
 from nevo.sso.service import SsoService
 
 logger = logging.getLogger(__name__)
@@ -3188,6 +3189,50 @@ async def staged_upload(
     )
 
 
+def _same_school(actor: User):
+    """The upload-job filter for this actor's own school, or for no school.
+
+    For a /me learner the comparison is IS NULL, never = NULL, which would
+    match nothing and succeed.
+    """
+
+    if actor.school_id is None:
+        return UploadJob.school_id.is_(None)
+    return UploadJob.school_id == actor.school_id
+
+
+def _owns_upload(actor: User, job: UploadJob | None) -> bool:
+    if job is None:
+        return False
+    if is_individual(actor):
+        return job.school_id is None and job.requested_by_id == actor.id
+    return job.school_id == actor.school_id
+
+
+def _visible_uploads(actor: User):
+    if is_individual(actor):
+        return (UploadJob.school_id.is_(None)) & (UploadJob.requested_by_id == actor.id)
+    return UploadJob.school_id == actor.school_id
+
+
+async def _upload_actor(session: DatabaseSession, principal) -> User:
+    if principal.account_type == "individual":
+        return await actor_user(session, principal)
+    return await require_school_actor(session, principal)
+
+
+def _upload_refusal(refusal: UploadRefused) -> HTTPException:
+    detail: dict[str, object] = {"code": refusal.code, "offer": refusal.offer}
+    if refusal.usage is not None:
+        detail["usage"] = {
+            "used": refusal.usage.used,
+            "allowance": refusal.usage.allowance,
+            "resetsAt": refusal.usage.resets_at.isoformat(),
+            "tier": refusal.usage.tier.key,
+        }
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 async def _queue_upload(
     payload: UploadRequest,
     *,
@@ -3223,7 +3268,7 @@ async def _queue_upload(
         select(UploadJob)
         .where(
             UploadJob.requested_by_id == actor.id,
-            UploadJob.school_id == actor.school_id,
+            _same_school(actor),
             UploadJob.scope == payload.scope,
             UploadJob.status == "processing",
             UploadJob.structure["sourceCacheKey"].astext == fingerprint,
@@ -3232,6 +3277,13 @@ async def _queue_upload(
     )
     if pending is not None:
         return reuse_response(pending)
+    if is_individual(actor):
+        # The one tier gate (/me Phase 3): only a new preparation counts, so
+        # a re-upload served from an earlier one above stays free.
+        try:
+            await require_upload_allowed(session, actor)
+        except UploadRefused as refusal:
+            raise _upload_refusal(refusal) from refusal
     job = UploadJob(
         school_id=actor.school_id,
         requested_by_id=actor.id,
@@ -3310,9 +3362,18 @@ async def _ingest_one_file(
         raise HTTPException(status_code=400, detail="Could not read lesson file") from error
     if not source_text.strip():
         raise HTTPException(status_code=400, detail="No readable lesson text was found")
-    actor = await require_school_actor(
-        session, principal, roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}
-    )
+    if principal.account_type == "individual":
+        # /me: a learner uploads for an audience of one. The gate is in
+        # _queue_upload, where a new preparation actually begins.
+        actor = await actor_user(session, principal)
+        if actor.role is not UserRole.STUDENT:
+            raise HTTPException(status_code=403, detail={"code": "student_required"})
+    else:
+        actor = await require_school_actor(
+            session,
+            principal,
+            roles={UserRole.TEACHER, UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN},
+        )
     reused = await find_reusable_upload(
         session,
         actor_id=actor.id,
@@ -3564,8 +3625,8 @@ async def upload_list(
     ones do not need re-reading.
     """
 
-    actor = await require_school_actor(session, principal)
-    query = select(UploadJob).where(UploadJob.school_id == actor.school_id)
+    actor = await _upload_actor(session, principal)
+    query = select(UploadJob).where(_visible_uploads(actor))
     if unsettled_only:
         query = query.where(UploadJob.status.in_(("pending", "processing")))
     jobs = (await session.scalars(query.order_by(UploadJob.created_at.desc()).limit(limit))).all()
@@ -3610,9 +3671,9 @@ async def upload_status(
     principal: PrincipalDependency,
     session: DatabaseSession,
 ) -> dict[str, object]:
-    actor = await require_school_actor(session, principal)
+    actor = await _upload_actor(session, principal)
     job = await session.get(UploadJob, upload_id)
-    if job is None or job.school_id != actor.school_id:
+    if not _owns_upload(actor, job):
         raise HTTPException(status_code=404, detail="Upload not found")
     lesson_id = _uuid(job.structure.get("lessonId"))
     lesson = await session.get(Lesson, lesson_id) if lesson_id else None
@@ -4018,9 +4079,9 @@ async def confirm_upload(
     first entry keeps the original lesson, and each additional entry becomes a
     new lesson with the segments the teacher assigned to it moved across.
     """
-    actor = await require_school_actor(session, principal)
+    actor = await _upload_actor(session, principal)
     job = await session.get(UploadJob, upload_id)
-    if job is None or job.school_id != actor.school_id:
+    if not _owns_upload(actor, job):
         raise HTTPException(status_code=404, detail="Upload not found")
     root_lesson_id = job.structure.get("lessonId")
     if not root_lesson_id:

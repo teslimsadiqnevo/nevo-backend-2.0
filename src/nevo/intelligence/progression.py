@@ -12,7 +12,11 @@ from nevo.db.models.mastery import (
     StudentConceptScheduling,
 )
 from nevo.db.models.product import LessonProgress, LessonQuestionAttempt
-from nevo.intelligence.learner_scope import available_lesson_ids, learner_concepts
+from nevo.intelligence.learner_scope import (
+    available_lesson_ids,
+    learner_concepts,
+    review_gate_applies,
+)
 from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
 
 LEVEL_INDEPENDENT_PASSES = 2
@@ -33,8 +37,14 @@ async def next_work(session, student, subject=None, lesson_id=None):
             segments_query.order_by(LessonSegment.lesson_id, LessonSegment.sequence_order)
         )
     )
-    blocked = {row.lesson_id for row in segments if row.needs_review and row.approved_at is None}
-    blocked.update(await outstanding_key_points(session, {row.lesson_id for row in segments}))
+    blocked: set = set()
+    if review_gate_applies(student):
+        blocked = {
+            row.lesson_id for row in segments if row.needs_review and row.approved_at is None
+        }
+        blocked.update(
+            await outstanding_key_points(session, {row.lesson_id for row in segments})
+        )
     targets = {}
     for segment in segments:
         if segment.lesson_id in blocked:

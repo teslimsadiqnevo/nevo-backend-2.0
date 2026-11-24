@@ -197,8 +197,10 @@ class UploadJob(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, server_default=text("gen_random_uuid()")
     )
-    school_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+    #: Null for a /me learner's own upload (migration 0152), which belongs to
+    #: the learner who requested it and to no school.
+    school_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=True
     )
     requested_by_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

@@ -23,7 +23,7 @@ async def find_reusable_upload(
     session: AsyncSession,
     *,
     actor_id: UUID,
-    school_id: UUID,
+    school_id: UUID | None,
     scope: str,
     key: str | None = None,
     content: bytes | None = None,
@@ -31,7 +31,8 @@ async def find_reusable_upload(
 ) -> UploadJob | None:
     query = select(UploadJob).where(
         UploadJob.requested_by_id == actor_id,
-        UploadJob.school_id == school_id,
+        # A /me learner's uploads have no school: IS NULL, never = NULL.
+        UploadJob.school_id.is_(None) if school_id is None else UploadJob.school_id == school_id,
         UploadJob.scope == scope,
         UploadJob.status.in_(["ready", "processing"]),
     )

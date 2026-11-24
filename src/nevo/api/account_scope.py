@@ -70,6 +70,12 @@ SHARED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # The onboarding assessment's results, which set the baseline band.
         ("POST", "/api/baseline/trials"),
         ("POST", "/api/baseline/submit"),
+        # Phase 3: a learner uploads their own material, gated once on
+        # consent and monthly allowance (nevo.me.usage).
+        ("POST", f"{API_PREFIX}/uploads"),
+        ("GET", f"{API_PREFIX}/uploads"),
+        ("GET", f"{API_PREFIX}/uploads/{{upload_id}}"),
+        ("POST", f"{API_PREFIX}/uploads/{{upload_id}}/confirm"),
     }
 )
 

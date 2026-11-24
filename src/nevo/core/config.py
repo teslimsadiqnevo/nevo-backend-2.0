@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     me_registration_enabled: bool = Field(
         default=False, validation_alias="ME_REGISTRATION_ENABLED"
     )
+    #: /me fair-use ceiling on lessons per calendar month, above the top tier.
+    #: Unset on purpose (Lydia's to set). Never shown to a learner and named
+    #: by no copy: when set it only lowers the allowance the upload gate uses.
+    me_fair_use_ceiling: int | None = Field(
+        default=None, validation_alias="ME_FAIR_USE_CEILING"
+    )
 
     @property
     def collect_level_mastery(self) -> bool:

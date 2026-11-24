@@ -145,7 +145,11 @@ from nevo.intelligence.delivery_preferences import (
     save_choice,
     segment_choice,
 )
-from nevo.intelligence.learner_scope import is_individual, owned_lessons
+from nevo.intelligence.learner_scope import (
+    is_individual,
+    owned_lessons,
+    owns_lesson,
+)
 from nevo.intelligence.learning_runtime import (
     apply_marked_attempt,
     ensure_onboarding,
@@ -955,19 +959,26 @@ async def _lesson_for_actor(
     if lesson is None:
         raise HTTPException(status_code=404, detail="Lesson not found")
     if actor.role == UserRole.STUDENT:
-        assignment = await session.scalar(
-            select(LessonAssignment.id).where(
-                LessonAssignment.student_id == actor.id,
-                LessonAssignment.lesson_id == lesson.id,
-                LessonAssignment.status != "cancelled",
-                or_(
-                    LessonAssignment.available_from.is_(None),
-                    LessonAssignment.available_from <= datetime.now(UTC),
-                ),
+        if is_individual(actor):
+            # /me: a learner's lesson is one they uploaded, never one assigned.
+            if not owns_lesson(actor, lesson):
+                raise HTTPException(status_code=404, detail="Lesson not found")
+            if lesson.status == "failed":
+                raise HTTPException(409, detail={"code": "lesson_preparation_failed"})
+        else:
+            assignment = await session.scalar(
+                select(LessonAssignment.id).where(
+                    LessonAssignment.student_id == actor.id,
+                    LessonAssignment.lesson_id == lesson.id,
+                    LessonAssignment.status != "cancelled",
+                    or_(
+                        LessonAssignment.available_from.is_(None),
+                        LessonAssignment.available_from <= datetime.now(UTC),
+                    ),
+                )
             )
-        )
-        if assignment is None:
-            raise HTTPException(status_code=404, detail="Lesson not found")
+            if assignment is None:
+                raise HTTPException(status_code=404, detail="Lesson not found")
         if lesson.status == "failed":
             raise HTTPException(
                 409,
@@ -2016,7 +2027,9 @@ async def save_lesson_question_attempt(
                         "message": "That attempt id belongs to a different answer.",
                     },
                 )
-            return await _attempt_payload_with_outcome(session, existing)
+            return await _with_calibration(
+                session, actor, lesson_id, await _attempt_payload_with_outcome(session, existing)
+            )
     question, segment_id = await _question_for_attempt(
         session, lesson, payload, presentation_seed=str(actor.id)
     )
@@ -2118,7 +2131,40 @@ async def save_lesson_question_attempt(
             stages["committed"] - stages["mastery"],
             stages["payload"] - stages["committed"],
         )
-    return payload_out
+    return await _with_calibration(session, actor, lesson_id, payload_out)
+
+
+async def _with_calibration(
+    session: DatabaseSession, actor: User, lesson_id: UUID, payload: dict[str, object]
+):
+    """For a /me learner who predicted before this check, the gap rides on the result.
+
+    Ruling D1: the gap is returned with the check result. Only for an
+    individual account, and only when there is a prediction: a school
+    learner's response gains no key. Returned as a response so the response
+    model cannot strip the field it does not declare.
+    """
+
+    if not is_individual(actor):
+        return payload
+    from nevo.me.calibration import latest_for_lesson
+
+    latest = await latest_for_lesson(session, actor.id, lesson_id)
+    if latest is None:
+        return payload
+    body = LessonQuestionAttemptResponse.model_validate(payload).model_dump(
+        mode="json", by_alias=True
+    )
+    body["calibration"] = {
+        key: value
+        for key, value in {
+            "predicted": latest.predicted,
+            "reached": latest.reached,
+            "gap": latest.gap,
+        }.items()
+        if value is not None
+    }
+    return JSONResponse(body, status_code=status.HTTP_201_CREATED)
 
 
 @router.get(

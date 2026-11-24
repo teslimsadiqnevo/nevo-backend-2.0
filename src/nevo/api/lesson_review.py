@@ -1337,6 +1337,24 @@ def money(value: object) -> str:
     return f"{trimmed:f}"
 
 
+async def _signed_off_by_its_own_learner(session, lesson) -> bool:
+    """A /me learner's own lesson stands as signed off, with no teacher to sign.
+
+    The learner is author and audience, and there is no teacher in /me. The
+    safety checker's holds still apply; this answers only the teacher-review
+    question, and INDIVIDUAL_LESSONS_NEED_TEACHER_REVIEW (learner_scope.py)
+    reverses it - an open product decision, default chosen 24 November 2026.
+    School lessons never reach this: they always belong to a school.
+    """
+
+    from nevo.intelligence.learner_scope import INDIVIDUAL_LESSONS_NEED_TEACHER_REVIEW
+
+    if INDIVIDUAL_LESSONS_NEED_TEACHER_REVIEW or lesson is None or lesson.school_id is not None:
+        return False
+    author = await session.get(User, lesson.created_by_user_id)
+    return author is not None and author.account_type == "individual"
+
+
 async def approved_check_ids(session, lesson_id):
     memo = session.info.setdefault(_APPROVALS_MEMO, {})
     key = ("checks", str(lesson_id))
@@ -1380,6 +1398,8 @@ async def _approved_check_ids(session, lesson_id):
     }
     if not material:
         return authored
+    if await _signed_off_by_its_own_learner(session, lesson):
+        return authored | {(item["segmentId"], item["questionId"]) for item in material}
     approval = await session.scalar(
         select(LessonReviewSignoff)
         .where(
@@ -1449,6 +1469,12 @@ async def _approved_level_ids(session, lesson_id):
     }
     if not material:
         return authored_levels
+    if await _signed_off_by_its_own_learner(session, lesson):
+        return authored_levels | {
+            (item["segmentId"], item["questionId"])
+            for item in material
+            if item.get("masteryLevel") in {"knowledge", "application", "analysis"}
+        }
     approval = await session.scalar(
         select(LessonReviewSignoff)
         .where(

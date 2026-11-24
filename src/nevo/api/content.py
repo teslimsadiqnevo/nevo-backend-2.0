@@ -344,6 +344,7 @@ async def refresh_media_url(
             path.removesuffix("-preview.webp") + ".webp" if path.endswith("-preview.webp") else path
         )
         from nevo.api.product_learning import _lesson_for_actor
+        from nevo.intelligence.learner_scope import review_gate_applies
 
         matches = list(
             await session.scalars(
@@ -367,7 +368,11 @@ async def refresh_media_url(
                     continue
                 raise
             if actor.role == "student":
-                if segment.needs_review and segment.approved_at is None:
+                if (
+                    review_gate_applies(actor)
+                    and segment.needs_review
+                    and segment.approved_at is None
+                ):
                     continue
                 if (
                     path.startswith("images/")

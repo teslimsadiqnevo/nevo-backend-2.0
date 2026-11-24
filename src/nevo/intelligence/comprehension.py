@@ -497,6 +497,10 @@ async def note_attempt(session, sitting, segment, attempt):
 
 async def notify_teacher(session, sitting):
     student = await session.get(User, sitting.student_id)
+    if student is None or student.school_id is None:
+        # A /me learner has no teacher to tell. Said here rather than left to
+        # a school_id = NULL lookup that finds nobody by accident.
+        return
     recipients = set(
         await session.scalars(
             select(TeacherClassAssignment.teacher_id)

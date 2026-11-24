@@ -69,6 +69,33 @@ def available_lesson_ids(user: User, now: datetime) -> Select:
     )
 
 
+def owns_lesson(user: User, lesson: Lesson | None) -> bool:
+    """Whether this is one of an individual learner's own lessons."""
+
+    return (
+        lesson is not None
+        and lesson.created_by_user_id == user.id
+        and lesson.school_id is None
+    )
+
+
+async def concept_reachable(session, user: User, concept: Concept | None) -> bool:
+    """Whether this learner's work can reach this concept.
+
+    Never ``concept.school_id == user.school_id`` for an individual: two
+    Nones compare equal in Python, so that test passes for any school-less
+    concept at all - including another learner's.
+    """
+
+    if concept is None:
+        return False
+    if is_individual(user):
+        if concept.lesson_id is None:
+            return False
+        return owns_lesson(user, await session.get(Lesson, concept.lesson_id))
+    return user.school_id is not None and concept.school_id == user.school_id
+
+
 def learner_concepts(user: User) -> ColumnElement[bool]:
     """The filter for concepts this learner's work can reach."""
 

@@ -12,6 +12,7 @@ from nevo.db.models.mastery import StudentConceptScheduling
 from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.review_evidence import ConceptReviewEvidence
 from nevo.db.models.signal_event import LessonSession
+from nevo.intelligence.learner_scope import concept_reachable
 from nevo.scheduler.entities import ConceptSchedule
 from nevo.scheduler.fsrs import initial_schedule, update_schedule
 
@@ -39,7 +40,7 @@ async def record_session_reviews(session, student_id, session_id):
     results = {}
     for concept_id, rows in groups.items():
         concept = await session.get(Concept, concept_id)
-        if concept is None or concept.school_id != student.school_id:
+        if not await concept_reachable(session, student, concept):
             continue
         evidence = await session.scalar(
             select(ConceptReviewEvidence).where(

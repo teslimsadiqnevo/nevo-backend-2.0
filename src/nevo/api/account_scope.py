@@ -79,6 +79,22 @@ SHARED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # Phase 5: a learner may read their own mastery and nobody else's
         # (can_access_student); class and school views stay school-only.
         ("GET", "/api/mastery/student/{student_id}"),
+        # The lesson player, for a learner's own lessons (owns_lesson in
+        # _lesson_for_actor). Offline packages stay closed: they are a
+        # top-tier feature not built for /me yet.
+        ("GET", f"{API_PREFIX}/lessons/{{lesson_id}}"),
+        ("POST", f"{API_PREFIX}/lessons/{{lesson_id}}/session"),
+        ("POST", f"{API_PREFIX}/lessons/{{lesson_id}}/attempts"),
+        ("GET", f"{API_PREFIX}/lessons/{{lesson_id}}/attempts"),
+        ("GET", f"{API_PREFIX}/lessons/{{lesson_id}}/sessions/{{session_id}}/comprehension"),
+        ("POST", f"{API_PREFIX}/lessons/{{lesson_id}}/sessions/{{session_id}}/break"),
+        (
+            "PUT",
+            f"{API_PREFIX}/lessons/{{lesson_id}}/sessions/{{session_id}}"
+            "/segments/{segment_id}/preferences",
+        ),
+        ("PUT", f"{API_PREFIX}/lessons/{{lesson_id}}/progress"),
+        ("POST", "/api/content/media/url"),
     }
 )
 

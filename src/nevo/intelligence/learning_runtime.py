@@ -22,6 +22,7 @@ from nevo.db.models.mastery import (
 from nevo.db.models.product import LessonQuestionAttempt
 from nevo.db.models.signal_event import LessonSession
 from nevo.intelligence.entities import ScaffoldConceptState, ScaffoldProblemAttempt
+from nevo.intelligence.learner_scope import concept_reachable, learner_concepts
 from nevo.intelligence.scaffolds import ProgressiveScaffoldFadingEngine, initial_scaffold_intensity
 from nevo.mastery.engine import HybridAktMasteryEngine, reading_seed_from_wpm
 from nevo.mastery.entities import BaselineMasterySeed, MasteryState, MasteryUpdate
@@ -224,7 +225,7 @@ async def apply_marked_attempt(
     if not concept_id:
         return
     concept = await session.get(Concept, UUID(str(concept_id)))
-    if concept is None or concept.school_id != user.school_id:
+    if not await concept_reachable(session, user, concept):
         return
     row = await session.scalar(
         select(StudentConceptMastery)
@@ -269,7 +270,7 @@ async def apply_marked_attempt(
             .where(
                 StudentConceptMastery.student_id == user.id,
                 StudentConceptMastery.concept_id.in_(related_ids),
-                Concept.school_id == user.school_id,
+                learner_concepts(user),
             )
         )
     }

@@ -171,7 +171,13 @@ async def can_access_student(
     if actor.id == student_id:
         return True
     student = await session.get(User, student_id)
-    if student is None or student.school_id != actor.school_id:
+    if student is None or student.school_id is None or actor.school_id is None:
+        # A /me learner is reachable by nobody but themselves, and an account
+        # with no school reaches nobody else. Said outright: two NULL
+        # school_ids compare equal in Python, which is how one individual
+        # would otherwise have passed the next line for another.
+        return False
+    if student.school_id != actor.school_id:
         return False
     if actor.role.value in {"senco_admin", "other_admin"}:
         return True

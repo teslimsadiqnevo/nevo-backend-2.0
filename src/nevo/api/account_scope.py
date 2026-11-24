@@ -76,6 +76,9 @@ SHARED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", f"{API_PREFIX}/uploads"),
         ("GET", f"{API_PREFIX}/uploads/{{upload_id}}"),
         ("POST", f"{API_PREFIX}/uploads/{{upload_id}}/confirm"),
+        # Phase 5: a learner may read their own mastery and nobody else's
+        # (can_access_student); class and school views stay school-only.
+        ("GET", "/api/mastery/student/{student_id}"),
     }
 )
 

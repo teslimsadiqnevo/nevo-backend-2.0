@@ -333,7 +333,7 @@ async def register(
 
 
 @router.post("/verify-email", response_model=SessionResponse)
-async def verify_email(
+async def verify_individual_email(
     payload: VerifyRequest,
     request: Request,
     response: Response,

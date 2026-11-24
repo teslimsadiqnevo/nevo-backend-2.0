@@ -297,6 +297,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             sso_service=app.state.sso_service,
             issuance_service=InvoiceIssuanceService(sessions),
             content_parsing_service=app.state.content_parsing_service,
+            email_delivery=getattr(app.state, "email_delivery", None),
         ),
     )
     start_background(app.state.scheduled_job_runner)

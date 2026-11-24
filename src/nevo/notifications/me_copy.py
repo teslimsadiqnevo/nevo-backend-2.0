@@ -61,3 +61,20 @@ def guardian_paragraphs(*, learner_first_name: str | None) -> list[str]:
 
 
 GUARDIAN_CTA = "Read and give consent"
+
+
+RENEWAL_SUBJECT = "Your Nevo month is ending soon"
+
+
+def renewal_paragraphs(*, first_name: str | None, ends_on: str) -> list[str]:
+    greeting = f"Hello {first_name}," if first_name else "Hello,"
+    return [
+        greeting,
+        f"Your Nevo month ends on {ends_on}.",
+        "Nothing renews by itself. To keep your lessons, buy another month in the "
+        "app before then.",
+    ]
+
+
+def renewal_text(*, first_name: str | None, ends_on: str) -> str:
+    return "\n\n".join(renewal_paragraphs(first_name=first_name, ends_on=ends_on)) + "\n"

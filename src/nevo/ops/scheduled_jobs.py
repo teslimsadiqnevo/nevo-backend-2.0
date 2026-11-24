@@ -51,8 +51,14 @@ def build_scheduled_jobs(
     sso_service: SsoService,
     issuance_service: InvoiceIssuanceService,
     content_parsing_service: ContentParsingService,
+    email_delivery: object | None = None,
 ) -> tuple[ScheduledJob, ...]:
     """The recurring work that used to require someone to press a button."""
+
+    async def me_renewal_reminders() -> str:
+        from nevo.me.reminders import send_renewal_reminders
+
+        return await send_renewal_reminders(sessions, email_delivery)
 
     async def issue_invoices() -> str:
         return (await issuance_service.issue_due_invoices()).summary()
@@ -189,6 +195,9 @@ def build_scheduled_jobs(
         ),
         ScheduledJob(name="billing.issue_invoices", interval=DAILY, run=issue_invoices),
         ScheduledJob(name="billing.invoice_reminders", interval=DAILY, run=invoice_reminders),
+        # /me: a reminder before a paid month lapses. Email only; it holds no
+        # payment service and cannot charge anyone.
+        ScheduledJob(name="me.renewal_reminders", interval=DAILY, run=me_renewal_reminders),
     )
 
 

@@ -40,6 +40,7 @@ from nevo.api.dependencies import DatabaseSession
 from nevo.api.product_auth import credential_hasher
 from nevo.api.response_models import CamelResponse
 from nevo.auth.errors import AuthError
+from nevo.consent import guardian
 from nevo.core.config import get_settings
 from nevo.db.models.account import User
 from nevo.db.models.auth import AuthLoginAttempt, EmailConfirmation
@@ -50,10 +51,6 @@ from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
-
-#: Under this, a learner registers with a guardian nominated (Phase 1b).
-#: Ruling A: under-18s are registered, never refused.
-ADULT_AGE = 18
 
 CODE_DIGITS = 6
 CODE_LIFETIME = timedelta(minutes=30)
@@ -124,9 +121,9 @@ class Accepted(CamelResponse):
 class ConsentState(CamelResponse):
     """Whether this account needs a guardian's consent, and where it stands.
 
-    ``required`` is false for an adult. For an under-18 the state is
-    ``outstanding`` until Phase 1b's guardian route lands it; Phase 1b adds
-    ``granted`` and ``dormant`` without changing this shape.
+    ``required`` is false for an adult. For an under-18 it is outstanding,
+    dormant after fourteen days unanswered, or granted once a guardian has
+    consented (nevo.consent.guardian). GET /me/consent carries the detail.
     """
 
     required: bool
@@ -176,16 +173,9 @@ def _verify_identity(email: str) -> str:
     return _digest(f"me-verify-email:{email}")
 
 
-def is_minor(born: date | None, today: date | None = None) -> bool:
-    age = age_on(born, today)
-    return age is not None and age < ADULT_AGE
-
-
-def consent_for(user: User) -> ConsentState:
-    if not is_minor(user.date_of_birth):
-        return ConsentState(required=False, state="not_required")
-    # Phase 1b replaces this with the guardian consent record's own state.
-    return ConsentState(required=True, state="outstanding")
+async def _consent(session: DatabaseSession, user: User) -> ConsentState:
+    view = await guardian.consent_view(session, user)
+    return ConsentState(required=view.required, state=view.state)
 
 
 def _too_many(retry_at: datetime) -> HTTPException:
@@ -461,5 +451,5 @@ async def who_am_i(principal: PrincipalDependency, session: DatabaseSession) -> 
         first_name=user.first_name,
         last_name=user.last_name,
         school_id=None if individual else user.school_id,
-        consent=consent_for(user) if individual else None,
+        consent=(await _consent(session, user)) if individual else None,
     )

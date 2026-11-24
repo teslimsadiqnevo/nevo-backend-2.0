@@ -57,6 +57,7 @@ def me(monkeypatch):
     from nevo.api.auth import router as auth_router
     from nevo.api.dependencies import database_session
     from nevo.api.frontend_unblockers import router as unblockers_router
+    from nevo.api.guardian_consent import router as guardian_router
     from nevo.api.individual_auth import router as individual_router
     from nevo.api.product_learning import router as learning_router
     from nevo.auth.config import AuthSettings
@@ -84,6 +85,7 @@ def me(monkeypatch):
     app.include_router(learning_router)
     app.include_router(unblockers_router)
     app.include_router(product_auth.router)
+    app.include_router(guardian_router)
     app.state.auth_service = build_auth_service(sessions, AuthSettings())
     app.state.email_delivery = mailer
 

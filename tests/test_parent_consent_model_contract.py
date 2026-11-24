@@ -75,9 +75,12 @@ def test_consent_outbox_carries_worker_retry_state() -> None:
 
 
 def test_consent_record_distinguishes_confirmation_source() -> None:
+    # 'guardian' added by migration 0151 (/me Phase 1b): a /me learner's
+    # own guardian, consenting with no parent account made for them.
     assert enum_values("consent_records", "confirmation_source") == [
         "school",
         "parent",
+        "guardian",
     ]
     assert ("users", "id") in foreign_key_targets("consent_records")
     assert "ck_consent_records_confirmation_fields_match_status" in constraint_names(

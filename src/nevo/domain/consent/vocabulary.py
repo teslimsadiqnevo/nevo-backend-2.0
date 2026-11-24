@@ -28,6 +28,9 @@ class ParentContactMethod(StrEnum):
 class ConsentConfirmationSource(StrEnum):
     SCHOOL = "school"
     PARENT = "parent"
+    #: A /me learner's own nominated guardian, consenting from a link with no
+    #: account made for them. Names the guardian in parent_name_on_form.
+    GUARDIAN = "guardian"
 
 
 class ConsentNotificationKind(StrEnum):

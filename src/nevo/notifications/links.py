@@ -66,3 +66,15 @@ def admin_email_confirmation_url(base_url: str, *, token: str) -> str:
 
 def password_reset_url(base_url: str, *, token: str) -> str:
     return _url(base_url, PASSWORD_RESET_PATH, token=token)
+
+
+#: Where a /me learner's nominated guardian answers (Phase 1b).
+#:
+#: Unverified: the app has no such screen yet. The path is proposed to the
+#: frontend, not confirmed - the same shape as the parent link, token in the
+#: path, which the app calls back as GET /api/v1/guardian/<token>.
+GUARDIAN_CONSENT_PATH = "/guardian"
+
+
+def guardian_consent_url(base_url: str, *, token: str) -> str:
+    return _url(base_url, f"{GUARDIAN_CONSENT_PATH}/{quote(token, safe='')}")

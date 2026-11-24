@@ -527,6 +527,11 @@ class ConsentRecord(TimestampMixin, Base):
             "confirmation_source = 'parent'"
             " AND confirmed_by_parent_id IS NOT NULL"
             " AND confirmed_by_admin_id IS NULL"
+            ") OR ("
+            "confirmation_source = 'guardian'"
+            " AND confirmed_by_parent_id IS NULL"
+            " AND confirmed_by_admin_id IS NULL"
+            " AND parent_name_on_form IS NOT NULL"
             ")"
             ")"
             ")",

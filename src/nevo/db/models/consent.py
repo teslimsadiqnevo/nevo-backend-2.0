@@ -7,6 +7,8 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -254,3 +256,53 @@ class ConsentNotificationOutbox(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class GuardianInvitation(Base):
+    """A /me learner's nomination of a guardian, and the guardian's answer.
+
+    /me Phase 1b. One live row per learner: changing the contact supersedes
+    the old row, so a link sent to a mistyped address stops working. The
+    earliest row's created_at starts the fourteen-day dormancy clock. Holds
+    no school: the guardian consents from the link and no account is made.
+    """
+
+    __tablename__ = "guardian_invitations"
+    __table_args__ = (
+        CheckConstraint(
+            "consented_at IS NULL OR guardian_name IS NOT NULL",
+            name="consent_names_the_guardian",
+        ),
+        Index("ix_guardian_invitations_student_created", "student_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    contact: Mapped[str] = mapped_column(String(255), nullable=False)
+    contact_method: Mapped[ParentContactMethod] = mapped_column(
+        parent_contact_method_enum,
+        nullable=False,
+    )
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    send_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consented_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    guardian_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    guardian_contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    guardian_relationship: Mapped[str | None] = mapped_column(String(80), nullable=True)

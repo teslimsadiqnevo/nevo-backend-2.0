@@ -32,3 +32,32 @@ def verify_paragraphs(*, first_name: str | None, code: str, minutes: int) -> lis
         f"It works for {minutes} minutes. If you did not create a Nevo account, "
         "you can ignore this email.",
     ]
+
+
+GUARDIAN_SUBJECT = "Your consent is needed for Nevo"
+
+
+def guardian_text(*, learner_first_name: str | None, link: str) -> str:
+    who = learner_first_name or "A learner"
+    return (
+        "Hello,\n\n"
+        f"{who} has asked you, as their parent or guardian, to agree to them "
+        "using Nevo to study their own course material.\n\n"
+        f"Read what Nevo does and give your consent here: {link}\n\n"
+        "You do not need to create an account. If you do not know this "
+        "person, you can ignore this email.\n"
+    )
+
+
+def guardian_paragraphs(*, learner_first_name: str | None) -> list[str]:
+    who = learner_first_name or "A learner"
+    return [
+        "Hello,",
+        f"{who} has asked you, as their parent or guardian, to agree to them using "
+        "Nevo to study their own course material.",
+        "You do not need to create an account. If you do not know this person, "
+        "you can ignore this email.",
+    ]
+
+
+GUARDIAN_CTA = "Read and give consent"

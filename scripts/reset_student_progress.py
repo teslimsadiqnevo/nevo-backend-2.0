@@ -157,6 +157,8 @@ KEPT = (
     # Identity and consent.
     "age_checks",
     "consent_refusals",
+    # A /me learner's guardian nomination and its answer: consent, not progress.
+    "guardian_invitations",
     # What Nevo spent on this child, which is billing and not theirs to lose.
     "ai_gateway_calls",
 )

@@ -67,7 +67,7 @@ from nevo.db.models.mastery import (
     StudentConceptScaffoldState,
     StudentConceptScheduling,
 )
-from nevo.db.models.me import MePurchase
+from nevo.db.models.me import MeCheckPrediction, MeContactRequest, MePurchase
 from nevo.db.models.media_usage import media_usage_events  # noqa: F401
 from nevo.db.models.out_of_school import OutOfSchoolLearning
 from nevo.db.models.paper_work import PaperWorkEvidence
@@ -165,6 +165,8 @@ __all__ = [
     "LessonReviewSignoff",
     "LessonSegment",
     "LessonSession",
+    "MeCheckPrediction",
+    "MeContactRequest",
     "MePurchase",
     "Message",
     "MessageThread",

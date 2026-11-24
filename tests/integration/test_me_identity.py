@@ -63,6 +63,7 @@ def me(monkeypatch):
     from nevo.api.learning_readiness import router as readiness_router
     from nevo.api.mastery import router as mastery_router
     from nevo.api.me_billing import router as me_billing_router
+    from nevo.api.me_calibration import router as me_calibration_router
     from nevo.api.me_mastery import router as me_mastery_router
     from nevo.api.me_usage import router as usage_router
     from nevo.api.product_learning import router as learning_router
@@ -98,6 +99,7 @@ def me(monkeypatch):
     app.include_router(me_billing_router)
     app.include_router(billing_router)
     app.include_router(me_mastery_router)
+    app.include_router(me_calibration_router)
     app.include_router(mastery_router)
     app.state.mastery_service = build_mastery_service(sessions)
     app.state.auth_service = build_auth_service(sessions, AuthSettings())

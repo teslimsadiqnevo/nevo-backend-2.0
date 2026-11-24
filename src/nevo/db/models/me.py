@@ -1,4 +1,4 @@
-"""/me tables: a learner's purchased months (Phase 4)."""
+"""/me tables: purchased months (Phase 4), predictions and contact requests (Phase 6)."""
 
 import uuid
 from datetime import datetime
@@ -61,3 +61,57 @@ class MePurchase(Base):
     reminder_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class MeCheckPrediction(Base):
+    """The level a learner expected to reach in a lesson's check, said beforehand.
+
+    The outcome is read from the attempts made after predicted_at, never
+    stored beside it, so the two cannot disagree. Ruling D1.
+    """
+
+    __tablename__ = "me_check_predictions"
+    __table_args__ = (
+        CheckConstraint(
+            "predicted_level IN ('knowledge', 'application', 'analysis')",
+            name="predicted_level_known",
+        ),
+        Index(
+            "ix_me_check_predictions_learner_lesson", "learner_id", "lesson_id", "predicted_at"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    learner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    lesson_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False
+    )
+    predicted_level: Mapped[str] = mapped_column(String(20), nullable=False)
+    predicted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MeContactRequest(Base):
+    """A waitlist sign-up or an enquiry. Creates no account; touches no tier."""
+
+    __tablename__ = "me_contact_requests"
+    __table_args__ = (
+        CheckConstraint("kind IN ('waitlist', 'enquiry')", name="kind_known"),
+        Index("ix_me_contact_requests_email_created", "email", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    who: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    learner_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

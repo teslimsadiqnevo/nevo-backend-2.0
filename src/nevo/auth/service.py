@@ -294,6 +294,8 @@ class AuthService:
             user_id=session.user_id,
             role=session.role,
             session_id=session.id,
+            account_type=user.account_type,
+            school_id=user.school_id,
         )
 
     async def issue_for_provisioned_user(self, user_id: UUID) -> IssuedSession:

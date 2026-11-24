@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AliasChoices, BaseModel, EmailStr, Field
 
+from nevo.api.account_scope import enforce_account_scope
 from nevo.api.casing import CAMEL_CONFIG
 from nevo.auth.entities import AuthPrincipal, IssuedSession
 from nevo.auth.errors import (
@@ -278,14 +279,19 @@ async def login_with_pin(
 
 
 async def authenticated_principal(
+    request: Request,
     credentials: BearerDependency,
     service: AuthServiceDependency,
 ) -> AuthPrincipal:
     token = require_bearer_token(credentials)
     try:
-        return await service.authenticate(token)
+        principal = await service.authenticate(token)
     except AuthError as error:
         raise public_auth_error(error) from error
+    # Every authenticated route passes through here, which is what makes this
+    # the boundary for ruling B: see nevo.api.account_scope.
+    enforce_account_scope(request, principal)
+    return principal
 
 
 PrincipalDependency = Annotated[
@@ -303,9 +309,11 @@ async def optional_authenticated_principal(
     if not token or scheme.casefold() != "bearer":
         return None
     try:
-        return await service.authenticate(token)
+        principal = await service.authenticate(token)
     except AuthError as error:
         raise public_auth_error(error) from error
+    enforce_account_scope(request, principal)
+    return principal
 
 
 OptionalPrincipalDependency = Annotated[

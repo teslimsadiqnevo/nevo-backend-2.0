@@ -17,6 +17,7 @@ class AuthUser:
     school_auth_method: str | None = None
     deactivated_at: datetime | None = None
     preferences: dict[str, object] = field(default_factory=dict)
+    account_type: str = "school"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,10 @@ class AuthPrincipal:
     user_id: UUID
     role: str
     session_id: UUID
+    #: Read by the route guard in nevo.api.account_scope. Defaults keep every
+    #: existing construction a school account, which is what they all are.
+    account_type: str = "school"
+    school_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

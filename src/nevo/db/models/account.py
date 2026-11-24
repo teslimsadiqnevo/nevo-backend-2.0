@@ -252,6 +252,10 @@ class User(TimestampMixin, Base):
             "(status = 'deactivated') = (deactivated_at IS NOT NULL)",
             name="deactivated_at_matches_status",
         ),
+        CheckConstraint(
+            "account_type in ('school', 'individual')",
+            name="account_type_kind",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -266,6 +270,16 @@ class User(TimestampMixin, Base):
         index=True,
     )
     role: Mapped[UserRole] = mapped_column(user_role_enum, nullable=False, index=True)
+    #: "school" or "individual" (/me). The one flag the route guard reads:
+    #: school-only routes refuse an individual account at the boundary, and
+    #: /me routes refuse a school account. Never inferred from a NULL
+    #: school_id. Migration 0150.
+    account_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="school",
+        server_default="school",
+    )
     auth_method: Mapped[AuthMethod] = mapped_column(auth_method_enum, nullable=False)
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)

@@ -67,7 +67,11 @@ from nevo.api.pagination import (
     paginate,
     set_page_headers,
 )
-from nevo.api.permissions import RequireScope
+from nevo.api.permissions import (
+    PermissionServiceDependency,
+    RequireScope,
+    public_permission_error,
+)
 from nevo.api.privacy import validate_signal_privacy
 from nevo.api.product_admin import merge_preferences
 from nevo.api.product_common import (
@@ -151,6 +155,7 @@ from nevo.notifications.branding import render_email
 from nevo.notifications.email import EmailDeliveryUnavailableError, ResendEmailDelivery
 from nevo.notifications.links import password_reset_url
 from nevo.permissions.entities import PermissionSnapshot
+from nevo.permissions.errors import PermissionError as NevoPermissionError
 from nevo.storage.media import LessonMediaService
 
 logger = logging.getLogger(__name__)
@@ -930,6 +935,37 @@ async def class_unfinished_checks(
     ]
 
 
+async def _require_class_students_access(
+    session: DatabaseSession, snapshot, actor: User, class_id: UUID
+) -> None:
+    """Who may read a class's students and what Nevo has noticed about them.
+
+    A teacher: their own class, as before (since 6b5d4968), or any class if
+    they hold Learning Support. An administrator: with roster or SENCO access,
+    or a Learning Support grant, without needing to teach the class. S14: this
+    used to demand the teacher scope and a teaching assignment from everyone,
+    so no administrator could open any class, and Learning Support pages that
+    read observations from here stayed blank for them.
+    """
+
+    scopes = snapshot.assigned_scopes
+    if actor.role is UserRole.TEACHER:
+        if await holds_learning_support(session, actor):
+            return
+        await require_teacher_console_class(session, actor, class_id)
+        return
+    if actor.role in {UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN} and (
+        PermissionScope.ROSTER in scopes
+        or PermissionScope.SENCO in scopes
+        or await holds_learning_support(session, actor)
+    ):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": "class_students_forbidden"},
+    )
+
+
 @router.get(
     "/api/v1/classes/{class_id}/students",
     response_model=list[ClassStudentResponse],
@@ -937,9 +973,14 @@ async def class_unfinished_checks(
 )
 async def class_students(
     class_id: UUID,
-    actor: TeacherScope,
+    principal: PrincipalDependency,
+    permissions: PermissionServiceDependency,
     session: DatabaseSession,
 ) -> list[ClassStudentResponse]:
+    try:
+        actor = await permissions.permissions_for(principal)
+    except NevoPermissionError as error:
+        raise public_permission_error(error) from error
     school_class = await session.get(Class, class_id)
     if school_class is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
@@ -951,7 +992,7 @@ async def class_students(
     scoped_actor = await session.get(User, actor.user_id)
     if scoped_actor is None:
         raise HTTPException(404, detail="Class not found")
-    await require_teacher_console_class(session, scoped_actor, class_id)
+    await _require_class_students_access(session, actor, scoped_actor, class_id)
     rows = (
         await session.execute(
             select(User, LearnerProfile.id, func.max(LessonSession.started_at))

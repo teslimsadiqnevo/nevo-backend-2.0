@@ -34,6 +34,8 @@ TRIGGERED: dict[NotificationType, str] = {
     NotificationType.CONCEPT_SUPPORT_NEEDED: (
         "a teacher raises a concern and no learning support holder is named, "
         "so it falls back to the school's admins"
+    ),    NotificationType.SAFEGUARDING_FLAG: (
+        "a new block or safeguard entry reaches a school's safeguarding list"
     ),
 }
 

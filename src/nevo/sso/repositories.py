@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.auth.entities import AuthUser
 from nevo.db.models.account import Class, StudentClassEnrollment, User
+from nevo.db.models.frontend_support import Notification
 from nevo.db.models.learner_profile import LearnerProfile
 from nevo.db.models.sso import (
     RosterSyncIssue,
@@ -244,12 +245,15 @@ class SqlAlchemySsoRepository:
             )
             # A failed sync is the one a school has to act on, and until now
             # the only way to find out was to open the SSO screen and look.
-            await _notify_it_admins(
+            # One open notice per failing connection, updated in place: a
+            # nightly sync that keeps failing used to add a new one for every
+            # admin on every run (S13, 25 November 2026).
+            await _notify_failed_sync_once(
                 session,
                 school_id=school_id,
-                notification_type=NotificationType.SSO_NEEDS_ATTENTION,
-                title="Roster sync could not run",
+                provider=provider,
                 description=(f"{provider.value.title()} refused the last sync: {failure_reason}"),
+                failed_at=failed_at,
             )
             # A provider refusal is the signal that credentials lapsed, so the
             # health card starts telling the truth immediately.
@@ -761,6 +765,73 @@ def _roster_sync_run_view(
             for issue in issues
         ),
     )
+
+
+FAILED_SYNC_TITLE = "Roster sync could not run"
+
+
+async def _notify_failed_sync_once(
+    session: AsyncSession,
+    *,
+    school_id: UUID,
+    provider: SsoProvider,
+    description: str,
+    failed_at: datetime,
+) -> None:
+    """Keep one notice per admin per failing connection, until it works again.
+
+    An admin's latest notice about this provider's failed sync is updated in
+    place - new words, nothing re-marked unread - for as long as no sync for
+    this school and provider has succeeded since it was raised. After a
+    success, the next failure is news and raises a new one.
+    """
+
+    last_success = await session.scalar(
+        select(func.max(RosterSyncRun.completed_at)).where(
+            RosterSyncRun.school_id == school_id,
+            RosterSyncRun.provider == provider,
+            RosterSyncRun.status.in_(
+                [RosterSyncStatus.COMPLETED, RosterSyncStatus.PARTIAL_MANUAL_REVIEW]
+            ),
+        )
+    )
+    admins = (
+        await session.scalars(
+            select(User).where(
+                User.school_id == school_id,
+                User.role.in_({UserRole.SENCO_ADMIN, UserRole.OTHER_ADMIN}),
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+    ).all()
+    prefix = f"{provider.value.title()} refused the last sync"
+    fresh = []
+    for admin in admins:
+        query = select(Notification).where(
+            Notification.recipient_id == admin.id,
+            Notification.type == NotificationType.SSO_NEEDS_ATTENTION.value,
+            Notification.title == FAILED_SYNC_TITLE,
+            Notification.description.startswith(prefix),
+            Notification.archived_at.is_(None),
+        )
+        if last_success is not None:
+            query = query.where(Notification.created_at > last_success)
+        existing = await session.scalar(
+            query.order_by(Notification.created_at.desc()).limit(1)
+        )
+        if existing is not None:
+            existing.description = description
+            continue
+        fresh.append((admin.id, admin.role))
+    if fresh:
+        await notify_each(
+            session,
+            recipients=fresh,
+            notification_type=NotificationType.SSO_NEEDS_ATTENTION,
+            title=FAILED_SYNC_TITLE,
+            description=description,
+            navigates_to="/admin/sso",
+        )
 
 
 async def _notify_it_admins(

@@ -199,6 +199,9 @@ class NotificationType(StrEnum):
     #: adult turning the account back on. Without it a child meets a PIN that
     #: no longer works and has no idea why.
     SIGN_IN_CHANGED = "sign_in_changed"
+    #: A new entry on the school's safeguarding list, to each Learning
+    #: Support holder (S16, 25 November 2026).
+    SAFEGUARDING_FLAG = "safeguarding_flag"
 
 
 #: Which preference switch governs each kind of notification.
@@ -239,6 +242,7 @@ NOTIFICATION_CATEGORY_BY_TYPE: dict[NotificationType, NotificationCategory] = {
     # Not mutable in practice, but it belongs to a category so the settings
     # screen can describe it rather than show an uncategorised row.
     NotificationType.SIGN_IN_CHANGED: NotificationCategory.ACCOUNT,
+    NotificationType.SAFEGUARDING_FLAG: NotificationCategory.ATTENTION,
 }
 
 

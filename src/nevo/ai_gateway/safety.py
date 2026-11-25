@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -15,6 +16,8 @@ from nevo.ai_gateway.errors import AiGatewayError
 #: Strong refs to in-flight shadow comparisons, so they are not collected
 #: mid-call. Discarded by the done callback.
 _SHADOW_TASKS: set = set()
+
+logger = logging.getLogger(__name__)
 
 POLICY_VERSION = "child-safety-2026-10-v1"
 POLICY_VERSION_V2 = "child-safety-2026-11-v2"
@@ -716,6 +719,23 @@ class ContentSafetyGuard:
             "messages": [{"role": "user", "content": content}],
         }
 
+    @staticmethod
+    async def _tell_learning_support(session, row) -> None:
+        """S16: alert the school's holders. Never at the record's expense.
+
+        In a savepoint: a notification that fails is lost alone, and the
+        safeguarding record it describes is kept. A convenience must never
+        fail the thing it describes.
+        """
+
+        from nevo.notifications.safeguarding import notify_learning_support
+
+        try:
+            async with session.begin_nested():
+                await notify_learning_support(session, row)
+        except Exception:
+            logger.warning("Safeguarding notification for %s failed", row.id, exc_info=True)
+
     async def _record(
         self,
         decision,
@@ -777,6 +797,7 @@ class ContentSafetyGuard:
                 )
                 session.add(row)
                 await session.flush()
+                await self._tell_learning_support(session, row)
                 return row.id
         except Exception as error:
             # A required safeguarding record must not disappear behind a delivered answer.

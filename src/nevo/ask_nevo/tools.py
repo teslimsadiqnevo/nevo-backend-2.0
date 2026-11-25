@@ -485,13 +485,33 @@ async def _get_recent_flags(ctx: ToolContext, arguments: dict[str, Any]) -> dict
     }
 
 
+def _for_a_child(ctx: ToolContext) -> bool:
+    return ctx.actor.role is UserRole.STUDENT
+
+
+def _deliverable_to_a_child(segment: LessonSegment) -> bool:
+    """A section held by the safety check is never read back to a child."""
+
+    return "safety_hold" not in (segment.review_reasons or ())
+
+
 async def _get_lesson_overview(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     lesson_id = _uuid(arguments.get("lesson_id"))
     if lesson_id is None:
         return NOT_FOUND
-    lesson = await ctx.session.get(Lesson, lesson_id)
-    if lesson is None or lesson.school_id != ctx.actor.school_id:
-        return NOT_PERMITTED
+    if _for_a_child(ctx):
+        # A child is told only about lessons assigned to them and still open,
+        # by the same rule as the rest of the product: a withdrawn assignment
+        # (status cancelled) drops out here. It used to check the school
+        # alone, so a child could ask about any lesson in it. S11.
+        lessons = await accessible_lessons(ctx.session, ctx.actor)
+        lesson = next((item for item in lessons if item.id == lesson_id), None)
+        if lesson is None:
+            return {"error": "not_permitted", "detail": "That lesson is not one of yours."}
+    else:
+        lesson = await ctx.session.get(Lesson, lesson_id)
+        if lesson is None or lesson.school_id != ctx.actor.school_id:
+            return NOT_PERMITTED
     segments = (
         await ctx.session.scalars(
             select(LessonSegment)
@@ -500,6 +520,23 @@ async def _get_lesson_overview(ctx: ToolContext, arguments: dict[str, Any]) -> d
             .limit(MAX_ROWS)
         )
     ).all()
+    if _for_a_child(ctx):
+        # No held sections, and no review state: that is the teacher's.
+        return {
+            "lesson_id": str(lesson.id),
+            "title": lesson.title,
+            "subject": lesson.subject,
+            "estimated_minutes": lesson.estimated_minutes,
+            "segments": [
+                {
+                    "title": item.title,
+                    "content_type": item.content_type.value,
+                    "estimated_minutes": item.estimated_minutes,
+                }
+                for item in segments
+                if _deliverable_to_a_child(item)
+            ],
+        }
     return {
         "lesson_id": str(lesson.id),
         "title": lesson.title,
@@ -623,6 +660,10 @@ async def _get_lesson_content(ctx: ToolContext, arguments: dict[str, Any]) -> di
     segments = list(
         await ctx.session.scalars(query.order_by(LessonSegment.sequence_order).limit(MAX_ROWS))
     )
+    if _for_a_child(ctx):
+        # A section withdrawn by the safety check is not read back to a child,
+        # whatever the lesson around it says. S11.
+        segments = [item for item in segments if _deliverable_to_a_child(item)]
     if not segments:
         return NOT_FOUND
     return {

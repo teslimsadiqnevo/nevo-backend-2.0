@@ -373,11 +373,31 @@ async def read_accommodation_history(
             )
             for row in changes
         ],
-        adaptations_per_week=[
-            WeeklyCount(week_starting=week.date(), count=int(count)) for week, count in weekly.all()
-        ],
+        adaptations_per_week=every_week(
+            since,
+            datetime.now(UTC),
+            {week.date(): int(count) for week, count in weekly.all()},
+        ),
         series=_series(list(history)),
     )
+
+
+def every_week(since: datetime, now: datetime, counts: dict) -> list[WeeklyCount]:
+    """Every week in the window, oldest first, with 0 where nothing happened.
+
+    S15, 25 November: weeks with no adaptations were left out, so the chart
+    could not tell a quiet week from a missing one. Weeks start on Monday in
+    UTC, the same as date_trunc('week') in the query that counts them.
+    """
+
+    first = since.date() - timedelta(days=since.weekday())
+    last = now.date() - timedelta(days=now.weekday())
+    weeks = []
+    week = first
+    while week <= last:
+        weeks.append(WeeklyCount(week_starting=week, count=counts.get(week, 0)))
+        week += timedelta(days=7)
+    return weeks
 
 
 # Functional support history; do not disguise a modality preference as mastery.

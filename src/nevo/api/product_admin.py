@@ -1022,6 +1022,32 @@ async def restore_class(
     await session.commit()
 
 
+async def _subject_names_by_teacher(
+    session: AsyncSession, teacher_ids: list[UUID]
+) -> dict[UUID, list[str]]:
+    """Each teacher's subjects for the whole page: one query, then one name lookup.
+
+    The same source and the same display names as the teacher detail, so the
+    list and the detail never disagree. S7.
+    """
+
+    if not teacher_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(TeacherSubject.teacher_id, SchoolSubject.id, SchoolSubject.name)
+            .join(SchoolSubject, SchoolSubject.id == TeacherSubject.school_subject_id)
+            .where(TeacherSubject.teacher_id.in_(teacher_ids))
+            .order_by(SchoolSubject.name)
+        )
+    ).all()
+    names = await display_names(session, list({subject_id for _, subject_id, _ in rows}))
+    grouped: dict[UUID, list[str]] = {}
+    for teacher_id, subject_id, name in rows:
+        grouped.setdefault(teacher_id, []).append(names.get(subject_id, name))
+    return grouped
+
+
 async def _class_names_by_teacher(
     session: AsyncSession, teacher_ids: list[UUID]
 ) -> dict[UUID, list[str]]:
@@ -1085,6 +1111,7 @@ async def list_teachers(
     teachers = (await session.execute(query.order_by(User.first_name))).all()
     support = await _learning_support_metadata(session, [item.id for item, _, _ in teachers])
     teaches = await _class_names_by_teacher(session, [item.id for item, _, _ in teachers])
+    subjects = await _subject_names_by_teacher(session, [item.id for item, _, _ in teachers])
     return [
         {
             "id": str(item.id),
@@ -1093,6 +1120,7 @@ async def list_teachers(
             "status": item.status.value,
             "classCount": class_count,
             "teaches": teaches.get(item.id, []),
+            "subjects": subjects.get(item.id, []),
             "lastActiveAt": last_active_at,
             **support.get(item.id, {"learningSupport": False}),
         }

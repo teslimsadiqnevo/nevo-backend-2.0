@@ -303,6 +303,10 @@ class TeacherSummaryResponse(CamelResponse):
     #: this costs one grouped query for the page rather than one per teacher -
     #: which at ~280ms a round trip is the whole difference. T14, 20 November.
     teaches: list[str] = Field(default_factory=list)
+    #: The subjects this teacher teaches, by display name - what the admin's
+    #: Teachers list shows in its Teaches column. teaches stays the classes.
+    #: S7, 25 November.
+    subjects: list[str] = Field(default_factory=list)
     last_active_at: datetime | None = None
     learning_support: bool = False
     learning_support_granted_at: datetime | None = None
@@ -312,7 +316,6 @@ class TeacherSummaryResponse(CamelResponse):
 
 class TeacherDetailResponse(TeacherSummaryResponse):
     class_ids: list[UUID]
-    subjects: list[str] = Field(default_factory=list)
 
 
 class StudentConsentSummaryResponse(CamelResponse):

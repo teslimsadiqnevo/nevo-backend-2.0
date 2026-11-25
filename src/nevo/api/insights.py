@@ -661,6 +661,11 @@ async def student_adaptations(
     ]
 
 
+#: Below this many interactions, in the period or in one topic, nothing is
+#: shown: few enough questions could identify what a child asked.
+MINIMUM_HELP_SEEKING_INTERACTIONS = 3
+
+
 @router.get(
     "/conversation-evidence/student/{student_id}",
     response_model=ConversationEvidenceResponse,
@@ -693,7 +698,7 @@ async def conversation_evidence(
         if item.response_helpful is not None:
             rated += 1
             helpful += int(item.response_helpful)
-    if len(interactions) < 3:
+    if len(interactions) < MINIMUM_HELP_SEEKING_INTERACTIONS:
         return {
             "studentId": str(student_id),
             "periodDays": days,
@@ -702,17 +707,26 @@ async def conversation_evidence(
             "categoryLabels": HELP_SEEKING_CATEGORY_LABELS,
             "helpfulResponseRate": None,
             "privacy": "withheld_below_minimum",
-            "minimumInteractions": 3,
+            "minimumInteractions": MINIMUM_HELP_SEEKING_INTERACTIONS,
         }
+    # S10, 25 November: the floor per topic, not only for the whole period.
+    # The profile says a topic appears "only once {name} has asked about it
+    # enough times to be worth showing", so a topic asked about once must not
+    # be listed - and dropping it here keeps the counting off the device.
+    shown = {
+        category: count
+        for category, count in category_counts.items()
+        if count >= MINIMUM_HELP_SEEKING_INTERACTIONS
+    }
     return {
         "studentId": str(student_id),
         "periodDays": days,
         "interactionCount": len(interactions),
-        "categories": category_counts,
+        "categories": shown,
         "categoryLabels": HELP_SEEKING_CATEGORY_LABELS,
         "helpfulResponseRate": round(helpful / rated, 4) if rated else None,
         "privacy": "aggregate_only",
-        "minimumInteractions": 3,
+        "minimumInteractions": MINIMUM_HELP_SEEKING_INTERACTIONS,
     }
 
 

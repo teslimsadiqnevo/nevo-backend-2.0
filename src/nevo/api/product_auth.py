@@ -1053,6 +1053,45 @@ async def _invited_class_rows(
     )
 
 
+async def _invited_class_rows_for(
+    session: AsyncSession, invitation_ids: list[UUID]
+) -> dict[UUID, list[dict[str, str | None]]]:
+    """_invited_class_rows for a whole page of invitations, in one query.
+
+    The list route showed no classes at all (S8, 25 November): only create
+    and reissue carried them. One grouped query, never one per invitation.
+    """
+
+    if not invitation_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                SchoolInvitationClass.invitation_id,
+                SchoolInvitationClass.class_id,
+                Class.name,
+                SchoolInvitationClass.school_subject_id,
+                SchoolSubject.name,
+            )
+            .outerjoin(Class, Class.id == SchoolInvitationClass.class_id)
+            .outerjoin(SchoolSubject, SchoolSubject.id == SchoolInvitationClass.school_subject_id)
+            .where(SchoolInvitationClass.invitation_id.in_(invitation_ids))
+            .order_by(SchoolInvitationClass.invitation_id, Class.name)
+        )
+    ).all()
+    grouped: dict[UUID, list[dict[str, str | None]]] = {}
+    for invitation_id, class_id, class_name, subject_id, subject_name in rows:
+        grouped.setdefault(invitation_id, []).append(
+            {
+                "classId": str(class_id),
+                "className": class_name,
+                "subjectId": str(subject_id),
+                "subjectName": subject_name,
+            }
+        )
+    return grouped
+
+
 async def _attach_invited_classes(
     session: AsyncSession,
     *,
@@ -1399,6 +1438,7 @@ async def list_invites(
             == ("pending" if status_filter == "conflicted" else status_filter)
         )
     rows = (await session.scalars(query.order_by(SchoolInvitation.created_at.desc()))).all()
+    classes_by_invitation = await _invited_class_rows_for(session, [row.id for row in rows])
     reserved = {
         row.id: await session.get(User, row.id)
         for row in rows
@@ -1418,6 +1458,9 @@ async def list_invites(
                 else item.status
             ),
             "classId": item.class_id,
+            # S8: the same classes create and reissue return, so a teacher
+            # invited with several classes shows them in the list too.
+            "classes": classes_by_invitation.get(item.id, []),
             "createdAt": item.created_at,
             "expiresAt": item.expires_at,
             "consentStatus": item.consent_request_status,

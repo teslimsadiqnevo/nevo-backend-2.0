@@ -42,11 +42,39 @@ def test_the_category_vocabulary_never_reaches_the_teacher() -> None:
         assert leak not in written, f"{leak} reached the teacher"
 
 
-def test_a_child_is_not_sent_the_reason_at_all() -> None:
-    """One line whatever the reason, so the shape of the refusal stays out."""
+def test_a_child_who_typed_a_name_gets_the_names_line() -> None:
+    """S2, Lydia 26 November: names get their own line."""
     detail = _detail(("privacy_abuse",), audience="learner")
-    assert "reason" not in detail
-    assert detail["message"].startswith("Nevo can")
+    assert detail["reason"] == "names_person"
+    assert detail["message"] == (
+        "I can't talk about other people. Ask me again without the name and I'll help."
+    )
+
+
+@pytest.mark.parametrize(
+    ("categories", "disposition"),
+    [
+        (("self_harm",), "block"),
+        (("grooming",), "block"),
+        (("violence",), "block"),
+        (("hate_abuse",), "block"),
+        (("privacy_abuse", "violence"), "block"),
+        (("privacy_abuse", "sexual_exploitation"), "block"),
+        (("privacy_abuse",), "safeguard"),
+        ((), "block"),
+        (("unknown_thing",), "block"),
+    ],
+)
+def test_everything_else_keeps_the_trusted_adult_line(categories, disposition) -> None:
+    """Two lines, never a map of the threshold: anything but a name alone,
+    and anything in doubt, is the trusted-adult line."""
+    error = SafetyBlocked(categories, "input:ask_nevo", disposition=disposition)
+    detail = public_ai_error(error, audience="learner", about="question").detail
+    assert detail["reason"] == "trusted_adult"
+    assert detail["message"] == (
+        "I can't help with this one. Please talk to a trusted adult, like your teacher "
+        "or someone at home."
+    )
 
 
 def test_a_check_that_could_not_run_is_not_given_a_reason() -> None:

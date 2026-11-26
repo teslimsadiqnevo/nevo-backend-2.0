@@ -118,6 +118,29 @@ async def generate(
     return GenerateResponse.from_result(result)
 
 
+#: Lydia, 26 November 2026: two lines for a child, not three. Three would hand
+#: a child a map of where the welfare threshold sits; two tells them only
+#: that names are treated specially. Everything that is not a name alone
+#: keeps the trusted-adult line - and when in doubt it is the trusted-adult
+#: line, which she called load-bearing.
+LEARNER_LINES = {
+    "names_person": "I can't talk about other people. Ask me again without the name and I'll help.",
+    "trusted_adult": (
+        "I can't help with this one. Please talk to a trusted adult, like your teacher "
+        "or someone at home."
+    ),
+}
+
+
+def learner_block_reason(error) -> Literal["names_person", "trusted_adult"]:
+    """names_person only when the sole concern is a name; trusted_adult otherwise."""
+
+    categories = set(error.categories or ())
+    if error.disposition != "safeguard" and categories == {"privacy_abuse"}:
+        return "names_person"
+    return "trusted_adult"
+
+
 def public_ai_error(
     error: AiGatewayError,
     *,
@@ -153,6 +176,14 @@ def public_ai_error(
             "the question, leaving it out will."
         )
     detail: dict[str, object] = {"code": error.code, "message": message}
+    if isinstance(error, SafetyBlocked) and audience == "learner":
+        # S2. A child who typed a friend's name was told to talk to a trusted
+        # adult, which Lydia ruled wrong on 11 November. Two values only
+        # (her ruling of 26 November), never the categories themselves, and
+        # the message is her line for that reason.
+        reason = learner_block_reason(error)
+        detail["reason"] = reason
+        detail["message"] = LEARNER_LINES[reason]
     if isinstance(error, SafetyBlocked) and audience == "teacher":
         # Which of Lydia's two lines applies. She has one for a block that
         # names someone and one for everything else, and the 403 carried no

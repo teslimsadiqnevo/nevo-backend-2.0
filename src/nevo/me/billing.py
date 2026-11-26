@@ -24,7 +24,7 @@ from __future__ import annotations
 import secrets
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -176,12 +176,6 @@ async def start_checkout(
     return Checkout(authorization_url=url, reference=reference)
 
 
-#: How far back a checkout can still be waiting on a bank. A transfer or USSD
-#: payment Paystack has not settled after a day is not one to hold a new
-#: checkout behind.
-STILL_WAITING_WINDOW = timedelta(hours=24)
-
-
 def learner_status(purchase: MePurchase) -> Literal["pending", "success", "failed"]:
     """The three states the checkout screen has (Lydia, 26 November).
 
@@ -201,16 +195,20 @@ def learner_status(purchase: MePurchase) -> Literal["pending", "success", "faile
 async def still_waiting(
     session: AsyncSession, learner_id, now: datetime | None = None
 ) -> list[MePurchase]:
-    """The learner's recent checkouts not yet settled either way, newest first."""
+    """The learner's checkouts not yet settled either way, newest first.
 
-    now = now or datetime.now(UTC)
+    No time limit (Lydia, 26 November): a learner leaves the waiting state on
+    Paystack's answer, never on our clock. Each one is put to Paystack again
+    before it is shown, so a checkout Paystack calls abandoned drops out.
+    """
+
+    del now
     return list(
         await session.scalars(
             select(MePurchase)
             .where(
                 MePurchase.learner_id == learner_id,
                 MePurchase.status == "pending",
-                MePurchase.created_at > now - STILL_WAITING_WINDOW,
             )
             .order_by(MePurchase.created_at.desc())
             .limit(3)

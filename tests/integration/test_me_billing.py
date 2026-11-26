@@ -404,3 +404,30 @@ def test_a_checkout_left_without_paying_is_not_shown_as_waiting(paying):
     _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
 
     assert "pendingPayment" not in client.get("/api/v1/me/subscription", headers=auth).json()
+
+
+def test_a_payment_paystack_still_calls_waiting_stays_waiting_however_old(paying):
+    """Lydia, 26 November: out of pending on Paystack's answer, never our clock."""
+    client, mailer, sessions, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=("ongoing", 249_900, "NGN"))
+
+    from sqlalchemy import update
+
+    from nevo.db.models.me import MePurchase
+
+    async def age_it():
+        async with sessions.begin() as session:
+            await session.execute(
+                update(MePurchase)
+                .where(MePurchase.reference == reference)
+                .values(created_at=datetime(2020, 1, 1, tzinfo=UTC))
+            )
+
+    asyncio.run(age_it())
+
+    assert _status(client, auth, reference).json()["status"] == "pending"
+    subscription = client.get("/api/v1/me/subscription", headers=auth).json()
+    assert subscription["pendingPayment"]["reference"] == reference
+    again = client.post("/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12"})
+    assert again.status_code == 409

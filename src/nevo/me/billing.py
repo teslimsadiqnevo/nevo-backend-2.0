@@ -24,8 +24,9 @@ from __future__ import annotations
 import secrets
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -73,9 +74,7 @@ def add_one_month(moment: datetime) -> datetime:
     return moment.replace(year=year, month=month, day=day)
 
 
-async def active_purchases(
-    session: AsyncSession, learner_id, now: datetime
-) -> list[MePurchase]:
+async def active_purchases(session: AsyncSession, learner_id, now: datetime) -> list[MePurchase]:
     return list(
         await session.scalars(
             select(MePurchase).where(
@@ -88,9 +87,7 @@ async def active_purchases(
     )
 
 
-async def current_purchase(
-    session: AsyncSession, learner_id, now: datetime
-) -> MePurchase | None:
+async def current_purchase(session: AsyncSession, learner_id, now: datetime) -> MePurchase | None:
     """The paid month in force now: the highest tier among those active."""
 
     active = await active_purchases(session, learner_id, now)
@@ -179,6 +176,48 @@ async def start_checkout(
     return Checkout(authorization_url=url, reference=reference)
 
 
+#: How far back a checkout can still be waiting on a bank. A transfer or USSD
+#: payment Paystack has not settled after a day is not one to hold a new
+#: checkout behind.
+STILL_WAITING_WINDOW = timedelta(hours=24)
+
+
+def learner_status(purchase: MePurchase) -> Literal["pending", "success", "failed"]:
+    """The three states the checkout screen has (Lydia, 26 November).
+
+    pending: the money may have left the learner's bank and Paystack has not
+    confirmed it. failed: it did not go through, including a checkout left
+    without paying ("abandoned"). Neither failed nor abandoned is final here:
+    if Paystack later confirms the payment, the month is still granted.
+    """
+
+    if purchase.status == "success":
+        return "success"
+    if purchase.status == "pending":
+        return "pending"
+    return "failed"
+
+
+async def still_waiting(
+    session: AsyncSession, learner_id, now: datetime | None = None
+) -> list[MePurchase]:
+    """The learner's recent checkouts not yet settled either way, newest first."""
+
+    now = now or datetime.now(UTC)
+    return list(
+        await session.scalars(
+            select(MePurchase)
+            .where(
+                MePurchase.learner_id == learner_id,
+                MePurchase.status == "pending",
+                MePurchase.created_at > now - STILL_WAITING_WINDOW,
+            )
+            .order_by(MePurchase.created_at.desc())
+            .limit(3)
+        )
+    )
+
+
 class IndividualSettler:
     """Applies a verified Paystack transaction to a /me purchase.
 
@@ -237,6 +276,10 @@ class IndividualSettler:
                 return _outcome(purchase, "Month granted.")
 
             if status is PaymentTransactionStatus.PENDING:
+                # An abandoned checkout the learner reopened and paid by
+                # transfer is waiting again, not abandoned.
+                if purchase.status == "abandoned":
+                    purchase.status = "pending"
                 return _outcome(purchase, "Payment still pending.")
             purchase.status = (
                 "abandoned" if status is PaymentTransactionStatus.ABANDONED else "failed"

@@ -124,6 +124,21 @@ class PaymentService:
         provider_transaction = await self._client.verify_transaction(reference)
         return await self._settle(provider_transaction)
 
+    async def recheck_individual(self, reference: str) -> PaymentOutcome:
+        """Ask Paystack about a /me purchase and apply the answer.
+
+        The same path the webhook takes after its signature check: the state
+        comes from Paystack's API, never from the learner or the redirect.
+        For a bank transfer or USSD payment the webhook can arrive minutes
+        after the learner is back, and the app needs to say which of waiting,
+        done or not through applies meanwhile.
+        """
+        self._require_configured()
+        if not is_individual_reference(reference) or self._individual_settler is None:
+            raise PaymentNotFoundError
+        provider_transaction = await self._client.verify_transaction(reference)
+        return await self._individual_settler(provider_transaction)
+
     # charge_saved_method was here, and it is gone.
     #
     # It collected an invoice against a school's stored authorization: a

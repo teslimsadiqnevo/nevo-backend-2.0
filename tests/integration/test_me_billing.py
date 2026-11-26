@@ -271,3 +271,110 @@ def test_nothing_from_the_authorization_is_kept(paying):
     stored = " ".join(str(getattr(purchase, column.name)) for column in columns)
     assert "AUTH_should_never_be_kept" not in stored
     assert "4081" not in stored
+
+
+# -- Pending, Lydia 26 November ------------------------------------------------
+#
+# A bank transfer or USSD payment can sit pending at Paystack. The app has to
+# tell "waiting on the bank" from "didn't go through", or a learner whose money
+# has already left will pay twice.
+
+
+def _status(client, auth, reference):
+    return client.get(f"/api/v1/me/checkout/{reference}", headers=auth)
+
+
+def test_a_transfer_waiting_on_the_bank_reads_pending(paying):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=("ongoing", 249_900, "NGN"))
+
+    waiting = _status(client, auth, reference)
+
+    assert waiting.status_code == 200
+    assert waiting.json() == {"reference": reference, "tier": "monthly_12", "status": "pending"}
+
+
+def test_once_paystack_confirms_the_status_grants_the_month(paying):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=("pending", 249_900, "NGN"))
+    assert _status(client, auth, reference).json()["status"] == "pending"
+
+    fake.verdicts[reference] = ("success", 249_900, "NGN")
+    done = _status(client, auth, reference).json()
+
+    assert done["status"] == "success" and "periodEnd" in done
+    assert client.get("/api/v1/me/subscription", headers=auth).json()["tier"] == "monthly_12"
+    # The webhook arriving afterwards grants nothing twice.
+    assert _webhook(client, reference).status_code == 200
+    assert client.get("/api/v1/me/usage", headers=auth).json()["allowance"] == 12
+
+
+@pytest.mark.parametrize("verdict", ["failed", "abandoned", "reversed"])
+def test_a_payment_that_did_not_go_through_reads_failed(paying, verdict):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=(verdict, 249_900, "NGN"))
+
+    assert _status(client, auth, reference).json()["status"] == "failed"
+
+
+def test_a_left_checkout_that_is_paid_later_is_still_granted(paying):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
+    assert _status(client, auth, reference).json()["status"] == "failed"
+
+    fake.verdicts[reference] = ("success", 249_900, "NGN")
+
+    assert _status(client, auth, reference).json()["status"] == "success"
+
+
+def test_a_learner_cannot_see_someone_elses_payment(paying):
+    client, mailer, _, fake = paying
+    _, owner = _signed_in(client, mailer)
+    reference = _buy(client, owner, fake)
+    _, stranger = _signed_in(client, mailer)
+
+    assert _status(client, stranger, reference).status_code == 404
+    assert _status(client, owner, "ME-nope").status_code == 404
+
+
+def test_a_second_checkout_while_one_waits_on_the_bank_is_asked_first(paying):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=("ongoing", 249_900, "NGN"))
+    opened = len(fake.initialized)
+
+    again = client.post("/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12"})
+
+    assert again.status_code == 409
+    assert again.json()["detail"] == {"code": "payment_pending", "reference": reference}
+    assert len(fake.initialized) == opened
+    # The learner chose to pay again anyway.
+    anyway = client.post(
+        "/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12", "payAgain": True}
+    )
+    assert anyway.status_code == 201
+
+
+def test_a_checkout_left_without_paying_does_not_hold_the_next_one(paying):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
+
+    again = client.post("/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12"})
+
+    assert again.status_code == 201
+
+
+def test_paystack_being_unreachable_does_not_block_a_checkout(paying):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake)
+    del fake.verdicts[reference]  # verify_transaction now raises
+
+    assert _status(client, auth, reference).json()["status"] == "pending"
+    again = client.post("/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12"})
+    assert again.status_code == 201

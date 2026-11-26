@@ -4,15 +4,24 @@ Checkout is closed (404, as if absent) unless ME_BILLING_ENABLED is set -
 never opened by a Paystack key being present. The month is granted by the
 verified webhook (POST /api/billing/payments/webhook, which already handles
 school receipts), never by the learner arriving back from Paystack.
+
+GET /me/checkout/{reference} lets the app say which of three states a
+payment is in (Lydia, 26 November): a bank transfer or USSD payment can sit
+pending at Paystack, and a learner told "we are taking payment" while their
+money has already left the bank will pay twice. It asks Paystack's API, the
+same check the webhook makes, so it can grant the month a little sooner but
+never on the learner's word.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.casing import CAMEL_CONFIG
@@ -21,9 +30,12 @@ from nevo.api.response_models import CamelResponse
 from nevo.consent.guardian import upload_blocked_by_consent
 from nevo.core.config import get_settings
 from nevo.db.models.account import User
+from nevo.db.models.me import MePurchase
 from nevo.me import billing, tiers
 from nevo.payments.errors import PaymentError
 from nevo.payments.service import PaymentService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["me"])
 
@@ -48,11 +60,25 @@ class MeCheckoutRequest(BaseModel):
     model_config = CAMEL_CONFIG
 
     tier: Literal["monthly_12", "monthly_25"]
+    #: Start a new checkout even though an earlier one is still waiting on
+    #: the bank. Without it that case is refused with payment_pending, so the
+    #: learner is asked before they pay twice.
+    pay_again: bool = False
 
 
 class MeCheckoutResponse(CamelResponse):
     authorization_url: str
     reference: str
+
+
+class MeCheckoutStatusResponse(CamelResponse):
+    reference: str
+    tier: str
+    #: pending: waiting on the bank, do not pay again. success: the month is
+    #: granted. failed: it did not go through; try again or another method.
+    status: Literal["pending", "success", "failed"]
+    #: When the month bought by this payment ends. Only on success.
+    period_end: datetime | None = None
 
 
 class MeSubscriptionResponse(CamelResponse):
@@ -100,6 +126,13 @@ async def me_checkout(
     if await upload_blocked_by_consent(session, learner):
         # Nothing to buy lessons for until a guardian consents.
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "upload_consent_required"})
+    if not payload.pay_again:
+        for earlier in await billing.still_waiting(session, learner.id):
+            if await _ask_paystack(service, session, earlier) and earlier.status == "pending":
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={"code": "payment_pending", "reference": earlier.reference},
+                )
     tier = tiers.by_key(payload.tier)
     assert tier is not None
     try:
@@ -113,12 +146,58 @@ async def me_checkout(
     except billing.CheckoutRefused as refusal:
         raise HTTPException(refusal.status_code, detail={"code": refusal.code}) from refusal
     except PaymentError as error:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, detail={"code": error.code}
-        ) from error
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail={"code": error.code}) from error
     return MeCheckoutResponse(
         authorization_url=checkout.authorization_url, reference=checkout.reference
     )
+
+
+@router.get(
+    "/me/checkout/{reference}",
+    response_model=MeCheckoutStatusResponse,
+    response_model_exclude_none=True,
+)
+async def me_checkout_status(
+    reference: str,
+    principal: PrincipalDependency,
+    session: DatabaseSession,
+    request: Request,
+) -> MeCheckoutStatusResponse:
+    """Which state one of the learner's own payments is in. Poll while pending."""
+
+    if not get_settings().me_billing_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not Found")
+    purchase = await session.scalar(
+        select(MePurchase).where(
+            MePurchase.reference == reference, MePurchase.learner_id == principal.user_id
+        )
+    )
+    if purchase is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not Found")
+    if purchase.status in {"pending", "abandoned"}:
+        service = getattr(request.app.state, "payment_service", None)
+        if isinstance(service, PaymentService) and service.configured:
+            await _ask_paystack(service, session, purchase)
+    return MeCheckoutStatusResponse(
+        reference=purchase.reference,
+        tier=purchase.tier_key,
+        status=billing.learner_status(purchase),
+        period_end=purchase.period_end if purchase.status == "success" else None,
+    )
+
+
+async def _ask_paystack(service: PaymentService, session, purchase: MePurchase) -> bool:
+    """Bring a purchase up to date with Paystack. False if Paystack could not say."""
+
+    try:
+        await service.recheck_individual(purchase.reference)
+    except Exception:
+        logger.warning(
+            "Could not recheck /me payment %s with Paystack", purchase.reference, exc_info=True
+        )
+        return False
+    await session.refresh(purchase)
+    return True
 
 
 @router.get(

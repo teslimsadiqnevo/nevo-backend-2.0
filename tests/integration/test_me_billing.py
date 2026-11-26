@@ -159,16 +159,18 @@ def test_checkout_is_pending_until_the_webhook_grants_the_month(paying):
     client, mailer, _, fake = paying
     _, auth = _signed_in(client, mailer)
 
-    reference = _buy(client, auth, fake)
+    reference = _buy(client, auth, fake, verdict=("ongoing", 249_900, "NGN"))
     sent = fake.initialized[-1]
     assert sent["amount"] == 2499 and sent["channels"] == ["card", "bank", "ussd", "bank_transfer"]
-    # Paid at Paystack, returned to the app - and still nothing until the webhook.
+    # Returned to the app before Paystack has confirmed - nothing is granted.
     assert client.get("/api/v1/me/subscription", headers=auth).json() == {
         "tier": "free",
         "autoRenews": False,
+        "pendingPayment": {"reference": reference, "tier": "monthly_12"},
     }
     assert client.get("/api/v1/me/usage", headers=auth).json()["allowance"] == 3
 
+    fake.verdicts[reference] = ("success", 249_900, "NGN")
     granted = _webhook(client, reference)
 
     assert granted.status_code == 200
@@ -208,7 +210,9 @@ def test_the_wrong_amount_grants_nothing(paying):
 def test_an_unsigned_webhook_grants_nothing(paying):
     client, mailer, _, fake = paying
     _, auth = _signed_in(client, mailer)
-    reference = _buy(client, auth, fake)
+    # Paystack has not confirmed it; a forged callback claiming it has must
+    # not be believed.
+    reference = _buy(client, auth, fake, verdict=("ongoing", 249_900, "NGN"))
 
     forged = _webhook(client, reference, secret="not-the-secret-" + "y" * 30)
 
@@ -378,3 +382,25 @@ def test_paystack_being_unreachable_does_not_block_a_checkout(paying):
     assert _status(client, auth, reference).json()["status"] == "pending"
     again = client.post("/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12"})
     assert again.status_code == 201
+
+
+def test_a_learner_who_comes_back_is_told_their_payment_is_still_waiting(paying):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=("ongoing", 249_900, "NGN"))
+
+    waiting = client.get("/api/v1/me/subscription", headers=auth).json()
+    assert waiting["tier"] == "free"
+    assert waiting["pendingPayment"] == {"reference": reference, "tier": "monthly_12"}
+
+    fake.verdicts[reference] = ("success", 249_900, "NGN")
+    confirmed = client.get("/api/v1/me/subscription", headers=auth).json()
+    assert confirmed["tier"] == "monthly_12" and "pendingPayment" not in confirmed
+
+
+def test_a_checkout_left_without_paying_is_not_shown_as_waiting(paying):
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
+
+    assert "pendingPayment" not in client.get("/api/v1/me/subscription", headers=auth).json()

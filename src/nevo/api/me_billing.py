@@ -81,6 +81,11 @@ class MeCheckoutStatusResponse(CamelResponse):
     period_end: datetime | None = None
 
 
+class MePendingPayment(CamelResponse):
+    reference: str
+    tier: str
+
+
 class MeSubscriptionResponse(CamelResponse):
     tier: str
     #: When paid access ends, renewals already bought included. Omitted on
@@ -88,6 +93,11 @@ class MeSubscriptionResponse(CamelResponse):
     period_end: datetime | None = None
     renewal_reminder_sent_at: datetime | None = None
     auto_renews: Literal[False] = False
+    #: A payment the learner made that Paystack has not confirmed yet, newest
+    #: first. While it is present the app shows "Your payment is still being
+    #: confirmed" in place of the upgrade prompt (Lydia, 26 November), and
+    #: polls GET /me/checkout/{reference}. Omitted when nothing is waiting.
+    pending_payment: MePendingPayment | None = None
 
 
 @router.get("/me/tiers", response_model=MeTiersResponse, response_model_exclude_none=True)
@@ -204,11 +214,23 @@ async def _ask_paystack(service: PaymentService, session, purchase: MePurchase) 
     "/me/subscription", response_model=MeSubscriptionResponse, response_model_exclude_none=True
 )
 async def me_subscription(
-    principal: PrincipalDependency, session: DatabaseSession
+    principal: PrincipalDependency, session: DatabaseSession, request: Request
 ) -> MeSubscriptionResponse:
+    # Waiting payments are asked about first: one Paystack has just confirmed
+    # changes the tier below. If Paystack cannot be reached the payment stays
+    # shown as waiting, the side that never invites a second payment.
+    waiting = await billing.still_waiting(session, principal.user_id)
+    service = getattr(request.app.state, "payment_service", None)
+    if waiting and isinstance(service, PaymentService) and service.configured:
+        for purchase in waiting:
+            await _ask_paystack(service, session, purchase)
+    still = next((purchase for purchase in waiting if purchase.status == "pending"), None)
     current = await billing.subscription_for(session, principal.user_id)
     return MeSubscriptionResponse(
         tier=current.tier.key,
         period_end=current.period_end,
         renewal_reminder_sent_at=current.reminder_sent_at,
+        pending_payment=(
+            MePendingPayment(reference=still.reference, tier=still.tier_key) if still else None
+        ),
     )

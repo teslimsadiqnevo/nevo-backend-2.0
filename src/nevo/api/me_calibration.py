@@ -22,17 +22,33 @@ from nevo.api.response_models import CamelResponse
 from nevo.db.models.account import User
 from nevo.db.models.content import Lesson
 from nevo.db.models.me import MeCheckPrediction
+from nevo.mastery import read
 from nevo.me import calibration, contact
 
 router = APIRouter(prefix="/api/v1", tags=["me"])
 
-Level = Literal["knowledge", "application", "analysis"]
+#: The names a learner reads (S21). The engine's own names are still taken
+#: on the way in, so a client mid-switch is not refused.
+Level = Literal["knowing_and_understanding", "application", "analysis_and_evaluation"]
+_TO_ENGINE = {
+    "knowing_and_understanding": "knowledge",
+    "application": "application",
+    "analysis_and_evaluation": "analysis",
+    "knowledge": "knowledge",
+    "analysis": "analysis",
+}
 
 
 class PredictionRequest(BaseModel):
     model_config = CAMEL_CONFIG
 
-    level: Level
+    level: Literal[
+        "knowing_and_understanding",
+        "application",
+        "analysis_and_evaluation",
+        "knowledge",
+        "analysis",
+    ]
 
 
 class CalibrationResponse(CamelResponse):
@@ -74,9 +90,9 @@ class EnquiryRequest(BaseModel):
 def _response(item: calibration.Calibration) -> CalibrationResponse:
     return CalibrationResponse(
         lesson_id=item.lesson_id,
-        predicted=item.predicted,
+        predicted=read.level_from_engine(item.predicted),
         predicted_at=item.predicted_at,
-        reached=item.reached,
+        reached=read.level_from_engine(item.reached) if item.reached else None,
         answered=item.answered,
         gap=item.gap,
     )
@@ -118,7 +134,7 @@ async def predict(
         MeCheckPrediction(
             learner_id=learner.id,
             lesson_id=lesson_id,
-            predicted_level=payload.level,
+            predicted_level=_TO_ENGINE[payload.level],
             predicted_at=datetime.now(UTC),
         )
     )
@@ -173,9 +189,7 @@ async def join_waitlist(
 
 
 @router.post("/me/enquiry", response_model=Accepted, status_code=status.HTTP_202_ACCEPTED)
-async def enquire(
-    payload: EnquiryRequest, session: DatabaseSession, request: Request
-) -> Accepted:
+async def enquire(payload: EnquiryRequest, session: DatabaseSession, request: Request) -> Accepted:
     """More than twenty-five lessons, or a teacher, tutorial centre or school.
 
     Routes to a person, never to a fourth price.

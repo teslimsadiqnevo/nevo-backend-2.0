@@ -154,9 +154,12 @@ def test_each_prediction_is_judged_on_its_own_attempts_and_kept_over_time(me):
     latest = client.get(f"/api/v1/me/checks/{lesson_id}/prediction", headers=auth).json()
     history = client.get("/api/v1/me/calibration", headers=auth).json()["checks"]
 
-    assert latest["predicted"] == "analysis"
+    assert latest["predicted"] == "analysis_and_evaluation"
     assert latest["answered"] is False  # the earlier answer belongs to the earlier one
-    assert [item["predicted"] for item in history] == ["analysis", "knowledge"]
+    assert [item["predicted"] for item in history] == [
+        "analysis_and_evaluation",
+        "knowing_and_understanding",
+    ]
     assert history[1]["gap"] == "matched"
 
 

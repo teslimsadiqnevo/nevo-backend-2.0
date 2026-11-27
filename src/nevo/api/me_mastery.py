@@ -11,6 +11,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import Field
 
 from nevo.api.auth import PrincipalDependency
 from nevo.api.dependencies import DatabaseSession
@@ -21,7 +22,8 @@ from nevo.me.usage import current_tier
 
 router = APIRouter(prefix="/api/v1", tags=["me"])
 
-Level = Literal["knowledge", "application", "analysis"]
+Level = Literal["knowing_and_understanding", "application", "analysis_and_evaluation"]
+LevelState = Literal["reached", "working", "not"]
 
 
 class ConceptLevelResponse(CamelResponse):
@@ -29,8 +31,11 @@ class ConceptLevelResponse(CamelResponse):
     concept_name: str
     #: The highest level reached, in order. Omitted until the first is.
     level: Level | None = None
-    #: The next level. Omitted once analysis is reached.
+    #: The next level. Omitted once analysis and evaluation is reached.
     working_towards: Level | None = None
+    #: All three, for when the learner asks to see them: one entry per level
+    #: something was observed at. No entry means nothing observed, not `not`.
+    levels: dict[Level, LevelState] = Field(default_factory=dict)
 
 
 class MasteryResponse(CamelResponse):
@@ -70,6 +75,7 @@ async def my_mastery(principal: PrincipalDependency, session: DatabaseSession) -
                 concept_name=item.concept_name,
                 level=item.reached,
                 working_towards=item.working_towards,
+                levels=item.levels or {},
             )
             for item in await mastery.concept_levels(session, learner)
         ]
@@ -77,9 +83,7 @@ async def my_mastery(principal: PrincipalDependency, session: DatabaseSession) -
 
 
 @router.get("/me/progress", response_model=ProgressResponse, response_model_exclude_none=True)
-async def my_progress(
-    principal: PrincipalDependency, session: DatabaseSession
-) -> ProgressResponse:
+async def my_progress(principal: PrincipalDependency, session: DatabaseSession) -> ProgressResponse:
     """Progress across time. On the free tier, a locked body with a 200."""
 
     learner = await _learner(session, principal)

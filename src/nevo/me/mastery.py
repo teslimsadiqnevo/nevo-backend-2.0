@@ -4,10 +4,9 @@
 computation is the engine's, this only reads it and names it.
 
 No score, no percentage, no grade, no numbered bar. A concept is reported as
-the highest of knowledge, application and analysis the learner has reached,
-in order, and the next one they are working towards. Reached means what it
-means to the engine when it chooses review work: probability at or above
-MASTERY_THRESHOLD with LEVEL_INDEPENDENT_PASSES independent passes.
+the highest level the learner has reached, in order, and the next one they
+are working towards, over the same per-level states the school screens read
+(nevo.mastery.read, S21): a view, not a second model.
 
 Progress across time is the moments a level was strengthened. The first paid
 tier sees a rolling window; the second sees the full history; the free tier
@@ -17,7 +16,7 @@ state, not a fault).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -29,12 +28,11 @@ from nevo.db.models.account import User
 from nevo.db.models.frontend_support import Concept
 from nevo.db.models.mastery import StudentConceptLevelMastery
 from nevo.intelligence.learner_scope import learner_concepts
-from nevo.intelligence.learning_runtime import MASTERY_THRESHOLD
-from nevo.intelligence.progression import LEVEL_INDEPENDENT_PASSES
+from nevo.mastery import read
 from nevo.me import tiers
 
-Level = Literal["knowledge", "application", "analysis"]
-LEVELS: tuple[Level, ...] = ("knowledge", "application", "analysis")
+Level = read.Level
+LEVELS = read.LEVELS
 
 #: How far back the first paid tier sees. Not set by any ruling yet - the
 #: plan says "a rolling window" without a length. Lydia's to confirm.
@@ -47,6 +45,8 @@ class ConceptLevel:
     concept_name: str
     reached: Level | None
     working_towards: Level | None
+    #: All three, for a learner who asks: only the levels observed.
+    levels: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -66,14 +66,6 @@ class Progress:
     events: tuple[LevelReached, ...] = ()
 
 
-def _reached(row: StudentConceptLevelMastery | None) -> bool:
-    return (
-        row is not None
-        and row.mastery_probability >= MASTERY_THRESHOLD
-        and row.independent_pass_count >= LEVEL_INDEPENDENT_PASSES
-    )
-
-
 async def _level_rows(session: AsyncSession, learner: User):
     return (
         await session.execute(
@@ -88,26 +80,17 @@ async def _level_rows(session: AsyncSession, learner: User):
 
 
 async def concept_levels(session: AsyncSession, learner: User) -> list[ConceptLevel]:
-    by_concept: dict[object, tuple[Concept, dict[str, StudentConceptLevelMastery]]] = {}
-    for row, concept in await _level_rows(session, learner):
-        by_concept.setdefault(concept.id, (concept, {}))[1][row.mastery_level] = row
-    result = []
-    for concept, rows in by_concept.values():
-        reached: Level | None = None
-        for level in LEVELS:
-            if not _reached(rows.get(level)):
-                break
-            reached = level
-        index = LEVELS.index(reached) + 1 if reached else 0
-        result.append(
-            ConceptLevel(
-                concept_id=concept.id,
-                concept_name=readable_concept_name(concept.name),
-                reached=reached,
-                working_towards=LEVELS[index] if index < len(LEVELS) else None,
-            )
+    return [
+        ConceptLevel(
+            concept_id=item.concept_id,
+            concept_name=item.concept_name,
+            reached=item.reached,
+            working_towards=item.working_towards,
+            levels=dict(item.levels),
         )
-    return sorted(result, key=lambda item: item.concept_name.casefold())
+        for item in await read.read_learner(session, learner.id, concepts=learner_concepts(learner))
+        if item.levels
+    ]
 
 
 async def progress_for(
@@ -122,7 +105,7 @@ async def progress_for(
         LevelReached(
             concept_id=concept.id,
             concept_name=readable_concept_name(concept.name),
-            level=row.mastery_level,
+            level=read.level_from_engine(row.mastery_level),
             reached_at=row.strengthened_at,
         )
         for row, concept in await _level_rows(session, learner)

@@ -110,10 +110,13 @@ def test_mastery_is_three_levels_and_no_numbers(me):
     concepts = {item["conceptName"]: item for item in body["concepts"]}
     osmosis = next(item for name, item in concepts.items() if "smosis" in name)
     diffusion = next(item for name, item in concepts.items() if "iffusion" in name)
-    assert osmosis["level"] == "knowledge"
+    assert osmosis["level"] == "knowing_and_understanding"
     assert osmosis["workingTowards"] == "application"
+    # All three, for a learner who asks: reached, working, and nothing seen.
+    assert osmosis["levels"] == {"knowing_and_understanding": "reached", "application": "working"}
     assert "level" not in diffusion
-    assert diffusion["workingTowards"] == "knowledge"
+    assert diffusion["workingTowards"] == "knowing_and_understanding"
+    assert diffusion["levels"] == {"knowing_and_understanding": "not"}
     assert _numbers(body) == []  # no score, percentage or count anywhere
 
 
@@ -125,7 +128,7 @@ def test_a_level_needs_the_ones_below_it(me):
     concept = client.get("/api/v1/me/mastery", headers=auth).json()["concepts"][0]
 
     assert "level" not in concept
-    assert concept["workingTowards"] == "knowledge"
+    assert concept["workingTowards"] == "knowing_and_understanding"
 
 
 def test_a_learner_reads_only_themselves(me):
@@ -167,7 +170,7 @@ def test_first_paid_tier_sees_a_rolling_window(me):
     assert body["locked"] is False
     assert body["window"] == "rolling"
     assert len(body["events"]) == 1
-    assert body["events"][0]["level"] == "knowledge"
+    assert body["events"][0]["level"] == "knowing_and_understanding"
 
 
 def test_top_tier_sees_the_full_history(me):

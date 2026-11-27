@@ -1,0 +1,9 @@
+# Heroku builds the image on its own servers from this file when the code is
+# pushed with git (git push <remote> main). Only the source travels, a few MB,
+# instead of a built image of a few hundred: a deploy from a slow connection
+# took hours with `heroku container:push`. One Dockerfile serves both roles;
+# its CMD picks web or worker from $DYNO.
+build:
+  docker:
+    web: Dockerfile
+    worker: Dockerfile

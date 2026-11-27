@@ -516,7 +516,11 @@ async def health(request: Request) -> dict[str, str]:
         # Render variables alone could not do that job once the service moved
         # to Heroku: they survived as config and kept naming a build from
         # before the move, so a correct deploy read as the wrong one.
-        "commit": os.environ.get("DEPLOY_COMMIT") or os.environ.get("RENDER_GIT_COMMIT", ""),
+        # A build Heroku runs itself (git push with heroku.yml) cannot be
+        # handed DEPLOY_COMMIT, so the dyno metadata Heroku sets is next.
+        "commit": os.environ.get("DEPLOY_COMMIT")
+        or os.environ.get("HEROKU_BUILD_COMMIT", "")[:7]
+        or os.environ.get("RENDER_GIT_COMMIT", ""),
         "branch": os.environ.get("DEPLOY_BRANCH") or os.environ.get("RENDER_GIT_BRANCH", ""),
         "deployedAt": _STARTED_AT,
         #: Which process answered, so a slow reply can be pinned to a dyno.

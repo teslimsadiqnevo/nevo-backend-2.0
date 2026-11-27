@@ -519,7 +519,7 @@ async def health(request: Request) -> dict[str, str]:
         # A build Heroku runs itself (git push with heroku.yml) cannot be
         # handed DEPLOY_COMMIT, so the dyno metadata Heroku sets is next.
         "commit": os.environ.get("DEPLOY_COMMIT")
-        or os.environ.get("HEROKU_BUILD_COMMIT", "")[:7]
+        or os.environ.get("HEROKU_SLUG_COMMIT", "")[:7]
         or os.environ.get("RENDER_GIT_COMMIT", ""),
         "branch": os.environ.get("DEPLOY_BRANCH") or os.environ.get("RENDER_GIT_BRANCH", ""),
         "deployedAt": _STARTED_AT,

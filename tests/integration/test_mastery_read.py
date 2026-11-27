@@ -161,6 +161,18 @@ def test_a_level_never_observed_is_left_out_not_marked_not(me):
     assert "reading" not in concept_read
 
 
+def test_reading_alone_still_shows_the_concept(me):
+    _, _, sessions = me
+    admin, (child, *_), concept = _school_with(sessions, learners=1)
+    _levels(sessions, child, concept, {}, reading=0.9)
+
+    concepts = _get(
+        sessions, f"/api/v1/students/{child}/mastery", admin, "senco_admin"
+    ).json()["concepts"]
+
+    assert [(c["levels"], c["reading"]) for c in concepts] == [({}, "at")]
+
+
 def test_a_child_cannot_read_the_staff_view(me):
     _, _, sessions = me
     _, (child, *_), _ = _school_with(sessions, learners=1)

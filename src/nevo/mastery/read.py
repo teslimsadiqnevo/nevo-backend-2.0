@@ -155,14 +155,16 @@ async def read_learner(
         .join(Concept, Concept.id == StudentConceptLevelMastery.concept_id)
         .where(StudentConceptLevelMastery.student_id == learner_id)
     )
-    reading_query = select(StudentConceptMastery).where(
-        StudentConceptMastery.student_id == learner_id
+    # Reading is read on its own: a concept with reading evidence and no
+    # level evidence yet still appears, with its reading and no levels.
+    reading_query = (
+        select(StudentConceptMastery, Concept)
+        .join(Concept, Concept.id == StudentConceptMastery.concept_id)
+        .where(StudentConceptMastery.student_id == learner_id)
     )
     if concepts is not None:
         level_query = level_query.where(concepts)
-        reading_query = reading_query.join(
-            Concept, Concept.id == StudentConceptMastery.concept_id
-        ).where(concepts)
+        reading_query = reading_query.where(concepts)
 
     by_concept: dict[UUID, tuple[Concept, dict[Level, LevelState]]] = {}
     for row, concept in (await session.execute(level_query)).all():
@@ -189,10 +191,10 @@ async def read_learner(
             )
         ).all()
     }
-    reading = {
-        row.concept_id: reading_state(row, max_text_density=densest.get(str(row.concept_id)))
-        for row in await session.scalars(reading_query)
-    }
+    reading = {}
+    for row, concept in (await session.execute(reading_query)).all():
+        by_concept.setdefault(concept.id, (concept, {}))
+        reading[concept.id] = reading_state(row, max_text_density=densest.get(str(row.concept_id)))
 
     result = [
         ConceptRead(

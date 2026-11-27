@@ -115,6 +115,7 @@ def test_school_account_is_refused_on_an_individual_route():
         ("GET", "/api/v1/me/usage", RouteAudience.INDIVIDUAL_ONLY),
         ("GET", "/api/v1/meetings", RouteAudience.SCHOOL_ONLY),
         ("GET", "/api/v1/students/me/dashboard", RouteAudience.SHARED),
+        ("POST", "/api/v1/students/me/sessions/{session_id}/attention", RouteAudience.SHARED),
         ("GET", "/api/v1/students/{student_id}/profile", RouteAudience.SCHOOL_ONLY),
         ("GET", "/api/v1/parents/me/children", RouteAudience.SCHOOL_ONLY),
         ("GET", "/api/v1/auth/session", RouteAudience.SHARED),

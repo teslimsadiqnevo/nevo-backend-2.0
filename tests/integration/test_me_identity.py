@@ -54,6 +54,7 @@ def me(monkeypatch):
     monkeypatch.setenv("ME_REGISTRATION_ENABLED", "true")
 
     from nevo.api import product_auth
+    from nevo.api.application_attention import router as attention_router
     from nevo.api.auth import router as auth_router
     from nevo.api.billing import router as billing_router
     from nevo.api.dependencies import database_session
@@ -101,6 +102,7 @@ def me(monkeypatch):
     app.include_router(me_mastery_router)
     app.include_router(me_calibration_router)
     app.include_router(mastery_router)
+    app.include_router(attention_router)
     app.state.mastery_service = build_mastery_service(sessions)
     app.state.auth_service = build_auth_service(sessions, AuthSettings())
     app.state.email_delivery = mailer

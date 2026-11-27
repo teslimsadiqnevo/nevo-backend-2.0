@@ -94,6 +94,11 @@ SHARED_ROUTES: frozenset[tuple[str, str]] = frozenset(
             "/segments/{segment_id}/preferences",
         ),
         ("PUT", f"{API_PREFIX}/lessons/{{lesson_id}}/progress"),
+        # Away/return, the player's focus events: without them no answer has a
+        # trustworthy time, and per-level mastery cannot build for a /me
+        # learner at all. The handler resolves only the learner's own sitting
+        # and a segment of its lesson; nothing in it matches on a school.
+        ("POST", f"{API_PREFIX}/students/me/sessions/{{session_id}}/attention"),
         ("POST", "/api/content/media/url"),
     }
 )

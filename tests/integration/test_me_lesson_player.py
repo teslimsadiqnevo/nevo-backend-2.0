@@ -45,13 +45,18 @@ def _seed_lesson(sessions, email, *, needs_review=False, reasons=(), notes=()):
             learner = await session.scalar(select(User).where(User.email == email))
             learner.baseline_profile = {**(learner.baseline_profile or {}), **READY}
             lesson = Lesson(
-                created_by_user_id=learner.id, title="Osmosis", source_type="pdf",
-                status="completed", segment_count=1,
+                created_by_user_id=learner.id,
+                title="Osmosis",
+                source_type="pdf",
+                status="completed",
+                segment_count=1,
             )
             session.add(lesson)
             await session.flush()
             run_row = ContentParseRun(
-                lesson_id=lesson.id, requested_by_user_id=learner.id, source_type="pdf",
+                lesson_id=lesson.id,
+                requested_by_user_id=learner.id,
+                source_type="pdf",
                 review_notes=list(notes),
             )
             concept = Concept(name="osmosis", lesson_id=lesson.id)
@@ -123,9 +128,9 @@ def test_the_check_result_carries_the_calibration_gap(me):
     client, mailer, sessions = me
     email, auth = _signed_in(client, mailer)
     lesson_id, segment_id, checkpoint = _seed_lesson(sessions, email)
-    session_id = client.post(
-        f"/api/v1/lessons/{lesson_id}/session", headers=auth, json={}
-    ).json()["sessionId"]
+    session_id = client.post(f"/api/v1/lessons/{lesson_id}/session", headers=auth, json={}).json()[
+        "sessionId"
+    ]
     client.post(
         f"/api/v1/me/checks/{lesson_id}/prediction", headers=auth, json={"level": "application"}
     )
@@ -156,9 +161,9 @@ def test_no_prediction_means_no_calibration_key(me):
     client, mailer, sessions = me
     email, auth = _signed_in(client, mailer)
     lesson_id, segment_id, checkpoint = _seed_lesson(sessions, email)
-    session_id = client.post(
-        f"/api/v1/lessons/{lesson_id}/session", headers=auth, json={}
-    ).json()["sessionId"]
+    session_id = client.post(f"/api/v1/lessons/{lesson_id}/session", headers=auth, json={}).json()[
+        "sessionId"
+    ]
 
     answered = client.post(
         f"/api/v1/lessons/{lesson_id}/attempts",
@@ -196,9 +201,9 @@ def test_the_review_switch_puts_the_teacher_gate_back(me, monkeypatch):
     client, mailer, sessions = me
     email, auth = _signed_in(client, mailer)
     lesson_id, segment_id, checkpoint = _seed_lesson(sessions, email)
-    session_id = client.post(
-        f"/api/v1/lessons/{lesson_id}/session", headers=auth, json={}
-    ).json()["sessionId"]
+    session_id = client.post(f"/api/v1/lessons/{lesson_id}/session", headers=auth, json={}).json()[
+        "sessionId"
+    ]
 
     answered = client.post(
         f"/api/v1/lessons/{lesson_id}/attempts",
@@ -225,12 +230,15 @@ def test_a_flagged_passage_is_released_and_named_in_the_lesson(me):
         reasons=["safety_flagged"],
         notes=[
             {
-                "code": "lesson_text_flagged_released", "pageNumbers": [4],
+                "code": "lesson_text_flagged_released",
+                "pageNumbers": [4],
                 "reasonCategory": "violence",
             },
             {
-                "code": "lesson_text_refused_hard", "pageNumbers": [9],
-                "reasonCategory": "self_harm", "message": "Nevo can't teach this one.",
+                "code": "lesson_text_refused_hard",
+                "pageNumbers": [9],
+                "reasonCategory": "self_harm",
+                "message": "Nevo can't teach this one.",
             },
         ],
     )
@@ -255,3 +263,23 @@ def test_a_clean_lesson_carries_no_safety_keys(me):
 
     assert "flaggedPassages" not in body and "refusedPassages" not in body
     assert all("safetyFlagged" not in item for item in body["segments"])
+
+
+def test_a_learner_can_say_when_they_leave_and_come_back(me):
+    """S21: per-level mastery needs trustworthy answer times, which need focus
+    events. A /me learner was refused on the route, so theirs could never build."""
+    client, mailer, sessions = me
+    email, auth = _signed_in(client, mailer)
+    lesson_id, segment_id, _ = _seed_lesson(sessions, email)
+    session_id = client.post(f"/api/v1/lessons/{lesson_id}/session", headers=auth, json={}).json()[
+        "sessionId"
+    ]
+    path = f"/api/v1/students/me/sessions/{session_id}/attention"
+
+    away = client.post(path, headers=auth, json={"action": "away", "segmentId": str(segment_id)})
+    back = client.post(path, headers=auth, json={"action": "return", "segmentId": str(segment_id)})
+
+    assert away.status_code == 200, away.json()
+    assert away.json()["state"] == "away"
+    assert back.status_code == 200, back.json()
+    assert back.json()["state"] == "returned"

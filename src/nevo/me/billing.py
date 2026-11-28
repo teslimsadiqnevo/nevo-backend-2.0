@@ -21,14 +21,16 @@ higher tier starts it at once. The learner holds the highest tier active now.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from html import escape
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nevo.db.models.account import User
@@ -40,6 +42,8 @@ from nevo.me.tiers import Tier
 from nevo.payments.entities import PaymentOutcome, ProviderTransaction
 from nevo.payments.errors import PaymentNotFoundError
 from nevo.payments.paystack import PaystackClient, to_minor_units
+
+logger = logging.getLogger(__name__)
 
 #: Card, bank, USSD and transfer: restricting to card would exclude the
 #: students who do not have a working one.
@@ -132,6 +136,7 @@ async def start_checkout(
     tier: Tier,
     *,
     callback_url: str,
+    replaces: MePurchase | None = None,
     now: datetime | None = None,
 ) -> Checkout:
     """Record a pending purchase, then open Paystack's hosted checkout for it.
@@ -155,6 +160,7 @@ async def start_checkout(
         reference=reference,
         status="pending",
         created_at=now,
+        replaces_reference=replaces.reference if replaces else None,
     )
     session.add(purchase)
     await session.commit()
@@ -173,23 +179,76 @@ async def start_checkout(
         purchase.failure_reason = str(error)[:1000]
         await session.commit()
         raise
+    purchase.checkout_url = url
+    await session.commit()
     return Checkout(authorization_url=url, reference=reference)
 
 
-def learner_status(purchase: MePurchase) -> Literal["pending", "success", "failed"]:
-    """The three states the checkout screen has (Lydia, 26 November).
+LearnerStatus = Literal["pending", "abandoned", "success", "failed"]
+
+
+def learner_status(purchase: MePurchase) -> LearnerStatus:
+    """The states the checkout screen tells apart (Lydia, 26 and 28 November).
 
     pending: the money may have left the learner's bank and Paystack has not
-    confirmed it. failed: it did not go through, including a checkout left
-    without paying ("abandoned"). Neither failed nor abandoned is final here:
-    if Paystack later confirms the payment, the month is still granted.
+    confirmed it. abandoned: the learner left Paystack's page without paying;
+    the page is still live and payable, so this is not failed - calling it
+    failed is what made learners pay twice. failed: genuinely did not go
+    through, a wrong amount or Paystack's fraud check. None is final here: if
+    Paystack later confirms the payment, the month is still granted.
     """
 
-    if purchase.status == "success":
-        return "success"
-    if purchase.status == "pending":
-        return "pending"
+    if purchase.status in {"success", "pending", "abandoned"}:
+        return purchase.status  # type: ignore[return-value]
     return "failed"
+
+
+async def newest_unfinished(session: AsyncSession, learner_id) -> MePurchase | None:
+    """The learner's latest checkout neither paid nor genuinely failed."""
+
+    return await session.scalar(
+        select(MePurchase)
+        .where(
+            MePurchase.learner_id == learner_id,
+            MePurchase.status.in_(("pending", "abandoned")),
+        )
+        .order_by(MePurchase.created_at.desc())
+        .limit(1)
+    )
+
+
+async def unseen_double_payment(session: AsyncSession, learner_id) -> MePurchase | None:
+    """The latest double payment the learner has not been shown yet."""
+
+    return await session.scalar(
+        select(MePurchase)
+        .where(
+            MePurchase.learner_id == learner_id,
+            MePurchase.double_paid_at.is_not(None),
+            MePurchase.double_paid_seen_at.is_(None),
+        )
+        .order_by(MePurchase.double_paid_at.desc())
+        .limit(1)
+    )
+
+
+async def paired_with(session: AsyncSession, purchase: MePurchase) -> MePurchase | None:
+    """The other checkout of a pair started for one intention, if it was paid."""
+
+    conditions = [MePurchase.replaces_reference == purchase.reference]
+    if purchase.replaces_reference:
+        conditions.append(MePurchase.reference == purchase.replaces_reference)
+    return await session.scalar(
+        select(MePurchase)
+        .where(
+            MePurchase.learner_id == purchase.learner_id,
+            MePurchase.id != purchase.id,
+            MePurchase.status == "success",
+            or_(*conditions),
+        )
+        .order_by(MePurchase.paid_at.desc())
+        .limit(1)
+    )
 
 
 async def still_waiting(
@@ -271,6 +330,12 @@ class IndividualSettler:
                 purchase.period_end = add_one_month(start)
                 purchase.failure_reason = None
                 # transaction.authorization is deliberately never read.
+                # Paid twice for one intention (Lydia, 28 November): both
+                # months are kept, no refund goes out by itself. The learner
+                # is told, and the team is emailed (alert_double_payments).
+                if await paired_with(session, purchase) is not None:
+                    purchase.double_paid_at = now
+                    return _outcome(purchase, "Month granted; the learner paid twice.")
                 return _outcome(purchase, "Month granted.")
 
             if status is PaymentTransactionStatus.PENDING:
@@ -308,3 +373,64 @@ def _outcome(purchase: MePurchase, message: str) -> PaymentOutcome:
         payment_method_saved=False,
         message=message,
     )
+
+
+async def alert_double_payments(
+    sessions: async_sessionmaker[AsyncSession], delivery: object
+) -> str:
+    """Email the team about each double payment once (Lydia, 28 November).
+
+    The log she asked to be able to see: an automatic refund is a bigger
+    liability than this narrow case, and these emails are what show whether
+    that stays true. The marker is set only after the emails go, so a mail
+    outage means the next run tries again.
+    """
+
+    from nevo.notifications.email import ResendEmailDelivery
+    from nevo.partner_inquiries.notifier import LeadAlertSettings
+
+    if not isinstance(delivery, ResendEmailDelivery):
+        return "skipped: no email delivery"
+    addresses = LeadAlertSettings().addresses
+    if not addresses:
+        return "skipped: no LEAD_ALERT_RECIPIENTS"
+    alerted = 0
+    async with sessions() as session:
+        rows = (
+            await session.execute(
+                select(MePurchase, User)
+                .join(User, User.id == MePurchase.learner_id)
+                .where(
+                    MePurchase.double_paid_at.is_not(None),
+                    MePurchase.double_paid_alerted_at.is_(None),
+                )
+            )
+        ).all()
+        for purchase, learner in rows:
+            other = await paired_with(session, purchase)
+            lines = [
+                "A /me learner paid twice for one month. Both months were granted; "
+                "nothing was refunded.",
+                f"Learner: {learner.email or learner.id}",
+                f"Second payment: {purchase.reference} ({purchase.tier_key}, "
+                f"{purchase.amount_minor / 100:,.0f} {purchase.currency})",
+                f"First payment: {other.reference if other else '-'}",
+                f"Paid access now ends: {purchase.period_end:%d %B %Y}",
+            ]
+            sent = 0
+            for address in addresses:
+                try:
+                    await delivery.send(
+                        to=address,
+                        subject=f"/me double payment: {purchase.reference}",
+                        text="\n".join(lines),
+                        html="<br>".join(escape(line) for line in lines),
+                    )
+                    sent += 1
+                except Exception:
+                    logger.warning("/me double-payment alert to %s failed", address, exc_info=True)
+            if sent:
+                purchase.double_paid_alerted_at = datetime.now(UTC)
+                await session.commit()
+                alerted += 1
+    return f"double payments alerted {alerted} of {len(rows)}"

@@ -235,6 +235,8 @@ def test_renewing_early_queues_the_next_month_behind_this_one(paying):
     )
     assert second_end > first_end
     assert (second_end - first_end).days in {28, 29, 30, 31}
+    # Renewing on purpose is not paying twice.
+    assert "doublePayment" not in client.get("/api/v1/me/subscription", headers=auth).json()
 
 
 def test_the_top_tier_lifts_the_allowance_to_twenty_five(paying):
@@ -315,7 +317,7 @@ def test_once_paystack_confirms_the_status_grants_the_month(paying):
     assert client.get("/api/v1/me/usage", headers=auth).json()["allowance"] == 12
 
 
-@pytest.mark.parametrize("verdict", ["failed", "abandoned", "reversed"])
+@pytest.mark.parametrize("verdict", ["failed", "reversed"])
 def test_a_payment_that_did_not_go_through_reads_failed(paying, verdict):
     client, mailer, _, fake = paying
     _, auth = _signed_in(client, mailer)
@@ -324,11 +326,25 @@ def test_a_payment_that_did_not_go_through_reads_failed(paying, verdict):
     assert _status(client, auth, reference).json()["status"] == "failed"
 
 
+def test_a_checkout_left_without_paying_reads_abandoned_and_can_be_finished(paying):
+    """Lydia, 28 November: abandoned is not failed. The page is still payable."""
+    client, mailer, _, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
+
+    assert _status(client, auth, reference).json() == {
+        "reference": reference,
+        "tier": "monthly_12",
+        "status": "abandoned",
+        "paymentUrl": f"https://checkout.paystack.test/{reference}",
+    }
+
+
 def test_a_left_checkout_that_is_paid_later_is_still_granted(paying):
     client, mailer, _, fake = paying
     _, auth = _signed_in(client, mailer)
     reference = _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
-    assert _status(client, auth, reference).json()["status"] == "failed"
+    assert _status(client, auth, reference).json()["status"] == "abandoned"
 
     fake.verdicts[reference] = ("success", 249_900, "NGN")
 
@@ -363,14 +379,101 @@ def test_a_second_checkout_while_one_waits_on_the_bank_is_asked_first(paying):
     assert anyway.status_code == 201
 
 
-def test_a_checkout_left_without_paying_does_not_hold_the_next_one(paying):
+def test_a_checkout_left_without_paying_is_offered_back_before_a_second(paying):
     client, mailer, _, fake = paying
     _, auth = _signed_in(client, mailer)
-    _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
+    reference = _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
+    opened = len(fake.initialized)
+
+    again = client.post("/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12"})
+
+    assert again.status_code == 409
+    assert again.json()["detail"] == {
+        "code": "payment_abandoned",
+        "reference": reference,
+        "paymentUrl": f"https://checkout.paystack.test/{reference}",
+    }
+    assert len(fake.initialized) == opened
+    anyway = client.post(
+        "/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12", "payAgain": True}
+    )
+    assert anyway.status_code == 201
+
+
+def test_an_old_abandoned_checkout_with_no_page_kept_does_not_hold_the_next(paying):
+    client, mailer, sessions, fake = paying
+    _, auth = _signed_in(client, mailer)
+    reference = _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
+    _forget_page(sessions, reference)
 
     again = client.post("/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12"})
 
     assert again.status_code == 201
+
+
+def _forget_page(sessions, reference):
+    from sqlalchemy import update
+
+    from nevo.db.models.me import MePurchase
+
+    async def run():
+        async with sessions.begin() as session:
+            await session.execute(
+                update(MePurchase)
+                .where(MePurchase.reference == reference)
+                .values(checkout_url=None)
+            )
+
+    asyncio.run(run())
+
+
+def test_paying_twice_keeps_both_months_tells_the_learner_and_the_team(paying, monkeypatch):
+    """Lydia, 28 November: no automatic refund; the learner is told, the team emailed."""
+    client, mailer, sessions, fake = paying
+    monkeypatch.setenv("LEAD_ALERT_RECIPIENTS", "team@nevolearning-tests.com")
+    _, auth = _signed_in(client, mailer)
+    left = _buy(client, auth, fake, verdict=("abandoned", 249_900, "NGN"))
+    assert _status(client, auth, left).json()["status"] == "abandoned"
+    second = client.post(
+        "/api/v1/me/checkout", headers=auth, json={"tier": "monthly_12", "payAgain": True}
+    ).json()["reference"]
+    fake.verdicts[second] = ("success", 249_900, "NGN")
+    _webhook(client, second)
+    one_month = client.get("/api/v1/me/subscription", headers=auth).json()
+    assert "doublePayment" not in one_month
+
+    # The page called dead goes through after all.
+    fake.verdicts[left] = ("success", 249_900, "NGN")
+    first = _status(client, auth, left).json()
+
+    assert first["status"] == "success" and first["paidTwice"] is True
+    assert _status(client, auth, second).json()["paidTwice"] is True
+    both = client.get("/api/v1/me/subscription", headers=auth).json()
+    assert both["doublePayment"] == {
+        "references": [second, left],
+        "tier": "monthly_12",
+        "periodEnd": both["periodEnd"],
+    }
+    span = datetime.fromisoformat(both["periodEnd"]) - datetime.fromisoformat(
+        one_month["periodEnd"]
+    )
+    assert span.days in {28, 29, 30, 31}
+
+    from nevo.me.billing import alert_double_payments
+
+    assert asyncio.run(alert_double_payments(sessions, mailer)).startswith(
+        "double payments alerted 1"
+    )
+    assert asyncio.run(alert_double_payments(sessions, mailer)).startswith(
+        "double payments alerted 0"
+    )
+    alerts = [m for m in mailer.sent if m["to"] == "team@nevolearning-tests.com"]
+    assert len(alerts) == 1 and left in alerts[0]["subject"]
+    assert "nothing was refunded" in alerts[0]["text"]
+
+    seen = client.post("/api/v1/me/subscription/double-payment/seen", headers=auth)
+    assert seen.status_code == 204
+    assert "doublePayment" not in client.get("/api/v1/me/subscription", headers=auth).json()
 
 
 def test_paystack_being_unreachable_does_not_block_a_checkout(paying):

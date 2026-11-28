@@ -66,6 +66,19 @@ class MePurchase(Base):
     lapse_notice_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: Paystack's hosted page, so an abandoned checkout can be reopened and
+    #: finished (Lydia, 28 November). A page link: it charges nobody.
+    checkout_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The checkout still unfinished when this one was started (0156).
+    replaces_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #: Set on the second of such a pair to succeed. Both months are kept.
+    double_paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    double_paid_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    double_paid_alerted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class MeCheckPrediction(Base):
@@ -81,9 +94,7 @@ class MeCheckPrediction(Base):
             "predicted_level IN ('knowledge', 'application', 'analysis')",
             name="predicted_level_known",
         ),
-        Index(
-            "ix_me_check_predictions_learner_lesson", "learner_id", "lesson_id", "predicted_at"
-        ),
+        Index("ix_me_check_predictions_learner_lesson", "learner_id", "lesson_id", "predicted_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

@@ -60,6 +60,11 @@ def build_scheduled_jobs(
 
         return await send_renewal_reminders(sessions, email_delivery)
 
+    async def me_double_payment_alerts() -> str:
+        from nevo.me.billing import alert_double_payments
+
+        return await alert_double_payments(sessions, email_delivery)
+
     async def issue_invoices() -> str:
         return (await issuance_service.issue_due_invoices()).summary()
 
@@ -198,6 +203,9 @@ def build_scheduled_jobs(
         # /me: a reminder before a paid month lapses. Email only; it holds no
         # payment service and cannot charge anyone.
         ScheduledJob(name="me.renewal_reminders", interval=DAILY, run=me_renewal_reminders),
+        ScheduledJob(
+            name="me.double_payment_alerts", interval=HOURLY, run=me_double_payment_alerts
+        ),
     )
 
 
@@ -212,5 +220,3 @@ async def _connected_sso_schools(
             )
         )
     return list(dict.fromkeys(rows.all()))
-
-
